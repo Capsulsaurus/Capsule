@@ -584,6 +584,9 @@ pub mod error_codes {
     /// `error.upload.size_exceeded`
     pub const UPLOAD_SIZE_EXCEEDED: &str = "error.upload.size_exceeded";
 
+    /// `error.upload.source_changed`
+    pub const UPLOAD_SOURCE_CHANGED: &str = "error.upload.source_changed";
+
     /// `error.upload.stale_revival`
     pub const UPLOAD_STALE_REVIVAL: &str = "error.upload.stale_revival";
 

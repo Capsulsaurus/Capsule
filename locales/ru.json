@@ -7835,6 +7835,10 @@
     "message": "Загрузка отправила больше данных, чем было заявлено.",
     "origin": "machine"
   },
+  "error.upload.source_changed": {
+    "message": "Этот файл изменился во время загрузки, поэтому загрузка остановлена.",
+    "origin": "machine"
+  },
   "error.upload.stale_revival": {
     "message": "Это изменение основано на устаревшей версии элемента.",
     "origin": "machine"

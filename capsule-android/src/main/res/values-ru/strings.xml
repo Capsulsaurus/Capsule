@@ -1949,6 +1949,7 @@
     <string name="error_upload_session_not_active">Эта загрузка уже завершена.</string>
     <string name="error_upload_session_not_found">Сеанс загрузки истёк. Начинаем заново…</string>
     <string name="error_upload_size_exceeded">Загрузка отправила больше данных, чем было заявлено.</string>
+    <string name="error_upload_source_changed">Этот файл изменился во время загрузки, поэтому загрузка остановлена.</string>
     <string name="error_upload_stale_revival">Это изменение основано на устаревшей версии элемента.</string>
     <string name="error_upload_storage_full">На сервере закончилось место. Загрузка возобновится, когда место освободится.</string>
     <string name="error_upload_storage_inconsistent">На сервере возникла проблема с хранилищем. Повторите попытку.</string>

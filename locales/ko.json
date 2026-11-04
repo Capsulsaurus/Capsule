@@ -7835,6 +7835,10 @@
     "message": "업로드가 선언한 크기보다 많은 데이터를 보냈습니다.",
     "origin": "machine"
   },
+  "error.upload.source_changed": {
+    "message": "업로드 중에 이 파일이 변경되어 업로드를 중단했습니다.",
+    "origin": "machine"
+  },
   "error.upload.stale_revival": {
     "message": "이 변경은 항목의 오래된 버전을 기반으로 합니다.",
     "origin": "machine"

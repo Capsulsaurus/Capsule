@@ -1949,6 +1949,7 @@
     <string name="error_upload_session_not_active">Este envio já foi concluído.</string>
     <string name="error_upload_session_not_found">A sessão de envio expirou. Recomeçando…</string>
     <string name="error_upload_size_exceeded">O envio enviou mais dados do que declarou.</string>
+    <string name="error_upload_source_changed">Este arquivo mudou enquanto era enviado, então o envio foi interrompido.</string>
     <string name="error_upload_stale_revival">Esta alteração se baseia em uma versão desatualizada do item.</string>
     <string name="error_upload_storage_full">O servidor está sem espaço de armazenamento. O envio será retomado quando houver espaço livre.</string>
     <string name="error_upload_storage_inconsistent">O servidor teve um problema de armazenamento. Tente novamente.</string>

@@ -7835,6 +7835,10 @@
     "message": "Der Upload hat mehr Daten gesendet als angegeben.",
     "origin": "machine"
   },
+  "error.upload.source_changed": {
+    "message": "Diese Datei hat sich während des Uploads geändert, daher wurde der Upload angehalten.",
+    "origin": "machine"
+  },
   "error.upload.stale_revival": {
     "message": "Diese Änderung basiert auf einer veralteten Version des Elements.",
     "origin": "machine"

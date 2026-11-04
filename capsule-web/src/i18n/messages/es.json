@@ -1958,6 +1958,7 @@
   "error.upload.session_not_active": "Esta subida ya ha finalizado.",
   "error.upload.session_not_found": "La sesión de subida ha caducado. Empezando de nuevo…",
   "error.upload.size_exceeded": "La subida envió más datos de los que declaró.",
+  "error.upload.source_changed": "Este archivo cambió mientras se subía, así que se detuvo su subida.",
   "error.upload.stale_revival": "Este cambio se basa en una versión desactualizada del elemento.",
   "error.upload.storage_full": "El servidor no tiene espacio de almacenamiento. La subida se reanudará cuando se libere espacio.",
   "error.upload.storage_inconsistent": "El servidor tuvo un problema de almacenamiento. Inténtalo de nuevo.",

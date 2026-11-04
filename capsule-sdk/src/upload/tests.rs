@@ -15,7 +15,7 @@
 //! Postgres + Valkey, real protocol gate, real disk) — lives in that crate's
 //! `src/tests/sdk_client.rs`, which dev-depends on `capsule-sdk`.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::*;
@@ -1339,7 +1339,7 @@ async fn recovery_checksum_mismatch_resends_same_chunk() {
 }
 
 /// A blob of zeroes of any declared size, produced a window at a time, so a
-/// large-file tier can be driven without holding the file.
+/// large-file tier can be driven without holding the file. It cannot change, so it affirms.
 struct Zeroes(u64);
 
 impl UploadSource for Zeroes {
@@ -1348,6 +1348,21 @@ impl UploadSource for Zeroes {
             return Err(std::io::ErrorKind::UnexpectedEof.into());
         }
         Ok(Cow::Owned(vec![0u8; len]))
+    }
+
+    fn check_unchanged(&self) -> Result<SourceIdentity, SourceChanged> {
+        Ok(SourceIdentity::Affirmed)
+    }
+}
+
+/// Zeroes behind the default identity check: no change found, none affirmed.
+struct Unaffirmed(u64);
+
+impl UploadSource for Unaffirmed {
+    fn read_at(&self, offset: u64, len: usize) -> std::io::Result<Cow<'_, [u8]>> {
+        Zeroes(self.0)
+            .read_at(offset, len)
+            .map(|w| Cow::Owned(w.into_owned()))
     }
 }
 
@@ -1544,16 +1559,42 @@ fn short_bounds() -> RequestBounds {
     RequestBounds::new(Duration::from_millis(200), Duration::from_millis(400))
 }
 
+/// A `HEAD` answer for a session that holds nothing yet, counting how often it was asked.
+fn empty_head(heads: &AtomicUsize, size: u64) -> MockResponse {
+    heads.fetch_add(1, Ordering::SeqCst);
+    MockResponse::new(200, "OK")
+        .header("X-Capsule-Offset", "0")
+        .header("X-Capsule-Committed", "")
+        .header("X-Capsule-Content-Length", size.to_string())
+        .header("X-Capsule-Upload-Status", "pending")
+}
+
+/// A `HEAD` answer for a session that holds the prefix `[0, held)`, the truth a server that
+/// acknowledged every chunk up to `held` reports.
+fn prefix_head(held: u64, size: u64) -> MockResponse {
+    MockResponse::new(200, "OK")
+        .header("X-Capsule-Offset", held.to_string())
+        .header(
+            "X-Capsule-Committed",
+            CommittedSet::prefix(held).to_header(),
+        )
+        .header("X-Capsule-Content-Length", size.to_string())
+        .header("X-Capsule-Upload-Status", "uploading")
+}
+
 /// **Black-holed request.** The server reads a whole chunk and then never answers, holding the
 /// connection open. Without a bound of its own the client would wait until the OS gave up;
-/// with one it cuts the request at the response wait and re-sends the same offset, shorter,
-/// which lands.
+/// with one it cuts the request at the response wait. The answer was lost, so it reads `HEAD`
+/// before it sends anything again, then re-sends the same offset, shorter, which lands.
 #[tokio::test]
 async fn a_request_that_is_never_answered_is_cut_and_resent() {
     let patches = Arc::new(Mutex::new(Vec::<(u64, usize)>::new()));
+    let heads = Arc::new(AtomicUsize::new(0));
     let p = patches.clone();
+    let h = heads.clone();
     let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
         ("POST", "/") => created("sess-hole", CHUNK_SIZE_256KB),
+        ("HEAD", "/sess-hole") => empty_head(&h, 64 * 1024),
         ("PATCH", "/sess-hole") => {
             let mut seen = p.lock().unwrap();
             let offset = req.header("X-Capsule-Offset").unwrap().parse().unwrap();
@@ -1585,6 +1626,11 @@ async fn a_request_that_is_never_answered_is_cut_and_resent() {
         vec![(0, 64 * 1024), (0, 32 * 1024), (32 * 1024, 32 * 1024)],
         "cut, then re-sent at the same offset, half the size"
     );
+    assert_eq!(
+        heads.load(Ordering::SeqCst),
+        1,
+        "the lost answer is followed by a HEAD before the re-send"
+    );
     assert!(started.elapsed() >= short_bounds().response_wait);
 }
 
@@ -1598,9 +1644,12 @@ async fn a_request_that_is_never_answered_is_cut_and_resent() {
 async fn a_chunk_too_slow_to_drain_inside_the_response_wait_is_resent_shorter() {
     const DRAINS_IN_TIME: usize = 64 * 1024;
     let patches = Arc::new(Mutex::new(Vec::<(u64, usize)>::new()));
+    let heads = Arc::new(AtomicUsize::new(0));
     let p = patches.clone();
+    let h = heads.clone();
     let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
         ("POST", "/") => created("sess-drain", CHUNK_SIZE_256KB),
+        ("HEAD", "/sess-drain") => empty_head(&h, CHUNK_SIZE_256KB),
         ("PATCH", "/sess-drain") => {
             let offset = req.header("X-Capsule-Offset").unwrap().parse().unwrap();
             p.lock().unwrap().push((offset, req.body.len()));
@@ -1635,6 +1684,11 @@ async fn a_chunk_too_slow_to_drain_inside_the_response_wait_is_resent_shorter() 
         patches[3..].iter().all(|&(_, len)| len <= DRAINS_IN_TIME),
         "the size holds after the cut: {patches:?}"
     );
+    assert_eq!(
+        heads.load(Ordering::SeqCst),
+        2,
+        "every unanswered chunk is followed by a HEAD before anything is re-sent"
+    );
 }
 
 /// **A ceiling-sized chunk on a link that falls to about 1 KiB/s.** A chunk grown to the
@@ -1642,12 +1696,29 @@ async fn a_chunk_too_slow_to_drain_inside_the_response_wait_is_resent_shorter() 
 /// wait. Here the link drains only the protocol minimum until a chunk lands, then recovers.
 /// Every cut that shrinks is a stall re-send, not a transport reset, so the eight reset retries
 /// are never spent on them and the transfer completes rather than giving up at 64 KiB.
+///
+/// `HEAD` reports what the server acknowledged. Once the link recovers the chunk grows again,
+/// and a slow runner can still miss the response wait on a grown chunk; the server has already
+/// accepted it, so the honest answer moves the client on rather than back to offset 0, where
+/// the crawl would start over.
 #[tokio::test]
 async fn a_ceiling_chunk_on_a_link_that_falls_to_a_crawl_shrinks_past_the_reset_budget() {
+    const SIZE: u64 = 100 * 1024 * 1024;
     let patches = Arc::new(Mutex::new(Vec::<(u64, usize)>::new()));
+    let heads_while_crawling = Arc::new(AtomicUsize::new(0));
+    let landed = Arc::new(AtomicU64::new(0));
     let p = patches.clone();
+    let h = heads_while_crawling.clone();
+    let l = landed.clone();
     let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
         ("POST", "/") => created("sess-crawl", CHUNK_SIZE_16MB),
+        ("HEAD", "/sess-crawl") => {
+            let held = l.load(Ordering::SeqCst);
+            if held == 0 {
+                h.fetch_add(1, Ordering::SeqCst);
+            }
+            prefix_head(held, SIZE)
+        }
         ("PATCH", "/sess-crawl") => {
             let mut seen = p.lock().unwrap();
             let offset = req.header("X-Capsule-Offset").unwrap().parse().unwrap();
@@ -1656,8 +1727,9 @@ async fn a_ceiling_chunk_on_a_link_that_falls_to_a_crawl_shrinks_past_the_reset_
             if offset == 0 && req.body.len() as u64 > PROTOCOL_MIN_CHUNK {
                 return MockResponse::hold_open();
             }
-            MockResponse::new(204, "No Content")
-                .header("X-Capsule-Offset", ack_offset(req).to_string())
+            let acked = ack_offset(req);
+            l.fetch_max(acked, Ordering::SeqCst);
+            MockResponse::new(204, "No Content").header("X-Capsule-Offset", acked.to_string())
         }
         other => panic!("unexpected {other:?}"),
     })
@@ -1665,7 +1737,7 @@ async fn a_ceiling_chunk_on_a_link_that_falls_to_a_crawl_shrinks_past_the_reset_
 
     let client = server.client(PROTOCOL).with_request_bounds(short_bounds());
     // The 16 MiB ceiling is the >= 100 MiB tier's.
-    let data = vec![6u8; 100 * 1024 * 1024];
+    let data = vec![6u8; SIZE as usize];
     let outcome = tokio::time::timeout(
         Duration::from_secs(60),
         client.upload(&request(data.len() as u64), &data),
@@ -1687,6 +1759,11 @@ async fn a_ceiling_chunk_on_a_link_that_falls_to_a_crawl_shrinks_past_the_reset_
     assert_eq!(
         patches[13].0, PROTOCOL_MIN_CHUNK,
         "the minimum chunk landed"
+    );
+    assert_eq!(
+        heads_while_crawling.load(Ordering::SeqCst),
+        12,
+        "each unanswered cut reads HEAD before the shorter re-send"
     );
 }
 
@@ -2010,7 +2087,7 @@ async fn a_failed_finalization_is_the_rejection_head_names() {
         ("waiting_for_processing", None),
         (
             "failed_processing",
-            Some(error_codes::UPLOAD_CONTENT_HASH_MISMATCH),
+            Some(error_codes::UPLOAD_ENVELOPE_REJECTED),
         ),
     ]);
     let server = MockServer::start(handler).await;
@@ -2024,14 +2101,363 @@ async fn a_failed_finalization_is_the_rejection_head_names() {
 
     match error {
         UploadError::Rejected { code, .. } => {
-            assert_eq!(
-                code.as_deref(),
-                Some(error_codes::UPLOAD_CONTENT_HASH_MISMATCH)
-            );
+            assert_eq!(code.as_deref(), Some(error_codes::UPLOAD_ENVELOPE_REJECTED));
         }
         other => panic!("expected the finalization's rejection, got {other:?}"),
     }
     assert_eq!(heads.load(Ordering::SeqCst), 2);
+}
+
+/// A source whose identity check reports a change from the `n`th check on (1-based); `None`
+/// never does.
+struct ChangingSource {
+    bytes: Vec<u8>,
+    changes_at: Option<usize>,
+    checks: AtomicUsize,
+}
+
+impl ChangingSource {
+    fn new(bytes: Vec<u8>, changes_at: Option<usize>) -> Self {
+        Self {
+            bytes,
+            changes_at,
+            checks: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl UploadSource for ChangingSource {
+    fn read_at(&self, offset: u64, len: usize) -> std::io::Result<Cow<'_, [u8]>> {
+        self.bytes.read_at(offset, len)
+    }
+
+    fn check_unchanged(&self) -> Result<SourceIdentity, SourceChanged> {
+        let n = self.checks.fetch_add(1, Ordering::SeqCst) + 1;
+        match self.changes_at {
+            Some(at) if n >= at => Err(SourceChanged::new("the file's modification time moved")),
+            _ => Ok(SourceIdentity::Affirmed),
+        }
+    }
+}
+
+/// **`content_hash_mismatch`, source unchanged.** Finalization refused the hash, but the source
+/// is still what the bundle was built from, so the session is re-created once and the blob sent
+/// again; a second refusal is the rejection.
+#[tokio::test]
+async fn a_refused_hash_of_an_unchanged_source_recreates_the_session_once() {
+    let creates = Arc::new(AtomicUsize::new(0));
+    let c = creates.clone();
+    let (inner, heads) = finalizing_server(vec![(
+        "failed_processing",
+        Some(error_codes::UPLOAD_CONTENT_HASH_MISMATCH),
+    )]);
+    let server = MockServer::start(move |req: &MockRequest| {
+        if req.method == "POST" {
+            c.fetch_add(1, Ordering::SeqCst);
+        }
+        inner(req)
+    })
+    .await;
+
+    let data = ChangingSource::new(vec![2u8; 8192], None);
+    let error = server
+        .client(PROTOCOL)
+        .upload(&request(8192), &data)
+        .await
+        .expect_err("a second refusal fails the upload");
+
+    assert_eq!(
+        error.error_code(),
+        Some(error_codes::UPLOAD_CONTENT_HASH_MISMATCH)
+    );
+    assert_eq!(creates.load(Ordering::SeqCst), 2, "re-created exactly once");
+    assert_eq!(
+        heads.load(Ordering::SeqCst),
+        2,
+        "each session's outcome read once"
+    );
+}
+
+/// **`content_hash_mismatch`, source changed.** The source no longer matches its bundle, so the
+/// transfer ends with the typed source-changed error and its client-side code, and nothing is
+/// re-created.
+#[tokio::test]
+async fn a_refused_hash_of_a_changed_source_is_the_typed_source_change() {
+    let creates = Arc::new(AtomicUsize::new(0));
+    let c = creates.clone();
+    let (inner, _heads) = finalizing_server(vec![(
+        "failed_processing",
+        Some(error_codes::UPLOAD_CONTENT_HASH_MISMATCH),
+    )]);
+    let server = MockServer::start(move |req: &MockRequest| {
+        if req.method == "POST" {
+            c.fetch_add(1, Ordering::SeqCst);
+        }
+        inner(req)
+    })
+    .await;
+
+    // The check before the only window passes; the one after the refusal finds the change.
+    let data = ChangingSource::new(vec![2u8; 8192], Some(2));
+    let error = server
+        .client(PROTOCOL)
+        .upload(&request(8192), &data)
+        .await
+        .expect_err("a changed source fails the upload");
+
+    assert!(
+        matches!(error, UploadError::SourceChanged(_)),
+        "typed: {error:?}"
+    );
+    assert_eq!(error.error_code(), Some(error_codes::UPLOAD_SOURCE_CHANGED));
+    assert_eq!(creates.load(Ordering::SeqCst), 1, "nothing re-created");
+}
+
+/// **`content_hash_mismatch`, identity not affirmable.** A source that finds no change but
+/// cannot affirm there was none (every original re-derived from a file on disk, today) gets the
+/// refusal: re-sending would seal bytes that may differ under the nonces already spent, so
+/// nothing is re-created and nothing sent again.
+#[tokio::test]
+async fn a_refused_hash_of_a_source_that_cannot_affirm_its_identity_sends_nothing_again() {
+    let creates = Arc::new(AtomicUsize::new(0));
+    let patches = Arc::new(AtomicUsize::new(0));
+    let (c, p) = (creates.clone(), patches.clone());
+    let (inner, heads) = finalizing_server(vec![(
+        "failed_processing",
+        Some(error_codes::UPLOAD_CONTENT_HASH_MISMATCH),
+    )]);
+    let server = MockServer::start(move |req: &MockRequest| {
+        match req.method.as_str() {
+            "POST" => c.fetch_add(1, Ordering::SeqCst),
+            "PATCH" => p.fetch_add(1, Ordering::SeqCst),
+            _ => 0,
+        };
+        inner(req)
+    })
+    .await;
+
+    // `Unaffirmed` keeps the default identity check: no change found, none affirmed.
+    let data = Unaffirmed(8192);
+    assert_eq!(data.check_unchanged(), Ok(SourceIdentity::Unknown));
+    let error = server
+        .client(PROTOCOL)
+        .upload(&request(8192), &data)
+        .await
+        .expect_err("the refusal ends the upload");
+
+    assert_eq!(
+        error.error_code(),
+        Some(error_codes::UPLOAD_CONTENT_HASH_MISMATCH)
+    );
+    assert_eq!(creates.load(Ordering::SeqCst), 1, "nothing re-created");
+    assert_eq!(patches.load(Ordering::SeqCst), 1, "nothing sent again");
+    assert_eq!(heads.load(Ordering::SeqCst), 1, "the outcome read once");
+}
+
+/// Bytes held in memory cannot change, so they affirm their identity.
+#[test]
+fn in_memory_sources_affirm_their_identity() {
+    let bytes = vec![1u8; 4];
+    assert_eq!(bytes.check_unchanged(), Ok(SourceIdentity::Affirmed));
+    assert_eq!(
+        bytes.as_slice().check_unchanged(),
+        Ok(SourceIdentity::Affirmed)
+    );
+    assert_eq!([0u8; 3].check_unchanged(), Ok(SourceIdentity::Affirmed));
+    // A borrowed source answers for what it borrows.
+    fn through<S: UploadSource>(source: S) -> Result<SourceIdentity, SourceChanged> {
+        source.check_unchanged()
+    }
+    assert_eq!(through(&bytes), Ok(SourceIdentity::Affirmed));
+    assert_eq!(
+        through::<&Unaffirmed>(&Unaffirmed(1)),
+        Ok(SourceIdentity::Unknown)
+    );
+}
+
+/// **A server that keeps losing a range it acknowledged.** Every answer covers the blob, but
+/// every `HEAD` says the server holds nothing: each resume is charged to the recovery budget,
+/// so the transfer ends exhausted instead of re-sending forever.
+#[tokio::test]
+async fn a_server_that_keeps_losing_ranges_exhausts_the_recovery_budget() {
+    let patches = Arc::new(AtomicUsize::new(0));
+    let p = patches.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-lose", CHUNK_SIZE_256KB),
+        ("PATCH", "/sess-lose") => {
+            p.fetch_add(1, Ordering::SeqCst);
+            MockResponse::new(204, "No Content")
+                .header("X-Capsule-Offset", ack_offset(req).to_string())
+                .header("X-Capsule-Upload-Status", "uploading")
+        }
+        ("HEAD", "/sess-lose") => MockResponse::new(200, "OK")
+            .header("X-Capsule-Offset", "0")
+            .header("X-Capsule-Content-Length", "8192")
+            .header("X-Capsule-Upload-Status", "uploading"),
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let data = vec![3u8; 8192];
+    let error = server
+        .client(PROTOCOL)
+        .upload(&request(8192), &data)
+        .await
+        .expect_err("a server that never keeps the blob ends the upload");
+
+    assert!(
+        matches!(error, UploadError::RetriesExhausted(_)),
+        "{error:?}"
+    );
+    let sent = patches.load(Ordering::SeqCst);
+    assert!(
+        sent >= 2 && sent <= MAX_RECOVERIES as usize + 1,
+        "re-sent within the budget, not forever: {sent}"
+    );
+}
+
+/// **A `HEAD` that drops ranges the server acknowledged, mid-transfer.** Chunks up to 1 MiB are
+/// accepted, larger ones go unanswered, and every `HEAD` says the server holds nothing. Each
+/// accepted chunk refills the budgets progress refills, so only the per-transfer recovery
+/// budget can end this: every `HEAD` below what was acknowledged is charged to it, and the
+/// transfer ends exhausted within a bounded number of `HEAD`s instead of restarting from 0
+/// forever. Time is paused, so the response waits are not slept.
+#[tokio::test(start_paused = true)]
+async fn a_head_below_what_the_server_acknowledged_exhausts_the_recovery_budget() {
+    const SIZE: u64 = 64 * 1024 * 1024;
+    const ANSWERED: usize = 1024 * 1024;
+    const HEAD_BOUND: usize = 2 * MAX_RECOVERIES as usize;
+    let heads = Arc::new(AtomicUsize::new(0));
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let h = heads.clone();
+    let a = accepted.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-forget", CHUNK_SIZE_16MB),
+        // Past the bound the server reports the blob finalized, so a client that is never
+        // charged for the dropped ranges completes and fails the test instead of hanging it.
+        ("HEAD", "/sess-forget") if h.load(Ordering::SeqCst) >= HEAD_BOUND => {
+            MockResponse::new(200, "OK")
+                .header("X-Capsule-Offset", SIZE.to_string())
+                .header("X-Capsule-Content-Length", SIZE.to_string())
+                .header("X-Capsule-Upload-Status", "completed")
+        }
+        ("HEAD", "/sess-forget") => empty_head(&h, SIZE),
+        ("PATCH", "/sess-forget") => {
+            if req.body.len() > ANSWERED {
+                return MockResponse::hold_open();
+            }
+            a.fetch_add(1, Ordering::SeqCst);
+            MockResponse::new(204, "No Content")
+                .header("X-Capsule-Offset", ack_offset(req).to_string())
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let client = server.client(PROTOCOL).with_request_bounds(short_bounds());
+    let data = vec![8u8; SIZE as usize];
+    let error = tokio::time::timeout(
+        Duration::from_hours(1),
+        client.upload(&request(SIZE), &data),
+    )
+    .await
+    .expect("the transfer ends rather than restarting forever")
+    .expect_err("a server that keeps forgetting what it acknowledged ends the upload");
+
+    assert!(
+        matches!(error, UploadError::RetriesExhausted(_)),
+        "{error:?}"
+    );
+    let heads = heads.load(Ordering::SeqCst);
+    assert!(
+        accepted.load(Ordering::SeqCst) > 0,
+        "the server acknowledged ranges before it dropped them"
+    );
+    assert!(
+        heads < HEAD_BOUND,
+        "each HEAD below what was acknowledged is charged: {heads} HEADs"
+    );
+}
+
+/// **A source that changes mid-upload.** The identity check before a window's read finds the
+/// change: nothing of that window is sent, the session is cancelled, and the transfer ends with
+/// the typed error.
+#[tokio::test]
+async fn a_source_that_changes_before_a_window_is_read_stops_and_cancels_the_session() {
+    let patches = Arc::new(Mutex::new(Vec::<u64>::new()));
+    let deletes = Arc::new(AtomicUsize::new(0));
+    let p = patches.clone();
+    let d = deletes.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-chg", CHUNK_SIZE_256KB),
+        ("PATCH", "/sess-chg") => {
+            p.lock()
+                .unwrap()
+                .push(req.header("X-Capsule-Offset").unwrap().parse().unwrap());
+            MockResponse::new(204, "No Content")
+                .header("X-Capsule-Offset", ack_offset(req).to_string())
+        }
+        ("DELETE", "/sess-chg") => {
+            d.fetch_add(1, Ordering::SeqCst);
+            MockResponse::new(204, "No Content")
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let size = 3 * CHUNK_SIZE_256KB;
+    let data = ChangingSource::new(vec![9u8; size as usize], Some(2));
+    let error = server
+        .client(PROTOCOL)
+        .upload(&request(size), &data)
+        .await
+        .expect_err("a changed source fails the upload");
+
+    assert!(matches!(error, UploadError::SourceChanged(_)), "{error:?}");
+    assert_eq!(
+        *patches.lock().unwrap(),
+        vec![0],
+        "nothing after the change is sent"
+    );
+    assert_eq!(
+        deletes.load(Ordering::SeqCst),
+        1,
+        "the session is cancelled"
+    );
+}
+
+/// A source that finds a re-derived window differs from what it first sealed refuses the read
+/// with [`SourceChanged`] as the error's payload; the transfer ends typed, not as an I/O error.
+#[tokio::test]
+async fn a_read_refused_as_a_source_change_is_typed() {
+    struct TagMismatch;
+    impl UploadSource for TagMismatch {
+        fn read_at(&self, _: u64, _: usize) -> std::io::Result<Cow<'_, [u8]>> {
+            Err(std::io::Error::other(SourceChanged::new(
+                "a re-derived STREAM chunk's tag differs from the one recorded",
+            )))
+        }
+    }
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-tag", CHUNK_SIZE_256KB),
+        ("DELETE", "/sess-tag") => MockResponse::new(204, "No Content"),
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let error = server
+        .client(PROTOCOL)
+        .upload(&request(8192), &TagMismatch)
+        .await
+        .expect_err("a refused read fails the upload");
+    match error {
+        UploadError::SourceChanged(changed) => assert!(changed.reason.contains("tag")),
+        other => panic!("expected a typed source change, got {other:?}"),
+    }
+
+    // Any other read failure stays an I/O error.
+    let plain = UploadError::of_read(std::io::Error::other("disk on fire"));
+    assert!(matches!(plain, UploadError::Io(_)), "{plain:?}");
 }
 
 /// A duplicate create that hands back a full session `waiting_for_processing` sends nothing more
@@ -2724,4 +3150,890 @@ async fn a_refused_range_gives_its_reservation_back() {
         gate.events.lock().unwrap().last(),
         Some(&GateEvent::Released)
     );
+}
+
+// ─── The range scheduler on the block grid ───────────────────────────────────
+
+/// What a [`Grid`] script may do with one `PATCH`: answer it, and change what the server holds
+/// first.
+type Script = dyn Fn(usize, (u64, u64), &mut CommittedSet) -> Option<MockResponse> + Send + Sync;
+
+/// A block-grid server for one session `sess-grid`: it commits each range it is sent and answers
+/// `204` with the committed prefix, the committed set and the session's state, after `delay`.
+/// `script(n, range, held)` may answer the `n`th `PATCH` (1-based) instead, and may change what
+/// the server holds. `HEAD` reports the committed set, `completed` once it is full.
+struct Grid {
+    size: u64,
+    advice: &'static str,
+    delay: Duration,
+    held: Mutex<CommittedSet>,
+    /// Every `PATCH` as (offset, length, when it arrived).
+    patches: Mutex<Vec<(u64, u64, std::time::Instant)>>,
+    /// Every request's method, in arrival order.
+    methods: Mutex<Vec<&'static str>>,
+    script: Box<Script>,
+}
+
+impl Grid {
+    fn new(size: u64, advice: &'static str, delay: Duration, script: Box<Script>) -> Arc<Self> {
+        Arc::new(Self {
+            size,
+            advice,
+            delay,
+            held: Mutex::new(CommittedSet::empty()),
+            patches: Mutex::new(Vec::new()),
+            methods: Mutex::new(Vec::new()),
+            script,
+        })
+    }
+
+    fn progress(&self, response: MockResponse, held: &CommittedSet) -> MockResponse {
+        let status = if held.covers(self.size) {
+            "waiting_for_processing"
+        } else {
+            "uploading"
+        };
+        response
+            .header("X-Capsule-Offset", held.prefix_end().to_string())
+            .header("X-Capsule-Committed", held.to_header())
+            .header("X-Capsule-Upload-Status", status)
+    }
+
+    fn answer(&self, req: &MockRequest) -> MockResponse {
+        match (req.method.as_str(), req.path.as_str()) {
+            ("POST", "/") => {
+                self.methods.lock().unwrap().push("POST");
+                created_without_advice("sess-grid", CHUNK_SIZE_256KB)
+                    .header("X-Capsule-Advice", self.advice)
+            }
+            ("HEAD", "/sess-grid") => {
+                self.methods.lock().unwrap().push("HEAD");
+                let held = self.held.lock().unwrap();
+                let status = if held.covers(self.size) {
+                    "completed"
+                } else {
+                    "uploading"
+                };
+                MockResponse::new(200, "OK")
+                    .header("X-Capsule-Offset", held.prefix_end().to_string())
+                    .header("X-Capsule-Committed", held.to_header())
+                    .header("X-Capsule-Content-Length", self.size.to_string())
+                    .header("X-Capsule-Upload-Status", status)
+                    .header("X-Capsule-Advice", self.advice)
+            }
+            ("PATCH", "/sess-grid") => {
+                self.methods.lock().unwrap().push("PATCH");
+                let end = ack_offset(req);
+                let offset = end - req.body.len() as u64;
+                let n = {
+                    let mut patches = self.patches.lock().unwrap();
+                    patches.push((offset, end - offset, std::time::Instant::now()));
+                    patches.len()
+                };
+                let mut held = self.held.lock().unwrap();
+                if let Some(answer) = (self.script)(n, (offset, end), &mut held) {
+                    return answer;
+                }
+                assert!(
+                    !held.contains(offset, end) || held.is_empty(),
+                    "the client re-sent [{offset}, {end}), which it was told is committed"
+                );
+                held.insert(offset, end);
+                self.progress(MockResponse::new(204, "No Content"), &held)
+                    .after(self.delay)
+            }
+            ("DELETE", "/sess-grid") => {
+                self.methods.lock().unwrap().push("DELETE");
+                MockResponse::new(204, "No Content")
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    fn offsets(&self) -> Vec<u64> {
+        self.patches.lock().unwrap().iter().map(|p| p.0).collect()
+    }
+
+    fn heads(&self) -> usize {
+        self.methods
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|m| **m == "HEAD")
+            .count()
+    }
+}
+
+async fn grid_server(grid: &Arc<Grid>) -> MockServer {
+    let grid = grid.clone();
+    MockServer::start(move |req: &MockRequest| grid.answer(req)).await
+}
+
+const C: u64 = CHUNK_SIZE_256KB;
+
+/// **P ranges at once, lowest gap first.** With a window of four, the first four ranges are in
+/// flight together — the four lowest — and every byte lands.
+#[tokio::test]
+async fn a_window_of_four_sends_the_four_lowest_ranges_at_once() {
+    let size = 8 * C;
+    let grid = Grid::new(
+        size,
+        "chunk=262144, sessions=4, ranges=4, ttl=300",
+        Duration::from_millis(300),
+        Box::new(|_, _, _| None),
+    );
+    let server = grid_server(&grid).await;
+    let data = vec![1u8; size as usize];
+    let outcome = server
+        .client(PROTOCOL)
+        .with_ranges_window(4)
+        .upload(&request(size), &data)
+        .await
+        .unwrap();
+
+    assert!(matches!(outcome, UploadOutcome::Completed { .. }));
+    let patches = grid.patches.lock().unwrap().clone();
+    assert_eq!(patches.len(), 8, "every range once: {patches:?}");
+    let mut first: Vec<u64> = patches[..4].iter().map(|p| p.0).collect();
+    first.sort_unstable();
+    assert_eq!(
+        first,
+        vec![0, C, 2 * C, 3 * C],
+        "the four lowest gaps first"
+    );
+    assert!(
+        patches[3].2 - patches[0].2 < Duration::from_millis(250),
+        "the first four were in flight together"
+    );
+    assert!(grid.held.lock().unwrap().covers(size));
+}
+
+/// The session's advertised `ranges` narrows the client's own window.
+#[tokio::test]
+async fn the_sessions_advertised_ranges_narrow_the_window() {
+    let size = 4 * C;
+    let grid = Grid::new(
+        size,
+        "chunk=262144, sessions=4, ranges=2, ttl=300",
+        Duration::from_millis(300),
+        Box::new(|_, _, _| None),
+    );
+    let server = grid_server(&grid).await;
+    let data = vec![1u8; size as usize];
+    server
+        .client(PROTOCOL)
+        .with_ranges_window(4)
+        .upload(&request(size), &data)
+        .await
+        .unwrap();
+
+    let patches = grid.patches.lock().unwrap().clone();
+    assert_eq!(patches.len(), 4);
+    assert!(
+        patches[2].2 - patches[0].2 >= Duration::from_millis(250),
+        "the third range waited for one of the first two: {patches:?}"
+    );
+}
+
+/// The window is clamped into the protocol's bounds.
+#[test]
+fn the_client_window_is_clamped_into_the_protocol_bounds() {
+    let transport = UploadTransport::with_static_token(
+        reqwest::Client::new(),
+        "http://localhost",
+        PROTOCOL,
+        StaticToken("t".into()),
+    );
+    let client = UploadClient::new(transport);
+    assert_eq!(client.ranges_window(), DEFAULT_CLIENT_RANGES);
+    assert_eq!(client.clone().with_ranges_window(0).ranges_window(), 1);
+    assert_eq!(
+        client.with_ranges_window(99).ranges_window(),
+        MAX_RANGES_WINDOW
+    );
+}
+
+/// **`range_conflict` carrying the committed set.** The server already held the first range (a
+/// lost answer from an earlier attempt), so the client re-plans from the set the refusal
+/// carries: nothing it names is sent again, and no `HEAD` is needed.
+#[tokio::test]
+async fn a_range_conflict_carrying_the_committed_set_replans_without_head() {
+    let size = 3 * C;
+    let grid = Grid::new(
+        size,
+        "chunk=262144, ranges=1",
+        Duration::ZERO,
+        Box::new(|n, _, held| {
+            (n == 1).then(|| {
+                held.insert(0, C);
+                MockResponse::api_error(
+                    409,
+                    "Conflict",
+                    error_codes::UPLOAD_RANGE_CONFLICT,
+                    "overlap",
+                )
+                .header("X-Capsule-Committed", held.to_header())
+            })
+        }),
+    );
+    let server = grid_server(&grid).await;
+    let data = vec![2u8; size as usize];
+    server
+        .client(PROTOCOL)
+        .upload(&request(size), &data)
+        .await
+        .unwrap();
+
+    assert_eq!(grid.offsets(), vec![0, C, 2 * C]);
+    assert_eq!(grid.heads(), 1, "only the finalization poll");
+}
+
+/// **`range_conflict` without a committed set** re-plans from `HEAD`.
+#[tokio::test]
+async fn a_range_conflict_without_a_committed_set_replans_from_head() {
+    let size = 3 * C;
+    let grid = Grid::new(
+        size,
+        "chunk=262144, ranges=1",
+        Duration::ZERO,
+        Box::new(|n, _, held| {
+            (n == 1).then(|| {
+                held.insert(0, C);
+                MockResponse::api_error(
+                    409,
+                    "Conflict",
+                    error_codes::UPLOAD_RANGE_CONFLICT,
+                    "overlap",
+                )
+            })
+        }),
+    );
+    let server = grid_server(&grid).await;
+    let data = vec![2u8; size as usize];
+    server
+        .client(PROTOCOL)
+        .upload(&request(size), &data)
+        .await
+        .unwrap();
+
+    assert_eq!(grid.offsets(), vec![0, C, 2 * C]);
+    assert_eq!(
+        grid.methods.lock().unwrap()[..3],
+        ["POST", "PATCH", "HEAD"],
+        "the refusal is followed by a HEAD"
+    );
+}
+
+/// **`range_conflict` with `Retry-After`**: the overlap is with a range still in flight, so the
+/// client waits it out before it re-plans.
+#[tokio::test]
+async fn a_range_conflict_with_retry_after_is_waited_out() {
+    let size = C;
+    let grid = Grid::new(
+        size,
+        "chunk=262144, ranges=1",
+        Duration::ZERO,
+        Box::new(|n, _, held| {
+            (n == 1).then(|| {
+                MockResponse::api_error(
+                    409,
+                    "Conflict",
+                    error_codes::UPLOAD_RANGE_CONFLICT,
+                    "in flight",
+                )
+                .header("X-Capsule-Committed", held.to_header())
+                .header("Retry-After", "1")
+            })
+        }),
+    );
+    let server = grid_server(&grid).await;
+    let data = vec![2u8; size as usize];
+    server
+        .client(PROTOCOL)
+        .upload(&request(size), &data)
+        .await
+        .unwrap();
+
+    let patches = grid.patches.lock().unwrap().clone();
+    assert_eq!(patches.len(), 2);
+    assert_eq!(
+        (patches[0].0, patches[1].0),
+        (0, 0),
+        "the same range, re-sent"
+    );
+    assert!(patches[1].2 - patches[0].2 >= Duration::from_secs(1));
+}
+
+/// **`too_fragmented`**: the ranges in flight finish first, then the refused range is re-planned.
+#[tokio::test]
+async fn too_fragmented_lets_the_ranges_in_flight_finish_then_replans() {
+    let size = 4 * C;
+    let grid = Grid::new(
+        size,
+        "chunk=262144, ranges=4",
+        Duration::from_millis(300),
+        Box::new(|n, _, _| {
+            (n == 2).then(|| {
+                MockResponse::api_error(
+                    409,
+                    "Conflict",
+                    error_codes::UPLOAD_TOO_FRAGMENTED,
+                    "fragments",
+                )
+                .header("Retry-After", "0")
+            })
+        }),
+    );
+    let server = grid_server(&grid).await;
+    let data = vec![3u8; size as usize];
+    server
+        .client(PROTOCOL)
+        .with_ranges_window(2)
+        .upload(&request(size), &data)
+        .await
+        .unwrap();
+
+    let patches = grid.patches.lock().unwrap().clone();
+    assert_eq!(patches.len(), 5, "the refused range once more: {patches:?}");
+    assert!(
+        patches[2].2 - patches[0].2 >= Duration::from_millis(250),
+        "nothing is sent until the range in flight returned: {patches:?}"
+    );
+    assert!(grid.held.lock().unwrap().covers(size));
+}
+
+/// **`too_many_in_flight`**: the client waits, then narrows its window to the ranges it still
+/// had in flight, so it never asks for more than the server is holding.
+#[tokio::test]
+async fn too_many_in_flight_narrows_the_window() {
+    let size = 6 * C;
+    let grid = Grid::new(
+        size,
+        "chunk=262144, ranges=4",
+        Duration::from_millis(300),
+        Box::new(|n, _, _| {
+            (n == 2).then(|| {
+                MockResponse::api_error(
+                    409,
+                    "Conflict",
+                    error_codes::UPLOAD_TOO_MANY_IN_FLIGHT,
+                    "window",
+                )
+                .header("Retry-After", "0")
+            })
+        }),
+    );
+    let server = grid_server(&grid).await;
+    let data = vec![4u8; size as usize];
+    server
+        .client(PROTOCOL)
+        .with_ranges_window(2)
+        .upload(&request(size), &data)
+        .await
+        .unwrap();
+
+    let patches = grid.patches.lock().unwrap().clone();
+    assert_eq!(patches.len(), 7);
+    for pair in patches[2..].windows(2) {
+        assert!(
+            pair[1].2 - pair[0].2 >= Duration::from_millis(250),
+            "one range at a time after the refusal: {patches:?}"
+        );
+    }
+}
+
+/// **A lost ACK.** The server committed the range, then the connection dropped before its
+/// answer. The client reads `HEAD` before it sends anything else, so the committed range is not
+/// sent again.
+#[tokio::test]
+async fn a_lost_answer_reads_head_and_sends_nothing_already_committed() {
+    let size = 3 * C;
+    let grid = Grid::new(
+        size,
+        "chunk=262144, ranges=1",
+        Duration::ZERO,
+        Box::new(|n, (offset, end), held| {
+            (n == 1).then(|| {
+                held.insert(offset, end);
+                MockResponse::drop_connection()
+            })
+        }),
+    );
+    let server = grid_server(&grid).await;
+    let data = vec![5u8; size as usize];
+    server
+        .client(PROTOCOL)
+        .upload(&request(size), &data)
+        .await
+        .unwrap();
+
+    assert_eq!(grid.offsets(), vec![0, C, 2 * C], "nothing re-sent");
+    assert_eq!(
+        grid.methods.lock().unwrap()[..3],
+        ["POST", "PATCH", "HEAD"],
+        "the reset is followed by a HEAD"
+    );
+}
+
+/// **The committed set on a `204`.** The answer says the server also holds a later range (an
+/// earlier attempt's), so the client plans around it.
+#[tokio::test]
+async fn the_committed_set_a_chunk_answer_carries_is_planned_from() {
+    let size = 3 * C;
+    let grid = Grid::new(
+        size,
+        "chunk=262144, ranges=1",
+        Duration::ZERO,
+        Box::new(|n, _, held| {
+            if n == 1 {
+                held.insert(2 * C, 3 * C);
+            }
+            None
+        }),
+    );
+    let server = grid_server(&grid).await;
+    let data = vec![6u8; size as usize];
+    server
+        .client(PROTOCOL)
+        .upload(&request(size), &data)
+        .await
+        .unwrap();
+
+    assert_eq!(grid.offsets(), vec![0, C], "the held range is never sent");
+}
+
+/// **A record the server lost.** Every range was answered, but the last answer says the session
+/// is still `uploading`: the client polls `HEAD`, re-sends what the server no longer holds, and
+/// only then is the upload complete.
+#[tokio::test]
+async fn a_range_the_server_lost_is_sent_again_before_completion() {
+    let size = 2 * C;
+    let grid = Grid::new(
+        size,
+        "chunk=262144, ranges=1",
+        Duration::ZERO,
+        Box::new(|n, (offset, end), held| {
+            (n == 2).then(|| {
+                // The record of the first range is lost as the second commits.
+                *held = CommittedSet::empty();
+                held.insert(offset, end);
+                MockResponse::new(204, "No Content")
+                    .header("X-Capsule-Offset", "0")
+                    .header("X-Capsule-Committed", held.to_header())
+                    .header("X-Capsule-Upload-Status", "uploading")
+            })
+        }),
+    );
+    let server = grid_server(&grid).await;
+    let data = vec![7u8; size as usize];
+    let outcome = server
+        .client(PROTOCOL)
+        .upload(&request(size), &data)
+        .await
+        .unwrap();
+
+    assert!(matches!(outcome, UploadOutcome::Completed { .. }));
+    assert_eq!(
+        grid.offsets(),
+        vec![0, C, 0],
+        "the lost range is sent again"
+    );
+    assert!(grid.held.lock().unwrap().covers(size));
+}
+
+// ─── Re-sends only from a source that affirms it is unchanged ───────────────
+
+/// A lost answer for a range the server did **not** keep: the first `PATCH` resets.
+fn a_lost_uncommitted_answer() -> Box<Script> {
+    Box::new(|n, _, _| (n == 1).then(MockResponse::drop_connection))
+}
+
+/// **A lost answer, source unchanged.** The range the server did not keep is read again and
+/// re-sent, because the source affirms it returns the same bytes.
+#[tokio::test]
+async fn a_lost_answer_re_sends_from_a_source_that_affirms_it_is_unchanged() {
+    let size = 2 * C;
+    let grid = Grid::new(
+        size,
+        "chunk=262144, ranges=1",
+        Duration::ZERO,
+        a_lost_uncommitted_answer(),
+    );
+    let server = grid_server(&grid).await;
+    let data = ChangingSource::new(vec![5u8; size as usize], None);
+    let outcome = server
+        .client(PROTOCOL)
+        .upload(&request(size), &data)
+        .await
+        .unwrap();
+
+    assert!(matches!(outcome, UploadOutcome::Completed { .. }));
+    assert_eq!(grid.offsets(), vec![0, 0, C], "the lost range once more");
+}
+
+/// **A lost answer, source changed before the re-send.** The check just before the range would
+/// be read again finds the change: the transfer ends typed, the session is cancelled, and the
+/// range is never sent a second time.
+#[tokio::test]
+async fn a_lost_answer_of_a_source_changed_since_is_never_re_sent() {
+    let size = 2 * C;
+    let grid = Grid::new(
+        size,
+        "chunk=262144, ranges=1",
+        Duration::ZERO,
+        a_lost_uncommitted_answer(),
+    );
+    let server = grid_server(&grid).await;
+    // The check before the first window passes; the one before its re-send finds the change.
+    let data = ChangingSource::new(vec![5u8; size as usize], Some(2));
+    let error = server
+        .client(PROTOCOL)
+        .upload(&request(size), &data)
+        .await
+        .expect_err("a changed source ends the transfer");
+
+    assert!(
+        matches!(error, UploadError::SourceChanged(_)),
+        "typed: {error:?}"
+    );
+    assert_eq!(grid.offsets(), vec![0], "nothing sent again");
+    assert_eq!(
+        grid.methods.lock().unwrap().last(),
+        Some(&"DELETE"),
+        "the session is cancelled"
+    );
+}
+
+/// **A lost answer, identity not affirmable.** A source that finds no change but cannot affirm
+/// there was none is never read twice for the same range: the transfer ends typed.
+#[tokio::test]
+async fn a_lost_answer_of_a_source_that_cannot_affirm_its_identity_is_never_re_sent() {
+    let size = 2 * C;
+    let grid = Grid::new(
+        size,
+        "chunk=262144, ranges=1",
+        Duration::ZERO,
+        a_lost_uncommitted_answer(),
+    );
+    let server = grid_server(&grid).await;
+    let error = server
+        .client(PROTOCOL)
+        .upload(&request(size), &Unaffirmed(size))
+        .await
+        .expect_err("an unaffirmed re-send ends the transfer");
+
+    assert!(
+        matches!(error, UploadError::SourceChanged(_)),
+        "typed: {error:?}"
+    );
+    assert_eq!(grid.offsets(), vec![0], "nothing sent again");
+}
+
+/// **A lost range record, source changed.** Finalization finds a range missing that was sent;
+/// the source changed since, so it is not sent again.
+#[tokio::test]
+async fn a_lost_range_record_of_a_changed_source_is_never_re_sent() {
+    let size = 2 * C;
+    let grid = Grid::new(
+        size,
+        "chunk=262144, ranges=1",
+        Duration::ZERO,
+        Box::new(|n, (offset, end), held| {
+            (n == 2).then(|| {
+                *held = CommittedSet::empty();
+                held.insert(offset, end);
+                MockResponse::new(204, "No Content")
+                    .header("X-Capsule-Offset", "0")
+                    .header("X-Capsule-Committed", held.to_header())
+                    .header("X-Capsule-Upload-Status", "uploading")
+            })
+        }),
+    );
+    let server = grid_server(&grid).await;
+    // Two windows pass their checks; the third, before the lost range is read again, fails.
+    let data = ChangingSource::new(vec![7u8; size as usize], Some(3));
+    let error = server
+        .client(PROTOCOL)
+        .upload(&request(size), &data)
+        .await
+        .expect_err("a changed source ends the transfer");
+
+    assert!(
+        matches!(error, UploadError::SourceChanged(_)),
+        "typed: {error:?}"
+    );
+    assert_eq!(
+        grid.offsets(),
+        vec![0, C],
+        "the lost range is not sent again"
+    );
+}
+
+/// **A resume, source changed.** A session from before this transfer may hold any byte already
+/// sent, so a resumed read is a re-send: a source changed since is not read at all.
+#[tokio::test]
+async fn a_resume_of_a_changed_source_sends_nothing() {
+    let patches = Arc::new(AtomicUsize::new(0));
+    let deletes = Arc::new(AtomicUsize::new(0));
+    let (p, d) = (patches.clone(), deletes.clone());
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("HEAD", "/sess-R") => MockResponse::new(200, "OK")
+            .header("X-Capsule-Offset", CHUNK_SIZE_256KB.to_string())
+            .header("X-Capsule-Content-Length", (300 * 1024).to_string())
+            .header("X-Capsule-Upload-Status", "uploading"),
+        ("PATCH", "/sess-R") => {
+            p.fetch_add(1, Ordering::SeqCst);
+            MockResponse::new(204, "No Content")
+                .header("X-Capsule-Offset", ack_offset(req).to_string())
+        }
+        ("DELETE", "/sess-R") => {
+            d.fetch_add(1, Ordering::SeqCst);
+            MockResponse::new(204, "No Content")
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let size = 300 * 1024;
+    let data = ChangingSource::new(vec![2u8; size as usize], Some(1));
+    let error = server
+        .client(PROTOCOL)
+        .upload_resuming("sess-R", &request(size), &data)
+        .await
+        .expect_err("a changed source ends the resume");
+
+    assert!(
+        matches!(error, UploadError::SourceChanged(_)),
+        "typed: {error:?}"
+    );
+    assert_eq!(patches.load(Ordering::SeqCst), 0, "nothing sent");
+    assert_eq!(
+        deletes.load(Ordering::SeqCst),
+        1,
+        "the session is cancelled"
+    );
+}
+
+/// **A resume, identity not affirmable.** Nothing is read from a source that cannot affirm it
+/// is what the session's earlier bytes were read from.
+#[tokio::test]
+async fn a_resume_of_a_source_that_cannot_affirm_its_identity_sends_nothing() {
+    let patches = Arc::new(AtomicUsize::new(0));
+    let p = patches.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("HEAD", "/sess-R") => MockResponse::new(200, "OK")
+            .header("X-Capsule-Offset", "0")
+            .header("X-Capsule-Content-Length", "8192")
+            .header("X-Capsule-Upload-Status", "uploading"),
+        ("PATCH", "/sess-R") => {
+            p.fetch_add(1, Ordering::SeqCst);
+            MockResponse::new(204, "No Content")
+                .header("X-Capsule-Offset", ack_offset(req).to_string())
+        }
+        ("DELETE", "/sess-R") => MockResponse::new(204, "No Content"),
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let error = server
+        .client(PROTOCOL)
+        .upload_resuming("sess-R", &request(8192), &Unaffirmed(8192))
+        .await
+        .expect_err("an unaffirmed resume ends the transfer");
+
+    assert!(
+        matches!(error, UploadError::SourceChanged(_)),
+        "typed: {error:?}"
+    );
+    assert_eq!(patches.load(Ordering::SeqCst), 0, "nothing sent");
+}
+
+/// A real library original: its workspace's temp dir, the bundle and the plaintext's path.
+fn library_original() -> (
+    tempfile::TempDir,
+    capsule_library::lifecycle::UploadBundle,
+    std::path::PathBuf,
+) {
+    use capsule_core::crypto::primitives::Argon2Params;
+    use capsule_library::lifecycle::Workspace;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let lib = dir.path().join("library");
+    std::fs::create_dir_all(&lib).unwrap();
+    let src = dir.path().join("photo.jpg");
+    std::fs::write(&src, b"\xFF\xD8\xFF an original edited while it is pushed").unwrap();
+    let fast = Argon2Params {
+        mem_kib: 64,
+        t_cost: 1,
+        p_cost: 1,
+    };
+    let mut ws = Workspace::create_with_params(&lib, b"passphrase", fast).unwrap();
+    let album = ws.default_album_id();
+    ws.ensure_album(album, "Imports").unwrap();
+    let asset_id = ws.import_asset(album, &src).unwrap();
+    let bundle = ws.upload_bundle(&asset_id).unwrap();
+    let path = ws.original_path(&asset_id).unwrap();
+    (dir, bundle, path)
+}
+
+/// A one-range session whose first `PATCH` runs `on_first` and then resets, and whose later
+/// `PATCH`es commit the blob. Counts each method.
+async fn lost_first_answer_server(
+    size: u64,
+    on_first: impl Fn() + Send + Sync + 'static,
+) -> (MockServer, Arc<Mutex<Vec<&'static str>>>) {
+    let methods = Arc::new(Mutex::new(Vec::new()));
+    let m = methods.clone();
+    let held = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let server = MockServer::start(move |req: &MockRequest| {
+        let committed = |done: bool| {
+            if done {
+                format!("0-{}", size - 1)
+            } else {
+                String::new()
+            }
+        };
+        match (req.method.as_str(), req.path.as_str()) {
+            ("POST", "/") => {
+                m.lock().unwrap().push("POST");
+                created("sess-orig", CHUNK_SIZE_256KB)
+            }
+            ("HEAD", "/sess-orig") => {
+                m.lock().unwrap().push("HEAD");
+                let done = held.load(Ordering::SeqCst);
+                MockResponse::new(200, "OK")
+                    .header("X-Capsule-Offset", if done { size } else { 0 }.to_string())
+                    .header("X-Capsule-Committed", committed(done))
+                    .header("X-Capsule-Content-Length", size.to_string())
+                    .header(
+                        "X-Capsule-Upload-Status",
+                        if done { "completed" } else { "uploading" },
+                    )
+            }
+            ("PATCH", "/sess-orig") => {
+                let first = !m.lock().unwrap().contains(&"PATCH");
+                m.lock().unwrap().push("PATCH");
+                if first {
+                    on_first();
+                    return MockResponse::drop_connection();
+                }
+                held.store(true, Ordering::SeqCst);
+                MockResponse::new(204, "No Content")
+                    .header("X-Capsule-Offset", size.to_string())
+                    .header("X-Capsule-Committed", committed(true))
+                    .header("X-Capsule-Upload-Status", "waiting_for_processing")
+            }
+            ("DELETE", "/sess-orig") => {
+                m.lock().unwrap().push("DELETE");
+                MockResponse::new(204, "No Content")
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    })
+    .await;
+    (server, methods)
+}
+
+/// **A library original, unchanged.** Its first answer is lost; the file on disk is the one
+/// the bundle verified, so the original affirms it and its window is sent again.
+#[tokio::test]
+async fn an_unchanged_library_original_is_re_sent_after_a_lost_answer() {
+    let (_dir, bundle, _path) = library_original();
+    let data = crate::push::BlobBytes::Original(&bundle.original);
+    let size = bundle.original.size();
+    let (server, methods) = lost_first_answer_server(size, || {}).await;
+    let outcome = server
+        .client(PROTOCOL)
+        .upload(&request(size), &data)
+        .await
+        .unwrap();
+
+    assert!(matches!(outcome, UploadOutcome::Completed { .. }));
+    let methods = methods.lock().unwrap();
+    assert_eq!(
+        methods.iter().filter(|m| **m == "PATCH").count(),
+        2,
+        "re-sent once: {methods:?}"
+    );
+}
+
+/// **A library original edited mid-upload.** The plaintext is rewritten while its first
+/// window is in flight and that answer is lost: the re-send's check sees the file is no longer
+/// the one verified, so no second ciphertext is sealed under the window's nonces.
+#[tokio::test]
+async fn a_library_original_edited_mid_upload_is_never_re_sent() {
+    let (_dir, bundle, path) = library_original();
+    let data = crate::push::BlobBytes::Original(&bundle.original);
+    let size = bundle.original.size();
+    let edited = path.clone();
+    let (server, methods) = lost_first_answer_server(size, move || {
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&edited)
+            .unwrap();
+        std::io::Write::write_all(&mut &file, b"\xFF\xD8\xFF EDITED").unwrap();
+        file.set_modified(std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1))
+            .unwrap();
+    })
+    .await;
+    let error = server
+        .client(PROTOCOL)
+        .upload(&request(size), &data)
+        .await
+        .expect_err("an edited original ends the transfer");
+
+    assert!(
+        matches!(error, UploadError::SourceChanged(_)),
+        "typed: {error:?}"
+    );
+    assert_eq!(error.error_code(), Some(error_codes::UPLOAD_SOURCE_CHANGED));
+    let methods = methods.lock().unwrap();
+    assert_eq!(
+        methods.iter().filter(|m| **m == "PATCH").count(),
+        1,
+        "nothing sent again: {methods:?}"
+    );
+    assert_eq!(methods.last(), Some(&"DELETE"), "the session is cancelled");
+}
+
+/// A `duplicate_blob` names the existing asset in its structured `existing_asset` member, which
+/// wins over anything the English detail says.
+#[tokio::test]
+async fn a_duplicate_blob_is_merged_onto_its_structured_existing_asset() {
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => MockResponse::new(409, "Conflict").json_body(format!(
+            r#"{{"error":"This content is already stored as asset from-detail","code":{:?},"existing_asset":"from-member"}}"#,
+            error_codes::UPLOAD_DUPLICATE_BLOB
+        )),
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+    let outcome = server
+        .client(PROTOCOL)
+        .upload(&request(4096), &[0u8; 4096])
+        .await
+        .unwrap();
+    match outcome {
+        UploadOutcome::AlreadyStored { asset_ref } => assert_eq!(asset_ref, "from-member"),
+        other @ UploadOutcome::Completed { .. } => panic!("expected a merge, got {other:?}"),
+    }
+    assert_eq!(duplicate_asset_ref(Some("  "), "as asset x"), "x");
+    assert_eq!(duplicate_asset_ref(None, "no id here"), "no id here");
+}
+
+/// A session's state never moves backwards when answers return out of order, and an answer
+/// with no state (an older server) leaves none.
+#[test]
+fn the_session_state_only_moves_forward() {
+    let s = |v: &str| Some(v.to_owned());
+    assert_eq!(
+        later_state(s(STATUS_WAITING), s("uploading")),
+        s(STATUS_WAITING)
+    );
+    assert_eq!(
+        later_state(s("uploading"), s(STATUS_WAITING)),
+        s(STATUS_WAITING)
+    );
+    assert_eq!(later_state(s(STATUS_WAITING), None), None);
+    assert_eq!(later_state(None, s("uploading")), s("uploading"));
 }

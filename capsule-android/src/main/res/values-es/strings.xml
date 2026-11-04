@@ -1949,6 +1949,7 @@
     <string name="error_upload_session_not_active">Esta subida ya ha finalizado.</string>
     <string name="error_upload_session_not_found">La sesión de subida ha caducado. Empezando de nuevo…</string>
     <string name="error_upload_size_exceeded">La subida envió más datos de los que declaró.</string>
+    <string name="error_upload_source_changed">Este archivo cambió mientras se subía, así que se detuvo su subida.</string>
     <string name="error_upload_stale_revival">Este cambio se basa en una versión desactualizada del elemento.</string>
     <string name="error_upload_storage_full">El servidor no tiene espacio de almacenamiento. La subida se reanudará cuando se libere espacio.</string>
     <string name="error_upload_storage_inconsistent">El servidor tuvo un problema de almacenamiento. Inténtalo de nuevo.</string>

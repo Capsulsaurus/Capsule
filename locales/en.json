@@ -8503,6 +8503,10 @@
     "message": "The upload sent more data than it declared.",
     "context": "HTTP 400, invariant 11: cumulative received bytes would exceed the declared size. Session moves to FailedProcessing."
   },
+  "error.upload.source_changed": {
+    "message": "This file changed while it was uploading, so its upload was stopped.",
+    "context": "Client-side, never sent by the server: the file an original is read from no longer matches what its upload bundle was built from (its size, modification time or file id changed, or a re-read chunk disagrees with the one first sealed). The client stops that blob and cancels its session rather than send different bytes under the same nonce; the asset is pushed again once its bundle is rebuilt."
+  },
   "error.upload.stale_revival": {
     "message": "This change is based on an out-of-date version of the item.",
     "context": "HTTP 409 on POST /albums/{album_id}/ops, invariant 17: the manifest's prior_provenance_hash does not match the asset's current provenance-chain head (a stale or forked position, e.g. a peer replaying an old manifest to revive a deleted asset)."

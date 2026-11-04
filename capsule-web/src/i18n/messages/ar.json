@@ -1958,6 +1958,7 @@
   "error.upload.session_not_active": "اكتمل هذا الرفع بالفعل.",
   "error.upload.session_not_found": "انتهت صلاحية جلسة الرفع. جارٍ البدء من جديد…",
   "error.upload.size_exceeded": "أرسل الرفع بيانات أكثر مما أعلن عنه.",
+  "error.upload.source_changed": "تغيّر هذا الملف أثناء رفعه، لذلك أُوقف رفعه.",
   "error.upload.stale_revival": "يستند هذا التغيير إلى نسخة قديمة من العنصر.",
   "error.upload.storage_full": "نفدت مساحة التخزين على الخادم. سيُستأنف الرفع بمجرد تحرير مساحة.",
   "error.upload.storage_inconsistent": "واجه الخادم مشكلة في التخزين. يُرجى المحاولة مرة أخرى.",

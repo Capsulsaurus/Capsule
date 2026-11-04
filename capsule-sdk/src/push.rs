@@ -79,8 +79,8 @@ use crate::upload::queue::{
     GrantId, LaneWindows, QueuedJob, RangeId, RangeRefused, ServerKey, UploadQueue,
 };
 use crate::upload::{
-    BlobRole, CreateUploadRequest, ManifestEnvelope, TransferGate, UploadClient, UploadError,
-    UploadOutcome, UploadSource,
+    BlobRole, CreateUploadRequest, ManifestEnvelope, SourceChanged, SourceIdentity, TransferGate,
+    UploadClient, UploadError, UploadOutcome, UploadSource,
 };
 use crate::verify::{AssetQuery, StorageVerifyClient, VerifyError};
 
@@ -157,8 +157,26 @@ impl UploadSource for BlobBytes<'_> {
             Self::Inline(bytes) => bytes.read_at(offset, len),
             Self::Original(original) => {
                 let window = original.read_at(offset, len)?;
+                // The check before the read cannot see an edit made while the window was being
+                // sealed; this one refuses that window before it is sent.
+                original
+                    .check_unchanged()
+                    .map_err(|changed| std::io::Error::other(SourceChanged::new(changed.reason)))?;
                 Ok(Cow::Owned(window))
             }
+        }
+    }
+
+    /// Inline bytes cannot change and affirm it. An original affirms while its plaintext file
+    /// still has the length, modification time and (on Unix) inode and status-change time it
+    /// had when the bundle verified its ciphertext, and is changed otherwise.
+    fn check_unchanged(&self) -> Result<SourceIdentity, SourceChanged> {
+        match self {
+            Self::Inline(bytes) => bytes.check_unchanged(),
+            Self::Original(original) => original
+                .check_unchanged()
+                .map(|()| SourceIdentity::Affirmed)
+                .map_err(|changed| SourceChanged::new(changed.reason)),
         }
     }
 }
@@ -498,6 +516,7 @@ impl PushError {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Album(_) => "album",
+            Self::Upload(UploadError::SourceChanged(_)) => "source_changed",
             Self::Upload(_) => "upload",
             Self::CreateRefused { .. } => "create_refused",
             Self::UnknownBlob { .. } => "unknown_blob",

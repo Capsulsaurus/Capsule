@@ -7835,6 +7835,10 @@
     "message": "上傳傳送的資料超過了其宣告的大小。",
     "origin": "machine"
   },
+  "error.upload.source_changed": {
+    "message": "此檔案在上傳過程中發生了變更，因此已停止上傳。",
+    "origin": "machine"
+  },
   "error.upload.stale_revival": {
     "message": "此變更基於該項目的過時版本。",
     "origin": "machine"

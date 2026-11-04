@@ -1949,6 +1949,7 @@
     <string name="error_upload_session_not_active">Ce téléversement est déjà terminé.</string>
     <string name="error_upload_session_not_found">La session de téléversement a expiré. Redémarrage…</string>
     <string name="error_upload_size_exceeded">Le téléversement a envoyé plus de données qu\'il n\'en avait déclaré.</string>
+    <string name="error_upload_source_changed">Ce fichier a changé pendant son téléversement, qui a donc été arrêté.</string>
     <string name="error_upload_stale_revival">Cette modification repose sur une version obsolète de l\'élément.</string>
     <string name="error_upload_storage_full">Le serveur n\'a plus d\'espace de stockage. Le téléversement reprendra une fois de l\'espace libéré.</string>
     <string name="error_upload_storage_inconsistent">Le serveur a rencontré un problème de stockage. Veuillez réessayer.</string>

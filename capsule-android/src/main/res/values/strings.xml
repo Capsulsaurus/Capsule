@@ -2103,6 +2103,7 @@
     <string name="error_upload_session_not_active">This upload has already finished.</string>
     <string name="error_upload_session_not_found">The upload session expired. Starting over…</string>
     <string name="error_upload_size_exceeded">The upload sent more data than it declared.</string>
+    <string name="error_upload_source_changed">This file changed while it was uploading, so its upload was stopped.</string>
     <string name="error_upload_stale_revival">This change is based on an out-of-date version of the item.</string>
     <string name="error_upload_storage_full">The server is out of storage space. Uploading will resume once space is freed.</string>
     <string name="error_upload_storage_inconsistent">The server hit a storage problem. Please try again.</string>

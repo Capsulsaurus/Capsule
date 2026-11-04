@@ -85,7 +85,7 @@ pub use self::sync_apply::{
 };
 pub use self::unanchored::{UnanchoredShape, UnanchoredSidecar, unanchored_sidecars};
 pub use self::upload::{
-    DerivativeBlob, OPAQUE_CONTENT_TYPE, OriginalCiphertext, UploadBundle,
+    DerivativeBlob, OPAQUE_CONTENT_TYPE, OriginalChanged, OriginalCiphertext, UploadBundle,
     WIRE_ORIGINAL_CONTENT_TYPES, wire_content_type,
 };
 pub use crate::account::HardwareSignerBinding;

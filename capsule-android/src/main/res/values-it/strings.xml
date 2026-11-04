@@ -1949,6 +1949,7 @@
     <string name="error_upload_session_not_active">Questo caricamento è già terminato.</string>
     <string name="error_upload_session_not_found">La sessione di caricamento è scaduta. Ricomincio…</string>
     <string name="error_upload_size_exceeded">Il caricamento ha inviato più dati di quanti ne avesse dichiarati.</string>
+    <string name="error_upload_source_changed">Questo file è cambiato durante il caricamento, quindi il caricamento è stato interrotto.</string>
     <string name="error_upload_stale_revival">Questa modifica si basa su una versione non aggiornata dell\'elemento.</string>
     <string name="error_upload_storage_full">Lo spazio di archiviazione del server è esaurito. Il caricamento riprenderà quando verrà liberato spazio.</string>
     <string name="error_upload_storage_inconsistent">Il server ha riscontrato un problema di archiviazione. Riprova.</string>

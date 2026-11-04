@@ -7835,6 +7835,10 @@
     "message": "アップロードが宣言したサイズより多くのデータを送信しました。",
     "origin": "machine"
   },
+  "error.upload.source_changed": {
+    "message": "アップロード中にこのファイルが変更されたため、アップロードを停止しました。",
+    "origin": "machine"
+  },
   "error.upload.stale_revival": {
     "message": "この変更は、この項目の古いバージョンに基づいています。",
     "origin": "machine"

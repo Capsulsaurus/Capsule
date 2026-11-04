@@ -7835,6 +7835,10 @@
     "message": "O envio enviou mais dados do que declarou.",
     "origin": "machine"
   },
+  "error.upload.source_changed": {
+    "message": "Este arquivo mudou enquanto era enviado, então o envio foi interrompido.",
+    "origin": "machine"
+  },
   "error.upload.stale_revival": {
     "message": "Esta alteração se baseia em uma versão desatualizada do item.",
     "origin": "machine"

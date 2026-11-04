@@ -1958,6 +1958,7 @@
   "error.upload.session_not_active": "यह अपलोड पहले ही पूरा हो चुका है।",
   "error.upload.session_not_found": "अपलोड सत्र समाप्त हो गया। फिर से शुरू किया जा रहा है…",
   "error.upload.size_exceeded": "अपलोड ने अपने घोषित आकार से अधिक डेटा भेजा।",
+  "error.upload.source_changed": "अपलोड के दौरान यह फ़ाइल बदल गई, इसलिए इसका अपलोड रोक दिया गया।",
   "error.upload.stale_revival": "यह परिवर्तन आइटम के पुराने संस्करण पर आधारित है।",
   "error.upload.storage_full": "सर्वर का स्टोरेज भर गया है। जगह ख़ाली होने पर अपलोड फिर से शुरू होगा।",
   "error.upload.storage_inconsistent": "सर्वर को स्टोरेज समस्या आई। कृपया फिर से प्रयास करें।",

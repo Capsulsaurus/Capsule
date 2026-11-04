@@ -1958,6 +1958,7 @@
   "error.upload.session_not_active": "Dieser Upload ist bereits abgeschlossen.",
   "error.upload.session_not_found": "Die Upload-Sitzung ist abgelaufen. Neustart…",
   "error.upload.size_exceeded": "Der Upload hat mehr Daten gesendet als angegeben.",
+  "error.upload.source_changed": "Diese Datei hat sich während des Uploads geändert, daher wurde der Upload angehalten.",
   "error.upload.stale_revival": "Diese Änderung basiert auf einer veralteten Version des Elements.",
   "error.upload.storage_full": "Der Server hat keinen Speicherplatz mehr. Das Hochladen wird fortgesetzt, sobald Speicherplatz frei ist.",
   "error.upload.storage_inconsistent": "Auf dem Server ist ein Speicherproblem aufgetreten. Bitte versuchen Sie es erneut.",

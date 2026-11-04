@@ -1949,6 +1949,7 @@
     <string name="error_upload_session_not_active">اكتمل هذا الرفع بالفعل.</string>
     <string name="error_upload_session_not_found">انتهت صلاحية جلسة الرفع. جارٍ البدء من جديد…</string>
     <string name="error_upload_size_exceeded">أرسل الرفع بيانات أكثر مما أعلن عنه.</string>
+    <string name="error_upload_source_changed">تغيّر هذا الملف أثناء رفعه، لذلك أُوقف رفعه.</string>
     <string name="error_upload_stale_revival">يستند هذا التغيير إلى نسخة قديمة من العنصر.</string>
     <string name="error_upload_storage_full">نفدت مساحة التخزين على الخادم. سيُستأنف الرفع بمجرد تحرير مساحة.</string>
     <string name="error_upload_storage_inconsistent">واجه الخادم مشكلة في التخزين. يُرجى المحاولة مرة أخرى.</string>

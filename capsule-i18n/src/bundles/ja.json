@@ -1958,6 +1958,7 @@
   "error.upload.session_not_active": "このアップロードはすでに完了しています。",
   "error.upload.session_not_found": "アップロードセッションの有効期限が切れました。最初からやり直しています…",
   "error.upload.size_exceeded": "アップロードが宣言したサイズより多くのデータを送信しました。",
+  "error.upload.source_changed": "アップロード中にこのファイルが変更されたため、アップロードを停止しました。",
   "error.upload.stale_revival": "この変更は、この項目の古いバージョンに基づいています。",
   "error.upload.storage_full": "サーバーのストレージ容量が不足しています。空き容量が確保されるとアップロードが再開されます。",
   "error.upload.storage_inconsistent": "サーバーでストレージの問題が発生しました。もう一度お試しください。",

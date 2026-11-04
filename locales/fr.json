@@ -7835,6 +7835,10 @@
     "message": "Le téléversement a envoyé plus de données qu'il n'en avait déclaré.",
     "origin": "machine"
   },
+  "error.upload.source_changed": {
+    "message": "Ce fichier a changé pendant son téléversement, qui a donc été arrêté.",
+    "origin": "machine"
+  },
   "error.upload.stale_revival": {
     "message": "Cette modification repose sur une version obsolète de l'élément.",
     "origin": "machine"

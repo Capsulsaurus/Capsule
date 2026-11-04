@@ -7835,6 +7835,10 @@
     "message": "अपलोड ने अपने घोषित आकार से अधिक डेटा भेजा।",
     "origin": "machine"
   },
+  "error.upload.source_changed": {
+    "message": "अपलोड के दौरान यह फ़ाइल बदल गई, इसलिए इसका अपलोड रोक दिया गया।",
+    "origin": "machine"
+  },
   "error.upload.stale_revival": {
     "message": "यह परिवर्तन आइटम के पुराने संस्करण पर आधारित है।",
     "origin": "machine"

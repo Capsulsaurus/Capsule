@@ -403,6 +403,37 @@ fn a_finalization_the_server_refused_reaches_the_json_report_with_its_code() {
     assert_eq!(json["failed_assets"], 1);
 }
 
+/// **A source that changed mid-upload is named in `--json`.** The SDK stops the blob with its
+/// typed source-changed error; the report names the failure `source_changed`, with the client's
+/// own `error.upload.source_changed` code a localizing client switches on.
+#[test]
+fn a_source_that_changed_mid_upload_reaches_the_json_report_typed() {
+    let mut summary = PushSummary {
+        assets: 1,
+        ..Default::default()
+    };
+    let mut failed = AssetPushOutcome::new(Uuid::from_u128(4), AssetPushStatus::Failed);
+    failed.error = Some(
+        AssetError::from(PushError::Upload(UploadError::SourceChanged(
+            capsule_sdk::upload::SourceChanged::new("the original's modification time moved"),
+        )))
+        .failure(),
+    );
+    summary.record(failed);
+
+    let json = serde_json::to_value(&summary).expect("the summary serializes");
+    let error = &json["outcomes"][0]["error"];
+    assert_eq!(error["kind"], "source_changed");
+    assert_eq!(error["code"], "error.upload.source_changed");
+    assert!(
+        error["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("modification time")),
+        "the reason rides the message: {error}"
+    );
+    assert_eq!(json["failed_assets"], 1);
+}
+
 /// The server's refusal of a create, as finalization answers it (issue #822).
 fn refused_create() -> UploadError {
     UploadError::Rejected {
