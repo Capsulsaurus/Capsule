@@ -8,6 +8,9 @@ use uuid::Uuid;
 
 use super::*;
 use crate::blob::{BlobStore as _, ContentAddress, InMemoryBlobStore};
+use crate::drop::{
+    Admission, InMemoryDrops, LinkCaps, LinkProvisionOutcome, PendingDeposit, UploadLinkRecord,
+};
 use crate::index::memory::InMemoryAssetIndex;
 use crate::quota::{ChargeOutcome, InMemoryQuota, QuotaContext, QuotaLimits, QuotaStore as _};
 use crate::store::memory::{InMemoryUploadSessions, ManualClock};
@@ -98,6 +101,7 @@ struct Harness {
     context: UploadContext,
     blobs: Arc<InMemoryBlobStore>,
     quotas: Arc<InMemoryQuota>,
+    drops: InMemoryDrops,
 }
 
 fn harness() -> Harness {
@@ -117,6 +121,7 @@ fn harness() -> Harness {
         context,
         blobs,
         quotas,
+        drops: InMemoryDrops::new(),
     }
 }
 
@@ -205,7 +210,7 @@ async fn a_stage_no_session_holds_is_abandoned() {
     let h = harness();
     h.stage("orphan").await;
 
-    let report = startup(&h.context).await;
+    let report = startup(&h.context, &h.drops).await;
 
     assert_eq!(report.abandoned, vec![id("orphan")]);
     assert!(report.discarded.is_empty(), "{report:?}");
@@ -226,7 +231,7 @@ async fn a_held_session_keeps_its_stage_whatever_its_status() {
         h.open(tag, status, true).await;
     }
 
-    let report = startup(&h.context).await;
+    let report = startup(&h.context, &h.drops).await;
 
     assert_eq!(report, StartupScrub::default(), "nothing repaired");
     for (tag, status) in statuses {
@@ -243,7 +248,7 @@ async fn an_evictable_session_whose_stage_is_missing_is_discarded_and_its_reserv
         .await;
     assert!(h.used().await > 0, "both sessions are charged");
 
-    let report = startup(&h.context).await;
+    let report = startup(&h.context, &h.drops).await;
 
     let mut discarded = report.discarded.clone();
     discarded.sort();
@@ -252,6 +257,102 @@ async fn an_evictable_session_whose_stage_is_missing_is_discarded_and_its_reserv
     assert_eq!(h.status("pending").await, None, "the uniform 404");
     assert_eq!(h.status("uploading").await, None, "the uniform 404");
     assert_eq!(h.used().await, 0, "both reservations are given back");
+}
+
+/// A one-file link whose only slot a guest's admission spent on session `tag`, held as a
+/// pending deposit, as the drop create route leaves it. Returns the link's opaque id.
+async fn spent_link(drops: &InMemoryDrops, tag: &str) -> String {
+    let opaque_id = "0123456789abcdef0123456789abcdef".to_owned();
+    let provisioned = drops
+        .provision(UploadLinkRecord {
+            opaque_id: opaque_id.clone(),
+            owner_id: uploader(),
+            drop_pubkey: vec![1; 32],
+            crypto_suite_id: 1,
+            protocol_version: "2026-08-29".to_owned(),
+            caps: LinkCaps {
+                max_file_count: Some(1),
+                ..LinkCaps::default()
+            },
+            passphrase_verifier: None,
+            used_bytes: 0,
+            used_files: 0,
+            revoked_at: None,
+        })
+        .await
+        .expect("the drop store answers");
+    assert!(matches!(provisioned, LinkProvisionOutcome::Provisioned));
+    let size = bytes(tag).len() as u64;
+    assert!(matches!(
+        drops
+            .charge(&opaque_id, size, now())
+            .await
+            .expect("answers"),
+        Admission::Admitted { .. }
+    ));
+    drops
+        .reserve(
+            PendingDeposit {
+                drop_id: format!("drop-{tag}"),
+                opaque_id: opaque_id.clone(),
+                owner_id: uploader(),
+                kem_ct: vec![9; 64],
+                content_type: "image/jpeg".to_owned(),
+                suggested_filename: None,
+                size,
+            },
+            &id(tag),
+        )
+        .await
+        .expect("reserved");
+    opaque_id
+}
+
+#[tokio::test]
+async fn a_guest_drop_whose_stage_is_missing_gives_its_link_the_slot_back() {
+    let h = harness();
+    let outcome = h
+        .quotas
+        .charge(
+            &uploader(),
+            &address("drop"),
+            bytes("drop").len() as u64,
+            now(),
+            QuotaLimits::unlimited(),
+        )
+        .await
+        .expect("the ledger answers");
+    assert!(matches!(outcome, ChargeOutcome::Charged { .. }));
+    let mut record = session("drop");
+    record.manifest_envelope = String::new();
+    h.context.sessions().open(record).await.expect("opened");
+    let link = spent_link(&h.drops, "drop").await;
+    assert_eq!(
+        h.drops.charge(&link, 1, now()).await.expect("answers"),
+        Admission::CapExhausted,
+        "the link's one slot is spent"
+    );
+
+    let report = startup(&h.context, &h.drops).await;
+
+    assert_eq!(report.discarded, vec![id("drop")]);
+    assert_eq!(h.status("drop").await, None, "the uniform 404");
+    assert_eq!(h.used().await, 0, "the owner's quota is given back");
+    assert_eq!(
+        h.drops
+            .take_reservation(&id("drop"))
+            .await
+            .expect("answers"),
+        None,
+        "the held declaration is taken"
+    );
+    assert!(
+        matches!(
+            h.drops.charge(&link, 1, now()).await.expect("answers"),
+            Admission::Admitted { .. }
+        ),
+        "the link's one slot is usable again"
+    );
 }
 
 #[tokio::test]
@@ -264,7 +365,7 @@ async fn a_claimed_or_terminal_session_without_a_stage_is_left_to_finalization_a
     h.open("completed", UploadSessionStatus::Completed, false)
         .await;
 
-    let report = startup(&h.context).await;
+    let report = startup(&h.context, &h.drops).await;
 
     assert_eq!(report, StartupScrub::default(), "nothing repaired");
     assert_eq!(
@@ -289,7 +390,7 @@ async fn both_directions_in_one_pass_and_a_second_boot_finds_nothing() {
         .await;
     h.open("live", UploadSessionStatus::Uploading, true).await;
 
-    let report = startup(&h.context).await;
+    let report = startup(&h.context, &h.drops).await;
 
     assert_eq!(report.abandoned, vec![id("orphan")]);
     assert_eq!(report.discarded, vec![id("unstaged")]);
@@ -302,5 +403,5 @@ async fn both_directions_in_one_pass_and_a_second_boot_finds_nothing() {
         Some(UploadSessionStatus::Uploading),
         "the live transfer is untouched"
     );
-    assert_eq!(startup(&h.context).await, StartupScrub::default());
+    assert_eq!(startup(&h.context, &h.drops).await, StartupScrub::default());
 }

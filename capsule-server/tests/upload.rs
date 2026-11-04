@@ -3463,7 +3463,8 @@ async fn scrub_at_boot(fixture: &Fixture) -> capsule_server::upload::scrub::Star
     use kynos::di::Provides as _;
 
     let upload: UploadContext = fixture.app().provide();
-    capsule_server::upload::scrub::startup(&upload).await
+    let drops: capsule_server::drop::DropContext = fixture.app().provide();
+    capsule_server::upload::scrub::startup(&upload, drops.drops()).await
 }
 
 /// Stage bytes under `id` with no session, as a creation that died after its stage leaves.

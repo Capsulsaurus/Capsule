@@ -89,6 +89,7 @@ use capsule_i18n::error_codes;
 use jiff::Timestamp;
 
 use crate::blob::{BlobError, BlobStore, ContentAddress};
+use crate::drop::DropStore;
 use crate::quota::{ExpiredReservation, QuotaLimits, QuotaStore, reservation_deadline};
 use crate::store::{
     StoreError, StoreFuture, UnclaimedDiscard, UploadId, UploadSessionRecord, UploadSessionStatus,
@@ -330,6 +331,48 @@ pub async fn release_logged(context: &UploadContext, record: &UploadSessionRecor
     }
 }
 
+/// Give a discarded guest drop's link back the reservation its admission spent, logging rather
+/// than returning a failure.
+///
+/// A drop's session holds two reservations: the link owner's quota, which [`release`] gives
+/// back, and the link's caps, which the drop store charged at admission and holds as a
+/// [`PendingDeposit`](crate::drop::PendingDeposit) until the bytes are filed. A session
+/// discarded without its bytes must give back both, as a refused deposit does: otherwise the
+/// link's caps stay spent on a drop that never arrived, and the held declaration is never
+/// taken ([`DropStore::refund`]).
+///
+/// Nothing is asked of the drop store for an album session. A drop session whose declaration
+/// is already gone refunds nothing, so a second discard of the same session cannot refund the
+/// link twice.
+pub async fn refund_drop_logged(drops: &dyn DropStore, record: &UploadSessionRecord) {
+    if !record.is_guest_drop() {
+        return;
+    }
+    let upload = &record.upload_id;
+    match drops.take_reservation(upload).await {
+        Ok(Some(pending)) => match drops.refund(&pending.opaque_id, pending.size).await {
+            Ok(()) => tracing::info!(
+                upload_id = %upload,
+                size = pending.size,
+                "gave a discarded drop's link its reservation back"
+            ),
+            Err(error) => tracing::error!(
+                %error,
+                upload_id = %upload,
+                "a discarded drop's link reservation could not be refunded"
+            ),
+        },
+        Ok(None) => {
+            tracing::debug!(upload_id = %upload, "a discarded drop held no declaration to give back");
+        }
+        Err(error) => tracing::error!(
+            %error,
+            upload_id = %upload,
+            "a discarded drop's declaration could not be released"
+        ),
+    }
+}
+
 /// Settle `record`'s reservation: its finalization committed the bytes.
 ///
 /// Called after the blob commit and before the session is marked `Completed`. An address the
@@ -403,17 +446,20 @@ pub async fn settle(
 /// compare-and-set [`UploadSessionStore::discard_unclaimed`], so a session whose finalization
 /// was claimed in the meantime is left to its finalizer, and the release is [`release`]'s, so
 /// the reservation stays where the bytes are stored or another live session of the uploader
-/// still declares them. The stage is dropped after the record, as a refused session's is.
+/// still declares them. The stage is dropped after the record, as a refused session's is. A
+/// guest drop's link gets its caps back through `drops` ([`refund_drop_logged`]).
 ///
 /// `None` when nothing was discarded — the session is gone, claimed or terminal.
 ///
 /// # Errors
 ///
 /// [`ReleaseError`] when the session store could not discard, or a collaborator could not
-/// decide the release. A session discarded before the release failed stays discarded.
-#[tracing::instrument(level = "debug", skip(context))]
+/// decide the release. A session discarded before the release failed stays discarded, and a
+/// drop's link is refunded before the release is attempted.
+#[tracing::instrument(level = "debug", skip(context, drops))]
 pub async fn discard_under_pressure(
     context: &UploadContext,
+    drops: &dyn DropStore,
     upload: &UploadId,
 ) -> Result<Option<Released>, ReleaseError> {
     let record = match context.sessions().discard_unclaimed(upload).await? {
@@ -430,6 +476,7 @@ pub async fn discard_under_pressure(
     if let Err(error) = context.blobs().abandon(upload).await {
         tracing::error!(%error, "a pressure-discarded session's stage could not be dropped");
     }
+    refund_drop_logged(drops, &record).await;
     let released = release(context, &record).await?;
     tracing::info!(
         uploader = %record.upload_user_id,

@@ -14,9 +14,10 @@
 //!   cap, and an evictable one is somebody's transfer.
 //! - **An evictable session with no stage** cannot take another byte: every write would answer
 //!   `500 error.upload.storage_inconsistent` until its cap ended it. It is discarded as a
-//!   cancellation is — under its admission turn, its reservation given back — so its client
-//!   reads the uniform `404` and re-creates. There is no length check on a stage that *is*
-//!   there: it is written positionally, so its length says nothing about what is committed.
+//!   cancellation is — under its admission turn, its reservation given back, and a guest drop's
+//!   link refunded as a refused deposit's is — so its client reads the uniform `404` and
+//!   re-creates. There is no length check on a stage that *is* there: it is written
+//!   positionally, so its length says nothing about what is committed.
 //!
 //! `WaitingForProcessing` and terminal sessions are never discarded here. The discard is the
 //! store's compare-and-set [`UploadSessionStore::discard_unclaimed`], so a session claimed
@@ -36,9 +37,10 @@ use std::collections::BTreeSet;
 
 use jiff::Timestamp;
 
+use crate::drop::DropStore;
 use crate::store::{UnclaimedDiscard, UploadId};
-use crate::upload::UploadContext;
 use crate::upload::chunk::admission_turn;
+use crate::upload::{UploadContext, reservation};
 
 /// What one startup scrub repaired.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -50,13 +52,14 @@ pub struct StartupScrub {
     pub discarded: Vec<UploadId>,
 }
 
-/// Run the startup scrub over `context`'s stores.
+/// Run the startup scrub over `context`'s stores, refunding a discarded guest drop's link
+/// through `drops`.
 ///
 /// Call it before boot recovery and before the listener accepts a request: it reads every
 /// stage and every evictable session once and assumes nothing creates or ends one meanwhile.
 /// Never fails; every store error is logged and leaves what it touched for the next boot.
 #[tracing::instrument(skip_all)]
-pub async fn startup(context: &UploadContext) -> StartupScrub {
+pub async fn startup(context: &UploadContext, drops: &dyn DropStore) -> StartupScrub {
     let mut report = StartupScrub::default();
     let staged: BTreeSet<UploadId> = match context.blobs().staged().await {
         Ok(staged) => staged.into_iter().collect(),
@@ -71,7 +74,7 @@ pub async fn startup(context: &UploadContext) -> StartupScrub {
     tracing::debug!(staged = staged.len(), "listed the staged uploads");
 
     abandon_orphans(context, &staged, &mut report).await;
-    discard_unstaged(context, &staged, &mut report).await;
+    discard_unstaged(context, drops, &staged, &mut report).await;
 
     tracing::info!(
         staged = staged.len(),
@@ -121,9 +124,11 @@ async fn abandon_orphans(
     }
 }
 
-/// Discard every evictable session whose stage is not in `staged`, giving its reservation back.
+/// Discard every evictable session whose stage is not in `staged`, giving its reservation back,
+/// and a guest drop's link its caps.
 async fn discard_unstaged(
     context: &UploadContext,
+    drops: &dyn DropStore,
     staged: &BTreeSet<UploadId>,
     report: &mut StartupScrub,
 ) {
@@ -151,7 +156,8 @@ async fn discard_unstaged(
         drop(turn);
         match outcome {
             Ok(UnclaimedDiscard::Discarded(record)) => {
-                crate::upload::reservation::release_logged(context, &record).await;
+                reservation::release_logged(context, &record).await;
+                reservation::refund_drop_logged(drops, &record).await;
                 tracing::info!(
                     upload_id = %upload,
                     uploader = %record.upload_user_id,

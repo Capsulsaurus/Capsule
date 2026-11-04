@@ -8,6 +8,9 @@ use uuid::Uuid;
 
 use super::*;
 use crate::blob::InMemoryBlobStore;
+use crate::drop::{
+    Admission, InMemoryDrops, LinkCaps, LinkProvisionOutcome, PendingDeposit, UploadLinkRecord,
+};
 use crate::index::memory::InMemoryAssetIndex;
 use crate::quota::{ChargeOutcome, InMemoryQuota, QuotaContext, QuotaLimits};
 use crate::store::memory::{InMemoryUploadSessions, ManualClock};
@@ -1073,7 +1076,7 @@ async fn a_pressure_discard_releases_through_the_one_rule() {
     h.reserve(&uploader()).await;
 
     assert_eq!(
-        discard_under_pressure(&h.context, &victim.upload_id)
+        discard_under_pressure(&h.context, &InMemoryDrops::new(), &victim.upload_id)
             .await
             .expect("answers"),
         Some(Released::Released)
@@ -1088,7 +1091,7 @@ async fn a_pressure_discard_releases_through_the_one_rule() {
             .is_none()
     );
     assert_eq!(
-        discard_under_pressure(&h.context, &victim.upload_id)
+        discard_under_pressure(&h.context, &InMemoryDrops::new(), &victim.upload_id)
             .await
             .expect("answers"),
         None,
@@ -1105,7 +1108,7 @@ async fn a_pressure_discard_keeps_the_reservation_of_stored_bytes() {
     h.blobs.put(&address(), BYTES).await.expect("stored");
 
     assert_eq!(
-        discard_under_pressure(&h.context, &victim.upload_id)
+        discard_under_pressure(&h.context, &InMemoryDrops::new(), &victim.upload_id)
             .await
             .expect("answers"),
         Some(Released::BytesStored)
@@ -1126,10 +1129,130 @@ async fn a_pressure_discard_leaves_a_claimed_session_to_its_finalizer() {
         .expect("claimed");
 
     assert_eq!(
-        discard_under_pressure(&h.context, &claimed.upload_id)
+        discard_under_pressure(&h.context, &InMemoryDrops::new(), &claimed.upload_id)
             .await
             .expect("answers"),
         None
     );
     assert_eq!(h.used(&uploader()).await, BYTES.len() as u64);
+}
+
+/// A one-file link whose only slot a guest's admission spent on `record`, held as a pending
+/// deposit, as the drop create route leaves it. Returns the link's opaque id.
+async fn spent_link(drops: &InMemoryDrops, record: &UploadSessionRecord) -> String {
+    let opaque_id = "0123456789abcdef0123456789abcdef".to_owned();
+    let provisioned = drops
+        .provision(UploadLinkRecord {
+            opaque_id: opaque_id.clone(),
+            owner_id: uploader(),
+            drop_pubkey: vec![1; 32],
+            crypto_suite_id: 1,
+            protocol_version: "2026-08-29".to_owned(),
+            caps: LinkCaps {
+                max_file_count: Some(1),
+                ..LinkCaps::default()
+            },
+            passphrase_verifier: None,
+            used_bytes: 0,
+            used_files: 0,
+            revoked_at: None,
+        })
+        .await
+        .expect("the drop store answers");
+    assert!(matches!(provisioned, LinkProvisionOutcome::Provisioned));
+    let at = Timestamp::from_second(1_800_000_000).expect("in range");
+    assert!(matches!(
+        drops
+            .charge(&opaque_id, record.total_size, at)
+            .await
+            .expect("answers"),
+        Admission::Admitted { .. }
+    ));
+    drops
+        .reserve(
+            PendingDeposit {
+                drop_id: format!("drop-{}", record.upload_id),
+                opaque_id: opaque_id.clone(),
+                owner_id: uploader(),
+                kem_ct: vec![9; 64],
+                content_type: "image/jpeg".to_owned(),
+                suggested_filename: None,
+                size: record.total_size,
+            },
+            &record.upload_id,
+        )
+        .await
+        .expect("reserved");
+    opaque_id
+}
+
+#[tokio::test]
+async fn a_pressure_discarded_guest_drop_gives_its_link_the_slot_back() {
+    let h = harness();
+    let drops = InMemoryDrops::new();
+    let mut victim = session("pressured-drop", UploadSessionStatus::Uploading);
+    victim.manifest_envelope = String::new();
+    h.open(victim.clone()).await;
+    h.reserve(&uploader()).await;
+    let link = spent_link(&drops, &victim).await;
+    let at = Timestamp::from_second(1_800_000_000).expect("in range");
+    assert_eq!(
+        drops.charge(&link, 1, at).await.expect("answers"),
+        Admission::CapExhausted,
+        "the link's one slot is spent"
+    );
+
+    assert_eq!(
+        discard_under_pressure(&h.context, &drops, &victim.upload_id)
+            .await
+            .expect("answers"),
+        Some(Released::Released)
+    );
+    assert_eq!(
+        h.used(&uploader()).await,
+        0,
+        "the owner's quota is given back"
+    );
+    assert_eq!(
+        drops
+            .take_reservation(&victim.upload_id)
+            .await
+            .expect("answers"),
+        None,
+        "the held declaration is taken"
+    );
+    assert!(
+        matches!(
+            drops.charge(&link, 1, at).await.expect("answers"),
+            Admission::Admitted { .. }
+        ),
+        "the link's one slot is usable again"
+    );
+}
+
+#[tokio::test]
+async fn a_pressure_discarded_album_session_asks_nothing_of_the_drop_store() {
+    let h = harness();
+    let drops = InMemoryDrops::new();
+    let victim = session("pressured-album", UploadSessionStatus::Uploading);
+    h.open(victim.clone()).await;
+    h.reserve(&uploader()).await;
+    let link = spent_link(&drops, &victim).await;
+
+    discard_under_pressure(&h.context, &drops, &victim.upload_id)
+        .await
+        .expect("answers");
+    assert!(
+        drops
+            .take_reservation(&victim.upload_id)
+            .await
+            .expect("answers")
+            .is_some(),
+        "an album session's discard leaves the drop store alone"
+    );
+    let at = Timestamp::from_second(1_800_000_000).expect("in range");
+    assert_eq!(
+        drops.charge(&link, 1, at).await.expect("answers"),
+        Admission::CapExhausted
+    );
 }

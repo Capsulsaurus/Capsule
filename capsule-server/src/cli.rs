@@ -660,7 +660,8 @@ async fn scrub_staged_uploads(app: &crate::App) {
     use kynos::di::Provides as _;
 
     let upload: crate::upload::UploadContext = app.provide();
-    crate::upload::scrub::startup(&upload).await;
+    let drops: crate::drop::DropContext = app.provide();
+    crate::upload::scrub::startup(&upload, drops.drops()).await;
 }
 
 /// Re-drive the finalization claims a previous process died holding — album finalizations and
