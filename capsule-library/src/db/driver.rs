@@ -391,8 +391,8 @@ impl DatabaseDriver {
         Ok(changed > 0)
     }
 
-    /// Permanently remove an asset's rows — its `assets` row, its indexed tags, its cached
-    /// representations and its stack memberships — in one transaction, so no index row names
+    /// Permanently remove an asset's rows — its `assets` row, its indexed tags, its upload
+    /// source guard, its cached representations and its stack memberships — in one transaction, so no index row names
     /// it afterwards. A stack whose primary or cover it was passes that role to its first
     /// remaining member (by sequence, then id), and a stack it leaves empty is removed. An
     /// album cover naming it is cleared. The on-disk files are the caller's concern
@@ -400,6 +400,11 @@ impl DatabaseDriver {
     pub fn purge_asset(&self, uuid: &str) -> Result<(), rusqlite::Error> {
         let tx = self.conn.unchecked_transaction()?;
         tx.execute("DELETE FROM asset_tags WHERE uuid = ?1", params![uuid])?;
+        // A purged asset's bundle is abandoned: its source guard goes with it.
+        tx.execute(
+            "DELETE FROM upload_guards WHERE asset_id = ?1",
+            params![uuid],
+        )?;
         tx.execute(
             "DELETE FROM cached_representations WHERE uuid = ?1",
             params![uuid],
