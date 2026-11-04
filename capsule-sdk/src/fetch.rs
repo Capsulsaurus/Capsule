@@ -566,6 +566,9 @@ impl FetchError {
     pub fn error_code(&self) -> Option<&str> {
         match self {
             Self::PendingUpload => Some(error_codes::BLOB_PENDING_UPLOAD),
+            // A `404` folds in here too: either way the blob is not coming back, which is what a
+            // caller telling a permanent refusal from a transient one needs to read.
+            Self::Gone => Some(error_codes::BLOB_GONE),
             Self::AuthorizationChanged { code }
             | Self::Rejected { code, .. }
             | Self::Unauthenticated { code, .. } => code.as_deref(),

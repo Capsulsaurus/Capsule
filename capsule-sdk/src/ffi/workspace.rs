@@ -1692,6 +1692,55 @@ impl FfiWorkspace {
         })
     }
 
+    /// [`apply_sync_entry_from_file`](Self::apply_sync_entry_from_file) for an entry of an asset
+    /// this workspace **holds**, with no original fetched: the original is the one the held
+    /// chain's head commits to, which this workspace verified when it adopted or imported it.
+    ///
+    /// This is how a `delete` on an album page — which names no metadata blob and no blob — is
+    /// applied to an asset held here: the delete binds no metadata blob and commits to the
+    /// original the asset already has, so the same chokepoint and adoption as the apply verb
+    /// verify it against the entry's `local_chain_head`, and the asset moves to this device's
+    /// trash. A record committing to another original than the held one is quarantined as
+    /// `Rejected.CiphertextHashMismatch`, and one that binds a metadata blob the entry does not
+    /// carry is refused by the binding check: neither is adopted.
+    ///
+    /// # Errors
+    ///
+    /// [`FfiError::InvalidArgument`] for a malformed `album_id` or `local_chain_head`;
+    /// [`FfiError::Workspace`] when the record names an asset this workspace does not hold, or
+    /// the workspace itself fails. A record that does not decode is a quarantined verdict, as the
+    /// apply verb answers one.
+    pub fn apply_held_sync_entry(
+        &self,
+        entry: FfiSyncHead,
+    ) -> Result<FfiSyncApplyOutcome, FfiError> {
+        entry.parsed()?;
+        self.with(|ws| {
+            // A record that does not decode names no asset; the chokepoint quarantines it before
+            // the digest is looked at.
+            let committed = match ProvenanceRecord::decode(&entry.manifest_cbor) {
+                Ok(record) => {
+                    let asset_id = record.manifest.core.file_id;
+                    let held = ws
+                        .asset(&asset_id)
+                        .and_then(|asset| asset.chain.records().last())
+                        .map(|head| head.manifest.core.ciphertext_hash);
+                    held.ok_or_else(|| FfiError::Workspace {
+                        detail: format!("asset {asset_id} is not managed by this workspace"),
+                    })?
+                }
+                Err(_) => Hash32::from_bytes([0; 32]),
+            };
+            let head = entry.remote(committed)?;
+            let (outcome, adoption) = ws.adopt_remote_head(head)?;
+            tracing::info!(
+                ?adoption,
+                "ffi: a held asset's entry applied against its held original"
+            );
+            Ok(FfiSyncApplyOutcome::from(outcome).adopted(adoption))
+        })
+    }
+
     /// **Open a synced original** from the ciphertext file at `ciphertext_path` to its plaintext
     /// at `destination_path`, in memory bounded by a few STREAM chunks whatever its size.
     ///

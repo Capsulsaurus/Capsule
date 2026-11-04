@@ -697,3 +697,31 @@ fn an_unbound_or_malformed_chain_names_no_sources() {
         other => panic!("{other:?}"),
     }
 }
+
+/// A delete's window is closed from its signed `retention_until` on, and open strictly before
+/// it; a record that is not a delete has no window at any instant.
+#[test]
+fn a_delete_window_closes_at_its_retention_until() {
+    let (_lib, chain) = real_chain();
+    let until: jiff::Timestamp = core_of(&chain[3])
+        .retention_until
+        .expect("a delete signs its window")
+        .parse()
+        .unwrap();
+    let second = jiff::SignedDuration::from_secs(1);
+    assert!(!retention_closed(&chain[3], until - second).unwrap());
+    assert!(retention_closed(&chain[3], until).unwrap());
+    assert!(retention_closed(&chain[3], until + second).unwrap());
+    for record in &chain[..3] {
+        assert!(!retention_closed(record, until + second).unwrap());
+    }
+}
+
+/// A head that is not a record is named as the head, as the history walk names it.
+#[test]
+fn a_malformed_head_has_no_window_to_judge() {
+    match retention_closed(b"not a record", jiff::Timestamp::UNIX_EPOCH) {
+        Err(HistoryError::Malformed { hash, .. }) => assert_eq!(hash, "head"),
+        other => panic!("{other:?}"),
+    }
+}

@@ -397,6 +397,13 @@
             },
             {
               "kind": "func",
+              "name": "applyHeldSyncEntry",
+              "signature": "func applyHeldSyncEntry(entry: FfiSyncHead) throws -> FfiSyncApplyOutcome",
+              "doc": "[`apply_sync_entry_from_file`](Self::apply_sync_entry_from_file) for an entry of an asset\nthis workspace **holds**, with no original fetched: the original is the one the held\nchain's head commits to, which this workspace verified when it adopted or imported it.\n\nThis is how a `delete` on an album page — which names no metadata blob and no blob — is\napplied to an asset held here: the delete binds no metadata blob and commits to the\noriginal the asset already has, so the same chokepoint and adoption as the apply verb\nverify it against the entry's `local_chain_head`, and the asset moves to this device's\ntrash. A record committing to another original than the held one is quarantined as\n`Rejected.CiphertextHashMismatch`, and one that binds a metadata blob the entry does not\ncarry is refused by the binding check: neither is adopted.\n\n# Errors\n\n[`FfiError::InvalidArgument`] for a malformed `album_id` or `local_chain_head`;\n[`FfiError::Workspace`] when the record names an asset this workspace does not hold, or\nthe workspace itself fails. A record that does not decode is a quarantined verdict, as the\napply verb answers one.",
+              "members": []
+            },
+            {
+              "kind": "func",
               "name": "applySyncEntry",
               "signature": "func applySyncEntry(entry: FfiSyncEntry) throws -> FfiSyncApplyOutcome",
               "doc": "**Sync-apply**: verify one remote feed entry through the `verify_asset` chokepoint,\nbind and decrypt its metadata blob, and return either the facts to upsert or a named\nquarantine/hold verdict.\n\nNever silently drops and never silently accepts: a refused entry is a\n[`FfiSyncApplyOutcome::Quarantined`] the app must surface, not an error that aborts the\npage. Errors are reserved for a failure of this workspace itself.\n\nAn applied record that chains onto an asset this workspace holds is **adopted**: appended\nto the asset's chain with the metadata it binds, written and indexed, and the facts say\nso ([`FfiAssetFacts::adopted`]). A `create` is adopted only by\n[`open_synced_original`](Self::open_synced_original), which has its original.",
@@ -3088,6 +3095,13 @@
         },
         {
           "kind": "func",
+          "name": "syncedRetentionClosed",
+          "signature": "public func syncedRetentionClosed(manifestCbor: Data, changedAt: String) throws -> Bool",
+          "doc": "**Whether a tombstone's retention window had closed** at `changed_at` (RFC 3339, a feed\nentry's own): `manifest_cbor` is a `delete` record and `changed_at` is at or after the\n`retention_until` signed into it.\n\nA device that first sees an asset at an album page's tombstone reads this before it calls\n[`FfiSession::fetch_provenance_history`]: once the window has closed the server refuses the\nasset's records and bytes to its readers, so there is nothing left to adopt, and passing the\nentry loses nothing. A record that is not a `delete`, or a `delete` whose window is absent or\nunreadable, answers `false`.\n\nPure and offline.\n\n# Errors\n\n[`FfiError::InvalidArgument`] when `changed_at` is not an RFC 3339 instant;\n[`FfiError::Sync`] when `manifest_cbor` does not decode.",
+          "members": []
+        },
+        {
+          "kind": "func",
           "name": "embeddedPreview",
           "signature": "public func embeddedPreview(originalPath: String, ext: String) throws -> FfiEmbeddedPreview?",
           "doc": "Read the embedded preview of the original at `original_path`, whose extension (without the\ndot) is `ext`.\n\n`None` when the original is not a RAW, carries no preview, or carries one that does not read\nwithin the decode budget: each leaves the rung to the next source, so none is an error. The\nreason is logged.\n\nThis reads the whole original into memory, because the extraction's IFD bounds walk and its\nstated-length guard run over the full file before the RAW reader does. Call it once per asset\nand keep the [`FfiEmbeddedPreview`] it returns, rather than once per render.\n\n# Errors\n\n[`FfiError::Workspace`] when the file cannot be read.",
@@ -3520,6 +3534,13 @@
               "name": "albums",
               "signature": "fun albums(): List<FfiAlbum>",
               "doc": "Every album this workspace holds key material for, in the one album order every app\nshows as is: the album with the most recent visible, untrashed asset first, an empty\nalbum by its creation time, ties by ascending id (`Workspace::albums`).",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "applyHeldSyncEntry",
+              "signature": "fun applyHeldSyncEntry(entry: FfiSyncHead): FfiSyncApplyOutcome",
+              "doc": "[`apply_sync_entry_from_file`](Self::apply_sync_entry_from_file) for an entry of an asset\nthis workspace **holds**, with no original fetched: the original is the one the held\nchain's head commits to, which this workspace verified when it adopted or imported it.\n\nThis is how a `delete` on an album page — which names no metadata blob and no blob — is\napplied to an asset held here: the delete binds no metadata blob and commits to the\noriginal the asset already has, so the same chokepoint and adoption as the apply verb\nverify it against the entry's `local_chain_head`, and the asset moves to this device's\ntrash. A record committing to another original than the held one is quarantined as\n`Rejected.CiphertextHashMismatch`, and one that binds a metadata blob the entry does not\ncarry is refused by the binding check: neither is adopted.\n\n# Errors\n\n[`FfiError::InvalidArgument`] for a malformed `album_id` or `local_chain_head`;\n[`FfiError::Workspace`] when the record names an asset this workspace does not hold, or\nthe workspace itself fails. A record that does not decode is a quarantined verdict, as the\napply verb answers one.",
               "members": []
             },
             {
@@ -6211,6 +6232,13 @@
           "name": "syncedHistorySources",
           "signature": "@Throws(FfiException::class) fun syncedHistorySources(manifestCbor: kotlin.ByteArray, history: List<kotlin.ByteArray>): FfiHistorySources",
           "doc": "**Name what adopting an asset from its history fetches**: the live metadata blob and the\noriginal, read off the asset's latest record `manifest_cbor` (a feed entry's) and `history`,\nthe records before it that [`FfiSession::fetch_provenance_history`] returned.\n\nAn album page — the one a writer member's device reads — serves a `delete` with no metadata\nblob and no blob, so a device that first sees the asset there has only its records. The live\nmetadata blob is the newest record that binds one, and the delete commits to the original;\nthe server serves both to the asset's readers until its retention window closes. Fetch them\nwith [`FfiSession::fetch_metadata_blob`] and [`FfiSession::fetch_blob_to_path`], set the\nentry's `metadata_blob` to the first, and hand the second to\n[`FfiWorkspace::open_synced_history`]: the asset is held in this device's trash and its\n`trash-restore` can be signed. An entry that names its metadata blob (the owner's own feed)\nagrees with this answer.\n\nPure and offline. Nothing is trusted for being named: the adoption binds the metadata blob and\nthe original to the records, and refuses what does not.\n\n# Errors\n\n[`FfiError::Sync`] when a record does not decode or none binds a metadata blob.",
+          "members": []
+        },
+        {
+          "kind": "fun",
+          "name": "syncedRetentionClosed",
+          "signature": "@Throws(FfiException::class) fun syncedRetentionClosed(manifestCbor: kotlin.ByteArray, changedAt: kotlin.String): kotlin.Boolean",
+          "doc": "**Whether a tombstone's retention window had closed** at `changed_at` (RFC 3339, a feed\nentry's own): `manifest_cbor` is a `delete` record and `changed_at` is at or after the\n`retention_until` signed into it.\n\nA device that first sees an asset at an album page's tombstone reads this before it calls\n[`FfiSession::fetch_provenance_history`]: once the window has closed the server refuses the\nasset's records and bytes to its readers, so there is nothing left to adopt, and passing the\nentry loses nothing. A record that is not a `delete`, or a `delete` whose window is absent or\nunreadable, answers `false`.\n\nPure and offline.\n\n# Errors\n\n[`FfiError::InvalidArgument`] when `changed_at` is not an RFC 3339 instant;\n[`FfiError::Sync`] when `manifest_cbor` does not decode.",
           "members": []
         },
         {
