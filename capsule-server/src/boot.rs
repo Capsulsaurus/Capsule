@@ -671,7 +671,9 @@ impl Stores {
                 self.clock.clone(),
             )
             .with_ledger(self.ledger.clone(), keys.clone())
-            .with_held_blobs(self.held.clone()),
+            .with_held_blobs(self.held.clone())
+            // Check 8 audits the same quota ledger the rebuild's reconcile repairs (#1183).
+            .with_quotas(self.quotas.clone()),
             rebuild: RebuildContext::new(
                 self.index.clone(),
                 self.blobs.clone(),

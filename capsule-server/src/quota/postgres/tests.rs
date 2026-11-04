@@ -121,6 +121,8 @@ mod postgres_conformance {
         materialised::racing_writers_never_miss_each_other(&harness).await;
         materialised::a_rekey_of_a_counted_row_is_refused(&harness).await;
         materialised::the_reconciler_finds_and_rebuilds_drift(&harness).await;
+        materialised::the_scrub_reports_drift_and_only_an_applied_rebuild_repairs_it(&harness)
+            .await;
         materialised::the_migration_backfills_existing_holdings(&harness).await;
 
         // A suspension survives a restart (#705): a fresh pool and a fresh adapter, sharing
@@ -151,7 +153,7 @@ mod postgres_conformance {
     }
 
     /// What the reconciler would rebuild now.
-    async fn drift(harness: &PostgresHarness) -> Vec<super::super::PulledDrift> {
+    async fn drift(harness: &PostgresHarness) -> Vec<crate::quota::PulledDrift> {
         harness
             .quotas
             .pulled_drift()
@@ -400,6 +402,107 @@ mod postgres_conformance {
                 "the rebuilt count releases on time"
             );
             assert_no_drift(h, "the unsubscribe after a rebuild").await;
+        }
+
+        /// Drift written behind the triggers is a `capsule-server scrub` finding, a dry-run
+        /// rebuild names it and writes nothing, and `rebuild --apply` rebuilds it (#1183).
+        ///
+        /// The scrub and the rebuild are assembled over empty in-memory stores beside this
+        /// ledger, so every finding and every rebuilt account is the quota check's.
+        pub(super) async fn the_scrub_reports_drift_and_only_an_applied_rebuild_repairs_it(
+            h: &PostgresHarness,
+        ) {
+            use std::sync::Arc;
+
+            use crate::blob::InMemoryBlobStore;
+            use crate::gc::Mode;
+            use crate::index::memory::InMemoryAssetIndex;
+            use crate::ledger::InMemoryLedger;
+            use crate::ledger::rebuild::{RebuildContext, rebuild};
+            use crate::ledger::replay::LedgerKeys;
+            use crate::quota::PulledDrift;
+            use crate::scrub::{Depth, Finding, ScrubContext, scrub};
+            use crate::share::InMemoryShares;
+            use crate::store::memory::{InMemoryUploadSessions, ManualClock};
+
+            let owner = UserId::new("mat-scrub");
+            h.hold_pulled(&owner, PEER, "scrub", &address("scrub", 1), 8)
+                .await
+                .expect("hold");
+            h.run(
+                "UPDATE quota_usage SET pulled = pulled + 3 WHERE user_id = $1",
+                vec![Value::from(owner.as_str().to_owned())],
+            )
+            .await
+            .expect("skew a total behind the triggers");
+            let drifted = PulledDrift {
+                user: owner.clone(),
+                stored: 11,
+                derived: 8,
+                holdings: false,
+            };
+
+            let quotas: Arc<dyn QuotaStore> = Arc::new(h.quotas.clone());
+            let index = Arc::new(InMemoryAssetIndex::new());
+            let blobs = Arc::new(InMemoryBlobStore::new());
+            let clock = Arc::new(ManualClock::default());
+            let scrubber = ScrubContext::new(
+                index.clone(),
+                blobs.clone(),
+                Arc::new(InMemoryUploadSessions::new(
+                    clock.clone(),
+                    jiff::SignedDuration::from_hours(24),
+                )),
+                Arc::new(InMemoryShares::new()),
+                clock.clone(),
+            )
+            .with_quotas(quotas.clone());
+            let report = scrub(&scrubber, Depth::Structural)
+                .await
+                .expect("a scrub pass");
+            assert_eq!(
+                report.findings,
+                vec![Finding::PulledQuotaDrift {
+                    user: owner.clone(),
+                    stored: 11,
+                    derived: 8,
+                    holdings: false,
+                }],
+            );
+            assert_eq!(used(h, &owner).await, 11, "the scrub repaired nothing");
+
+            let rebuilder = RebuildContext::new(
+                index,
+                blobs,
+                Arc::new(InMemoryLedger::new()),
+                quotas,
+                LedgerKeys::default(),
+                clock,
+            );
+            let dry = rebuild(&rebuilder, Mode::DryRun)
+                .await
+                .expect("a dry-run rebuild");
+            assert_eq!(dry.pulled_drift, vec![drifted.clone()]);
+            assert!(!dry.has_faults(), "drift is a repair, not a fault");
+            assert_eq!(used(h, &owner).await, 11, "a dry run rebuilt nothing");
+
+            let applied = rebuild(&rebuilder, Mode::Apply)
+                .await
+                .expect("an applied rebuild");
+            assert_eq!(applied.pulled_drift, vec![drifted]);
+            assert_eq!(used(h, &owner).await, 8, "the applied rebuild repaired it");
+            assert_no_drift(h, "the applied rebuild").await;
+            let again = rebuild(&rebuilder, Mode::Apply)
+                .await
+                .expect("a second rebuild");
+            assert!(again.pulled_drift.is_empty(), "a rerun rebuilds nothing");
+            assert!(
+                scrub(&scrubber, Depth::Structural)
+                    .await
+                    .expect("a scrub pass")
+                    .is_clean(),
+                "the scrub after the repair is clean"
+            );
         }
 
         /// Rows written before the migration are counted by it, and its `down` and `up` round

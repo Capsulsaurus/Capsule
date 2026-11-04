@@ -555,6 +555,20 @@ fn a_rebuild_report_names_what_it_restored_and_what_it_found() {
         links_only: true,
         owners: vec![owner],
         orphans: vec![address(0xDD)],
+        pulled_drift: vec![
+            crate::quota::PulledDrift {
+                user: crate::store::UserId::new("drifted-total"),
+                stored: 14,
+                derived: 9,
+                holdings: false,
+            },
+            crate::quota::PulledDrift {
+                user: crate::store::UserId::new("drifted-refs"),
+                stored: 9,
+                derived: 9,
+                holdings: true,
+            },
+        ],
     };
     let rendered = render_rebuild(&report, Mode::DryRun).to_string();
     for expected in [
@@ -574,6 +588,9 @@ fn a_rebuild_report_names_what_it_restored_and_what_it_found() {
         "ledger entry 3 (the directory copy is missing)",
         "needs a new sync epoch",
         "orphans, left to gc (1)",
+        "pulled quota totals that drifted, would rebuild (2)",
+        "drifted-total: stored 14, derived 9\n",
+        "drifted-refs: stored 9, derived 9, holdings differ",
     ] {
         assert!(
             rendered.contains(expected),
@@ -627,8 +644,18 @@ fn a_rebuild_report_names_the_way_out_of_a_caught_rewrite() {
             ),
         ],
         orphans: Vec::new(),
+        pulled_drift: vec![crate::quota::PulledDrift {
+            user: crate::store::UserId::new("drifted"),
+            stored: 3,
+            derived: 1,
+            holdings: false,
+        }],
     };
     let rendered = render_rebuild(&report, Mode::Apply).to_string();
+    assert!(
+        rendered.contains("pulled quota totals that drifted, rebuilt (1)"),
+        "{rendered}"
+    );
     assert!(
         rendered.contains("rebuild --apply --accept-rewrites"),
         "{rendered}"

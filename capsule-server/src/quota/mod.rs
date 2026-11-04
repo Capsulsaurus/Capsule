@@ -105,8 +105,10 @@
 //! the job's rows being forgotten — with no second write that could run twice, run never, or
 //! credit below zero. The Postgres ledger keeps that total stored rather than summing it per
 //! read, maintained by the schema in the transaction that changes the holdings and checked
-//! against the derivation ([`PostgresQuota`], #1171). A blob the account itself is attributed in the ledger (an upload, a reservation)
-//! is counted there and not again as pulled; one another account is attributed is still charged
+//! against the derivation ([`PostgresQuota`], #1171): [`QuotaStore::pulled_drift`] is that
+//! check, reported by `capsule-server scrub`, and [`QuotaStore::reconcile_pulled`] its repair,
+//! run by `capsule-server rebuild --apply` (#1183). A blob the account itself is attributed in
+//! the ledger (an upload, a reservation) is counted there and not again as pulled; one another account is attributed is still charged
 //! to the receiver, because dropping it would make `GET /v1/quota` say that somebody on this
 //! server uploaded those bytes — the cross-tenant answer [`ChargeOutcome::AlreadyAttributed`]
 //! refuses to give.
@@ -267,6 +269,21 @@ pub struct ExpiredReservation {
     pub reserved_until: Timestamp,
 }
 
+/// An account whose stored pulled holdings or total differ from what its rows derive, as
+/// [`QuotaStore::pulled_drift`] names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PulledDrift {
+    /// The account.
+    pub user: UserId,
+    /// Its stored pulled total.
+    pub stored: u64,
+    /// The pulled total its subscriptions, pulled blobs and attributions derive.
+    pub derived: u64,
+    /// Whether its stored holdings differ from the derived ones, whatever the totals say: a
+    /// wrong reference count is a wrong total at the next unsubscribe.
+    pub holdings: bool,
+}
+
 /// Where quota accounting lives.
 pub trait QuotaStore: std::fmt::Debug + Send + Sync {
     /// What `user` currently owes.
@@ -381,6 +398,23 @@ pub trait QuotaStore: std::fmt::Debug + Send + Sync {
     ///
     /// `true` when this call lifted one; `false` when the account was not suspended.
     fn unsuspend<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, bool>;
+
+    /// Every account whose stored pulled state differs from what its holdings derive, in
+    /// account order ("Pulled blobs" above).
+    ///
+    /// The audit `capsule-server scrub` reports (#1183). An adapter that derives the pulled
+    /// total at read time holds no second copy to drift, and answers empty; one that stores it
+    /// compares the two in one snapshot. It reads every holding on the server, so it is an
+    /// audit, never a request-path read.
+    fn pulled_drift(&self) -> StoreFuture<'_, Vec<PulledDrift>>;
+
+    /// Rebuild every account [`Self::pulled_drift`] names from its holdings, answering what was
+    /// found.
+    ///
+    /// The repair `capsule-server rebuild --apply` runs (#1183), never the scrub, which writes
+    /// nothing. An empty answer is the expected one. Rebuilding an account that no longer
+    /// drifts is a no-op, so a second call over the same rows rebuilds nothing.
+    fn reconcile_pulled(&self) -> StoreFuture<'_, Vec<PulledDrift>>;
 }
 
 /// The state `used` puts a user in, given how long they have been over.
@@ -827,6 +861,17 @@ impl QuotaStore for InMemoryQuota {
                 .and_then(|entry| entry.suspended_since.take())
                 .is_some())
         })
+    }
+
+    /// Always empty: this ledger stores no pulled total, it derives one from [`PulledHoldings`]
+    /// on every read, so there is no second copy to drift from the first.
+    fn pulled_drift(&self) -> StoreFuture<'_, Vec<PulledDrift>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    /// Always empty, and writes nothing, for the reason [`Self::pulled_drift`] is.
+    fn reconcile_pulled(&self) -> StoreFuture<'_, Vec<PulledDrift>> {
+        Box::pin(async { Ok(Vec::new()) })
     }
 }
 

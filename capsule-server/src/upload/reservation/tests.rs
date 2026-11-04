@@ -240,6 +240,14 @@ impl crate::quota::QuotaStore for RacingQuota {
     fn unsuspend<'a>(&'a self, user: &'a UserId) -> crate::store::StoreFuture<'a, bool> {
         self.inner.unsuspend(user)
     }
+
+    fn pulled_drift(&self) -> crate::store::StoreFuture<'_, Vec<crate::quota::PulledDrift>> {
+        self.inner.pulled_drift()
+    }
+
+    fn reconcile_pulled(&self) -> crate::store::StoreFuture<'_, Vec<crate::quota::PulledDrift>> {
+        self.inner.reconcile_pulled()
+    }
 }
 
 /// A harness whose ledger lets `arrival` land in the middle of the next release.

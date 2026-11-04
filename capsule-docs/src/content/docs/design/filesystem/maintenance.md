@@ -30,7 +30,7 @@ Re-hashes each local original against the sidecar's plaintext `hash` (algorithm 
 
 ## Server-Side Integrity Scrub
 
-An operator-invoked (schedulable) command that verifies a Postgres + blob-store pair, on a code path separate from the write path so one bug cannot hide another. It is **read-only**: it classifies and reports, never repairs. Repair stays with [GC](/design/filesystem/server/#deletion-and-garbage-collection), [index rebuild](/design/filesystem/server/#recovering-the-index-from-blobs-alone), or the operator. Finding classes are defined in [`capsule-server::scrub`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-server/src/scrub/mod.rs).
+An operator-invoked (schedulable) command that verifies a Postgres + blob-store pair, on a code path separate from the write path so one bug cannot hide another. It is **read-only**: it classifies and reports, never repairs. Repair stays with [GC](/design/filesystem/server/#deletion-and-garbage-collection), [index rebuild](/design/filesystem/server/#recovering-the-index-from-blobs-alone) (which also rebuilds drifted pulled quota totals), or the operator. Finding classes are defined in [`capsule-server::scrub`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-server/src/scrub/mod.rs).
 
 1. **Row → blob.** Every committed reference resolves under `blobs/`; a miss is a dangling reference — except a missing original on an [`awaiting-original`](/design/transfer/upload/#upload-tiering-staged-uploads) asset.
 2. **Blob → row.** Every blob is referenced by a committed row or a live [share link](/design/share-links/#storing-the-record); otherwise an orphan, reported for GC.
@@ -39,6 +39,7 @@ An operator-invoked (schedulable) command that verifies a Postgres + blob-store 
 5. **Mirrored facts.** Facts Postgres mirrors from the signed manifest match the manifest's own copies.
 6. **Ledger ⇄ index.** Every [owner ledger](/design/filesystem/server/#the-owner-ledger) chain verifies, and every entry has its row.
 7. **Debris and quarantine inventory.** Unattached `incoming/` files and everything in `quarantine/` are listed.
+8. **Quota ledger.** Every account's stored [pulled quota total](/design/quota/#accounting-model) and holdings equal what its subscriptions, pulled blobs and attributions derive; an account that differs is a drift finding. A ledger that derives the total on every read cannot drift and reports none. The derivation is the authority by definition, so `rebuild --apply` rebuilds every drifted account under its lock, and a dry-run rebuild names them; the scrub only reports.
 
 Checks 4 and 5 decode manifests through the server's single manifest parser, shared with [rebuild](/design/filesystem/server/#rebuild); the write path never decodes them. Check 6 verifies signatures when the host holds `ATTESTATION_KEY_SEED` and links and positions otherwise, and the report says which; it reports a ledgered upload the index has no row for. Each ledger is verified against the head the index recorded for its owner (the [anchor](/design/filesystem/server/#the-owner-ledger)), so a tail cut exactly at an entry boundary is reported whenever the index survived; the scrub reads the anchor and never moves it.
 

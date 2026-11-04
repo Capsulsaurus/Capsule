@@ -31,7 +31,10 @@
 //! The pulled total is a second copy of a derivable fact, which this ledger otherwise refuses
 //! (above), so the derivation is kept beside it: [`PostgresQuota::pulled_drift`] compares the
 //! stored holdings and totals with what the rows derive, in one snapshot, and
-//! [`PostgresQuota::reconcile_pulled`] rebuilds every account it names.
+//! [`PostgresQuota::reconcile_pulled`] rebuilds every account it names. Both are this adapter's
+//! answers to [`QuotaStore::pulled_drift`] and [`QuotaStore::reconcile_pulled`], so
+//! `capsule-server scrub` reports the drift and `capsule-server rebuild --apply` rebuilds it
+//! (#1183).
 //!
 //! # Why `charge` is a transaction and not one statement
 //!
@@ -55,7 +58,7 @@ use sea_orm::{
     TransactionTrait, Value,
 };
 
-use super::{ChargeOutcome, ExpiredReservation, QuotaLimits, QuotaStore, StoredUsage};
+use super::{ChargeOutcome, ExpiredReservation, PulledDrift, QuotaLimits, QuotaStore, StoredUsage};
 use crate::blob::ContentAddress;
 use crate::postgres::error::Port;
 use crate::postgres::time::{from_micros, to_micros};
@@ -179,20 +182,6 @@ async fn commit(transaction: DatabaseTransaction) -> Result<(), StoreError> {
         .commit()
         .await
         .map_err(PORT.failing("committing a transaction"))
-}
-
-/// An account whose stored pulled holdings or total differ from what its rows derive.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PulledDrift {
-    /// The account.
-    pub user: UserId,
-    /// Its stored pulled total, `quota_usage.pulled`.
-    pub stored: u64,
-    /// The pulled total its subscriptions, pulled blobs and attributions derive.
-    pub derived: u64,
-    /// Whether its `quota_pulled_holdings` rows differ from the derived ones, whatever the
-    /// totals say: a wrong reference count is a wrong total at the next unsubscribe.
-    pub holdings: bool,
 }
 
 /// Every `(account, address)` holding the rows derive, with its size and reference count: the
@@ -742,6 +731,14 @@ impl QuotaStore for PostgresQuota {
                 .map_err(PORT.failing("lifting an account's quota suspension"))?;
             Ok(lifted.rows_affected() == 1)
         })
+    }
+
+    fn pulled_drift(&self) -> StoreFuture<'_, Vec<PulledDrift>> {
+        Box::pin(PostgresQuota::pulled_drift(self))
+    }
+
+    fn reconcile_pulled(&self) -> StoreFuture<'_, Vec<PulledDrift>> {
+        Box::pin(PostgresQuota::reconcile_pulled(self))
     }
 }
 
