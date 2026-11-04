@@ -91,6 +91,9 @@ struct AppEnvironment {
     /// off until the user turns it on in Security & Privacy.
     let placeNames: any PlaceNameResolver
     let importer: LibraryImporter
+    /// One sync of the managed lane with its server; `nil` for a lane with no
+    /// session to sync over. See ``syncManagedLane()``.
+    private let managedSync: ManagedLaneSync?
 
     /// The local-authentication gate in front of Trash and Hidden (*SR1*).
     ///
@@ -242,10 +245,8 @@ struct AppEnvironment {
         // this provider's `AssetLocationSource` conformance, which the erased
         // `any AssetProvider` the rest of the app sees does not carry.
         let library = PortBackedAssetProvider(library: mock.library, organize: mock.organize)
-        let managed = Self.makeManagedLane(
-            root: Self.libraryRoot(), openLibrary: lane.openManagedLibrary, uploads: mock.uploads,
-            renderLadder: lane.renderLadder, embeddedPreviews: lane.embeddedPreviews
-        )
+        let managed = Self.makeManagedLane(root: Self.libraryRoot(), lane: lane, uploads: mock.uploads)
+        managedSync = managed.sync
         assetProvider = Self.composeTimeline(library: library, managed: managed.provider)
         captionStore = Self.composeCaptions(
             library: PortBackedCaptionStore(library: mock.library, organize: mock.organize),
@@ -315,6 +316,9 @@ struct AppEnvironment {
         let renderLadder: RenderLadder
         /// Where a RAW original's embedded preview is read, when the lane can.
         let embeddedPreviews: (any EmbeddedPreviewPort)?
+        /// One sync of the store with its server, handing each drain to
+        /// ``provider``; `nil` for a lane with no session.
+        var sync: ManagedLaneSync?
     }
 
     /// The picker-driven import flow and the provider that reads what it writes.
@@ -338,12 +342,16 @@ struct AppEnvironment {
     ///   mock lane's stand-in; the FFI lane passes `RenderLadder.ffi`.
     /// - Parameter embeddedPreviews: where a RAW's embedded preview is read.
     ///   With none, every rung is drawn from the original.
+    /// - Parameter openSync: the lane's sync of the store over the layout,
+    ///   handing each drain to the provider built here. With none (signed
+    ///   out, the mock lane), nothing syncs.
     static func makeManagedLane(
         root: URL,
         openLibrary: (@Sendable (ManagedLibraryLayout) -> ManagedLibrary)? = nil,
         uploads: (any UploadPort)? = nil,
         renderLadder: RenderLadder = MockRenderLadder.ladder,
-        embeddedPreviews: (any EmbeddedPreviewPort)? = nil
+        embeddedPreviews: (any EmbeddedPreviewPort)? = nil,
+        openSync: OpenManagedLaneSync? = nil
     ) -> ManagedLane {
         let layout = ManagedLibraryLayout(root: root)
         let fileStore = SystemFileStore()
@@ -370,8 +378,35 @@ struct AppEnvironment {
             reader: ManagedMediaReader(library: library),
             trashGate: trashGate,
             renderLadder: renderLadder,
-            embeddedPreviews: embeddedPreviews
+            embeddedPreviews: embeddedPreviews,
+            sync: openSync?(layout, provider)
         )
+    }
+
+    /// ``makeManagedLane(root:openLibrary:uploads:renderLadder:embeddedPreviews:openSync:)``
+    /// with every lane-supplied part taken from `lane`.
+    private static func makeManagedLane(root: URL, lane: LanePorts, uploads: any UploadPort) -> ManagedLane {
+        makeManagedLane(
+            root: root,
+            openLibrary: lane.openManagedLibrary,
+            uploads: uploads,
+            renderLadder: lane.renderLadder,
+            embeddedPreviews: lane.embeddedPreviews,
+            openSync: lane.openManagedSync
+        )
+    }
+
+    /// Sync the managed lane with its server, when it has one: one drain of
+    /// the feed, whose newly indexed assets release the held records the
+    /// provider waits to deliver.
+    ///
+    /// The scene runs it at launch and on every return to the foreground,
+    /// which is when the platform lets the app run without a background
+    /// task. A sync asked for while one runs joins it, so the two triggers
+    /// landing together cost one drain. With no session it does nothing.
+    func syncManagedLane() async {
+        guard let managedSync else { return }
+        await managedSync()
     }
 
     /// Send the purges the workspace kept, and the deletes and restores of
@@ -462,3 +497,11 @@ struct AppEnvironment {
         return URL.temporaryDirectory.appending(path: "CapsuleLibrary", directoryHint: .isDirectory)
     }
 }
+
+/// One sync of the managed lane with its server. It logs its own failure and
+/// keeps what the pages before it applied, so a caller has nothing to handle.
+typealias ManagedLaneSync = @Sendable () async -> Void
+
+/// A lane's sync of the managed store at a layout, handing each drain to the
+/// provider that reads the store.
+typealias OpenManagedLaneSync = @Sendable (ManagedLibraryLayout, ManagedProvider) -> ManagedLaneSync

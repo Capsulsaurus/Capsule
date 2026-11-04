@@ -27,6 +27,9 @@ struct LanePorts {
     /// Where a RAW original's embedded preview is read. `nil` without a Rust
     /// core, which draws every rung from the original.
     var embeddedPreviews: (any EmbeddedPreviewPort)?
+    /// The managed store's sync with its server. `nil` without a signed-in
+    /// session, which leaves the store unsynced.
+    var openManagedSync: OpenManagedLaneSync?
     /// What the cull pass reads and writes: the workspace's cull verbs in the
     /// FFI lane, the mock world's library, organize and stack ports otherwise.
     let cull: any CullPort
