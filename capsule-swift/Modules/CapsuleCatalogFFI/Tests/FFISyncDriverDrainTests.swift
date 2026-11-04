@@ -101,9 +101,18 @@ private final class GatedVerbs: FFISyncDriverVerbs, @unchecked Sendable {
         )
     }
 
+    func retentionClosed(manifestCbor _: Data, changedAt _: String) -> Bool {
+        false
+    }
+
     func applySyncEntry(_ head: FfiSyncHead, ciphertextAt _: URL) -> FfiSyncApplyOutcome {
         lock.withLock { applyCount += 1 }
         return .applied(facts: facts(head, adopted: false))
+    }
+
+    func applyHeldSyncEntry(_ head: FfiSyncHead) -> FfiSyncApplyOutcome {
+        lock.withLock { applyCount += 1 }
+        return .applied(facts: facts(head, adopted: true))
     }
 
     func openSyncedOriginal(_: FfiSyncHead, ciphertextAt _: URL, to _: URL) -> FfiOpenedOriginal {

@@ -11,9 +11,10 @@ private let syncLog = Logger(subsystem: CapsuleLog.subsystem, category: "sync-dr
 /// The session and workspace verbs a sync of the managed lane drives, bound
 /// to one server: `FfiSession.syncPull`, `FfiSession.fetchBlobToPath`,
 /// `FfiSession.fetchMetadataBlob`, `FfiSession.fetchProvenanceHistory`, `FfiWorkspace.applySyncEntryFromFile`,
-/// `FfiWorkspace.openSyncedOriginal`, `FfiWorkspace.openSyncedHistory`,
-/// `FfiWorkspace.provenanceHead` and `FfiWorkspace.assetIds`, and nothing else
-/// of either, plus the pure `syncedHistorySources`.
+/// `FfiWorkspace.applyHeldSyncEntry`, `FfiWorkspace.openSyncedOriginal`,
+/// `FfiWorkspace.openSyncedHistory`, `FfiWorkspace.provenanceHead` and
+/// `FfiWorkspace.assetIds`, and nothing else of either, plus the pure
+/// `syncedHistorySources` and `syncedRetentionClosed`.
 ///
 /// Narrowed to a protocol so the driver is tested over a scripted feed and
 /// scripted verdicts rather than a live session.
@@ -37,9 +38,19 @@ protocol FFISyncDriverVerbs: Sendable {
     /// Pure and offline; `FfiError.Sync` when a record does not decode or
     /// none binds a metadata blob.
     func historySources(manifestCbor: Data, history: [Data]) throws -> FfiHistorySources
+    /// Whether the retention window of the `delete` that is `manifestCbor`
+    /// had closed at `changedAt` (a feed entry's own, RFC 3339): `false` for
+    /// a record that is not a `delete` or signs no readable window. Pure and
+    /// offline; `FfiError.Sync` when the record does not decode.
+    func retentionClosed(manifestCbor: Data, changedAt: String) throws -> Bool
     /// Run the sync chokepoint over `head` with the original's ciphertext read
     /// from the file at `path`. Writes nothing.
     func applySyncEntry(_ head: FfiSyncHead, ciphertextAt path: URL) throws -> FfiSyncApplyOutcome
+    /// Run the sync chokepoint over `head`, of an asset the workspace holds,
+    /// against the original its held chain commits to, fetching nothing, and
+    /// adopt what applies: how a held asset's album-page tombstone, which
+    /// names no blob, moves it to the trash.
+    func applyHeldSyncEntry(_ head: FfiSyncHead) throws -> FfiSyncApplyOutcome
     /// Run the sync chokepoint over `head` with the original's ciphertext read
     /// from the file at `path`, and decrypt it to `destination`, which holds
     /// the verified plaintext only when this answers `opened`.
@@ -106,8 +117,16 @@ struct FFISessionSyncVerbs: FFISyncDriverVerbs {
         try syncedHistorySources(manifestCbor: manifestCbor, history: history)
     }
 
+    func retentionClosed(manifestCbor: Data, changedAt: String) throws -> Bool {
+        try syncedRetentionClosed(manifestCbor: manifestCbor, changedAt: changedAt)
+    }
+
     func applySyncEntry(_ head: FfiSyncHead, ciphertextAt path: URL) throws -> FfiSyncApplyOutcome {
         try workspace.applySyncEntryFromFile(entry: head, ciphertextPath: path.path)
+    }
+
+    func applyHeldSyncEntry(_ head: FfiSyncHead) throws -> FfiSyncApplyOutcome {
+        try workspace.applyHeldSyncEntry(entry: head)
     }
 
     func openSyncedOriginal(_ head: FfiSyncHead, ciphertextAt path: URL, to destination: URL) throws -> FfiOpenedOriginal {
@@ -170,11 +189,21 @@ struct FFISessionSyncVerbs: FFISyncDriverVerbs {
 /// (`syncedHistorySources`), both are fetched, and the entry is opened as
 /// one naming them is. A history whose records name no live metadata blob,
 /// or do not decode, quarantines the entry as
-/// ``SyncVerdict/unboundHistoryReason``, fetching no blob. A history fetch
-/// that fails is thrown as a blob fetch is; one whose records do not decode,
-/// or run past the walk's bound, quarantines the entry as
-/// ``SyncVerdict/malformedHistoryReason``. An entry of a held asset that
-/// names no metadata blob is only verified
+/// ``SyncVerdict/unboundHistoryReason``, fetching no blob. A tombstone of an
+/// asset the workspace does not hold, on an album page or the owner's own
+/// feed, whose delete's signed window had closed at the feed's `changed_at`
+/// (`syncedRetentionClosed`) is passed without a fetch, and so is one whose
+/// records or blobs the server refuses for good (`error.blob.gone`: a closed
+/// window, a takedown, a purge), as is any records-only adoption refused so:
+/// the server will never serve them again, and passing the delete of an
+/// asset this device does not hold loses nothing. A
+/// history fetch that fails otherwise is thrown as a blob fetch is; one whose
+/// records do not decode, or run past the walk's bound, quarantines the entry
+/// as ``SyncVerdict/malformedHistoryReason``. An album page's tombstone of a
+/// held asset, which names no original, is applied against the held chain
+/// and the original it commits to (`FfiWorkspace.applyHeldSyncEntry`),
+/// fetching nothing, so the asset moves to this device's trash. Any other
+/// entry of a held asset that names no metadata blob is only verified
 /// (`FfiWorkspace.applySyncEntryFromFile`).
 /// Every staged file the writer does not keep is removed; each drain first
 /// empties the staging directory of what a drain the process was killed in
@@ -203,6 +232,10 @@ public actor FFISyncDriver {
     /// The code `FfiError.Sync` carries when the server moved the library to
     /// a new sync epoch (`capsule_i18n::error_codes::SYNC_CURSOR_STALE`).
     static let staleCursorCode = "error.sync.cursor_stale"
+    /// The code `FfiError.Fetch` carries for a blob or record the server will
+    /// never serve again: a `410` past a retention window or under a
+    /// takedown, or a `404` (`capsule_i18n::error_codes::BLOB_GONE`).
+    static let blobGoneCode = "error.blob.gone"
 
     private let verbs: any FFISyncDriverVerbs
     private let store: any FFISyncStateStoring
@@ -366,17 +399,13 @@ public actor FFISyncDriver {
             fold.tally.level += 1
             return
         }
-        let held = heldIDs[key] != nil
         let verdict: SyncVerdict?
-        if !held, entry.metadataBlob.isEmpty {
-            verdict = try await adoptFromRecords(entry, key: key, localChainHead: applied ?? own)
-        } else {
-            guard entry.originalHeld, let original = entry.blobs.original else {
-                syncLog.debug("entry of \(key, privacy: .public) awaits its original on the server")
-                fold.tally.awaitingOriginal += 1
-                return
-            }
-            verdict = try await verify(entry, key: key, original: original, localChainHead: applied ?? own, held: held)
+        switch try await judge(entry, key: key, held: heldIDs[key] != nil, localChainHead: applied ?? own) {
+        case .awaitingOriginal:
+            fold.tally.awaitingOriginal += 1
+            return
+        case let .judged(judged):
+            verdict = judged
         }
         guard let verdict else {
             fold.tally.skipped += 1
@@ -454,50 +483,6 @@ public actor FFISyncDriver {
             metadata: metadata,
             history: history,
             original: original,
-            localChainHead: localChainHead
-        )
-    }
-
-    /// Adopt the asset of `entry`, which this workspace does not hold and
-    /// which names no metadata blob (an album page's tombstone), from its
-    /// records alone: fetch its history, name the live metadata blob and the
-    /// original from it (``FFISyncDriverVerbs/historySources(manifestCbor:history:)``),
-    /// fetch both, and open the entry with that metadata blob as one naming
-    /// it is opened. The feed's `originalHeld` and blobs are not read: the
-    /// tombstone lists neither, and the server serves both to the asset's
-    /// readers until its retention window closes. A history whose records
-    /// name no live metadata blob, or do not decode (`FfiError.Sync`), never
-    /// adopts, so it is a quarantined verdict, logged, and nothing is fetched.
-    private func adoptFromRecords(_ entry: FfiFeedEntry, key: String, localChainHead: Data?) async throws -> SyncVerdict {
-        syncLog.debug("entry of \(key, privacy: .public) names no metadata blob and its asset is not held: adopting from its records")
-        let history: [Data]
-        switch try await fetchHistory(entry, key: key) {
-        case let .records(records): history = records
-        case let .refused(verdict): return verdict
-        }
-        let sources: FfiHistorySources
-        do {
-            sources = try verbs.historySources(manifestCbor: entry.manifestCbor, history: history)
-        } catch let FfiError.Sync(_, detail) {
-            syncLog.error(
-                "entry of \(key, privacy: .public) refused: its \(history.count, privacy: .public)-record history names no live metadata blob: \(detail, privacy: .public)"
-            )
-            return SyncVerdict(
-                outcome: .quarantined(reason: SyncVerdict.unboundHistoryReason, detail: detail),
-                plaintext: nil
-            )
-        }
-        syncLog.debug(
-            "entry of \(key, privacy: .public) history names metadata blob \(sources.metadataBlobHash, privacy: .public) and original \(sources.original.ciphertextHash, privacy: .public) (\(sources.original.size, privacy: .public) bytes)"
-        )
-        let metadata = try await verbs.fetchMetadataBlob(hash: sources.metadataBlobHash)
-        syncLog.debug("entry of \(key, privacy: .public) metadata blob fetched: \(metadata.count, privacy: .public) bytes")
-        return try await open(
-            entry,
-            key: key,
-            metadata: metadata,
-            history: history,
-            original: sources.original,
             localChainHead: localChainHead
         )
     }
@@ -631,6 +616,159 @@ public actor FFISyncDriver {
     }
 }
 
+// MARK: - Album-page tombstones
+
+/// The two paths an album page's tombstone takes, which names no metadata
+/// blob, no blob and no held original: adopted from its records when its
+/// asset is not held here, applied against the held chain when it is.
+extension FFISyncDriver {
+    /// The chokepoint's verdict on `entry`, which is not level with the head
+    /// held for its asset (`localChainHead`), by the path its asset and what
+    /// it names take: adopted from its records, applied against the held
+    /// chain, or fetched and verified or opened. `nil` inside `judged` for an
+    /// entry passed without a verdict.
+    private func judge(
+        _ entry: FfiFeedEntry,
+        key: String,
+        held: Bool,
+        localChainHead: Data?
+    ) async throws -> EntryJudgement {
+        if !held, entry.metadataBlob.isEmpty {
+            return try await .judged(adoptFromRecords(entry, key: key, localChainHead: localChainHead))
+        }
+        if held, entry.kind == .deleted, entry.metadataBlob.isEmpty, !entry.originalHeld || entry.blobs.original == nil {
+            return try .judged(applyHeldTombstone(entry, key: key, localChainHead: localChainHead))
+        }
+        guard entry.originalHeld, let original = entry.blobs.original else {
+            syncLog.debug("entry of \(key, privacy: .public) awaits its original on the server")
+            return .awaitingOriginal
+        }
+        guard !held, entry.kind == .deleted else {
+            return try await .judged(verify(entry, key: key, original: original, localChainHead: localChainHead, held: held))
+        }
+        return try await .judged(passingUnserved(entry, key: key) {
+            try await verify(entry, key: key, original: original, localChainHead: localChainHead, held: held)
+        })
+    }
+
+    /// Adopt the asset of `entry`, which this workspace does not hold and
+    /// which names no metadata blob (an album page's tombstone), from its
+    /// records alone: fetch its history, name the live metadata blob and the
+    /// original from it (``FFISyncDriverVerbs/historySources(manifestCbor:history:)``),
+    /// fetch both, and open the entry with that metadata blob as one naming
+    /// it is opened. The feed's `originalHeld` and blobs are not read: the
+    /// tombstone lists neither, and the server serves both to the asset's
+    /// readers until its retention window closes. A history whose records
+    /// name no live metadata blob, or do not decode (`FfiError.Sync`), never
+    /// adopts, so it is a quarantined verdict, logged, and nothing is fetched.
+    ///
+    /// `nil`, logged, for a tombstone there is nothing left to adopt from: its
+    /// delete's window had closed at the feed's `changed_at`, judged before
+    /// any fetch, or the server refuses one of its records or blobs for good
+    /// (``FFISyncDriver/blobGoneCode``). The server never serves those again,
+    /// so throwing would stall every sync at this page until an operator
+    /// purges the asset; and passing the delete of an asset this device does
+    /// not hold loses nothing. Any other fetch failure is thrown.
+    private func adoptFromRecords(_ entry: FfiFeedEntry, key: String, localChainHead: Data?) async throws -> SyncVerdict? {
+        syncLog.debug("entry of \(key, privacy: .public) names no metadata blob and its asset is not held: adopting from its records")
+        return try await passingUnserved(entry, key: key) {
+            try await adoptFetched(entry, key: key, localChainHead: localChainHead)
+        }
+    }
+
+    /// Run `adopt` over `entry`, of an asset this workspace does not hold,
+    /// unless nothing the server serves is left to adopt it from: `nil`,
+    /// logged, for a tombstone whose delete's window had closed at the feed's
+    /// `changed_at`, judged before `adopt` fetches anything, and for an entry
+    /// one of whose records or blobs `adopt` is refused for good
+    /// (``FFISyncDriver/blobGoneCode``). Any other failure is `adopt`'s own.
+    private func passingUnserved(
+        _ entry: FfiFeedEntry,
+        key: String,
+        adopt: () async throws -> SyncVerdict?
+    ) async throws -> SyncVerdict? {
+        if entry.kind == .deleted, windowClosed(entry, key: key) {
+            syncLog.info(
+                "entry of \(key, privacy: .public) is a tombstone whose retention window had closed at \(entry.changedAt, privacy: .public): passed, nothing fetched"
+            )
+            return nil
+        }
+        do {
+            return try await adopt()
+        } catch let FfiError.Fetch(code, detail) where code == Self.blobGoneCode {
+            syncLog.info(
+                "entry of \(key, privacy: .public) passed: the server no longer serves what adopting it needs: \(detail, privacy: .public)"
+            )
+            return nil
+        }
+    }
+
+    /// Apply `entry`, an album page's tombstone of an asset this workspace
+    /// holds, against the held chain and the original it commits to
+    /// (``FFISyncDriverVerbs/applyHeldSyncEntry(_:)``), fetching nothing: the
+    /// page names no blob, and the device already holds both. The delete binds
+    /// no metadata blob, so the head carries none.
+    private func applyHeldTombstone(_ entry: FfiFeedEntry, key: String, localChainHead: Data?) throws -> SyncVerdict {
+        syncLog.debug("entry of \(key, privacy: .public) is a held asset's tombstone naming no original: applying it against the held chain")
+        let head = FfiSyncHead(
+            albumId: entry.albumId,
+            manifestCbor: entry.manifestCbor,
+            metadataBlob: Data(),
+            localChainHead: localChainHead
+        )
+        return try SyncVerdict(outcome: verbs.applyHeldSyncEntry(head), plaintext: nil)
+    }
+
+    /// Whether the window of `entry`'s delete had closed at its `changed_at`.
+    /// A record the judgement cannot read is logged and read as open: its
+    /// history fetch then decides, and quarantines a record that does not
+    /// decode.
+    private func windowClosed(_ entry: FfiFeedEntry, key: String) -> Bool {
+        do {
+            return try verbs.retentionClosed(manifestCbor: entry.manifestCbor, changedAt: entry.changedAt)
+        } catch {
+            syncLog.debug(
+                "retention window of \(key, privacy: .public) unread, fetching its history: \(String(describing: error), privacy: .public)"
+            )
+            return false
+        }
+    }
+
+    /// ``adoptFromRecords(_:key:localChainHead:)``'s fetches and open.
+    private func adoptFetched(_ entry: FfiFeedEntry, key: String, localChainHead: Data?) async throws -> SyncVerdict {
+        let history: [Data]
+        switch try await fetchHistory(entry, key: key) {
+        case let .records(records): history = records
+        case let .refused(verdict): return verdict
+        }
+        let sources: FfiHistorySources
+        do {
+            sources = try verbs.historySources(manifestCbor: entry.manifestCbor, history: history)
+        } catch let FfiError.Sync(_, detail) {
+            syncLog.error(
+                "entry of \(key, privacy: .public) refused: its \(history.count, privacy: .public)-record history names no live metadata blob: \(detail, privacy: .public)"
+            )
+            return SyncVerdict(
+                outcome: .quarantined(reason: SyncVerdict.unboundHistoryReason, detail: detail),
+                plaintext: nil
+            )
+        }
+        syncLog.debug(
+            "entry of \(key, privacy: .public) history names metadata blob \(sources.metadataBlobHash, privacy: .public) and original \(sources.original.ciphertextHash, privacy: .public) (\(sources.original.size, privacy: .public) bytes)"
+        )
+        let metadata = try await verbs.fetchMetadataBlob(hash: sources.metadataBlobHash)
+        syncLog.debug("entry of \(key, privacy: .public) metadata blob fetched: \(metadata.count, privacy: .public) bytes")
+        return try await open(
+            entry,
+            key: key,
+            metadata: metadata,
+            history: history,
+            original: sources.original,
+            localChainHead: localChainHead
+        )
+    }
+}
+
 /// The chokepoint's verdict on one entry, with the staged plaintext of its
 /// original when the entry was opened.
 struct SyncVerdict {
@@ -677,6 +815,14 @@ struct SyncVerdict {
             self.init(outcome: .quarantined(reason: Self.digestMismatchReason, detail: facts.assetId), plaintext: nil)
         }
     }
+}
+
+/// Where judging one entry left it: awaiting an original the server does not
+/// hold yet, which the feed lists again once it lands, or the chokepoint's
+/// verdict, `nil` for an entry passed without one.
+private enum EntryJudgement {
+    case awaitingOriginal
+    case judged(SyncVerdict?)
 }
 
 /// What fetching an unheld asset's earlier records came to: the records,
