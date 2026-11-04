@@ -1455,6 +1455,111 @@ async fn a_lanes_session_cap_bounds_its_window() {
     );
 }
 
+/// How long [`push_original_under`]'s server holds each range's answer.
+const RANGE_DELAY: Duration = Duration::from_millis(200);
+
+/// Push one real 2 MiB bundle through [`push_lanes`] with a client left at its own default
+/// window, a server that advises four ranges and answers each after [`RANGE_DELAY`], under a
+/// lane P of `lane_ranges`; return when each range of the original arrived, in arrival order.
+async fn push_original_under(lane_ranges: u32) -> Vec<std::time::Instant> {
+    let (_dir, bundle, _path) = real_bundle_of(2 << 20);
+    let original_hash = bundle.ciphertext_hash.to_hex();
+    let sessions: Arc<Mutex<HashMap<String, String>>> = Arc::default();
+    let arrivals: Arc<Mutex<Vec<std::time::Instant>>> = Arc::default();
+    let server = MockServer::start({
+        let arrivals = arrivals.clone();
+        move |req: &MockRequest| {
+            if req.method == "POST" {
+                let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+                let hash = body["hash"].as_str().unwrap().to_owned();
+                let id = format!("sess-{}", &hash[..16]);
+                sessions.lock().unwrap().insert(id.clone(), hash);
+                return MockResponse::new(201, "Created")
+                    .header("X-Capsule-Offset", "0")
+                    .header(
+                        "X-Capsule-Advice",
+                        "chunk=262144, sessions=4, ranges=4, ttl=300",
+                    )
+                    .json_body(format!(
+                        r#"{{"id":{id:?},"upload_url":"/upload/{id}","suggested_chunk_size":262144}}"#
+                    ));
+            }
+            let id = req.path.rsplit('/').next().unwrap().to_owned();
+            let offset: u64 = req
+                .header("X-Capsule-Offset")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            let response = MockResponse::new(204, "No Content").header(
+                "X-Capsule-Offset",
+                (offset + req.body.len() as u64).to_string(),
+            );
+            if sessions.lock().unwrap()[&id] == original_hash && !req.body.is_empty() {
+                arrivals.lock().unwrap().push(std::time::Instant::now());
+                return response.after(RANGE_DELAY);
+            }
+            response
+        }
+    })
+    .await;
+
+    let client = server.client(&bundle.protocol_version);
+    assert_eq!(
+        client.ranges_window(),
+        crate::upload::DEFAULT_CLIENT_RANGES,
+        "the client keeps its own window; only the lane lowers it"
+    );
+    let scheduler = StagedScheduler::new(
+        capsule_library::import::UploadPolicy::Full,
+        ConnectionClass::Unmetered,
+    );
+    let held = HashSet::new();
+    let lanes = [LanePush {
+        server: ServerKey::new(server.base_url()),
+        client: &client,
+        bundles: vec![LaneBundle {
+            bundle: &bundle,
+            held: &held,
+        }],
+        session_cap: None,
+    }];
+    let results = push_lanes(
+        &scheduler,
+        &lanes,
+        false,
+        PUSH_BYTE_BUDGET,
+        LaneWindows::new(1, lane_ranges),
+    )
+    .await;
+    results[0][0].as_ref().expect("the bundle pushes");
+    let arrivals = arrivals.lock().unwrap().clone();
+    assert!(
+        arrivals.len() >= 4,
+        "the original went out in several ranges: {}",
+        arrivals.len()
+    );
+    arrivals
+}
+
+/// **The lane's P lowers each session's window.** A client whose own window is four, under a
+/// server advising four, sends a verifying original's ranges four at once; the same client on a
+/// lane whose P is one sends them one at a time, each waiting for the one before it.
+#[tokio::test]
+async fn a_lanes_ranges_window_lowers_each_sessions_window() {
+    let parallel = push_original_under(4).await;
+    assert!(
+        parallel[3] - parallel[0] < RANGE_DELAY / 2,
+        "under P=4 the first four ranges were in flight together: {parallel:?}"
+    );
+
+    let sequential = push_original_under(1).await;
+    for pair in sequential.windows(2) {
+        assert!(
+            pair[1] - pair[0] >= RANGE_DELAY * 3 / 4,
+            "under P=1 each range waited for the one before it: {sequential:?}"
+        );
+    }
+}
+
 /// An empty run returns at once, and the run's future can move across threads.
 #[tokio::test]
 async fn an_empty_push_run_returns_nothing() {
@@ -1607,4 +1712,156 @@ async fn the_queue_gates_serve_waiting_ranges_first_come() {
         .expect("the holder is served once the line ahead of it drains")
         .expect("reserved");
     assert_eq!(shared.queue().in_use(), 100);
+}
+
+// ─── A source that changes under the push ────────────────────────────────────
+
+/// A real workspace with one imported asset whose original is `len` bytes, its bundle, and the
+/// path of the plaintext the bundle re-derives the original's ciphertext from.
+fn real_bundle_of(len: usize) -> (tempfile::TempDir, UploadBundle, std::path::PathBuf) {
+    let dir = tempfile::TempDir::new().unwrap();
+    let lib = dir.path().join("library");
+    std::fs::create_dir_all(&lib).unwrap();
+    let src = dir.path().join("photo.jpg");
+    let mut bytes: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+    bytes[..3].copy_from_slice(b"\xFF\xD8\xFF");
+    std::fs::write(&src, bytes).unwrap();
+
+    let mut ws = Workspace::create_with_params(&lib, b"passphrase", FAST).unwrap();
+    let album = ws.default_album_id();
+    ws.ensure_album(album, "Imports").unwrap();
+    let asset_id = ws.import_asset(album, &src).unwrap();
+    let bundle = ws.upload_bundle(&asset_id).unwrap();
+    let path = ws.original_path(&asset_id).unwrap();
+    (dir, bundle, path)
+}
+
+/// Overwrite one plaintext byte at `at`, keeping the length, and move the modification time
+/// apart as any real edit some time after the bundle was built does.
+fn edit_plaintext(path: &std::path::Path, at: u64) {
+    use std::io::{Seek as _, Write as _};
+
+    let mut file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+    file.seek(std::io::SeekFrom::Start(at)).unwrap();
+    file.write_all(&[0xee]).unwrap();
+    file.set_modified(std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1))
+        .unwrap();
+}
+
+/// A re-derived chunk whose tag differs from the one the bundle recorded refuses the read
+/// with the SDK's own [`SourceChanged`], which the upload client types as a source change; the
+/// refusal names the tag, which the read checks before the identity.
+#[test]
+fn an_originals_changed_chunk_refuses_its_read_as_a_source_change() {
+    let (_dir, bundle, path) = real_bundle_of(200_000);
+    let source = BlobBytes::Original(&bundle.original);
+    assert!(source.verifies_rederived());
+    source.read_at(0, 4096).unwrap();
+    edit_plaintext(&path, 10);
+
+    let error = source.read_at(0, 4096).unwrap_err();
+    let changed = error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<SourceChanged>())
+        .expect("the read carries SourceChanged");
+    assert!(changed.reason.contains("tag"), "{changed}");
+}
+
+/// **A push over a real original that changes mid-upload** ends typed as a source change: the
+/// session is cancelled, nothing more of the original is sent, and every byte the server
+/// received is the verified ciphertext's.
+#[tokio::test]
+async fn a_push_whose_original_changes_mid_upload_ends_as_a_source_change() {
+    let (_dir, bundle, path) = real_bundle_of(3 << 20);
+    let verified = bundle.original.to_vec().unwrap();
+    let original_hash = bundle.ciphertext_hash.to_hex();
+
+    let sessions: Arc<Mutex<HashMap<String, String>>> = Arc::default();
+    let edited = Arc::new(Mutex::new(false));
+    // Every range of the original the server received, as (offset, bytes).
+    type Received = Vec<(u64, Vec<u8>)>;
+    let received: Arc<Mutex<Received>> = Arc::default();
+    let cancelled = Arc::new(AtomicUsize::new(0));
+    let server = MockServer::start({
+        let (received, cancelled) = (received.clone(), cancelled.clone());
+        move |req: &MockRequest| {
+            if req.method == "POST" {
+                let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+                let hash = body["hash"].as_str().unwrap().to_owned();
+                let id = format!("sess-{}", &hash[..16]);
+                sessions.lock().unwrap().insert(id.clone(), hash);
+                return MockResponse::new(201, "Created")
+                    .header("X-Capsule-Offset", "0")
+                    .header(
+                        "X-Capsule-Advice",
+                        "chunk=262144, sessions=4, ranges=4, ttl=300",
+                    )
+                    .json_body(format!(
+                        r#"{{"id":{id:?},"upload_url":"/upload/{id}","suggested_chunk_size":262144}}"#
+                    ));
+            }
+            if req.method == "DELETE" {
+                cancelled.fetch_add(1, Ordering::SeqCst);
+                return MockResponse::new(204, "No Content");
+            }
+            let id = req.path.rsplit('/').next().unwrap().to_owned();
+            let hash = sessions.lock().unwrap()[&id].clone();
+            let offset: u64 = req
+                .header("X-Capsule-Offset")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            if hash == original_hash {
+                // The first range of the original to land edits the plaintext, and no range
+                // of it is answered before the edit is on disk.
+                let mut done = edited.lock().unwrap();
+                if !*done {
+                    edit_plaintext(&path, 2 << 20);
+                    *done = true;
+                }
+                received.lock().unwrap().push((offset, req.body.clone()));
+            }
+            MockResponse::new(204, "No Content").header(
+                "X-Capsule-Offset",
+                (offset + req.body.len() as u64).to_string(),
+            )
+        }
+    })
+    .await;
+
+    let scheduler = StagedScheduler::new(
+        capsule_library::import::UploadPolicy::Full,
+        ConnectionClass::Unmetered,
+    );
+    let pushed = push_bundle(
+        &server.client(&bundle.protocol_version),
+        &scheduler,
+        &bundle,
+        &HashSet::new(),
+        false,
+    )
+    .await;
+
+    let error = pushed.expect_err("a changed original fails the push");
+    assert!(
+        matches!(error, PushError::Upload(UploadError::SourceChanged(_))),
+        "{error:?}"
+    );
+    assert_eq!(error.kind(), "source_changed");
+    assert_eq!(
+        cancelled.load(Ordering::SeqCst),
+        1,
+        "the original's session is cancelled"
+    );
+    let received = received.lock().unwrap();
+    assert!(!received.is_empty(), "the original was mid-upload");
+    let sent: u64 = received.iter().map(|(_, body)| body.len() as u64).sum();
+    assert!(sent < verified.len() as u64, "nothing more of it was sent");
+    for (offset, body) in received.iter() {
+        let at = usize::try_from(*offset).unwrap();
+        assert_eq!(
+            body[..],
+            verified[at..at + body.len()],
+            "every byte the server received is the verified ciphertext's (at {offset})"
+        );
+    }
 }

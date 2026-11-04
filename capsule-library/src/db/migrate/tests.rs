@@ -219,6 +219,12 @@ ALTER TABLE assets ADD COLUMN latitude REAL;
 ALTER TABLE assets ADD COLUMN longitude REAL;
 ";
 
+/// The v6 addition over v5: the album-recency covering index.
+const RECENCY_BLOCK_V6: &str = "
+CREATE INDEX IF NOT EXISTS idx_assets_album_recency
+    ON assets(album_id, is_deleted, is_hidden, capture_utc, capture_timestamp);
+";
+
 /// A historical catalog shape: the DDL a build of that era created, and the stamp it wrote.
 #[derive(Clone, Copy)]
 struct Fixture {
@@ -265,6 +271,11 @@ const FIXTURES: &[Fixture] = &[
         stamp: 5,
         hash_column: "hash_sha256",
     },
+    Fixture {
+        label: "v6",
+        stamp: 6,
+        hash_column: "hash_sha256",
+    },
 ];
 
 fn fixture_ddl(f: &Fixture) -> String {
@@ -286,6 +297,9 @@ fn fixture_ddl(f: &Fixture) -> String {
         ),
         ("v5", _) => format!(
             "{ASSETS_V1_SHA256}{CORE_TABLES_V1}{INDEXES_V1_SHA256}{CACHE_BLOCK}{ALBUMS_BLOCK}{EMBEDDINGS_BLOCK}{HIDDEN_BLOCK_V4}{CAPTION_BLOCK_V5}"
+        ),
+        ("v6", _) => format!(
+            "{ASSETS_V1_SHA256}{CORE_TABLES_V1}{INDEXES_V1_SHA256}{CACHE_BLOCK}{ALBUMS_BLOCK}{EMBEDDINGS_BLOCK}{HIDDEN_BLOCK_V4}{CAPTION_BLOCK_V5}{RECENCY_BLOCK_V6}"
         ),
         _ => format!(
             "{ASSETS_V1_SHA256}{CORE_TABLES_V1}{INDEXES_V1_SHA256}{CACHE_BLOCK}{ALBUMS_BLOCK}{EMBEDDINGS_BLOCK}"
@@ -669,12 +683,12 @@ fn v5_catalog_gains_the_album_recency_index_and_keeps_its_rows() {
     .unwrap();
     let outcome = migrate(&conn).unwrap();
     assert_eq!(
-        outcome.applied,
-        vec![Applied {
+        outcome.applied.first(),
+        Some(&Applied {
             from: 5,
             to: 6,
             name: "v5_to_v6_album_recency_index"
-        }]
+        })
     );
     let index: i64 = conn
         .query_row(
@@ -710,6 +724,49 @@ fn v5_catalog_gains_the_album_recency_index_and_keeps_its_rows() {
         ),
         "the step must not touch an existing row"
     );
+}
+
+/// The v7 step adds the empty `upload_guards` table and touches no row: a v6 catalog's assets
+/// keep every projection, and a guard can be recorded straight after.
+#[test]
+fn v6_catalog_gains_an_empty_upload_guards_table_and_keeps_its_rows() {
+    let f = FIXTURES[7];
+    let conn = historical_conn(&f);
+    insert_historical_asset(&conn, &f, "uuid-1", &"f".repeat(64), Some("album-1"));
+    conn.execute_batch("UPDATE assets SET caption = 'kept' WHERE uuid = 'uuid-1';")
+        .unwrap();
+    let outcome = migrate(&conn).unwrap();
+    assert_eq!(
+        outcome.applied,
+        vec![Applied {
+            from: 6,
+            to: 7,
+            name: "v6_to_v7_upload_guards"
+        }]
+    );
+    assert!(table_exists(&conn, "upload_guards"));
+    let guards: i64 = conn
+        .query_row("SELECT COUNT(*) FROM upload_guards", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(guards, 0, "a migrated catalog holds no guard");
+    let caption: Option<String> = conn
+        .query_row(
+            "SELECT caption FROM assets WHERE uuid = 'uuid-1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        caption.as_deref(),
+        Some("kept"),
+        "the step must not touch a row"
+    );
+    conn.execute(
+        "INSERT INTO upload_guards (asset_id, nonce_prefix, plaintext_size, source_len,
+             chunk_tags, recorded_at) VALUES ('uuid-1', x'00', 1, 1, x'00', 0)",
+        [],
+    )
+    .unwrap();
 }
 
 #[test]

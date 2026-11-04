@@ -3,6 +3,7 @@ pub(crate) mod driver;
 pub(crate) mod migrate;
 pub(crate) mod rows;
 pub(crate) mod schema;
+pub(crate) mod upload_guard;
 pub(crate) mod vector;
 
 pub use album_order::{AlbumRecency, album_creation_secs};

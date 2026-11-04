@@ -24,10 +24,14 @@
 /// v6: added `idx_assets_album_recency` — the covering index the album order reads: the latest
 ///     effective capture among each album's visible, untrashed assets (SSoT:
 ///     design/organization § Album Order and Recency). No column is added; recency is derived.
+/// v7: added the `upload_guards` table — an original's source guard (its identity and every
+///     STREAM chunk's authentication tag), recorded by the upload bundle's hashing pass and kept
+///     until the bundle's every blob is custody-confirmed or the asset is purged (SSoT:
+///     design/cryptography/encryption § Encryption Workflow).
 ///
 /// **Bumping this constant requires appending a step to `db::migrate::STEPS`** —
 /// `steps_form_a_contiguous_chain` fails otherwise. Never edit a step that has shipped.
-pub(crate) const SCHEMA_VERSION: u32 = 6;
+pub(crate) const SCHEMA_VERSION: u32 = 7;
 
 pub(crate) const DDL: &str = r"
 PRAGMA journal_mode = WAL;
@@ -156,4 +160,24 @@ CREATE TABLE IF NOT EXISTS embeddings (
 
 CREATE INDEX IF NOT EXISTS idx_embeddings_asset ON embeddings(asset_id);
 CREATE INDEX IF NOT EXISTS idx_embeddings_task  ON embeddings(task, platform, model_version);
+
+-- The source guard of an original whose upload bundle was built: what the bundle's hashing
+-- pass recorded of the plaintext (its length, modification time, file id and status-change
+-- time) and every STREAM chunk's 16-byte authentication tag, concatenated in chunk order, under
+-- the nonce prefix they were sealed with. A re-derived chunk whose tag differs is never sent.
+-- Kept until every blob of the bundle is custody-confirmed or the asset is purged; local
+-- state, untouched by index rebuild. SSoT: design/cryptography/encryption § Encryption Workflow.
+CREATE TABLE IF NOT EXISTS upload_guards (
+    asset_id        TEXT    PRIMARY KEY,
+    nonce_prefix    BLOB    NOT NULL,
+    plaintext_size  INTEGER NOT NULL,
+    source_len      INTEGER NOT NULL,
+    modified_ns     INTEGER,
+    file_dev        INTEGER,
+    file_ino        INTEGER,
+    ctime_secs      INTEGER,
+    ctime_nanos     INTEGER,
+    chunk_tags      BLOB    NOT NULL,
+    recorded_at     INTEGER NOT NULL
+);
 ";

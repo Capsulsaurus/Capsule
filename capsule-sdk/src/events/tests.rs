@@ -469,7 +469,12 @@ async fn scripted_upload(script: Vec<(usize, ChunkFault)>) -> (UploadOutcome, Ve
     let server = MockServer::start(move |req: &MockRequest| state.answer(req)).await;
     let events = TransferEvents::channel(1024);
     let mut subscriber = events.subscribe().unwrap();
-    let client = server.client(PROTOCOL).with_events(events);
+    // The scripted server takes one range at a time, in order, so the replayed sequence is
+    // the sequential schedule's.
+    let client = server
+        .client(PROTOCOL)
+        .with_ranges_window(1)
+        .with_events(events);
     let data: Vec<u8> = (0..SIZE).map(|i| (i % 251) as u8).collect();
     let outcome = client.upload(&request(), &data).await.unwrap();
     (outcome, drain(&mut subscriber))

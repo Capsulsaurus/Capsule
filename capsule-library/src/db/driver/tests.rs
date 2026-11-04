@@ -34,7 +34,7 @@ fn make_asset(uuid: &str, hash: &str) -> AssetRow {
 fn test_init_schema_idempotent() {
     let db = DatabaseDriver::open_in_memory().unwrap();
     db.init_schema().unwrap(); // second call — should not fail
-    assert_eq!(db.schema_version().unwrap(), 6);
+    assert_eq!(db.schema_version().unwrap(), 7);
 }
 
 /// The caption and location projections round-trip through insert, upsert and the row
