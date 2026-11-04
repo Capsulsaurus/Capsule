@@ -408,8 +408,11 @@ impl PostgresQuota {
             return Ok(ChargeOutcome::AlreadyAttributed);
         }
 
-        // The account's row in `quota_usage` exists from its first charge onwards, and holds
-        // nothing but the clock.
+        // The account's row in `quota_usage` exists from its first charge or its first pulled
+        // hold, whichever comes first: migration 000030's triggers create it on either, and
+        // the attribution trigger already did so for the debit above, so this insert is a
+        // no-op kept so the lock below never depends on a trigger having run. The row holds the clock (`over_since`)
+        // and the stored `pulled` total, which only those triggers write.
         transaction
             .execute_raw(Statement::from_sql_and_values(
                 DbBackend::Postgres,
