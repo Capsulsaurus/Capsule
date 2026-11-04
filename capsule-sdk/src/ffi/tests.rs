@@ -895,13 +895,20 @@ async fn ffi_push_asset_streams_the_original_in_bounded_windows() {
         };
 
         let received = chunks.lock().unwrap().clone();
-        let original_chunks: Vec<&ReceivedChunk> = received
+        let mut original_chunks: Vec<&ReceivedChunk> = received
             .iter()
             .filter(|(s, _, _)| s == session_id)
             .collect();
+        // An original verifies what it re-derives, so its ranges go out several at once and
+        // may arrive in any order; ordered by offset they must tile the ciphertext exactly.
+        original_chunks.sort_by_key(|(_, offset, _)| *offset);
         let mut reassembled = Vec::new();
         for (_, offset, body) in &original_chunks {
-            assert_eq!(*offset, reassembled.len() as u64, "chunks arrive in order");
+            assert_eq!(
+                *offset,
+                reassembled.len() as u64,
+                "the ranges tile the ciphertext with no gap or overlap"
+            );
             reassembled.extend_from_slice(body);
         }
         let largest = original_chunks
