@@ -1455,6 +1455,111 @@ async fn a_lanes_session_cap_bounds_its_window() {
     );
 }
 
+/// How long [`push_original_under`]'s server holds each range's answer.
+const RANGE_DELAY: Duration = Duration::from_millis(200);
+
+/// Push one real 2 MiB bundle through [`push_lanes`] with a client left at its own default
+/// window, a server that advises four ranges and answers each after [`RANGE_DELAY`], under a
+/// lane P of `lane_ranges`; return when each range of the original arrived, in arrival order.
+async fn push_original_under(lane_ranges: u32) -> Vec<std::time::Instant> {
+    let (_dir, bundle, _path) = real_bundle_of(2 << 20);
+    let original_hash = bundle.ciphertext_hash.to_hex();
+    let sessions: Arc<Mutex<HashMap<String, String>>> = Arc::default();
+    let arrivals: Arc<Mutex<Vec<std::time::Instant>>> = Arc::default();
+    let server = MockServer::start({
+        let arrivals = arrivals.clone();
+        move |req: &MockRequest| {
+            if req.method == "POST" {
+                let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+                let hash = body["hash"].as_str().unwrap().to_owned();
+                let id = format!("sess-{}", &hash[..16]);
+                sessions.lock().unwrap().insert(id.clone(), hash);
+                return MockResponse::new(201, "Created")
+                    .header("X-Capsule-Offset", "0")
+                    .header(
+                        "X-Capsule-Advice",
+                        "chunk=262144, sessions=4, ranges=4, ttl=300",
+                    )
+                    .json_body(format!(
+                        r#"{{"id":{id:?},"upload_url":"/upload/{id}","suggested_chunk_size":262144}}"#
+                    ));
+            }
+            let id = req.path.rsplit('/').next().unwrap().to_owned();
+            let offset: u64 = req
+                .header("X-Capsule-Offset")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            let response = MockResponse::new(204, "No Content").header(
+                "X-Capsule-Offset",
+                (offset + req.body.len() as u64).to_string(),
+            );
+            if sessions.lock().unwrap()[&id] == original_hash && !req.body.is_empty() {
+                arrivals.lock().unwrap().push(std::time::Instant::now());
+                return response.after(RANGE_DELAY);
+            }
+            response
+        }
+    })
+    .await;
+
+    let client = server.client(&bundle.protocol_version);
+    assert_eq!(
+        client.ranges_window(),
+        crate::upload::DEFAULT_CLIENT_RANGES,
+        "the client keeps its own window; only the lane lowers it"
+    );
+    let scheduler = StagedScheduler::new(
+        capsule_library::import::UploadPolicy::Full,
+        ConnectionClass::Unmetered,
+    );
+    let held = HashSet::new();
+    let lanes = [LanePush {
+        server: ServerKey::new(server.base_url()),
+        client: &client,
+        bundles: vec![LaneBundle {
+            bundle: &bundle,
+            held: &held,
+        }],
+        session_cap: None,
+    }];
+    let results = push_lanes(
+        &scheduler,
+        &lanes,
+        false,
+        PUSH_BYTE_BUDGET,
+        LaneWindows::new(1, lane_ranges),
+    )
+    .await;
+    results[0][0].as_ref().expect("the bundle pushes");
+    let arrivals = arrivals.lock().unwrap().clone();
+    assert!(
+        arrivals.len() >= 4,
+        "the original went out in several ranges: {}",
+        arrivals.len()
+    );
+    arrivals
+}
+
+/// **The lane's P lowers each session's window.** A client whose own window is four, under a
+/// server advising four, sends a verifying original's ranges four at once; the same client on a
+/// lane whose P is one sends them one at a time, each waiting for the one before it.
+#[tokio::test]
+async fn a_lanes_ranges_window_lowers_each_sessions_window() {
+    let parallel = push_original_under(4).await;
+    assert!(
+        parallel[3] - parallel[0] < RANGE_DELAY / 2,
+        "under P=4 the first four ranges were in flight together: {parallel:?}"
+    );
+
+    let sequential = push_original_under(1).await;
+    for pair in sequential.windows(2) {
+        assert!(
+            pair[1] - pair[0] >= RANGE_DELAY * 3 / 4,
+            "under P=1 each range waited for the one before it: {sequential:?}"
+        );
+    }
+}
+
 /// An empty run returns at once, and the run's future can move across threads.
 #[tokio::test]
 async fn an_empty_push_run_returns_nothing() {
