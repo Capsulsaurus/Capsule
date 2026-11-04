@@ -866,6 +866,39 @@ pub(crate) enum FederationCommands {
         #[arg(long)]
         json: bool,
     },
+    /// List every asset this account's server pulled for one subscription: each live asset's
+    /// id, chain head, timestamp, author and size
+    Assets {
+        /// The album's home server
+        #[arg(value_name = "PEER")]
+        peer: String,
+        /// The album, as its home server names it
+        #[arg(value_name = "ALBUM_ID")]
+        album_id: String,
+        /// Print the album as one JSON document on stdout: its peer, album id and assets
+        #[arg(long)]
+        json: bool,
+    },
+    /// Fetch one pulled asset's encrypted metadata blob, byte for byte as this account's
+    /// server pulled it, into a file
+    Metadata {
+        /// The album's home server
+        #[arg(value_name = "PEER")]
+        peer: String,
+        /// The album, as its home server names it
+        #[arg(value_name = "ALBUM_ID")]
+        album_id: String,
+        /// The asset, as its home server names it
+        #[arg(value_name = "ASSET_ID")]
+        asset_id: String,
+        /// File the blob is written to, replacing any file already there
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Print the outcome as one JSON document on stdout: the peer, album and asset, the
+        /// blob's size and content hash, and the file it was written to
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]

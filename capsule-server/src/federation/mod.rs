@@ -73,6 +73,7 @@ pub use self::peers::{
     BlockOutcome, Blocked, InvalidSigningKey, PeerAdministration, PeerRecord, PeerStore,
     PinOutcome, UnblockOutcome, parse_signing_key, revoke_grants_of,
 };
+use self::pull::pulled::PulledAlbumReads;
 pub use self::report::{
     REPORT_FRESHNESS, REPORT_NONCE_WINDOW, ReportClaim, ReportError, verify_signed_report,
 };
@@ -177,6 +178,9 @@ pub struct FederationCollaborators {
     pub peers: Arc<dyn PeerStore>,
     /// The albums this server pulls from peers for its own members.
     pub subscriptions: Arc<dyn SubscriptionStore>,
+    /// What the pull worker committed for those members, as their clients read it: the same
+    /// store the worker writes.
+    pub pulled: Arc<dyn PulledAlbumReads>,
     /// The clock every record and every deadline is stamped from.
     pub clock: Arc<dyn Clock>,
     /// Whether this deployment federates at all (`FEDERATION_ENABLED`, #509).
@@ -222,6 +226,7 @@ pub struct FederationContext {
     capabilities: Arc<dyn CapabilityStore>,
     peers: Arc<dyn PeerStore>,
     subscriptions: Arc<dyn SubscriptionStore>,
+    pulled: Arc<dyn PulledAlbumReads>,
     clock: Arc<dyn Clock>,
     enabled: Arc<dyn FederationSetting>,
     hints: Option<Arc<dyn HintReceiver>>,
@@ -235,6 +240,7 @@ impl FederationContext {
             capabilities,
             peers,
             subscriptions,
+            pulled,
             clock,
             enabled,
         } = collaborators;
@@ -243,6 +249,7 @@ impl FederationContext {
             capabilities,
             peers,
             subscriptions,
+            pulled,
             clock,
             enabled,
             hints: None,
@@ -267,6 +274,11 @@ impl FederationContext {
     /// The albums this server pulls from peers for its own members.
     pub fn subscriptions(&self) -> &dyn SubscriptionStore {
         self.subscriptions.as_ref()
+    }
+
+    /// What the pull worker committed, as a subscriber's client reads it.
+    pub fn pulled(&self) -> &dyn PulledAlbumReads {
+        self.pulled.as_ref()
     }
 
     /// The codec capabilities are minted with and read by.

@@ -84,8 +84,8 @@ use crate::enrollment::EnrollmentContext;
 use crate::escrow::postgres::PostgresEscrow;
 use crate::escrow::{EscrowContext, EscrowStore, InMemoryEscrow};
 use crate::federation::postgres::{PostgresCapabilities, PostgresPeers};
-use crate::federation::pull::pulled::PeerCachingBudget;
 use crate::federation::pull::pulled::postgres::{PeerBudgetCharge, PostgresPulledAlbums};
+use crate::federation::pull::pulled::{PeerCachingBudget, PulledAlbumReads};
 use crate::federation::pull::remote::{egress_client, rest};
 use crate::federation::pull::valkey::ValkeyPullJobs;
 use crate::federation::pull::{
@@ -602,6 +602,9 @@ struct Stores {
     /// references (#1141): a pulled metadata blob has no asset row, so a collector not handed
     /// these would sweep it from [`Stores::blobs`] once the grace window passed.
     held: Arc<dyn HeldBlobs>,
+    /// The same store as [`Self::pulled`], as what a subscriber's client reads of an album
+    /// pulled for it (#1160): the subscription routes read it, never the worker.
+    reads: Arc<dyn PulledAlbumReads>,
     /// The bounded soft-fail table the pull worker remembers each refused stale revival in
     /// (#1157): durable, so Postgres on the durable arm.
     rejected: Arc<dyn RejectedHashes>,
@@ -778,7 +781,8 @@ impl Base {
             capabilities: Arc::new(InMemoryCapabilities::new(self.clock.clone())),
             peers: Arc::new(InMemoryPeers::new()),
             pulled: pulled.clone(),
-            held: pulled,
+            held: pulled.clone(),
+            reads: pulled,
             subscriptions,
             rejected: Arc::new(InMemoryRejectedHashes::new(self.rejected_bounds)),
             moderation: Arc::new(InMemoryModeration::new()),
@@ -809,7 +813,8 @@ impl Base {
             peers: Arc::new(PostgresPeers::new(connection.clone())),
             subscriptions: Arc::new(PostgresSubscriptions::new(connection.clone())),
             pulled: pulled.clone(),
-            held: pulled,
+            held: pulled.clone(),
+            reads: pulled,
             rejected: Arc::new(PostgresRejectedHashes::new(
                 connection.clone(),
                 self.rejected_bounds,
@@ -1082,6 +1087,7 @@ fn compose(
     let issued = stores.capabilities.clone();
     let peers = stores.peers.clone();
     let subscriptions = stores.subscriptions.clone();
+    let pulled_reads = stores.reads.clone();
     let moderation = stores.moderation.clone();
     let activity = stores.activity.clone();
 
@@ -1319,6 +1325,7 @@ fn compose(
                 capabilities: issued,
                 peers,
                 subscriptions,
+                pulled: pulled_reads,
                 clock: clock.clone(),
                 enabled: Arc::new(config.federation_endpoint().is_some()),
             });

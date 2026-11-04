@@ -4362,6 +4362,9 @@ pub(crate) struct Fixture {
     pub(crate) peers: Arc<InMemoryPeers>,
     /// The albums this server pulls from peers for its own members.
     pub(crate) subscriptions: Arc<SwitchableSubscriptions>,
+    /// What the pull worker committed for those members: the *same* store the subscription
+    /// routes read, so a case commits a page and reads it back through them.
+    pub(crate) pulled: Arc<capsule_server::federation::pull::InMemoryPulledAlbums>,
     /// Whether the server federates — the *same* switch it reads, so a case can turn the whole
     /// federation surface off for the requests it is about.
     pub(crate) federation: Arc<SwitchableFederation>,
@@ -4515,6 +4518,7 @@ impl Fixture {
         let subscriptions = Arc::new(SwitchableSubscriptions::new());
         let federation = Arc::new(SwitchableFederation::new(federating));
         let hints = Arc::new(capsule_server::federation::RecordingHints::new());
+        let pulled = Arc::new(capsule_server::federation::pull::InMemoryPulledAlbums::new());
         let passwords = Arc::new(SwitchablePasswords::new(passwords_disabled));
         let chunk_pace = Arc::new(SwitchableChunkPace::new(ChunkPace::default()));
         let challenges = Arc::new(SwitchableChallenges::new(clock.clone()));
@@ -4614,6 +4618,7 @@ impl Fixture {
                 capabilities: revocations.clone(),
                 peers: peers.clone(),
                 subscriptions: subscriptions.clone(),
+                pulled: pulled.clone(),
                 clock: clock.clone(),
                 enabled: federation.clone(),
             })
@@ -4669,6 +4674,7 @@ impl Fixture {
             revocations,
             peers,
             subscriptions,
+            pulled,
             federation,
             hints,
             passwords,
@@ -4799,6 +4805,7 @@ impl Fixture {
                 capabilities: issued,
                 peers: Arc::new(InMemoryPeers::new()),
                 subscriptions: Arc::new(InMemorySubscriptions::new()),
+                pulled: Arc::new(capsule_server::federation::pull::InMemoryPulledAlbums::new()),
                 clock: clock.clone(),
                 enabled: Arc::new(true),
             }),

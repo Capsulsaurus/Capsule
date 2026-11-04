@@ -1,7 +1,7 @@
-//! The `--json` documents `capsule federation list` and `unsubscribe` print: each is a contract,
-//! so its keys are pinned.
+//! The `--json` documents `capsule federation list`, `unsubscribe` and `metadata` print: each
+//! is a contract, so its keys are pinned.
 
-use super::{SubscriptionsReport, UnsubscribeReport};
+use super::{PulledMetadataReport, SubscriptionsReport, UnsubscribeReport};
 use crate::federation::SubscriptionEntry;
 
 #[test]
@@ -56,6 +56,29 @@ fn the_unsubscribe_document_keeps_its_keys() {
             "peer": "home.test",
             "album_id": "album-1",
             "unsubscribed": true,
+        })
+    );
+}
+
+#[test]
+fn the_metadata_document_keeps_its_keys() {
+    let report = PulledMetadataReport {
+        peer: "home.test".to_owned(),
+        album_id: "album-1".to_owned(),
+        asset_id: "asset-1".to_owned(),
+        size: 42,
+        hash: "ab".repeat(32),
+        out: std::path::PathBuf::from("out/asset-1.bin"),
+    };
+    assert_eq!(
+        serde_json::to_value(&report).expect("serializes"),
+        serde_json::json!({
+            "peer": "home.test",
+            "album_id": "album-1",
+            "asset_id": "asset-1",
+            "size": 42,
+            "hash": "ab".repeat(32),
+            "out": "out/asset-1.bin",
         })
     );
 }

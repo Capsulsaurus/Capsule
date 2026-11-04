@@ -6,7 +6,10 @@
 //! pushes an asset into her album, lists Bob's account on its roster and mints a capability for
 //! Bob's server; Bob posts it through the CLI's own `federation subscribe` orchestration, whose
 //! result is the document `capsule federation subscribe --json` prints; and one round of Bob's
-//! server's pull worker pulls the album from Alice's server.
+//! server's pull worker pulls the album from Alice's server. Bob's client then renders what
+//! his server pulled through the CLI's `federation assets` and `federation metadata`
+//! orchestration: the album's asset, as its breadcrumb, and the metadata blob the pull stored,
+//! byte for byte the one Alice's record commits to.
 //!
 //! # The wire between the servers is the production one
 //!
@@ -25,15 +28,16 @@
 //!
 //! # What is not asserted here
 //!
-//! Bob's client rendering the pulled album: nothing on Bob's server reads the entries a pull
-//! commits yet (the breadcrumb index, #1157), so there is no surface for a client to render
-//! from. What this case proves is the pull — the capability crossing servers, the signed
-//! presentations verifying under the pinned keys, and every entry of a non-empty feed passing
-//! Bob's re-validation, which is what [`JobOutcome::Pulled`] reports.
+//! Who else may read the pulled album: that a non-subscriber is told nothing is the server's
+//! own `tests/subscriptions.rs`. What this case proves is the round trip — the capability
+//! crossing servers, the signed presentations verifying under the pinned keys, every entry of a
+//! non-empty feed passing Bob's re-validation ([`JobOutcome::Pulled`]), and Bob's client
+//! reading back exactly what Alice's server served.
 
 use capsule_cli::federation::{self, Subscribed};
 use capsule_cli::remote::RemoteConfig;
 use capsule_cli::session::SessionStore;
+use capsule_core::crypto::hash::hash_bytes;
 use capsule_core::crypto::keys::AmkVersion;
 use capsule_core::crypto::membership::{AlbumRoster, MemberRole, RosterMember, SignedAlbumRoster};
 use capsule_e2e::federation::{SECOND_ED25519_DER, TlsFront};
@@ -216,4 +220,40 @@ async fn e2e_case_4_bobs_server_pulls_alices_album_with_the_capability_bob_subsc
         .expect("`capsule federation list` answers");
     assert_eq!(listed.len(), 1, "{listed:?}");
     assert!(listed[0].live);
+
+    // Bob's client renders what his server pulled: the album's asset, as the document
+    // `capsule federation assets --json` prints, with the head Alice's own feed carries.
+    let alice_feed = alice.feed(&alice_server).await;
+    let alices = entry_for(&alice_feed, &asset).expect("Alice's feed carries the asset");
+    let pulled = federation::assets(&remote, &store, ALICE, &album.to_string())
+        .await
+        .expect("`capsule federation assets` lists the pulled album");
+    let printed = serde_json::to_value(&pulled).expect("the report serializes");
+    assert_eq!(printed["peer"], ALICE, "{printed:#}");
+    assert_eq!(printed["album_id"], album.to_string());
+    let assets = printed["assets"].as_array().expect("a list of assets");
+    assert_eq!(assets.len(), 1, "the one asset Alice pushed: {printed:#}");
+    assert_eq!(assets[0]["asset_id"], asset.to_string());
+    assert_eq!(assets[0]["author"], alice.user_id.to_string());
+    assert_eq!(
+        assets[0]["head"],
+        hash_bytes(&alices.manifest_cbor).to_hex(),
+        "the breadcrumb's head is the record Alice's server serves"
+    );
+
+    // And the metadata blob the pull stored, byte for byte the one Alice's record commits to.
+    let metadata = federation::metadata(
+        &remote,
+        &store,
+        ALICE,
+        &album.to_string(),
+        &asset.to_string(),
+    )
+    .await
+    .expect("`capsule federation metadata` fetches the pulled blob");
+    assert_eq!(
+        hash_bytes(&metadata).to_hex(),
+        String::from_utf8(alices.metadata_blob.clone()).expect("a hex content address"),
+        "the blob Bob's server holds is the one Alice's asset carries"
+    );
 }
