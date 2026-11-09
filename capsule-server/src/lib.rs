@@ -514,5 +514,8 @@ pub fn openapi() -> kynos::Result<kynos::openapi::Document> {
     openapi::describe_retry_after_header(&mut document);
     // The same gap for the chunk route's `X-Capsule-Committed` on a `409 range_conflict`.
     openapi::describe_refusal_committed_header(&mut document);
+    // What every operation shares — negotiation, the bearer scheme, the error contract — as the
+    // document's description, from `openapi/contract.md`.
+    openapi::describe_contract(&mut document);
     Ok(document)
 }

@@ -527,6 +527,20 @@ fn fill_binary(schema: &mut Option<Schema>) {
     );
 }
 
+/// The contract every operation shares, as the document's `info.description`: protocol
+/// negotiation and the operations exempt from its gate, the one bearer scheme, and how a
+/// rejection is coded and mapped to a status.
+///
+/// Kept in `contract.md` beside this module so it is read and reviewed as prose, and emitted
+/// into the document so the generated REST reference and every generated client carry it from
+/// the one place the server defines it.
+pub(crate) const CONTRACT: &str = include_str!("contract.md");
+
+/// Sets the document's description to [`CONTRACT`].
+pub(crate) fn describe_contract(document: &mut Document) {
+    document.info.description = Some(CONTRACT.trim_end().to_owned());
+}
+
 /// Files the protocol window's three response headers under every response (issue #404).
 ///
 /// [`crate::negotiation::Negotiation`] attaches `X-Capsule-Protocol-Min`, `-Max` and
