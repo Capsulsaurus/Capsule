@@ -17,6 +17,9 @@ export const BADGE_CLASS = 'lib-badge';
 /** The badge's visible text. */
 export const BADGE_TEXT = 'repo';
 
+/** Text that, right after an inline-code mention, makes it part of a word. */
+const COMPOUND = /^[\w'’-]/;
+
 /** @param {string} text */
 function escapeRegExp(text) {
     return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -40,12 +43,13 @@ export function compile(libraries) {
     }
     const names = [...byName.keys()].sort((a, b) => b.length - a.length);
     // A name is a word on its own: not part of a path, an identifier, a
-    // hyphenated compound or a file name.
+    // hyphenated compound, a possessive or a file name. (A badge inside a
+    // word would split it: "rustls repo-only".)
     const prose =
         names.length === 0
             ? null
             : new RegExp(
-                  `(?<![\\w./@-])(?:${names.map(escapeRegExp).join('|')})(?![\\w/@-]|\\.\\w)`,
+                  `(?<![\\w./@-])(?:${names.map(escapeRegExp).join('|')})(?![\\w/@'’-]|\\.\\w)`,
                   'g',
               );
     return { byName, byCode, prose };
@@ -65,9 +69,6 @@ export function linkLibraries(tree, libraries = LIBRARIES) {
     /** The mention as written, then its badge. */
     const badged = (library, mention, name) => [
         mention,
-        // A real space, so the name and the badge stay two words in search
-        // and copied text; the badge's own margin is zero.
-        { type: 'text', value: ' ' },
         {
             type: 'link',
             url: library.url,
@@ -117,14 +118,15 @@ export function linkLibraries(tree, libraries = LIBRARIES) {
         if (!Array.isArray(node.children)) return;
         const inside = blocked || BLOCKED.has(node.type);
         const children = [];
-        for (const child of node.children) {
+        for (const [index, child] of node.children.entries()) {
             if (!inside && child.type === 'text') {
                 children.push(...splitText(child.value));
             } else if (
                 !inside &&
                 child.type === 'inlineCode' &&
                 byCode.has(child.value) &&
-                !linked.has(byCode.get(child.value))
+                !linked.has(byCode.get(child.value)) &&
+                !COMPOUND.test(node.children[index + 1]?.value ?? '')
             ) {
                 const library = byCode.get(child.value);
                 linked.add(library);
