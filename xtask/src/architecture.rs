@@ -59,8 +59,8 @@ const PLANNED_WORKSPACE_DEPENDENCIES: &[(&str, &str)] = &[
 // Lock-graph edges into a retired crate that are not the decision the retirement records, each
 // with its reason. `prost`/`tonic` are retired as **Capsule's public surface** (no gRPC; see
 // .claude/rules/capsule-server.md), and these crates use them as an internal encoding or a
-// container-runtime client, which exposes no surface of Capsule's. An edge is sanctioned, not a crate: the same retired
-// crate arriving through anything else is still a violation.
+// container-runtime client, which exposes no surface of Capsule's. An edge is sanctioned, not a
+// crate: the same retired crate arriving through anything else is still a violation.
 const SANCTIONED_TRANSITIVE_EDGES: &[(&str, &str, &str)] = &[
     (
         "tzf-rs",
