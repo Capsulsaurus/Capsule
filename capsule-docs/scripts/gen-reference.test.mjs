@@ -806,6 +806,20 @@ describe('the SDK pages', () => {
         );
     });
 
+    it('opens every SDK page with a status the docs require', () => {
+        // The content schema leaves `status` optional (plugin routes have no
+        // frontmatter); the generator is what guarantees generated pages set it.
+        for (const page of [
+            renderWasmPage(wasm, parseWasmSurface(MINIMAL_WASM)),
+            renderBindingsPage(swift, MINIMAL_BINDINGS),
+            renderBindingsPage(kotlin, MINIMAL_BINDINGS),
+        ]) {
+            expect(page).toMatch(
+                /^---\n[\s\S]*?^status: stable$[\s\S]*?^---$/m,
+            );
+        }
+    });
+
     it('demotes a heading inside a member doc comment below the member', () => {
         const page = renderBindingsPage(swift, MINIMAL_BINDINGS);
         expect(page).toContain('##### Errors');

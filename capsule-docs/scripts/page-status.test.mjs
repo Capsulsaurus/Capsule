@@ -4,7 +4,7 @@
 // The content schema cannot require the field itself: plugin routes such as
 // the blog index render through <StarlightPage> with no frontmatter of their
 // own, and a required field would reject them. So the schema leaves it
-// optional and this test is what keeps a page from landing unmarked.
+// optional and this test is what keeps an authored page from landing unmarked.
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,8 +31,9 @@ describe('frontmatterStatus', () => {
 });
 
 describe('docs pages', () => {
-    // Every page on disk, generated reference pages included: they are
-    // emitted with a status too, and nothing else would notice if one lost it.
+    // Every page on disk. Generated reference pages exist only after
+    // `gen-reference` has run, so they are checked here when present; their
+    // status is guaranteed by the renderers' own tests in gen-reference.test.mjs.
     const pages = readdirSync(DOCS, { recursive: true, encoding: 'utf8' })
         .map((rel) => rel.split('\\').join('/'))
         .filter((rel) => /\.mdx?$/.test(rel));
