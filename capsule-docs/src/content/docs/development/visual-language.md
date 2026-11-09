@@ -6,7 +6,7 @@ status: draft
 
 This doc owns Capsule's **brand tokens**: the accent, neutral ramp, type, radius and spacing scales
 defined in one place. It also owns the **voice** of public copy and the **docs-site
-rules** (status badges, front page, footer, blog). It defers everything else about a client's look to
+rules** (header, status badges, sidebar, front page, footer, blog). It defers everything else about a client's look to
 [Clients — Design Language](/design/clients/#design-language): native material on each platform,
 no third house style. The brand reaches a native client only through its accent and its app icon.
 
@@ -19,8 +19,11 @@ no third house style. The brand reaches a native client only through its accent 
   The accent is the only brand token a native client adopts; type, controls, radius and spacing are
   the platform's own. The radius and spacing scales below are the Apple client's; the docs site
   mirrors the radii, and Android keeps Material's shape and spacing scales.
-- **Nothing leaks.** A Capsule-served page (the docs site, the web client) MUST NOT request a
-  third-party asset: fonts, images, scripts and analytics come from the same origin or are not used.
+- **Nothing leaks.** A product surface that shows a user's library (the web client, share and
+  guest-upload pages) MUST NOT request a third-party asset: fonts, images, scripts and analytics come
+  from the same origin or are not used. The docs site is not a product surface: it self-hosts its
+  fonts and scripts, and may show third-party images such as a blog author's GitHub avatar
+  (`avatars.githubusercontent.com`).
 - **Accessible by default.** Text and interactive accents meet WCAG AA (4.5:1) in both themes, motion
   is decorative only and stops under `prefers-reduced-motion`, and a state is never conveyed by
   colour alone.
@@ -51,7 +54,8 @@ bottom; body text is the opposite end.
 
 ### Type
 
-- **Web and docs:** Geist for text and Geist Mono for code, self-hosted.
+- **Web and docs:** Geist for text and Geist Mono for code, self-hosted. The docs site uses the
+  variable cuts; at a named weight their outlines match the static cuts.
 - **Apple and Android:** the platform's system text styles (Dynamic Type, Material type scale). No
   brand font ships in a native app.
 
@@ -87,27 +91,45 @@ one is designed.
 
 ## Docs Site
 
+- **Header.** The wordmark (the capsule mark beside "Capsule" in heavy, tightly tracked Geist), then
+  the section links centred in the free space: Guides, Design, Reference and, once the blog is live,
+  Blog. The current section is an accent-tinted pill. Then search, a labelled GitHub button and a
+  theme toggle that cycles Auto, Light and Dark. Narrow screens move the section links into the
+  menu; splash pages such as the front page have no menu, so there they are reached through the
+  page's own links.
 - **Status badges.** Every authored page carries a review `status`
   ([Core Principles — Review Status](/design/principles/#review-status)). The page title always shows
   it. The sidebar shows it only for a page that is not `stable`, so the navigation lists exactly what
   still awaits review.
+- **Sidebar.** The same surface as the page, divided from it by a hairline; the current page is an
+  accent-tinted pill.
 - **Front page.** In order: a hero with the differentiators and a theme-matched product screenshot,
-  a one-line status, the differentiators with a link into the design doc behind each, the
+  a one-line status, the differentiators with a link named for the doc behind each, the
   table-stakes tier, why Capsule is built this way, and where to start.
-- **Footer.** On every page: links to the documentation, the blog (once it is live), the roadmap,
-  discussions and the source, then the copyright holder and the licence line.
+- **Footer.** On every page, centred: links to the documentation, the blog (once it is live), the
+  roadmap, discussions and the source, then the copyright holder, the licence line and the commit
+  the site was built from, linked to that commit.
 - **The blog goes live with its first post.** Until a post is published the production site has no
   blog route, header link, RSS feed, sitemap entry or footer link, so no reader lands on an empty
   index.
 - **Blog.** Announcements, release notes and design write-ups. A post links to the design doc it
   discusses rather than restating its contract. `draft: true` keeps a post unpublished; a published
-  post carries `status: stable`, so it never shows a Draft badge.
+  post carries `status: stable`, so it never shows a Draft badge. A published post also carries a
+  title, a description of 50 to 160 characters, a date, at least one configured author and one tag,
+  and an `<!-- excerpt -->` marker that ends its teaser on the index. A post's header shows its
+  date, reading time and authors with their pictures, and its body is set to a reading measure.
 
 ## Validation
 
 - `scripts/page-status.test.mjs` fails on any docs page without a `status`, and on a published blog
-  post whose status is not `stable`.
+  post whose status is not `stable` or that breaks the post contract above
+  (`src/lib/blog-posts.test.mjs` proves the contract check itself).
+- `src/lib/site-nav.test.mjs` proves the header and footer links, their order, the Blog link's
+  dependence on the blog being live, and that every internal link resolves to a page.
+- `src/lib/theme-cycle.test.mjs` proves the toggle's cycle and that it stores what Starlight reads;
+  `src/lib/build-commit.test.mjs` proves which commit the footer names.
 - `src/lib/sidebar-status.test.mjs` proves which sidebar entries carry a badge.
 - `mise run build-docs` runs the link validator over every page, front-page feature links included.
-  The site footer's links are not validated.
+  The header and footer components are not seen by the link validator; their links are checked by
+  `site-nav.test.mjs` instead.
 - Contrast figures above are recomputed when the accent changes; there is no automated contrast gate.

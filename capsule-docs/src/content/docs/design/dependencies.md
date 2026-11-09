@@ -90,7 +90,7 @@ Astro and Starlight, built with bun. Nothing here ships in a client or server ar
 | --- | --- | --- |
 | Site generator | Astro + `@astrojs/starlight` | One chrome for every page, generated reference included ([Developer Documentation](/design/developer-docs/)). |
 | Blog | `starlight-blog` | Posts are docs pages under `blog/`; MIT. |
-| Web fonts | `@fontsource-variable/geist`, `@fontsource-variable/geist-mono` | Self-hosted so no page requests a third-party font ([Visual Language](/development/visual-language/#principles)); OFL-1.1, see [Licensing](/design/licensing/). |
+| Web fonts | `@fontsource-variable/geist`, `@fontsource-variable/geist-mono` | Self-hosted so text never waits on a third-party origin ([Visual Language](/development/visual-language/#type)); variable cuts, OFL-1.1, see [Licensing](/design/licensing/). |
 
 ## Swift
 
