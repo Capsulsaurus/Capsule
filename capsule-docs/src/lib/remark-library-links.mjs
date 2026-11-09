@@ -18,7 +18,7 @@ export const BADGE_CLASS = 'lib-badge';
 export const BADGE_TEXT = 'repo';
 
 /** Text that, right after an inline-code mention, makes it part of a word. */
-const COMPOUND = /^[\w'’-]/;
+const COMPOUND = /^(?:[\w/@'’-]|\.\w)/;
 
 /** @param {string} text */
 function escapeRegExp(text) {

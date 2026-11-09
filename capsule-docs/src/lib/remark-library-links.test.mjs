@@ -82,6 +82,10 @@ describe('linkLibraries', () => {
             `Kynos's routes. rustls-only. Then Kynos{${KYNOS.url}} and rustls{${RUSTLS.url}}.`,
         );
         expect(badges('Kynos’s routes.', [KYNOS])).toEqual([]);
+        // An inline-code mention follows the same word rule as prose.
+        expect(
+            badges('`rustls`/webpki, `rustls`@0.23, `rustls`.toml.', [RUSTLS]),
+        ).toEqual([]);
     });
 
     it('makes the badge a labelled link to the source repository', () => {
