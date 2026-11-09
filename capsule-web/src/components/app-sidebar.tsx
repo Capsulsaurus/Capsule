@@ -37,7 +37,7 @@ export function AppSidebar({ className }: { className?: string }) {
     return (
         <aside
             className={cn(
-                'w-64 flex flex-col h-[calc(100vh-65px)] border-r bg-background py-4',
+                'w-64 flex flex-col h-[calc(100vh-65px)] border-e bg-background py-4',
                 className,
             )}
         >
@@ -51,7 +51,7 @@ export function AppSidebar({ className }: { className?: string }) {
                                 }
                                 className="w-full justify-start"
                             >
-                                <item.icon className="mr-2 h-4 w-4" />
+                                <item.icon className="me-2 h-4 w-4" />
                                 <FormattedMessage id={item.labelId} />
                             </Button>
                         </Link>
@@ -71,7 +71,7 @@ export function AppSidebar({ className }: { className?: string }) {
                                 }
                                 className="w-full justify-start"
                             >
-                                <item.icon className="mr-2 h-4 w-4" />
+                                <item.icon className="me-2 h-4 w-4" />
                                 <FormattedMessage id={item.labelId} />
                             </Button>
                         </Link>
