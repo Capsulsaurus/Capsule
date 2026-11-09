@@ -73,14 +73,38 @@ const shouldRenderSearch =
     gap: 0.75rem;
   }
 
+  /* Every rule below depends on the window's width alone, never on the
+     page's layout, so the bar is the same on every page: the splash front
+     page, which has no sidebar, included. (Starlight's own header sizes its
+     title column from --sl-content-inline-start, which only sidebar pages
+     set, so its bar moves between the two.) */
   @media (min-width: 50rem) {
     .header {
       display: grid;
-      /* The title column is always the sidebar's width, on pages with a
-         sidebar and without (the splash front page), so the wordmark, the
-         section links and the actions sit at the same place on every page
-         and the bar never shifts between them. Starlight's own header sizes
-         it from --sl-content-inline-start, which only sidebar pages set. */
+      grid-template-columns: auto 1fr auto;
+    }
+
+    /* Its own column, whether or not the section links are shown. */
+    .right-group {
+      grid-column: 3;
+    }
+
+    .actions {
+      display: flex;
+    }
+
+    /* Search shrinks to a compact field so the section links own the middle. */
+    .search {
+      width: clamp(9rem, 16vw, 15rem);
+    }
+  }
+
+  /* The section links need the width the table of contents also waits for.
+     Below it, the sidebar (and on narrow screens the menu) carries them. */
+  @media (min-width: 72rem) {
+    .header {
+      /* The title column runs to the sidebar's edge, so the wordmark lines
+         up with the navigation below it. */
       grid-template-columns:
         minmax(calc(var(--sl-sidebar-width) - var(--sl-nav-pad-x)), auto)
         1fr
@@ -91,15 +115,6 @@ const shouldRenderSearch =
       display: flex;
       justify-content: center;
       min-width: 0;
-    }
-
-    .actions {
-      display: flex;
-    }
-
-    /* Search shrinks to a compact field so the section links own the middle. */
-    .search {
-      width: clamp(9rem, 16vw, 15rem);
     }
   }
 </style>
