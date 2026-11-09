@@ -8,6 +8,7 @@ describe('isDraftPost', () => {
     it.each([
         ['---\ntitle: A\ndraft: true\n---\nbody', true],
         ['---\r\ndraft: true\r\n---\r\n', true],
+        ['---\ndraft: true # until reviewed\n---\n', true],
         ['---\ntitle: A\ndraft: false\n---\n', false],
         ['---\ntitle: A\n---\ndraft: true\n', false],
         ['---\nnotdraft: true\n---\n', false],

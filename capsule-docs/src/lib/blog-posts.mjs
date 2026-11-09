@@ -1,7 +1,8 @@
-// Whether the blog has anything to show. The site links to the blog (header,
-// footer, RSS) only once at least one post is published, so a reader never
-// lands on an empty index. Read by astro.config.mjs, before content collections
-// exist, so it parses frontmatter directly.
+// Whether the blog has anything to show. Until at least one post is published,
+// astro.config.mjs leaves the blog plugin out entirely (no /blog/ route, header
+// link, RSS feed or sitemap entry) and the footer omits its link, so a reader
+// never lands on an empty index. Read at config time, before content
+// collections exist, so it parses frontmatter directly.
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -14,7 +15,9 @@ import { join } from 'node:path';
  */
 export function isDraftPost(source) {
     const block = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/.exec(source);
-    return block !== null && /^draft:[ \t]*true[ \t]*\r?$/m.test(block[1]);
+    return (
+        block !== null && /^draft:[ \t]*true[ \t]*(#.*)?\r?$/m.test(block[1])
+    );
 }
 
 /**
