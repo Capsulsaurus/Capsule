@@ -971,6 +971,17 @@ describe('the native SDK layouts', () => {
             returns: 'void',
         });
         expect(tsSignature('readonly size: number;')).toBeNull();
+        expect(
+            tsSignature(
+                'export function on(cb: (x: T) => void, ...rest: U[]): R;',
+            ),
+        ).toEqual({
+            parameters: [
+                { name: 'cb', optional: false, type: '(x: T) => void' },
+                { name: '...rest', optional: false, type: 'U[]' },
+            ],
+            returns: 'R',
+        });
     });
 });
 

@@ -11,7 +11,8 @@
  * function body, a plain comment) flags the artifact until it is regenerated once: every
  * generator rewrites its file even when the bytes are unchanged, so its modification time then
  * passes the sources' and the warning clears. The CI gate, not this, is what a page's
- * correctness rests on.
+ * correctness rests on. Modification times follow write order, so a branch switch that
+ * rewrites a source before its artifact can clear a warning it should have kept.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -56,7 +57,8 @@ function touches(path, prefixes) {
  * The artifacts whose sources changed after they did.
  *
  * - An uncommitted change to a source, with the artifact itself unchanged, is stale.
- * - An uncommitted change to the artifact is a fresh regeneration: not stale.
+ * - An uncommitted change to the artifact is a fresh regeneration: not stale, unless (with
+ *   `mtimeOf`) an uncommitted source was edited after it.
  * - Otherwise, over the branch's own commits (newest first), the artifact is stale when the
  *   newest commit touching a source is newer than the newest touching the artifact.
  * - Either way, with `mtimeOf`, it is stale only while some changed source on disk is newer
@@ -76,7 +78,6 @@ export function staleArtifacts(
 ) {
     const stale = [];
     for (const [artifact, { sources: prefixes }] of Object.entries(sources)) {
-        if (changes.dirty.includes(artifact)) continue;
         const changed = [...changes.dirty, ...changes.commits.flat()].filter(
             (path) => touches(path, prefixes),
         );
@@ -86,9 +87,14 @@ export function staleArtifacts(
         const regenerated = changes.commits.findIndex((paths) =>
             paths.includes(artifact),
         );
-        const suspect =
-            changes.dirty.some((path) => touches(path, prefixes)) ||
-            (source !== -1 && (regenerated === -1 || source < regenerated));
+        // An uncommitted artifact is a fresh regeneration, so on its own it settles the
+        // question; only a source edited after it (the mtime gate below) reopens it.
+        const regeneratedNow = changes.dirty.includes(artifact);
+        const suspect = regeneratedNow
+            ? mtimeOf !== undefined &&
+              changes.dirty.some((path) => touches(path, prefixes))
+            : changes.dirty.some((path) => touches(path, prefixes)) ||
+              (source !== -1 && (regenerated === -1 || source < regenerated));
         if (!suspect) continue;
         if (mtimeOf) {
             const built = mtimeOf(artifact) ?? 0;

@@ -109,7 +109,8 @@
     border-top: 1px solid var(--sl-color-hairline);
 }
 
-.sl-markdown-content .sdk-symbol > h3 {
+/* Starlight wraps each heading in .sl-heading-wrapper. */
+.sl-markdown-content .sdk-symbol > .sl-heading-wrapper.level-h3 {
     margin-top: 0.25rem;
 }
 

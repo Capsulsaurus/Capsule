@@ -76,6 +76,19 @@ describe('staleArtifacts, with modification times', () => {
         expect(staleArtifacts(changes, SOURCES, mtime)).toEqual([]);
     });
 
+    it('flags a source edited after an uncommitted regeneration', () => {
+        const dirty = {
+            dirty: [CLI, 'capsule-cli/src/cli/mod.rs'],
+            commits: [],
+        };
+        expect(
+            staleArtifacts(dirty, SOURCES, (path) => (path === CLI ? 1 : 2)),
+        ).toEqual([CLI]);
+        expect(
+            staleArtifacts(dirty, SOURCES, (path) => (path === CLI ? 3 : 2)),
+        ).toEqual([]);
+    });
+
     it('ignores a deleted source', () => {
         const mtime = (path) => (path === CLI ? 1 : undefined);
         expect(staleArtifacts(changes, SOURCES, mtime)).toEqual([]);

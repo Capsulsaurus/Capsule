@@ -1379,7 +1379,8 @@ function inlineProse(text) {
         .split(/(`+[^`]*`+)/)
         .map((part, index) => (index % 2 ? part : part.replace(/</g, '&lt;')))
         .join('')
-        .replace(/^(#|>|\d+\.)/, '\\$1');
+        .replace(/^(#|>|[-*+](?=\s|$))/, '\\$1')
+        .replace(/^(\d+)([.)])/, '$1\\$2');
 }
 
 /**
@@ -2064,6 +2065,7 @@ export function tsSignature(signature) {
     const cuts = [];
     for (let i = open; i < signature.length; i += 1) {
         const c = signature[i];
+        if (c === '>' && signature[i - 1] === '=') continue;
         if ('(<[{'.includes(c)) depth += 1;
         else if (')>]}'.includes(c)) {
             depth -= 1;
@@ -2081,7 +2083,7 @@ export function tsSignature(signature) {
         for (const cut of [...cuts.map((c) => c - open - 1), inner.length]) {
             const part = inner.slice(start, cut).trim();
             start = cut + 1;
-            const match = /^([\w$]+)(\??):\s*(.+)$/.exec(part);
+            const match = /^((?:\.\.\.)?[\w$]+)(\??):\s*(.+)$/.exec(part);
             if (!match) return null;
             parameters.push({
                 name: match[1],
@@ -2191,7 +2193,7 @@ function renderMembers(declaration, style, level, anchors, source) {
                       ]
                     : [`- ${codeSpan(member.signature)}`];
             if (member.doc) {
-                lines.push(docProse(member.doc, level + 1, anchors));
+                lines.push(docProse(member.doc, level, anchors));
             }
             return [lines[0], ...lines.slice(1).map(indentItem)].join('\n\n');
         });
