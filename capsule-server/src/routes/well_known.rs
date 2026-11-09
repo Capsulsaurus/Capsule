@@ -144,6 +144,11 @@ pub struct AuthEndpointsResponse {
     /// this deployment has none. Always present, so a client reads one field rather than
     /// probing for one.
     pub oidc: Option<OidcEndpointsResponse>,
+    /// `true` when this deployment refuses password registration and sign-in, so a client
+    /// offers only `oidc`. Absent means `false`: a server that predates the switch accepts
+    /// passwords, so a client reads a missing field the way it reads `false`.
+    #[serde(default)]
+    pub password_disabled: bool,
 }
 
 /// The OIDC ceremony's endpoints.
@@ -246,6 +251,7 @@ pub async fn server_info(Inject(discovery): Inject<DiscoveryContext>) -> Json<Se
                     authorize: endpoints.authorize.clone(),
                     callback: endpoints.callback.clone(),
                 }),
+            password_disabled: info.auth().password_disabled,
         },
         federation_url: info.federation_url().map(ToOwned::to_owned),
         protocol_version: ProtocolWindowResponse {

@@ -23,12 +23,13 @@
 //! is worse in every way, because a client that believed it would then fail to sign in with no
 //! explanation.
 //!
-//! What bounds it is a rate limiter, and **there is none yet**. Limiting registration means
-//! limiting *a source*, and the trusted client address that needs now exists
-//! ([`crate::client_addr`], #704) — [`CounterKey::ShareSource`](crate::counter::CounterKey::ShareSource)
-//! and [`DropSource`](crate::counter::CounterKey::DropSource) are charged with it.
-//! [`CounterKey::RegistrationSource`](crate::counter::CounterKey::RegistrationSource) is declared
-//! and not yet consumed: the shape is written down so wiring it is a one-line change. An email-keyed limiter was considered and rejected — it would bound repeated
+//! What bounds it is a rate limiter on *the source*: the route charges
+//! [`CounterKey::RegistrationSource`](crate::counter::CounterKey::RegistrationSource), keyed on
+//! the trusted client address ([`crate::client_addr`], #704), against
+//! [`budgets::REGISTRATION_SOURCE`](crate::counter::budgets::REGISTRATION_SOURCE) before this
+//! port is asked anything, and refuses with `429 error.auth.rate_limited` once it is spent
+//! (#1001). The limiter fails closed: a counter store that cannot answer refuses the
+//! registration. An email-keyed limiter was considered and rejected — it would bound repeated
 //! probes against *one* address while doing nothing about a sweep across many, which is the
 //! actual attack, and a limiter that reads as protection without providing it is worse than an
 //! absent one.

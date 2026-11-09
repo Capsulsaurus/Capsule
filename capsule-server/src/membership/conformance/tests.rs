@@ -33,6 +33,7 @@ conformance_cases! {
     a_version_leap_is_refused_and_the_album_still_takes_its_next_roster,
     the_version_window_binds_an_albums_first_roster,
     an_epoch_regression_is_refused_and_changes_nothing,
+    a_removal_that_does_not_advance_the_epoch_is_refused_and_changes_nothing,
     one_application_revokes_continues_and_admits,
     an_account_listed_twice_is_taken_once_last_entry_winning,
     an_omitted_member_is_revoked_at_the_rosters_version_and_epoch,

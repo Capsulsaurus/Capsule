@@ -198,7 +198,8 @@ actor FakeLibrary: LibraryPort, OrganizePort {
             TrashEntry(
                 assetID: asset.stableSortKey,
                 deletedAt: asset.deletedAt ?? asset.importTimestamp,
-                retentionUntil: asset.importTimestamp
+                retentionUntil: asset.importTimestamp,
+                isRestorable: true
             )
         }
         let request = PageRequest(offset: offset, limit: limit)

@@ -218,6 +218,101 @@ pub async fn concurrent_hits_admit_exactly_the_budget(counters: Arc<dyn CounterS
     assert_eq!(admitted, 3, "racing hits must admit exactly the budget");
 }
 
+/// A weighted charge spends its weight, and one that would overrun an open window is refused
+/// whole without charging anything (#476).
+pub async fn a_weighted_charge_is_all_or_nothing(counters: &dyn CounterStore) {
+    let key = fresh(counters, "weighted").await;
+    let budget = Budget::new(10, SignedDuration::from_mins(10));
+
+    assert_eq!(
+        ok(counters.charge(&key, 4, budget, at(0)).await, "charge"),
+        Verdict::Admitted { remaining: 6 }
+    );
+    assert_eq!(
+        ok(counters.charge(&key, 7, budget, at(1)).await, "charge"),
+        Verdict::Limited {
+            retry_after: at(10)
+        },
+        "a charge past the limit is refused, and told when the window ends"
+    );
+    assert_eq!(
+        ok(counters.charge(&key, 6, budget, at(2)).await, "charge"),
+        Verdict::Admitted { remaining: 0 },
+        "the refused charge spent nothing, so exactly the remainder still fits"
+    );
+    assert!(
+        !ok(counters.hit(&key, budget, at(3)).await, "hit").admits(),
+        "a hit is a charge of one, against the same window"
+    );
+}
+
+/// A fresh window admits any charge, however large, and is then spent until it ends.
+///
+/// The rule that keeps one unit of work bigger than the whole budget servable once a window
+/// rather than never.
+pub async fn a_fresh_window_admits_a_charge_larger_than_its_limit(counters: &dyn CounterStore) {
+    let key = fresh(counters, "oversized").await;
+    let budget = Budget::new(10, SignedDuration::from_mins(10));
+
+    assert_eq!(
+        ok(counters.charge(&key, 25, budget, at(0)).await, "charge"),
+        Verdict::Admitted { remaining: 0 }
+    );
+    assert_eq!(
+        ok(counters.charge(&key, 1, budget, at(5)).await, "charge"),
+        Verdict::Limited {
+            retry_after: at(10)
+        }
+    );
+    assert_eq!(
+        ok(counters.charge(&key, 25, budget, at(10)).await, "charge"),
+        Verdict::Admitted { remaining: 0 },
+        "the next window takes it again"
+    );
+}
+
+/// A charge of zero units writes nothing and answers what a peek answers.
+pub async fn a_zero_charge_writes_nothing(counters: &dyn CounterStore) {
+    let key = fresh(counters, "zero").await;
+    for _ in 0..5 {
+        assert_eq!(
+            ok(counters.charge(&key, 0, budget(), at(0)).await, "charge"),
+            Verdict::Admitted { remaining: 3 }
+        );
+    }
+    for _ in 0..3 {
+        ok(counters.hit(&key, budget(), at(0)).await, "hit");
+    }
+    assert_eq!(
+        ok(counters.charge(&key, 0, budget(), at(0)).await, "charge"),
+        ok(counters.peek(&key, budget(), at(0)).await, "peek")
+    );
+}
+
+/// Racing weighted charges admit exactly what fits — the property a loop of hits does not have.
+pub async fn concurrent_charges_admit_exactly_what_fits(counters: Arc<dyn CounterStore>) {
+    let key = fresh(&*counters, "concurrent-weighted").await;
+    let budget = Budget::new(100, SignedDuration::from_mins(10));
+    // The first charge opens the window, so every racing charge below meets an open one.
+    ok(counters.charge(&key, 10, budget, at(0)).await, "charge");
+    let mut tasks = tokio::task::JoinSet::new();
+    for _ in 0..24 {
+        let counters = Arc::clone(&counters);
+        let key = key.clone();
+        tasks.spawn(async move { ok(counters.charge(&key, 7, budget, at(0)).await, "charge") });
+    }
+    let mut admitted = 0;
+    while let Some(verdict) = tasks.join_next().await {
+        if verdict.expect("a charge task completes").admits() {
+            admitted += 1;
+        }
+    }
+    assert_eq!(
+        admitted, 12,
+        "ninety units left in sevens admit exactly twelve charges"
+    );
+}
+
 /// The partition ceiling every case above leaves alone, with its own key space.
 pub const CEILING: usize = 3;
 
@@ -304,5 +399,9 @@ pub async fn run_all(counters: Arc<dyn CounterStore>) {
     a_reset_ends_the_run(&*counters).await;
     peeking_charges_nothing_and_answers_a_verdict(&*counters).await;
     no_sequence_of_calls_admits_more_than_the_budget(&*counters).await;
+    a_weighted_charge_is_all_or_nothing(&*counters).await;
+    a_fresh_window_admits_a_charge_larger_than_its_limit(&*counters).await;
+    a_zero_charge_writes_nothing(&*counters).await;
+    concurrent_charges_admit_exactly_what_fits(counters.clone()).await;
     concurrent_hits_admit_exactly_the_budget(counters).await;
 }

@@ -1,4 +1,4 @@
-//! The harness behind the bounded E2E cases (design/module-map.md, "E2E Test Surface").
+//! The harness behind the bounded E2E cases, and the index of those cases (below).
 //!
 //! Three real things, wired the way production wires them, and nothing standing in for any of
 //! them:
@@ -28,9 +28,48 @@
 //! give: processes that die. [`processes`] drives the real `capsule` and `capsule-server`
 //! binaries, and [`killpoints`] draws the seeded schedule of where they are `SIGKILL`ed.
 //!
-//! Every test that uses this crate names its case — `E2E case N` — so `rg "E2E case N"` finds
-//! it, per the module map's contract.
+//! # E2E Test Surface
+//!
+//! The surface is **bounded**: adding a case means justifying why the cross-module surface is
+//! irreducible, and each case stays backed primarily by unit and adapter-contract tests. Code
+//! names the case it covers — `E2E case N` — so `rg "E2E case N"` finds it.
+//!
+//! 1. **Auth → sync → client-side library query.** Sign in, apply the sync feed, a local
+//!    `library.sqlite` query lists the expected albums.
+//! 2. **Import + upload + finalize.** Scan → plan → execute → upload → finalize; the blob is at
+//!    its content address and the index row is uploaded.
+//! 3. **Sync feed pickup.** Device A uploads; device B's feed advances and B fetches metadata
+//!    and, per scope, the original.
+//! 4. **Federation cross-server pull.** A capability lets Bob's server pull Alice's metadata and
+//!    blobs and Bob's client renders them.
+//! 5. **LAN peering A→B.** Discovery → TLS → delta artifact → byte-equal libraries.
+//! 6. **Backup → restore on a fresh device.** Passphrase and escrow bootstrap; every asset
+//!    present and verifiable.
+//! 7. **Full lifecycle.** Create → update → trash → restore → delete → purge after retention;
+//!    the provenance chain advances and the server refuses purge before `retention_until`.
+//! 8. **Album upgrade ceremony.** Quiesce → drain → tombstone → fork → replay, including one
+//!    resume from a mid-ceremony crash.
+//! 9. **Cross-version protocol gate.** An out-of-range `protocol_version` upload gets `426` and
+//!    an actionable error.
+//! 10. **Model regen after version bump.** Stale embeddings are excluded from queries until
+//!     regen replaces them.
+//! 11. **Server crash mid-finalization.** A crash between blob rename and index commit leaves
+//!     the session `FailedProcessing`, the asset `Pending`, and **nothing referencing the
+//!     blob**; an orphaned blob is permitted and collected. The process-restart variant
+//!     `SIGKILL`s the CLI or the server at seeded points and reruns the phase until every asset
+//!     is durable exactly once and no index row lacks its blob, and the restore is byte-equal.
+//!     It runs armed during import, push and restore.
+//! 12. **Cross-device enrollment.** A authorizes B over a verified channel, cross-signs it, B
+//!     joins each album's MLS group and the libraries match; includes one MITM-on-relay abort.
+//! 13. **Web drop → adopt.** A WASM client seals a drop; the owner's native client rewraps and
+//!     adopts it, and a second device `verify_asset`-accepts it.
+//! 14. **Share link over TCP.** A link issued by the CLI opens from the URL alone through the
+//!     `capsule-wasm` entry points, and revocation turns it into the public path's `404`.
+//! 15. **Upload delegation.** A hands a sealed bundle to B, B uploads it, A releases the
+//!     original only after verifying the receipt against its own hash; B's death mid-upload
+//!     makes A re-queue it.
 
+pub mod federation;
 pub mod fixtures;
 pub mod killpoints;
 pub mod processes;
@@ -143,6 +182,31 @@ impl Server {
         Self::serve(blob_root, env, &overrides).await
     }
 
+    /// Boot the memory profile as a **federating** deployment named `domain`, signing with the
+    /// PKCS#8 Ed25519 key `der_base64`.
+    ///
+    /// `SERVER_DOMAIN` is the identity every capability names and `server-info` publishes;
+    /// `FEDERATION_ENABLED` and `FEDERATION_URL` (`https://{domain}`) are what assemble the pull
+    /// worker. Nothing spawns its loop: a case drives it a round at a time through
+    /// `assembled.pull_worker`, so no case waits on the tick.
+    pub async fn boot_federating(domain: &str, der_base64: &str) -> Self {
+        let blob_root = tempfile::tempdir().expect("a temp blob root");
+        let env: BTreeMap<String, String> = [
+            ("SERVER_DOMAIN", domain.to_owned()),
+            ("FEDERATION_ENABLED", "true".to_owned()),
+            ("FEDERATION_URL", format!("https://{domain}")),
+            ("JWT_ED25519_DER", der_base64.to_owned()),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value))
+        .collect();
+        let overrides = Overrides {
+            memory: true,
+            ..Overrides::default()
+        };
+        Self::serve(blob_root, env, &overrides).await
+    }
+
     /// Boot the **durable** profile, the one a deployment runs, over `blob_root` and the
     /// Postgres and Valkey `backends` name.
     ///
@@ -171,7 +235,8 @@ impl Server {
             "BLOB_ROOT".to_owned(),
             blob_root.path().display().to_string(),
         );
-        env.insert("JWT_ED25519_DER".to_owned(), JWT_ED25519_DER.to_owned());
+        env.entry("JWT_ED25519_DER".to_owned())
+            .or_insert_with(|| JWT_ED25519_DER.to_owned());
         let config = Config::load(&env, overrides, Demands::Serve)
             .expect("the configuration loads from the variables the harness sets");
         let assembled = boot::assemble(&config)
@@ -204,6 +269,19 @@ impl Server {
     #[must_use]
     pub fn base_url(&self) -> &str {
         &self.base_url
+    }
+
+    /// The plain listener's socket address: what a TLS front forwards to.
+    ///
+    /// # Panics
+    ///
+    /// Never for a server this harness bound: its base URL is `http://` and an address.
+    #[must_use]
+    pub fn address(&self) -> std::net::SocketAddr {
+        self.base_url
+            .trim_start_matches("http://")
+            .parse()
+            .expect("the base URL names a socket address")
     }
 
     /// `{root}/v1`: what the verify transport and the blob source take.

@@ -306,6 +306,30 @@ fn a_delegated_asset_is_shown_handed_off_and_not_retried() {
     assert_eq!(retryable, vec![C]);
 }
 
+/// An asset the run skipped because the server already holds its create is shown on the
+/// server, and a retry does not push it: there is nothing of it left to upload.
+#[test]
+fn an_asset_the_server_already_holds_is_shown_on_server_and_not_retried() {
+    let mut screen = running();
+    let mut indexed = outcome(B, None);
+    indexed.status = AssetPushStatus::Indexed;
+    indexed.uploaded = 0;
+    indexed.already_held = 0;
+    indexed.receipts = 0;
+    screen.update(PushAction::Progress(vec![
+        PushProgress::Finished(indexed),
+        started(C, 1),
+        PushProgress::Finished(outcome(C, Some(("upload", "connection reset")))),
+    ]));
+    assert_eq!(screen.row(B).map(|r| &r.custody), Some(&Custody::OnServer));
+    let retryable: Vec<&str> = screen
+        .retryable()
+        .iter()
+        .map(|r| r.asset_id.as_str())
+        .collect();
+    assert_eq!(retryable, vec![C]);
+}
+
 #[test]
 fn a_run_that_stopped_leaves_its_unfinished_assets_not_reached_and_retryable() {
     let mut screen = running();

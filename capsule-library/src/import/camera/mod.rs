@@ -38,13 +38,14 @@ pub(crate) mod staging;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufWriter, Read, Write};
+use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use capsule_core::crypto::hash::{Hash32, Sha256Hasher};
 use jiff::civil::DateTime;
 pub use ptp_device::PtpCamera;
+pub use staging::safe_file_name;
 use thiserror::Error;
 
 use crate::import::importers::{
@@ -485,12 +486,7 @@ fn receive_one(
         _ => None,
     };
     let (file, hasher, offset) = if let Some((offset, hasher)) = durable {
-        let file = OpenOptions::new()
-            .append(true)
-            .open(&partial)
-            .map_err(staging_error(&partial))?;
-        // Bytes past the checkpoint were never confirmed durable; receive them again.
-        file.set_len(offset).map_err(staging_error(&partial))?;
+        let file = reopen_partial(&partial, offset).map_err(staging_error(&partial))?;
         tracing::debug!(
             handle = format_args!("{:08x}", object.handle),
             offset,
@@ -859,6 +855,18 @@ fn durable_prefix(partial: &Path, checkpoint: &Path, size: u64) -> Option<(u64, 
         return None;
     }
     Some((len, hasher))
+}
+
+/// Open `partial` to continue writing at `offset`, cutting off the bytes past it: they were never
+/// confirmed durable, so they are received again.
+///
+/// The handle is opened for writing and positioned at `offset`, not opened for append: on Windows
+/// an append-only handle lacks `FILE_WRITE_DATA`, so truncating through it is refused.
+fn reopen_partial(partial: &Path, offset: u64) -> io::Result<File> {
+    let mut file = OpenOptions::new().write(true).open(partial)?;
+    file.set_len(offset)?;
+    file.seek(SeekFrom::Start(offset))?;
+    Ok(file)
 }
 
 /// Sync what `sink` holds to disk, then record its length and digest in `checkpoint`.

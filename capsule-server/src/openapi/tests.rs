@@ -171,3 +171,83 @@ fn the_capsule_problems_carry_everything_the_base_one_does() {
         }
     }
 }
+
+/// **Every write declares the early-data `425`, and no read does** (design/networking.md, HTTP
+/// Transport). The refusal is mounted per group, so this is what catches a new group of writes
+/// that forgot it, or a read placed behind it.
+#[test]
+fn the_early_data_refusal_is_declared_on_every_write_and_no_read() {
+    let json = serde_json::to_value(document()).expect("a document serializes");
+
+    let (mut writes, mut reads) = (0_usize, 0_usize);
+    for (path, item) in json["paths"].as_object().expect("paths") {
+        for (method, operation) in item.as_object().expect("a path item") {
+            let Some(responses) = operation.get("responses").and_then(|r| r.as_object()) else {
+                continue;
+            };
+            let declared = responses.contains_key("425");
+            if matches!(method.as_str(), "get" | "head" | "options" | "trace") {
+                assert!(!declared, "{method} {path} is safe and declares a 425");
+                reads += 1;
+            } else {
+                assert!(declared, "{method} {path} is a write and declares no 425");
+                writes += 1;
+            }
+        }
+    }
+    assert!(
+        writes > 0 && reads > 0,
+        "both kinds of operation were checked"
+    );
+}
+
+/// The document carries the shared contract as its description.
+#[test]
+fn the_document_describes_the_shared_contract() {
+    assert_eq!(
+        document().info.description.as_deref(),
+        Some(CONTRACT.trim_end())
+    );
+}
+
+/// **The contract names every operation exempt from the protocol gate.** An operation that does
+/// not require `X-Capsule-Protocol` skips the gate; the description must list it by its own path,
+/// or for the well-known, share and drop families by the family. A new route outside those
+/// families that skips the gate fails here; one inside them is covered by the family's line, and
+/// `tests/conformance.rs` pins the exact exempt set.
+#[test]
+fn the_contract_lists_every_operation_the_protocol_gate_exempts() {
+    let json = serde_json::to_value(document()).expect("a document serializes");
+
+    let mut exempt = 0_usize;
+    for (path, item) in json["paths"].as_object().expect("paths") {
+        for (method, operation) in item.as_object().expect("a path item") {
+            let gated = operation
+                .get("parameters")
+                .and_then(|p| p.as_array())
+                .is_some_and(|parameters| {
+                    parameters.iter().any(|parameter| {
+                        parameter["in"] == "header"
+                            && parameter["name"] == "X-Capsule-Protocol"
+                            && parameter["required"] == true
+                    })
+                });
+            if gated {
+                continue;
+            }
+            exempt += 1;
+            let named_by = ["/.well-known/capsule/", "/s/{opaque_id}", "/d/{opaque_id}"]
+                .into_iter()
+                .find(|family| path.starts_with(family))
+                .map_or_else(
+                    || path.clone(),
+                    |family| family.replace("capsule/", "capsule/*"),
+                );
+            assert!(
+                CONTRACT.contains(&format!("{named_by}`")),
+                "{method} {path} skips the protocol gate and contract.md does not list it"
+            );
+        }
+    }
+    assert!(exempt > 0, "the exempt operations were checked");
+}

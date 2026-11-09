@@ -1,0 +1,12 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: redact_guids(&again)
+---
+status: 0
+--- stdout ---
+{
+  "created": false,
+  "guid": "[GUID]",
+  "name": "Contract"
+}
+--- stderr ---

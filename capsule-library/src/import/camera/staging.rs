@@ -120,7 +120,8 @@ const WINDOWS_DEVICE_NAMES: [&str; 4] = ["CON", "PRN", "AUX", "NUL"];
 /// Windows strips) become `_`, and a reserved device name (`CON`, `PRN`, `AUX`, `NUL`,
 /// `COM1`-`COM9`, `LPT1`-`LPT9`, with or without an extension) gains a leading `_`. A repaired
 /// name can equal another object's real name; the identity record keeps the two apart.
-pub(crate) fn safe_file_name(name: &str) -> Option<Cow<'_, str>> {
+#[must_use]
+pub fn safe_file_name(name: &str) -> Option<Cow<'_, str>> {
     let trimmed = name.trim();
     if trimmed.is_empty()
         || trimmed == "."

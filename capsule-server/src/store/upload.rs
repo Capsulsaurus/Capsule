@@ -16,8 +16,18 @@
 //! - **Accepting a chunk was three calls.** `increment_received_bytes`, `touch_progress` and
 //!   `record_chunk` were issued separately from the append path, so a crash between them left
 //!   a counter, a progress score and a replay entry disagreeing about the same chunk. Here
-//!   accepting a chunk is [`UploadSessionStore::record_progress`], one operation taking one
-//!   [`AcceptedChunk`].
+//!   committing a range is [`UploadSessionStore::record_range`], one operation taking one
+//!   [`CommittedRange`] and merging it into the session's [`CommittedSet`].
+//!
+//! # The committed set
+//!
+//! A session's bytes sit on a 4 KiB grid and arrive as ranges in any order (transfer upload
+//! design doc, Chunk Rules and Strictness), so what the server has made durable is a set of
+//! byte ranges, not an offset. The set is the commit point: a range is recorded only after its
+//! bytes are written and fsynced, and staged bytes outside it are garbage whatever the staging
+//! file holds. The set is merged inside the store in one step, so two ranges recorded at once
+//! never lose each other. The ranges still in flight are not here: they are claims held by the
+//! process writing them ([`crate::upload::chunk`]), and they do not survive it.
 //!
 //! The 24-hour lifetime cap is a property of the store, matching
 //! design/filesystem/server.md; the ≥1-hour survival floor and pressure-discard policy are
@@ -165,13 +175,23 @@ pub struct UploadSessionRecord {
     /// The server-visible manifest envelope, held verbatim. Structural validation is the
     /// envelope gate's job, not the store's.
     pub manifest_envelope: String,
-    /// Bytes durably appended so far. The on-disk file length is the truth this caches; see
-    /// [`UploadSessionStore::reconcile_received_bytes`].
-    pub received_bytes: u64,
+    /// The byte ranges durably written and recorded so far — the commit point. Merged by
+    /// [`UploadSessionStore::record_range`]; never inferred from the staging file.
+    pub committed: CommittedSet,
+    /// How many ranges of this session may be in flight at once, fixed at creation and
+    /// advertised as the advice's `ranges` member. At most
+    /// [`crate::upload::chunk::MAX_IN_FLIGHT_RANGES`].
+    pub in_flight_cap: u8,
     /// The declared total.
     pub total_size: u64,
     /// Where the session is in its state machine.
     pub status: UploadSessionStatus,
+    /// The `error.*` code finalization failed with, set only with `FailedProcessing` by
+    /// [`UploadSessionStore::fail_processing`].
+    ///
+    /// The one channel through which a client learns why its upload was refused: no request
+    /// waits on finalization, so `HEAD` and the session list carry this code instead.
+    pub failure_code: Option<String>,
     /// When the session was created.
     pub created_at: Timestamp,
     /// When the last chunk was accepted, or creation time if none. Anchors the survival floor
@@ -198,25 +218,158 @@ impl UploadSessionRecord {
     /// session, so whoever meets it — a replayed chunk, a duplicate create, a `HEAD`, boot
     /// recovery — finishes it through the claim, which makes two of them racing harmless.
     pub fn is_full_and_unclaimed(&self) -> bool {
-        self.status.is_evictable() && self.received_bytes == self.total_size
+        self.status.is_evictable() && self.is_full()
+    }
+
+    /// Whether the committed set is exactly `[0, total_size)`.
+    pub fn is_full(&self) -> bool {
+        self.committed.is_full(self.total_size)
     }
 }
 
-/// One chunk the server durably appended.
+/// One range the server durably wrote, to be merged into its session's [`CommittedSet`].
 ///
-/// The replay half of the `(upload_id, offset, chunk_hash)` idempotency tuple: a client that
-/// re-sends a chunk it already got an acknowledgement for is answered from this rather than
-/// appending twice.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AcceptedChunk {
-    /// The offset the chunk was written at.
-    pub offset: u64,
-    /// The chunk's lowercase-hex SHA-256, as the `X-Capsule-Checksum` header carried it.
-    pub chunk_hash: String,
-    /// The session's received-byte count after this chunk.
-    pub next_offset: u64,
-    /// When the append was acknowledged. Becomes the session's `last_progress_at`.
+/// Half-open: `start..end`. Carries no hash, deliberately: a range wholly inside the committed
+/// set is answered as a duplicate without comparing bytes, and the finalize re-hash — not a
+/// per-write record — is what admits bytes to a content address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommittedRange {
+    /// The range's first byte.
+    pub start: u64,
+    /// One past its last byte.
+    pub end: u64,
+    /// When its write was recorded. Becomes the session's `last_progress_at`.
     pub accepted_at: Timestamp,
+}
+
+/// The coalesced, ordered set of half-open byte ranges a session has committed.
+///
+/// Always normal: ranges are non-empty, sorted, and neither overlap nor touch, so two sets
+/// holding the same bytes are equal and the fragment count is the number of gaps a client still
+/// has to fill, plus one. Every operation is pure; the stores merge through
+/// [`Self::with_range`]'s rule, the Valkey adapter in Lua.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CommittedSet {
+    ranges: Vec<(u64, u64)>,
+}
+
+impl CommittedSet {
+    /// The set holding exactly `[0, prefix)`, or nothing when `prefix` is zero.
+    ///
+    /// The shape a session recorded by an append-only server reads back as: its counter was a
+    /// contiguous prefix.
+    pub fn prefix_of(prefix: u64) -> Self {
+        Self::default().with_range(0, prefix)
+    }
+
+    /// The ranges, ascending, each `(start, end)` half-open.
+    pub fn ranges(&self) -> &[(u64, u64)] {
+        &self.ranges
+    }
+
+    /// The set with `start..end` merged in. An empty range changes nothing.
+    #[must_use]
+    pub fn with_range(&self, start: u64, end: u64) -> Self {
+        if start >= end {
+            return self.clone();
+        }
+        let (mut start, mut end) = (start, end);
+        let mut merged = Vec::with_capacity(self.ranges.len() + 1);
+        let mut placed = false;
+        for &(a, b) in &self.ranges {
+            if b < start {
+                merged.push((a, b));
+            } else if a > end {
+                if !placed {
+                    merged.push((start, end));
+                    placed = true;
+                }
+                merged.push((a, b));
+            } else {
+                start = start.min(a);
+                end = end.max(b);
+            }
+        }
+        if !placed {
+            merged.push((start, end));
+        }
+        Self { ranges: merged }
+    }
+
+    /// How many fragments the set would hold with `start..end` merged in.
+    pub fn fragments_with(&self, start: u64, end: u64) -> usize {
+        self.with_range(start, end).ranges.len()
+    }
+
+    /// How many fragments the set holds.
+    pub fn fragments(&self) -> usize {
+        self.ranges.len()
+    }
+
+    /// The contiguous committed prefix: the end of a range starting at zero, else zero.
+    ///
+    /// What `X-Capsule-Offset` reports, so a client that sends in order resumes from it.
+    pub fn prefix(&self) -> u64 {
+        match self.ranges.first() {
+            Some(&(0, end)) => end,
+            _ => 0,
+        }
+    }
+
+    /// How many bytes the set covers.
+    pub fn covered(&self) -> u64 {
+        self.ranges.iter().map(|&(a, b)| b - a).sum()
+    }
+
+    /// Whether the set is exactly `[0, size)`.
+    pub fn is_full(&self, size: u64) -> bool {
+        self.ranges.as_slice() == [(0, size)]
+    }
+
+    /// Whether `start..end` lies wholly inside one committed range.
+    pub fn contains(&self, start: u64, end: u64) -> bool {
+        self.ranges.iter().any(|&(a, b)| a <= start && end <= b)
+    }
+
+    /// Whether `start..end` shares at least one byte with the set.
+    pub fn overlaps(&self, start: u64, end: u64) -> bool {
+        self.ranges.iter().any(|&(a, b)| a < end && start < b)
+    }
+
+    /// The `X-Capsule-Committed` spelling: comma-separated **inclusive** byte ranges, such as
+    /// `0-1048575,2097152-4194303`, or the empty string for an empty set.
+    pub fn to_header(&self) -> String {
+        self.ranges
+            .iter()
+            .map(|&(a, b)| format!("{a}-{}", b - 1))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    /// The stored spelling: comma-separated **half-open** `start-end` pairs, the empty string
+    /// for an empty set. The Valkey adapter's merge script reads and writes the same form.
+    pub fn to_stored(&self) -> String {
+        self.ranges
+            .iter()
+            .map(|&(a, b)| format!("{a}-{b}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    /// The set a [`Self::to_stored`] string spells, or `None` when it is not one — an empty or
+    /// reversed range, or ranges out of order, touching or overlapping.
+    pub fn from_stored(text: &str) -> Option<Self> {
+        let mut ranges: Vec<(u64, u64)> = Vec::new();
+        for pair in text.split(',').filter(|pair| !pair.is_empty()) {
+            let (a, b) = pair.split_once('-')?;
+            let (a, b): (u64, u64) = (a.parse().ok()?, b.parse().ok()?);
+            if a >= b || ranges.last().is_some_and(|&(_, end)| end >= a) {
+                return None;
+            }
+            ranges.push((a, b));
+        }
+        Some(Self { ranges })
+    }
 }
 
 /// The outcome of racing for the right to finalize a session.
@@ -227,6 +380,18 @@ pub enum FinalizeClaim {
     Won(Box<UploadSessionRecord>),
     /// Another caller already claimed it, or the session is no longer active.
     AlreadyClaimed,
+    /// No such session.
+    NotFound,
+}
+
+/// The outcome of discarding a session only while nobody has claimed its finalization.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnclaimedDiscard {
+    /// The session was `Pending` or `Uploading` and is gone. The record is the session as it
+    /// was discarded.
+    Discarded(Box<UploadSessionRecord>),
+    /// The session's finalization is claimed, or it is terminal: it was left as it is.
+    Claimed,
     /// No such session.
     NotFound,
 }
@@ -263,32 +428,18 @@ pub trait UploadSessionStore: std::fmt::Debug + Send + Sync {
         uploader: &'a UserId,
     ) -> StoreFuture<'a, Vec<UploadSessionRecord>>;
 
-    /// Accept `chunk`: record it for replay, advance `received_bytes` to its `next_offset`,
-    /// and move the session's progress clock — one operation, because they describe one event.
+    /// Commit `range`: merge it into the session's committed set, move a `Pending` session to
+    /// `Uploading`, and move its progress clock — one atomic step, because they describe one
+    /// event, and because two ranges recorded at once must both land.
     ///
-    /// Returns the updated record, or `None` if there was no live session to advance.
-    fn record_progress<'a>(
+    /// Returns the updated record, or `None` if there was no live, active session to record
+    /// against — expired, discarded, cancelled or terminal. A range recorded against a removed
+    /// session is lost, which is the contract: its bytes are garbage and the client sends them
+    /// again.
+    fn record_range<'a>(
         &'a self,
         upload: &'a UploadId,
-        chunk: AcceptedChunk,
-    ) -> StoreFuture<'a, Option<UploadSessionRecord>>;
-
-    /// The chunk previously accepted at `offset`, if any.
-    fn chunk_at<'a>(
-        &'a self,
-        upload: &'a UploadId,
-        offset: u64,
-    ) -> StoreFuture<'a, Option<AcceptedChunk>>;
-
-    /// Set `received_bytes` to an absolute value, for the startup scrub only.
-    ///
-    /// The file on disk is the truth and this counter is its cache, so a crash between the
-    /// durable append and the counter update is reconciled *up* to the on-disk length. This is
-    /// the one write that does not touch the progress clock: a scrub is not progress.
-    fn reconcile_received_bytes<'a>(
-        &'a self,
-        upload: &'a UploadId,
-        on_disk: u64,
+        range: CommittedRange,
     ) -> StoreFuture<'a, Option<UploadSessionRecord>>;
 
     /// Move a live session to `status`, returning the updated record.
@@ -301,6 +452,18 @@ pub trait UploadSessionStore: std::fmt::Debug + Send + Sync {
         &'a self,
         upload: &'a UploadId,
         status: UploadSessionStatus,
+    ) -> StoreFuture<'a, Option<UploadSessionRecord>>;
+
+    /// Move a live session to `FailedProcessing`, recording the `error.*` code it failed with,
+    /// and return the updated record.
+    ///
+    /// [`Self::set_status`] with `FailedProcessing`, plus [`UploadSessionRecord::failure_code`]:
+    /// the code is what `HEAD` and the session list report, because the request that completed
+    /// the session never waits to hear it.
+    fn fail_processing<'a>(
+        &'a self,
+        upload: &'a UploadId,
+        failure_code: &'a str,
     ) -> StoreFuture<'a, Option<UploadSessionRecord>>;
 
     /// Claim the exclusive right to finalize `upload`.
@@ -322,9 +485,17 @@ pub trait UploadSessionStore: std::fmt::Debug + Send + Sync {
     /// is acceptable only in the in-memory double.
     fn claimed(&self) -> StoreFuture<'_, Vec<UploadSessionRecord>>;
 
-    /// Discard a session: its record, its accepted-chunk replay entries, and its place in
-    /// both views, together. Returns the record that was removed, or `None`.
+    /// Discard a session: its record and its place in every view, together. Returns the record
+    /// that was removed, or `None`.
     fn discard<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, Option<UploadSessionRecord>>;
+
+    /// [`Self::discard`] `upload` only if it is `Pending` or `Uploading`.
+    ///
+    /// The compare and the discard are one step, as in [`Self::claim_finalize`], so a session
+    /// whose finalization a racing request claims is never discarded out from under its
+    /// finalizer: one of the two wins, and the other sees [`UnclaimedDiscard::Claimed`] or
+    /// [`FinalizeClaim::NotFound`].
+    fn discard_unclaimed<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, UnclaimedDiscard>;
 
     /// The active session `uploader` currently has open for `expected_hash`, if any.
     ///
@@ -354,6 +525,21 @@ pub trait UploadSessionStore: std::fmt::Debug + Send + Sync {
         uploader: &'a UserId,
         expected_hash: &'a str,
     ) -> StoreFuture<'a, Option<UploadId>>;
+
+    /// Every active session declaring `expected_hash`, whoever uploads it, smallest id first.
+    ///
+    /// The question quota release asks after giving an attribution back
+    /// ([`crate::upload::reservation`]): attribution is keyed by content address globally, so a
+    /// session of **another** account may have been admitted against the attribution just
+    /// released, and is now the one that has to be charged for the bytes it will store.
+    ///
+    /// Unscoped on purpose, and therefore server-internal only. It must never back an answer to
+    /// a caller: that would tell any account that can name a hash whether somebody else is
+    /// uploading it — the signal [`Self::pending_for_address`] is uploader-scoped to withhold.
+    ///
+    /// Terminal sessions never match, as for [`Self::pending_for_address`]. Adapters need a
+    /// secondary index on `expected_hash`; scanning is acceptable only in the in-memory double.
+    fn live_for_address<'a>(&'a self, expected_hash: &'a str) -> StoreFuture<'a, Vec<UploadId>>;
 
     /// How many sessions are still in flight against `album`.
     ///

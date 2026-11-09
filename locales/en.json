@@ -587,6 +587,126 @@
     "message": "Waiting for the other device…",
     "context": "Spinner label while the issued code has not been used yet."
   },
+  "app.culling.action.collapse_stack": {
+    "message": "Collapse Stack",
+    "context": "Culling surface button and accessibility action that folds an expanded stack back to its cover photo."
+  },
+  "app.culling.action.expand_stack": {
+    "message": "Expand Stack",
+    "context": "Culling surface button and accessibility action that opens a stack so each photo in it is culled on its own."
+  },
+  "app.culling.action.next": {
+    "message": "Next Photo",
+    "context": "Culling surface button and accessibility action that moves to the next photo in the pass."
+  },
+  "app.culling.action.pick": {
+    "message": "Pick",
+    "context": "Culling surface button and accessibility action that flags the photo as a keeper, then moves on."
+  },
+  "app.culling.action.previous": {
+    "message": "Previous Photo",
+    "context": "Culling surface button and accessibility action that moves back to the previous photo in the pass."
+  },
+  "app.culling.action.reject": {
+    "message": "Reject",
+    "context": "Culling surface button and accessibility action that flags the photo for rejection, then moves on."
+  },
+  "app.culling.action.shortcuts": {
+    "message": "Keyboard Shortcuts",
+    "context": "Culling surface toolbar button, and the title of the sheet it opens, listing every key the pass answers."
+  },
+  "app.culling.action.sweep": {
+    "message": "Move Rejects to Trash",
+    "context": "Culling surface toolbar button and accessibility action that moves every rejected photo in the pass to the trash, after a confirmation."
+  },
+  "app.culling.action.unflag": {
+    "message": "Unflag",
+    "context": "Culling surface button and accessibility action that clears the photo's pick or reject flag, then moves on."
+  },
+  "app.culling.announcement": {
+    "message": "{flag}, {position}",
+    "context": "What VoiceOver reads for the photo under review and announces after every move: its flag (e.g. \"Picked\"), then its position (e.g. \"3 of 120\")."
+  },
+  "app.culling.empty.body": {
+    "message": "Photos in this view appear here for review.",
+    "context": "Body of the culling surface's empty state."
+  },
+  "app.culling.empty.title": {
+    "message": "Nothing to Cull",
+    "context": "Title of the culling surface's empty state, when the view it was opened over holds no photos."
+  },
+  "app.culling.error.flag": {
+    "message": "The flag could not be saved, so the photo keeps the flag it had.",
+    "context": "Alert on the culling surface when writing a pick, reject or unflag failed and was undone."
+  },
+  "app.culling.error.load": {
+    "message": "The photos could not be loaded.",
+    "context": "Culling surface state when reading the photos to review failed."
+  },
+  "app.culling.error.sweep": {
+    "message": "The rejected photos could not be moved to the Trash.",
+    "context": "Alert on the culling surface when moving the rejects to the trash failed."
+  },
+  "app.culling.flag.pick": {
+    "message": "Picked",
+    "context": "Badge and spoken flag of a photo flagged as a keeper on the culling surface."
+  },
+  "app.culling.flag.reject": {
+    "message": "Rejected",
+    "context": "Badge and spoken flag of a photo flagged for rejection on the culling surface."
+  },
+  "app.culling.flag.unflagged": {
+    "message": "Unflagged",
+    "context": "Badge and spoken flag of a photo with no pick or reject flag on the culling surface."
+  },
+  "app.culling.open": {
+    "message": "Cull",
+    "context": "Timeline toolbar button that starts a culling pass over the library."
+  },
+  "app.culling.position": {
+    "message": "{position} of {total}",
+    "context": "Where the culling pass is: the current photo's number, then how many there are. Both arrive already formatted."
+  },
+  "app.culling.stack.all_rejected": {
+    "message": "Stack, all rejected",
+    "context": "Badge and spoken state of a collapsed stack on the culling surface whose every photo is rejected."
+  },
+  "app.culling.stack.any_pick": {
+    "message": "Stack with a pick",
+    "context": "Badge and spoken state of a collapsed stack on the culling surface in which at least one photo is picked."
+  },
+  "app.culling.stack.members": {
+    "message": "{count, plural, one {# photo} other {# photos}}",
+    "context": "How many photos a collapsed stack on the culling surface holds."
+  },
+  "app.culling.stack.mixed": {
+    "message": "Stack, undecided",
+    "context": "Badge and spoken state of a collapsed stack on the culling surface with no pick and not every photo rejected."
+  },
+  "app.culling.stack.summary": {
+    "message": "{state}, {members}",
+    "context": "A collapsed stack's badge on the culling surface: its state (e.g. \"Stack with a pick\"), then its size (e.g. \"3 photos\")."
+  },
+  "app.culling.sweep.confirm": {
+    "message": "Move to Trash",
+    "context": "Destructive confirmation button that moves the culling pass's rejected photos to the trash."
+  },
+  "app.culling.sweep.done": {
+    "message": "{count, plural, one {Moved # photo to the Trash} other {Moved # photos to the Trash}}",
+    "context": "VoiceOver announcement after the culling pass's rejected photos were moved to the trash."
+  },
+  "app.culling.sweep.message": {
+    "message": "You can restore them from Recently Deleted until their retention window closes.",
+    "context": "Message of the confirmation before the culling pass's rejected photos move to the trash."
+  },
+  "app.culling.sweep.title": {
+    "message": "{count, plural, one {Move # rejected photo to the Trash?} other {Move # rejected photos to the Trash?}}",
+    "context": "Title of the confirmation before the culling pass's rejected photos move to the trash."
+  },
+  "app.culling.title": {
+    "message": "Culling",
+    "context": "Navigation title of the keyboard-driven culling surface."
+  },
   "app.custody.action.blocked.footer": {
     "message": "Capsule won't release the copy on this device until your server confirms it holds this photo.",
     "context": "Footer under the actions when releasing is not allowed. This gate is absolute — nothing local is freed on an unconfirmed verdict."
@@ -2198,6 +2318,134 @@
   "app.infoplist.photo_library_usage": {
     "message": "Capsule shows and organizes the photos and videos in your library.",
     "context": "iOS NSPhotoLibraryUsageDescription — system permission prompt explaining why Capsule reads the photo library."
+  },
+  "app.labels.add": {
+    "message": "Add",
+    "context": "Button that adds the typed label in the label editor."
+  },
+  "app.labels.add.placeholder": {
+    "message": "Add a label",
+    "context": "Placeholder of the field where a new label is typed in the label editor."
+  },
+  "app.labels.album.title": {
+    "message": "Album Labels",
+    "context": "Title of the label editor opened on an album, and of the album toolbar button that opens it."
+  },
+  "app.labels.draft.hint": {
+    "message": "Drag to move it and pinch to resize it.",
+    "context": "Hint under a region being drawn over a photo, and its VoiceOver hint."
+  },
+  "app.labels.draft.label": {
+    "message": "New region",
+    "context": "VoiceOver label of the region being drawn over a photo. Swipe up or down grows or shrinks it."
+  },
+  "app.labels.draft.move_down": {
+    "message": "Move down",
+    "context": "VoiceOver action that moves the region being drawn a small step down."
+  },
+  "app.labels.draft.move_left": {
+    "message": "Move left",
+    "context": "VoiceOver action that moves the region being drawn a small step left."
+  },
+  "app.labels.draft.move_right": {
+    "message": "Move right",
+    "context": "VoiceOver action that moves the region being drawn a small step right."
+  },
+  "app.labels.draft.move_up": {
+    "message": "Move up",
+    "context": "VoiceOver action that moves the region being drawn a small step up."
+  },
+  "app.labels.empty": {
+    "message": "No labels yet",
+    "context": "Shown in the label editor when the region, stack or album has no labels."
+  },
+  "app.labels.failure.empty": {
+    "message": "A label needs at least one character.",
+    "context": "Shown in the label editor when the typed label is only spaces."
+  },
+  "app.labels.failure.not_found": {
+    "message": "This item no longer exists.",
+    "context": "Shown in the label editor when the photo, region, stack or album was deleted, possibly on another device."
+  },
+  "app.labels.failure.shape": {
+    "message": "That region does not fit inside the photo.",
+    "context": "Shown in the label editor when a drawn region was refused for reaching past the photo's edge."
+  },
+  "app.labels.failure.too_long": {
+    "message": "That label is too long.",
+    "context": "Shown in the label editor when the typed label is longer than the limit."
+  },
+  "app.labels.failure.unavailable": {
+    "message": "The change could not be saved. Try again.",
+    "context": "Shown in the label editor when a label or region change failed for a reason it cannot name."
+  },
+  "app.labels.open": {
+    "message": "Regions and Labels",
+    "context": "Menu item in the photo viewer that opens the editor for marking and labelling parts of the photo."
+  },
+  "app.labels.preview.unavailable": {
+    "message": "Preview unavailable",
+    "context": "Shown in the label editor where the photo would be when it cannot be loaded."
+  },
+  "app.labels.region.delete": {
+    "message": "Delete Region",
+    "context": "Button in the label editor that deletes the selected region of a photo."
+  },
+  "app.labels.region.delete.confirm": {
+    "message": "Delete this region and its labels on every device?",
+    "context": "Confirmation title before deleting a region of a photo. The deletion cannot be undone and reaches every device."
+  },
+  "app.labels.region.draw_circle": {
+    "message": "Draw Circle",
+    "context": "Button in the label editor that starts drawing a round region over the photo."
+  },
+  "app.labels.region.draw_rect": {
+    "message": "Draw Rectangle",
+    "context": "Button in the label editor that starts drawing a rectangular region over the photo."
+  },
+  "app.labels.region.empty": {
+    "message": "No regions yet. Draw one to label part of this photo.",
+    "context": "Shown in the label editor when the photo has no regions."
+  },
+  "app.labels.region.first_label": {
+    "message": "First label (optional)",
+    "context": "Placeholder of the field for the label a new region is saved with."
+  },
+  "app.labels.region.none_selected": {
+    "message": "Select a region to see its labels.",
+    "context": "Shown in the label editor on a photo when no region is selected."
+  },
+  "app.labels.region.save": {
+    "message": "Save Region",
+    "context": "Button in the label editor that saves the region being drawn."
+  },
+  "app.labels.region.title": {
+    "message": "Regions",
+    "context": "Section header over the list of marked parts of a photo in the label editor."
+  },
+  "app.labels.region.unlabelled": {
+    "message": "Unlabelled region",
+    "context": "Name of a marked part of a photo that has no labels yet, on screen and for VoiceOver."
+  },
+  "app.labels.remove": {
+    "message": "Remove label",
+    "context": "VoiceOver label of the button that removes one label in the label editor."
+  },
+  "app.labels.section": {
+    "message": "Labels",
+    "context": "Section header over the labels of the selected region, stack or album in the label editor."
+  },
+  "app.labels.stack.open": {
+    "message": "Stack Labels",
+    "context": "Link in the label editor on a photo that opens the labels of the stack the photo belongs to."
+  },
+  "app.labels.stack.title": {
+    "message": "Stack Labels",
+    "context": "Title of the label editor opened on a stack of related photos, such as a burst."
+  },
+  "app.labels.title": {
+    "message": "Regions and Labels",
+    "context": "Title of the label editor opened on a photo."
   },
   "app.media.live_photo": {
     "message": "Live Photo",
@@ -6315,6 +6563,142 @@
     "message": "Nothing to Transfer",
     "context": "Empty-state title on the transfers screen when everything is up to date."
   },
+  "app.transfer.live.custody.durable": {
+    "message": "Durable",
+    "context": "VoiceOver label on the live transfers screen for how many photos the server confirmed it holds safely. The spoken value is a number."
+  },
+  "app.transfer.live.custody.not_durable": {
+    "message": "Not yet durable",
+    "context": "VoiceOver label on the live transfers screen for how many photos the server says it does not yet hold safely. The spoken value is a number."
+  },
+  "app.transfer.live.custody.receipts": {
+    "message": "Receipts verified",
+    "context": "VoiceOver label on the live transfers screen for how many signed delivery receipts were checked. The spoken value is a number."
+  },
+  "app.transfer.live.custody.title": {
+    "message": "Custody",
+    "context": "Row label on the live transfers screen for the server's answers about whether it holds the uploaded photos safely."
+  },
+  "app.transfer.live.detail.chunk_history": {
+    "message": "Earlier chunk sizes",
+    "context": "Label on one live transfer for the piece sizes used before the current one, as the app adapted to the connection. The value is a list of data amounts."
+  },
+  "app.transfer.live.detail.chunk_size": {
+    "message": "Chunk size",
+    "context": "Label on one live transfer for the size of the pieces it is sent in right now. The value is a data amount."
+  },
+  "app.transfer.live.detail.progress": {
+    "message": "Done",
+    "context": "Label on one live transfer for how much of it has moved. The value is a data amount, or 'amount of total'."
+  },
+  "app.transfer.live.detail.progress.value": {
+    "message": "%1$@ of %2$@",
+    "context": "How much of one live transfer has moved: the amount done, then the total. Both values arrive already formatted, such as '3 MB'."
+  },
+  "app.transfer.live.detail.receipt": {
+    "message": "Receipt",
+    "context": "Label on one live transfer for the number of the signed delivery receipt that verified it. The value is a number."
+  },
+  "app.transfer.live.detail.rejects": {
+    "message": "Checksum refusals",
+    "context": "Label on one live transfer for how many times the server refused a damaged piece. The value is a number."
+  },
+  "app.transfer.live.detail.resumed_at": {
+    "message": "Resumed at",
+    "context": "Label on one live transfer for where it picked up after an interruption. The value is a data amount."
+  },
+  "app.transfer.live.detail.retries": {
+    "message": "Retries",
+    "context": "Label on one live transfer for how many times a piece had to be sent again. The value is a number."
+  },
+  "app.transfer.live.detail.sessions": {
+    "message": "Sessions",
+    "context": "Label on one live transfer for how many upload sessions it took, more than one after the server lost one. The value is a number."
+  },
+  "app.transfer.live.direction.fetch": {
+    "message": "Download",
+    "context": "VoiceOver label for the arrow marking a live transfer that comes from the server."
+  },
+  "app.transfer.live.direction.upload": {
+    "message": "Upload",
+    "context": "VoiceOver label for the arrow marking a live transfer that goes to the server."
+  },
+  "app.transfer.live.empty.description": {
+    "message": "Uploads and downloads appear here piece by piece while they run.",
+    "context": "Empty-state description on the live transfers screen."
+  },
+  "app.transfer.live.empty.title": {
+    "message": "Nothing Moving",
+    "context": "Empty-state title on the live transfers screen when no upload or download is running."
+  },
+  "app.transfer.live.link.description": {
+    "message": "Every piece of every upload and download, as it moves",
+    "context": "Subtitle of the link from the transfers screen to the live transfers screen."
+  },
+  "app.transfer.live.phase.active": {
+    "message": "Moving",
+    "context": "Status of a live transfer whose data is being sent or received."
+  },
+  "app.transfer.live.phase.finalizing": {
+    "message": "Finalizing",
+    "context": "Status of a live upload whose data has all reached the server, which is finishing it."
+  },
+  "app.transfer.live.phase.integrity_rejected": {
+    "message": "Failed Its Check",
+    "context": "Status of a live download whose data did not match what was asked for and was thrown away."
+  },
+  "app.transfer.live.phase.merged": {
+    "message": "Already Stored",
+    "context": "Status of a live upload the server already had, so nothing was sent."
+  },
+  "app.transfer.live.phase.verified": {
+    "message": "Verified",
+    "context": "Status of a live transfer that finished and was checked."
+  },
+  "app.transfer.live.retry.fetch_empty": {
+    "message": "Nothing arrived, so the download paused and tried again",
+    "context": "Why a live download was retried: a request brought no data."
+  },
+  "app.transfer.live.retry.fetch_stalled": {
+    "message": "The download stalled, so it paused and tried again",
+    "context": "Why a live download was retried: no data arrived for too long."
+  },
+  "app.transfer.live.retry.offset_realign": {
+    "message": "The server asked to continue from a different point",
+    "context": "Why a live upload was retried: the server reported a different position than expected."
+  },
+  "app.transfer.live.retry.server_wait": {
+    "message": "The server asked to wait, then the upload continued",
+    "context": "Why a live upload was retried: the server was busy or full and asked for a pause."
+  },
+  "app.transfer.live.retry.session_lost": {
+    "message": "The server lost the upload, so a new one was started",
+    "context": "Why a live upload was retried: its server session was gone and a new one was opened."
+  },
+  "app.transfer.live.retry.transport_reset": {
+    "message": "The connection dropped, so the piece was sent again",
+    "context": "Why a live upload was retried: the connection reset or a request was lost."
+  },
+  "app.transfer.live.strip": {
+    "message": "Transfer map",
+    "context": "VoiceOver label for the strip of coloured cells showing which parts of one transfer have moved. The spoken value is a percentage."
+  },
+  "app.transfer.live.summary.active": {
+    "message": "Active",
+    "context": "Row label on the live transfers screen for how many transfers are running. The value is a number."
+  },
+  "app.transfer.live.summary.missed": {
+    "message": "Steps not shown",
+    "context": "Row label on the live transfers screen for how many progress updates the screen fell too far behind to show. The transfers themselves were not affected. The value is a number."
+  },
+  "app.transfer.live.title": {
+    "message": "Live Transfers",
+    "context": "Title of the screen that shows every upload and download piece by piece as it moves, and of the link to it."
+  },
+  "app.transfer.live.transfers": {
+    "message": "Transfers",
+    "context": "Section header over the list of uploads and downloads on the live transfers screen."
+  },
   "app.transfer.policy.staged": {
     "message": "Full-size photos are uploaded after the details and previews.",
     "context": "Note shown when this device uploads in stages rather than all at once."
@@ -6551,6 +6935,238 @@
     "message": "No uploads in progress.",
     "context": "Shown in place of the upload list when nothing is uploading."
   },
+  "app.transfer.board.title": {
+    "message": "Live Transfers",
+    "context": "Title of the real-time transfer view, which shows every upload and download piece by piece as it moves."
+  },
+  "app.transfer.board.empty.title": {
+    "message": "Nothing Moving",
+    "context": "Real-time transfer view heading when no upload or download is in progress."
+  },
+  "app.transfer.board.empty.description": {
+    "message": "Uploads and downloads appear here the moment they start.",
+    "context": "Real-time transfer view body text when no upload or download is in progress."
+  },
+  "app.transfer.board.direction.upload": {
+    "message": "Upload",
+    "context": "Real-time transfer view: labels a transfer that sends a file to the user's server."
+  },
+  "app.transfer.board.direction.fetch": {
+    "message": "Download",
+    "context": "Real-time transfer view: labels a transfer that brings a file from the user's server to this device."
+  },
+  "app.transfer.board.phase.active": {
+    "message": "In Progress",
+    "context": "Real-time transfer view: the transfer is still moving bytes."
+  },
+  "app.transfer.board.phase.finalizing": {
+    "message": "Finishing on the Server",
+    "context": "Real-time transfer view: every byte of an upload arrived and the server is finishing it."
+  },
+  "app.transfer.board.phase.verified": {
+    "message": "Verified",
+    "context": "Real-time transfer view: the server proved it holds the upload, or a download matched its fingerprint."
+  },
+  "app.transfer.board.phase.merged": {
+    "message": "Already on the Server",
+    "context": "Real-time transfer view: the server already had this exact file, so nothing was sent."
+  },
+  "app.transfer.board.phase.integrity_rejected": {
+    "message": "Failed Its Integrity Check",
+    "context": "Real-time transfer view: a downloaded file did not match its fingerprint and was thrown away."
+  },
+  "app.transfer.board.progress": {
+    "message": "{done} of {size}",
+    "context": "Real-time transfer view progress. {done} and {size} are already-formatted amounts of data, such as '3 MB' and '12 MB'."
+  },
+  "app.transfer.board.progress_unknown": {
+    "message": "{done} so far",
+    "context": "Real-time transfer view progress while the total size is not known yet. {done} is an already-formatted amount of data."
+  },
+  "app.transfer.board.held": {
+    "message": "{held} was already on the server",
+    "context": "Real-time transfer view: how much of a resumed upload the server kept from an earlier attempt. {held} is an already-formatted amount of data."
+  },
+  "app.transfer.board.speed": {
+    "message": "{rate}/s",
+    "context": "Real-time transfer view speed. {rate} is an already-formatted amount of data, such as '1.2 MB'; translate the per-second part."
+  },
+  "app.transfer.board.total_speed": {
+    "message": "Total speed {rate}/s",
+    "context": "Real-time transfer view header: the combined speed of every transfer. {rate} is an already-formatted amount of data."
+  },
+  "app.transfer.board.chunk_size": {
+    "message": "Piece size {size}",
+    "context": "Real-time transfer view: the size of each piece an upload is split into. {size} is an already-formatted amount of data."
+  },
+  "app.transfer.board.resizes": {
+    "message": "{count, plural, one {Resized # time} other {Resized # times}}",
+    "context": "Real-time transfer view: how many times Capsule changed the piece size to suit the connection."
+  },
+  "app.transfer.board.retries": {
+    "message": "{count, plural, one {# retry} other {# retries}}",
+    "context": "Real-time transfer view: how many times a piece had to be sent or requested again."
+  },
+  "app.transfer.board.rejects": {
+    "message": "{count, plural, one {# piece refused} other {# pieces refused}}",
+    "context": "Real-time transfer view: how many pieces arrived damaged and were refused."
+  },
+  "app.transfer.board.active": {
+    "message": "{count, plural, one {# active} other {# active}}",
+    "context": "Real-time transfer view header: how many transfers are still moving."
+  },
+  "app.transfer.board.missed": {
+    "message": "{count, plural, one {# update was missed while the view caught up} other {# updates were missed while the view caught up}}",
+    "context": "Real-time transfer view: the view fell behind and skipped some progress updates. The transfers themselves are unaffected."
+  },
+  "app.transfer.board.custody": {
+    "message": "Saved on server: {durable} · Not yet: {not_durable} · Receipts: {receipts}",
+    "context": "Real-time transfer view footer. Each placeholder is an already-formatted count of photos or receipts the server confirmed."
+  },
+  "app.transfer.board.retry.transport_reset": {
+    "message": "Connection dropped; sending that piece again",
+    "context": "Real-time transfer view: why the last piece was retried."
+  },
+  "app.transfer.board.retry.offset_realign": {
+    "message": "Continuing from the server's position",
+    "context": "Real-time transfer view: the server reported a different position and the upload continues from there."
+  },
+  "app.transfer.board.retry.session_lost": {
+    "message": "The server lost the upload; starting a fresh one",
+    "context": "Real-time transfer view: why the last piece was retried."
+  },
+  "app.transfer.board.retry.server_wait": {
+    "message": "The server asked Capsule to wait",
+    "context": "Real-time transfer view: the server is busy or full and asked the upload to pause."
+  },
+  "app.transfer.board.retry.fetch_stalled": {
+    "message": "Download stalled; trying again",
+    "context": "Real-time transfer view: a download made no progress for too long and is retried."
+  },
+  "app.transfer.board.retry.fetch_empty": {
+    "message": "Nothing arrived; trying again",
+    "context": "Real-time transfer view: a download request brought no data and is retried."
+  },
+  "app.labels.title.regions": {
+    "message": "Regions",
+    "context": "Title of the editor for labelled areas drawn on a photo."
+  },
+  "app.labels.title.stack": {
+    "message": "Stack Labels",
+    "context": "Title of the editor for the labels on a stack (a group of photos shown as one)."
+  },
+  "app.labels.title.album": {
+    "message": "Album Labels",
+    "context": "Title of the editor for the labels on an album."
+  },
+  "app.labels.field": {
+    "message": "Add a label",
+    "context": "Placeholder of the text field that adds a label."
+  },
+  "app.labels.add": {
+    "message": "Add",
+    "context": "Button that adds the typed label."
+  },
+  "app.labels.remove": {
+    "message": "Remove {label}",
+    "context": "Accessibility label of the button that removes one label. {label} is the label's text."
+  },
+  "app.labels.empty": {
+    "message": "No labels yet.",
+    "context": "Shown in the label editor when the item has no labels."
+  },
+  "app.labels.regions.empty": {
+    "message": "Draw a region to label part of this photo.",
+    "context": "Shown in the region editor when the photo has no labelled regions."
+  },
+  "app.labels.regions.item": {
+    "message": "Region {number}",
+    "context": "Name of one labelled region of a photo, numbered in the order they were drawn. {number} is an already-formatted number."
+  },
+  "app.labels.regions.draft": {
+    "message": "New region",
+    "context": "Accessibility label of the region being drawn on a photo."
+  },
+  "app.labels.regions.draw_circle": {
+    "message": "Circle",
+    "context": "Button that starts drawing a round region on a photo."
+  },
+  "app.labels.regions.draw_rect": {
+    "message": "Rectangle",
+    "context": "Button that starts drawing a rectangular region on a photo."
+  },
+  "app.labels.regions.first_label": {
+    "message": "First label (optional)",
+    "context": "Placeholder of the text field for the label a new region is saved with."
+  },
+  "app.labels.regions.save": {
+    "message": "Save Region",
+    "context": "Button that saves the region being drawn."
+  },
+  "app.labels.regions.cancel": {
+    "message": "Cancel",
+    "context": "Button that discards the region being drawn."
+  },
+  "app.labels.regions.delete": {
+    "message": "Delete Region",
+    "context": "Button that permanently deletes the selected region and its labels."
+  },
+  "app.labels.regions.adjust.move_left": {
+    "message": "Move left",
+    "context": "Screen-reader action that moves the region being drawn a small step left."
+  },
+  "app.labels.regions.adjust.move_right": {
+    "message": "Move right",
+    "context": "Screen-reader action that moves the region being drawn a small step right."
+  },
+  "app.labels.regions.adjust.move_up": {
+    "message": "Move up",
+    "context": "Screen-reader action that moves the region being drawn a small step up."
+  },
+  "app.labels.regions.adjust.move_down": {
+    "message": "Move down",
+    "context": "Screen-reader action that moves the region being drawn a small step down."
+  },
+  "app.labels.regions.adjust.grow": {
+    "message": "Make larger",
+    "context": "Screen-reader action that enlarges the region being drawn a small step."
+  },
+  "app.labels.regions.adjust.shrink": {
+    "message": "Make smaller",
+    "context": "Screen-reader action that shrinks the region being drawn a small step."
+  },
+  "app.labels.failure.not_found": {
+    "message": "This item no longer exists.",
+    "context": "Label editor error: the photo, region, stack or album was deleted."
+  },
+  "app.labels.failure.label_empty": {
+    "message": "A label can't be empty.",
+    "context": "Label editor error: the typed label was only spaces."
+  },
+  "app.labels.failure.label_too_long": {
+    "message": "That label is too long: {bytes} bytes, and the limit is {max}.",
+    "context": "Label editor error. {bytes} and {max} are already-formatted numbers of bytes of text."
+  },
+  "app.labels.failure.shape_refused": {
+    "message": "That region doesn't fit inside the photo.",
+    "context": "Label editor error: the drawn region extends past the photo's edge or has no size."
+  },
+  "app.labels.failure.unavailable": {
+    "message": "Couldn't save the change. Try again.",
+    "context": "Label editor error for any failure the editor cannot name more precisely."
+  },
+  "app.viewer.sample.title": {
+    "message": "Sample Photo",
+    "context": "Title of the stand-in photo the Android app opens to draw regions on before a library is connected."
+  },
+  "app.viewer.sample.description": {
+    "message": "A stand-in photo for drawing regions",
+    "context": "Accessibility description of the stand-in photo the region editor draws on."
+  },
+  "app.home.menu.more": {
+    "message": "More options",
+    "context": "Accessibility label of the home screen's overflow menu button."
+  },
   "app.viewer.delete": {
     "message": "Delete",
     "context": "Accessibility label for the delete button in the photo viewer."
@@ -6586,6 +7202,10 @@
   "app.viewer.info.caption.accessibility": {
     "message": "Caption",
     "context": "iOS asset info: VoiceOver label for the editable caption field."
+  },
+  "app.viewer.info.caption.save_failed": {
+    "message": "This caption couldn't be saved. Edit it again to retry.",
+    "context": "iOS asset info: shown under the caption field when the store refused the last save; the typed text is kept in the field."
   },
   "app.viewer.info.caption_placeholder": {
     "message": "Add a Caption",
@@ -6686,6 +7306,34 @@
   "apple.menu.close_window": {
     "message": "Close Window",
     "context": "Menu item that closes the frontmost window."
+  },
+  "apple.menu.culling": {
+    "message": "Culling",
+    "context": "Name of the menu-bar menu (and iPad shortcut-overlay group) holding the culling pass's verbs."
+  },
+  "apple.menu.culling.collapse_stack": {
+    "message": "Collapse Stack",
+    "context": "Culling menu item that folds an expanded stack back to its cover photo. Shortcut C."
+  },
+  "apple.menu.culling.expand_stack": {
+    "message": "Expand Stack",
+    "context": "Culling menu item that opens a stack so each photo in it is culled on its own. Shortcut E."
+  },
+  "apple.menu.culling.pick": {
+    "message": "Pick",
+    "context": "Culling menu item that flags the photo under review as a keeper. Shortcut P."
+  },
+  "apple.menu.culling.reject": {
+    "message": "Reject",
+    "context": "Culling menu item that flags the photo under review for rejection. Shortcut X."
+  },
+  "apple.menu.culling.sweep": {
+    "message": "Move Rejects to Trash",
+    "context": "Culling menu item that moves every rejected photo in the pass to the trash, after a confirmation. Shortcut ⌘⌫."
+  },
+  "apple.menu.culling.unflag": {
+    "message": "Unflag",
+    "context": "Culling menu item that clears the photo's pick or reject flag. Shortcut U."
   },
   "apple.menu.culling_review": {
     "message": "Culling Review",
@@ -6795,6 +7443,10 @@
     "message": "Enter your email below to login to your account.",
     "context": "Login card description."
   },
+  "auth.login.or": {
+    "message": "or",
+    "context": "Web login: the word between the password sign-in button and the identity-provider (single sign-on) button."
+  },
   "auth.login.title": {
     "message": "Login",
     "context": "Login card title."
@@ -6806,6 +7458,22 @@
   "auth.no_account": {
     "message": "Don't have an account?",
     "context": "Login prompt preceding the sign-up link."
+  },
+  "auth.oidc.ceremony_lost": {
+    "message": "This tab can no longer find this sign-in. Start again from the login page.",
+    "context": "Web single sign-on callback: this browser tab holds no record of a sign-in matching the identity provider's answer (it may have been started in another tab, cleared, or replaced by a later sign-in in this tab), so the answer cannot be finished here."
+  },
+  "auth.oidc.completing": {
+    "message": "Finishing sign-in…",
+    "context": "Web single sign-on callback: title shown while the identity provider's answer is exchanged for a session."
+  },
+  "auth.oidc.failed_title": {
+    "message": "Sign-in Not Completed",
+    "context": "Web single sign-on callback: title of the card shown when the sign-in could not be finished."
+  },
+  "auth.oidc.not_completed": {
+    "message": "Your identity provider did not complete the sign-in.",
+    "context": "Web single sign-on callback: the identity provider came back with an error (for example the person declined) or without a sign-in code."
   },
   "auth.sign_up": {
     "message": "Sign up",
@@ -7211,6 +7879,10 @@
     "message": "Capsule couldn't reach your identity provider just now. Please try again.",
     "context": "HTTP 500 on the /v1/auth/oidc routes: the identity provider could not be reached, or its published metadata or keys could not be used. Retryable, and distinct from error.auth.unavailable because 'the identity provider is down' and 'the session store is down' are different operator actions."
   },
+  "error.auth.password_disabled": {
+    "message": "This server only accepts sign-in through single sign-on.",
+    "context": "HTTP 403 on POST /v1/auth/register, /v1/auth/login and /v1/auth/reauthenticate: the operator has switched password sign-in off (PASSWORD_AUTH_DISABLED), so no account can be created or signed in with a password, including one that already exists. The server-info record publishes auth.password_disabled as true in this case; the person signs in through the identity provider instead."
+  },
   "error.auth.password_invalid": {
     "message": "That password cannot be used.",
     "context": "HTTP 400 on POST /v1/auth/password: the proposed new password is under the 12-character floor, or is the password already in use. The second case matters because a change that changes nothing leaves the caller believing a leaked credential has been rotated."
@@ -7226,6 +7898,10 @@
   "error.auth.rate_limited": {
     "message": "Too many attempts. Please wait and try again.",
     "context": "High-level error for HTTP 429. Server sends code `error.auth.rate_limited`."
+  },
+  "error.auth.registration_at_capacity": {
+    "message": "This server is handling too many sign-ups right now. Please try again shortly.",
+    "context": "HTTP 429 on POST /v1/auth/register: the per-source-address registration rate-limit store is holding as many distinct source addresses as it will hold, so this address could not be given a window of its own. Saturated by design rather than broken - distinct from error.auth.rate_limited, which is this address's own registration budget being spent, and from error.auth.unavailable, which is a 500 meaning a store could not answer at all. The `retry_after` member is an upper bound: it is the limiter window, after which a lapsed window frees room."
   },
   "error.auth.registration_invalid": {
     "message": "That email or password can't be used. Passwords need at least 12 characters.",
@@ -7463,17 +8139,37 @@
     "message": "This source is temporarily backed off after repeated errors.",
     "context": "HTTP 429 on a federation pull: the peer spent its per-peer error budget on malformed input, tripping a circuit breaker that backs it off exponentially (5 / 30 / 60 minutes). Requests are short-circuited until the back-off elapses, so a buggy peer cannot DoS the server."
   },
+  "error.federation.hint_at_capacity": {
+    "message": "This server is handling too many update notices right now. Please wait and try again.",
+    "context": "HTTP 429 on POST /v1/federation/hints: one of the hint rate-limit stores (verified hints per home server, or the one-use hint nonces) is holding as many distinct keys as it will hold, so this hint could not be given a window of its own. Saturated by design rather than broken - distinct from error.federation.hint_rate_limited, which is this home server's own hint budget being spent, and from error.federation.unavailable, which is a 500 meaning a store could not answer at all. Nothing is scheduled; the album is still pulled on its own interval."
+  },
+  "error.federation.hint_malformed": {
+    "message": "That update notice isn't valid.",
+    "context": "HTTP 400 on POST /v1/federation/hints: a field of the signed pull hint is empty or too long, home_server is not a host name, sent_at is not an RFC 3339 timestamp, or the signature is not base64. Structural, and decided before any store is touched. A hint is a home server's advisory 'this album has news'; it never carries data."
+  },
+  "error.federation.hint_rate_limited": {
+    "message": "Too many update notices from this server. Please wait and try again.",
+    "context": "HTTP 429 on POST /v1/federation/hints: the verified home server has spent its hourly budget of pull hints. Nothing is scheduled; the album is still pulled on its own 15-minute interval, so a throttled hint costs at most that delay."
+  },
+  "error.federation.hint_unsigned": {
+    "message": "The update notice could not be verified.",
+    "context": "HTTP 401 on POST /v1/federation/hints: the hint's Ed25519 signature does not verify under the home server's operator-pinned key, or it does but the hint is addressed to another server, was signed more than five minutes from this server's clock, or reuses a nonce. The peer signs again with a fresh nonce."
+  },
   "error.federation.member_not_on_roster": {
     "message": "That person isn't on this album's member list.",
     "context": "HTTP 409 on POST /v1/albums/{album_id}/capabilities: the account the capability would carry is not on the album's current roster, so there is no membership to grant a peer access for. A stale-state class: the owner publishes the roster that lists them first, then mints."
   },
+  "error.federation.mint_at_capacity": {
+    "message": "This server is handling too many access grants right now. Please try again shortly.",
+    "context": "HTTP 429 on POST /v1/albums/{album_id}/capabilities: the per-account mint rate-limit store is holding as many distinct accounts as it will hold, so this account could not be given a window of its own. Saturated by design rather than broken - distinct from error.federation.rate_budget_exceeded, which is this account's own mint budget being spent, and from error.federation.unavailable, which is a 500 meaning a store could not answer at all. It clears within the limiter window, after which a lapsed window frees room."
+  },
   "error.federation.not_configured": {
     "message": "This server doesn't share albums with other servers.",
-    "context": "HTTP 404 on all four federation operations — minting, revoking or refreshing a capability, and federated report intake: this deployment has FEDERATION_ENABLED off, which is the default, so it does not federate. While it is off no capability is honoured, including one minted while it was on."
+    "context": "HTTP 404 on every federation operation — minting, revoking or refreshing a capability, federated report intake, pull-hint intake and album subscriptions: this deployment has FEDERATION_ENABLED off, which is the default, so it does not federate. While it is off no capability is honoured, including one minted while it was on."
   },
   "error.federation.peer_unknown": {
     "message": "That server isn't one this server knows.",
-    "context": "HTTP 403 on POST /v1/federation/reports: the reporting server has no pinned signing key here, so its report cannot be verified and is dropped before the admin queue. Peer keys are operator-pinned in v1; there is no network fetch."
+    "context": "HTTP 403 on POST /v1/federation/reports and POST /v1/federation/hints: the sending server has no pinned signing key here, so its report or pull hint cannot be verified and is dropped (a report before the admin queue). Peer keys are operator-pinned in v1; there is no network fetch."
   },
   "error.federation.rate_budget_exceeded": {
     "message": "This source has reached its request limit. Please wait and try again.",
@@ -7487,6 +8183,10 @@
     "message": "This access grant does not cover the requested content.",
     "context": "HTTP 403 on a federation blob fetch (threat-model invariant 19): a read-derivative-only capability tried to fetch a blob whose server-visible role is 'original'. Scope is enforced structurally against each blob's role."
   },
+  "error.federation.subscription_limit": {
+    "message": "You've reached the limit of shared albums you can follow from other servers. Remove one to add another.",
+    "context": "HTTP 403 on POST /v1/federation/subscriptions: the capability verified, but the caller's account already holds as many subscriptions to federated albums as an account may (1,000, live or lapsed), so a new one is not recorded. Waiting does not clear it, unlike error.federation.rate_budget_exceeded; unsubscribing from an album (DELETE /v1/federation/subscriptions/{peer}/{album_id}) frees a place. Re-posting an invite for an album already subscribed is a renewal and never meets this."
+  },
   "error.federation.unavailable": {
     "message": "Capsule couldn't reach the federation records. Please try again.",
     "context": "HTTP 500 on the federation surface: the capability store, the peer store or the per-peer counter could not answer, so nothing was decided — never a refusal and never an admission. A limiter that cannot be reached is an outage, not a limit."
@@ -7494,6 +8194,10 @@
   "error.moderation.account_suspended": {
     "message": "Your account is suspended. You can't upload or share until it's reinstated.",
     "context": "HTTP 403 at POST /upload session creation: the account carries an admin/billing suspension flag. Distinct from quota and permission rejections so the client surfaces the right remediation. Suspension is an access-level action — the user's data is untouched and the block is reversible."
+  },
+  "error.moderation.report_at_capacity": {
+    "message": "This server is handling too many reports right now. Please wait and try again.",
+    "context": "HTTP 429 on POST /v1/federation/reports: one of the report rate-limit stores (verified intake per reporting server, reports per reporting server, reports per reporting server and reported account, or the one-use report nonces) is holding as many distinct keys as it will hold, so this report could not be given a window of its own. Saturated by design rather than broken - distinct from error.moderation.report_rate_limited, which is this source's own report budget being spent, and from error.moderation.unavailable, which is a 500 meaning a store could not answer at all. Nothing is filed; it clears within the limiter window."
   },
   "error.moderation.report_malformed": {
     "message": "That report isn't valid.",
@@ -7570,6 +8274,10 @@
   "error.request.range_not_satisfiable": {
     "message": "Capsule couldn't send that part of the file.",
     "context": "HTTP 416 on a blob read: the requested byte range starts past the end of the blob. A client resuming a download with a stale offset reaches it; re-fetching from the start recovers."
+  },
+  "error.request.too_early": {
+    "message": "That request was sent too early. Please try again.",
+    "context": "HTTP 425: a write (any non-safe method) reached the server as TLS early data, which a replay could repeat, so it was refused before its body was read. Clients re-send the same request once the handshake has completed and rarely show this; it surfaces only when the retries give up."
   },
   "error.request.too_large": {
     "message": "That request was too large to accept.",
@@ -7677,15 +8385,15 @@
   },
   "error.upload.chunk_conflict": {
     "message": "The upload sent conflicting data and was stopped.",
-    "context": "HTTP 409, invariant 12: a PATCH at an already-acknowledged offset with a different chunk hash — the structural defense against a faulty client retrying with garbage."
+    "context": "HTTP 409, sent only by servers that predate block-grid uploads: a PATCH at an already-acknowledged offset with a different chunk hash. A current server answers a re-send of committed bytes as a duplicate and never sends this; the key stays so a client talking to an older server still localizes it."
   },
   "error.upload.chunk_not_aligned": {
     "message": "An upload chunk was incorrectly sized.",
-    "context": "HTTP 400, invariant 10: non-final chunk not a multiple of 4 KiB."
+    "context": "HTTP 400, invariant 10: the range's offset is not a multiple of 4 KiB, or its length is not and it does not end at the declared size."
   },
   "error.upload.chunk_timeout": {
     "message": "An upload chunk took too long to arrive.",
-    "context": "HTTP 408 on PATCH /v1/upload/{id} and PATCH /d/{opaque-id}/{upload-id}: the chunk body did not finish arriving within the server's chunk read deadline (CHUNK_READ_TIMEOUT_SECONDS, two minutes by default). Nothing of the chunk was kept and the offset did not move; the client resends the same chunk at the same offset, smaller if its link is slow."
+    "context": "HTTP 408 on PATCH /v1/upload/{id} and PATCH /d/{opaque-id}/{upload-id}: the chunk body stopped arriving: no bytes for the server's stall bound (CHUNK_STALL_TIMEOUT_SECONDS, thirty seconds by default), or a sustained rate below its floor (CHUNK_MIN_RATE_BYTES_PER_SECOND). A chunk is never cut for taking long. Nothing of the chunk was kept and the offset did not move; the client resends at the same offset, with a shorter range."
   },
   "error.upload.chunk_too_large": {
     "message": "An upload chunk exceeded the maximum chunk size.",
@@ -7757,11 +8465,15 @@
   },
   "error.upload.offset_mismatch": {
     "message": "The upload got out of sync and is realigning.",
-    "context": "HTTP 409, invariant 9: PATCH offset differs from the current received-byte count. Response carries the authoritative X-Capsule-Offset; the client realigns."
+    "context": "HTTP 409, sent only by servers that predate block-grid uploads: PATCH offset differs from the current received-byte count, with the authoritative offset; the client realigns. A current server admits ranges in any order and answers range_conflict instead; the key stays so a client talking to an older server still localizes it."
   },
   "error.upload.owner_not_permitted": {
     "message": "You can't upload on behalf of this user.",
     "context": "HTTP 403: owner_id differs from the uploader without a verified relationship."
+  },
+  "error.upload.range_conflict": {
+    "message": "Part of this upload is already on its way. Resuming…",
+    "context": "HTTP 409, invariant 9: the PATCH range overlaps a range of the session still in flight, or is partly committed. Nothing was written. Carries X-Capsule-Committed, and Retry-After when the overlap is in flight; the client re-plans from the committed set."
   },
   "error.upload.rate_limited": {
     "message": "Uploading is paused for a moment. It'll resume on its own.",
@@ -7791,6 +8503,10 @@
     "message": "The upload sent more data than it declared.",
     "context": "HTTP 400, invariant 11: cumulative received bytes would exceed the declared size. Session moves to FailedProcessing."
   },
+  "error.upload.source_changed": {
+    "message": "This file changed while it was uploading, so its upload was stopped.",
+    "context": "Client-side, never sent by the server: the file an original is read from no longer matches what its upload bundle was built from (its size, modification time or file id changed, or a re-read chunk disagrees with the one first sealed). The client stops that blob and cancels its session rather than send different bytes under the same nonce; the asset is pushed again once its bundle is rebuilt."
+  },
   "error.upload.stale_revival": {
     "message": "This change is based on an out-of-date version of the item.",
     "context": "HTTP 409 on POST /albums/{album_id}/ops, invariant 17: the manifest's prior_provenance_hash does not match the asset's current provenance-chain head (a stale or forked position, e.g. a peer replaying an old manifest to revive a deleted asset)."
@@ -7806,6 +8522,14 @@
   "error.upload.timestamp_out_of_range": {
     "message": "Your device's clock appears to be wrong. Check its date and time.",
     "context": "HTTP 400, invariant 8: envelope timestamp outside the gross-drift sanity window (default ±30 days)."
+  },
+  "error.upload.too_fragmented": {
+    "message": "This upload has too many gaps. Filling them in…",
+    "context": "HTTP 409, invariant 9: admitting the range could leave the committed set past its 64-fragment bound. Nothing was written. Carries Retry-After when other ranges of the session are in flight; the client lets its own ranges finish, then fills the lowest gap first."
+  },
+  "error.upload.too_many_in_flight": {
+    "message": "Too many parts of this upload are being sent at once. Slowing down…",
+    "context": "HTTP 409, invariant 9: the session already has its in-flight cap of ranges being written (the advice's `ranges`). Nothing was written. Carries Retry-After; the client narrows its window to the advertised cap."
   },
   "error.upload.unavailable": {
     "message": "The upload couldn't be completed. Please try again.",

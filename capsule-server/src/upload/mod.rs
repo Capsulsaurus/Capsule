@@ -1,7 +1,7 @@
 //! The upload module: the envelope gate, the session lifecycle, and the collaborators both
 //! need.
 //!
-//! One cohesive module, per design/module-map.md's "Planned Server Modules" — the operations
+//! One cohesive module (see the crate docs' Structure) — the operations
 //! themselves live in [`crate::routes::upload`], because a route is a description of a surface
 //! and this is the machinery behind it. The same split [`crate::auth`] uses.
 //!
@@ -24,9 +24,10 @@
 //! - **It never touches the filesystem.** Staging, appending, verifying and committing all go
 //!   through the blob port, which is why finalization reads the stage back through
 //!   [`crate::blob::BlobStore::read_staged_at`] rather than opening a file.
-//! - **It never splits chunk accounting.** Accepting a chunk is one call —
-//!   [`crate::store::UploadSessionStore::record_progress`] — because the byte counter, the progress clock and the replay entry describe one event.
-//!   The Salvo server issued three writes and a crash between them left all three disagreeing.
+//! - **It never splits chunk accounting.** Committing a range is one call —
+//!   [`crate::store::UploadSessionStore::record_range`] — because the committed set, the progress
+//!   clock and the status describe one event. The Salvo server issued three writes and a crash
+//!   between them left all three disagreeing.
 //!
 //! # The asset id comes from the manifest, not from here
 //!
@@ -40,21 +41,34 @@
 //!
 //! # What this port still does not carry
 //!
-//! Quota and custody receipts are owned elsewhere and consumed here.
+//! Quota and custody receipts are owned elsewhere and consumed here. The quota ledger is one
+//! of the collaborators because every way a session ends without its bytes — a cancellation, a
+//! `FailedProcessing` — gives its reservation back through [`reservation::release`], one rule
+//! for every terminal path rather than one copy per path.
 //!
 //! # A duplicate is adopted, not merely refused
 //!
 //! The **adoption path** cross-asset deduplication needs is [`adopt`]: a create refused as
 //! `409 duplicate_blob` because another asset of the same owner and album holds the bytes first
 //! records the blob against the requesting asset, so the collector counts both holders (#672).
+//!
+//! # A boot reconciles stages and sessions first
+//!
+//! A session's creation and its end each write a stage and a record in two steps, and a process
+//! can die between them. [`scrub::startup`] runs before boot recovery and repairs both halves:
+//! a stage no session holds is abandoned, and an evictable session whose stage is missing is
+//! discarded with its reservation given back.
 
 pub mod adopt;
+pub mod advice;
 pub mod authority;
 pub mod body;
 pub mod chunk;
 pub mod envelope;
 pub mod finalize;
 pub mod policy;
+pub mod reservation;
+pub mod scrub;
 pub mod signer;
 pub mod visibility;
 
@@ -64,9 +78,10 @@ pub use self::authority::{
     AlbumWriteAccess, AuthorityError, AuthorityFuture, WriteAuthority, WriteRole,
 };
 pub use self::envelope::{DeclaredBlob, GateContext, GateReject, ManifestEnvelope};
-pub use self::policy::{ChunkReadDeadline, UploadPolicy};
+pub use self::policy::{ChunkPace, ChunkReadPace, UploadPolicy};
 use crate::blob::BlobStore;
 use crate::index::AssetIndex;
+use crate::quota::{QuotaContext, QuotaLimits, QuotaStore};
 use crate::store::{Clock, UploadSessionStore};
 
 /// Everything the upload operations reach for, as one injectable value.
@@ -80,6 +95,7 @@ pub struct UploadContext {
     blobs: Arc<dyn BlobStore>,
     index: Arc<dyn AssetIndex>,
     authority: Arc<dyn WriteAuthority>,
+    quota: QuotaContext,
     clock: Arc<dyn Clock>,
     policy: Arc<UploadPolicy>,
 }
@@ -96,6 +112,7 @@ impl UploadContext {
         blobs: Arc<dyn BlobStore>,
         index: Arc<dyn AssetIndex>,
         authority: Arc<dyn WriteAuthority>,
+        quota: QuotaContext,
         clock: Arc<dyn Clock>,
         policy: UploadPolicy,
     ) -> Self {
@@ -104,6 +121,7 @@ impl UploadContext {
             blobs,
             index,
             authority,
+            quota,
             clock,
             policy: Arc::new(policy),
         }
@@ -128,6 +146,24 @@ impl UploadContext {
     /// The album and device authority invariants 6 and 7 are decided against.
     pub fn authority(&self) -> &dyn WriteAuthority {
         self.authority.as_ref()
+    }
+
+    /// The quota ledger a session's reservation is charged to and released from.
+    pub fn quotas(&self) -> &dyn QuotaStore {
+        self.quota.quotas()
+    }
+
+    /// The quota module's collaborators, for a charge that must pass the same limit and
+    /// suspension checks session creation applies ([`crate::quota::charge_upload`]).
+    pub fn quota(&self) -> &QuotaContext {
+        &self.quota
+    }
+
+    /// The deployment's quota thresholds, which a reservation restored on a session's behalf
+    /// is charged under. The same [`QuotaContext`] the quota module is built from, so the two
+    /// never disagree about a limit.
+    pub fn quota_limits(&self) -> QuotaLimits {
+        self.quota.limits()
     }
 
     /// The clock every record, deadline and drift bound is stamped from.

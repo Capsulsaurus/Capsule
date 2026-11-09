@@ -1,73 +1,100 @@
 ---
 title: Capsule
-description: An end-to-end-encrypted, self-hosted photo and video library
+description: An open-source photo library that organizes a lifetime of photos on your own devices, keeps every one end-to-end encrypted, and is built to share across servers.
 status: draft
 template: splash
 hero:
-  tagline: An end-to-end-encrypted, self-hosted photo and video library for people with terabytes of visual assets. In active development — no release has been cut yet.
+  title: A lifetime of photos, organized and private
+  tagline: Capsule organizes your whole library on your own devices, keeps every photo end-to-end encrypted on a server that never holds a key, and is built to share across servers.
   image:
-    file: ../../assets/houston.webp # TODO: Replace with a proper logo once available
+    # Raw HTML rather than `file`: Starlight's hero sizes `file` images to a
+    # 400x400 square, which crops a portrait screenshot.
+    html: |
+      <img class="hero-shot hero-shot-light" src="/images/hero-light.webp" width="800" height="1538" alt="Capsule on iPhone, showing the Library timeline" />
+      <img class="hero-shot hero-shot-dark" src="/images/hero-dark.webp" width="800" height="1538" alt="Capsule on iPhone, showing the Library timeline" />
   actions:
+    - text: Get started
+      link: /guides/getting-started/
+      icon: right-arrow
     - text: Read the design
       link: /design/
-      icon: right-arrow
-    - text: Getting started
-      link: /guides/getting-started/
-      icon: external
-      variant: minimal
+      variant: secondary
 ---
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
-import GradientBackground from '../../components/GradientBackground.astro';
-import GitHubStars from '../../components/GitHubStars.astro';
-import SimpleFooter from '../../components/SimpleFooter.astro';
+import Feature from '../../components/Feature.astro';
+import FeatureGrid from '../../components/FeatureGrid.astro';
+import StatusStrip from '../../components/StatusStrip.astro';
 
-<GradientBackground />
+<StatusStrip
+  text="The mobile clients are being stabilized and refined before they go to beta testers."
+  href="https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md"
+  linkLabel="Roadmap"
+/>
 
-<div style="display: flex; justify-content: center; margin-top: 1rem;">
-  <GitHubStars />
-</div>
+## What sets Capsule apart
 
-:::caution[Not yet usable]
-Capsule has not published a client binary or a deployable server, and there is no
-hosted instance. What exists today is the design — specified in detail — and the
-code implementing it. If you are evaluating Capsule, evaluate the
-[design docs](/design/); if you want to build it, start at
-[Local Development](/development/local-development/).
-:::
+<FeatureGrid>
+  <Feature icon="random" title="Organized at any scale" href="/features/smart-albums/" linkLabel="Smart albums">
+    Search, smart albums and automatic tagging are designed to run on your devices, over
+    a full local index, so a library of millions of photos stays navigable without
+    anyone sorting it by hand.
+  </Feature>
+  <Feature icon="padlock" title="A server with no keys" href="/design/cryptography/" linkLabel="Cryptography design">
+    The server stores ciphertext and never holds a key. It cannot read a photo, a caption
+    or an album title, yet it signs a custody receipt for every upload it accepts.
+  </Feature>
+  <Feature icon="server" title="Sharing across servers" href="/design/federation/" linkLabel="Federation design">
+    Trust lives in the cryptography rather than the server, so people on different
+    Capsule servers are meant to share albums with each other, with no central service
+    in between.
+  </Feature>
+  <Feature icon="laptop" title="Your whole library, offline" href="/features/offline-library/" linkLabel="Offline library">
+    Every native app is built to hold a full index of every photo you have kept, so all
+    of it can be browsed, searched and organized with no connection.
+  </Feature>
+  <Feature icon="approve-check-circle" title="Verifiable history" href="/design/cryptography/provenance/" linkLabel="Provenance design">
+    Every asset carries a signed, append-only provenance chain, so which person and
+    device imported or edited it is verified, not taken on trust.
+  </Feature>
+  <Feature icon="database" title="Recoverable by construction" href="/design/backup-recovery/" linkLabel="Backup and recovery">
+    Each asset is paired with a signed metadata sidecar, so a library stays readable
+    without a database and can be rebuilt from partial damage.
+  </Feature>
+</FeatureGrid>
 
-## What Capsule is
+## Everything you would expect
 
-<CardGrid stagger>
-	<Card title="End-to-end encrypted" icon="approve-check">
-		The server stores opaque ciphertext and never holds a key. It cannot read an
-		album title, a caption, or a photo — which is also why search and organization
-		run on your device rather than on it.
-	</Card>
-	<Card title="Self-hosted" icon="laptop">
-		Your server, your disks. Federation between servers is designed so sharing does
-		not require anyone to centralize.
-	</Card>
-	<Card title="Recoverable by construction" icon="seti:db">
-		Every asset is paired with a signed metadata sidecar, so a library is readable
-		without a database and reconstructible from partial corruption.
-	</Card>
-	<Card title="Built for originals" icon="seti:image">
-		RAW and video are first-class. Nothing is silently recompressed, and derivatives
-		are signed so a corrupted thumbnail cannot pass for a good one.
-	</Card>
-</CardGrid>
+Originals kept at full quality and restorable byte for byte. RAW and video as
+first-class formats. Native apps built with each platform's own controls. A
+[CLI and TUI](/reference/cli/) that can do everything the apps can.
 
 ## Why it is built this way
 
-Most photo services ask you to choose between the features that come from a server
-reading your library and the privacy that comes from it not being able to. Capsule
-takes the second and rebuilds the features on the client: tagging, search, and
-grouping run against a local index over data only your devices can decrypt.
+Most photo services make you choose between the features a server gets by reading your
+library and the privacy you get when it cannot. Capsule takes the privacy and rebuilds
+the features on your devices, over data only they can decrypt.
 
-That choice has costs, and the design docs state them rather than hiding them — what
-a key-free server [can and cannot tell you](/design/notifications/), what happens
-[when a key is lost](/design/cryptography/failure-modes/), and what a faulty or
-hostile client [is prevented from doing](/design/threat-model/).
+That choice has costs, and the design docs state them rather than hiding them: what a
+key-free server [can and cannot tell you](/design/notifications/), what happens
+[when a key is lost](/design/backup-recovery/#recovery-paths), and what a faulty or hostile
+client [is prevented from doing](/design/threat-model/).
 
-<SimpleFooter />
+## Get started
+
+<CardGrid>
+  <Card title="Host a server" icon="server">
+    Run Capsule on your own hardware. [Self-hosting](/guides/self-hosting/)
+  </Card>
+  <Card title="Use Capsule" icon="open-book">
+    Import, organize and browse your library. [User guide](/guides/user-guide/)
+  </Card>
+  <Card title="Bring your library" icon="cloud-download">
+    Import a Google Photos Takeout with its metadata.
+    [Migration](/guides/google-photos-migration/)
+  </Card>
+  <Card title="Build Capsule" icon="code-branch">
+    Every line is open source and developed in the open.
+    [Local development](/development/local-development/)
+  </Card>
+</CardGrid>

@@ -1,4 +1,5 @@
-//! **E2E case 15** — upload delegation (design/module-map.md; Peering § Delegation, issue #701).
+//! **E2E case 15** — upload delegation (the case index is in `src/lib.rs`; Peering § Delegation,
+//! issue #701).
 //!
 //! A (the origin) hands a sealed bundle to B, another device of the same account; B uploads it
 //! under its own session; A releases the original only after verifying custody of the hashes it
@@ -311,7 +312,7 @@ fn kinds_of(feed: &[capsule_sdk::sync::FeedEntry], asset: Uuid) -> Vec<ChangeKin
 /// server only once A's own custody check finds the create's receipts; it is sent once.
 #[tokio::test]
 async fn e2e_case_15_a_delete_after_hand_off_reaches_the_server_only_once_custody_exists() {
-    delete_after_hand_off(false).await;
+    Box::pin(delete_after_hand_off(false)).await;
 }
 
 /// As above, with an edit between the hand-off and the delete: the server's head is the create B
@@ -320,7 +321,7 @@ async fn e2e_case_15_a_delete_after_hand_off_reaches_the_server_only_once_custod
 /// than refusing it as a stale chain.
 #[tokio::test]
 async fn e2e_case_15_an_edit_then_a_delete_after_hand_off_both_reach_the_server_in_order() {
-    delete_after_hand_off(true).await;
+    Box::pin(delete_after_hand_off(true)).await;
 }
 
 async fn delete_after_hand_off(edit_first: bool) {
@@ -355,11 +356,6 @@ async fn delete_after_hand_off(edit_first: bool) {
             .expect("A edits it");
     }
     a.workspace.soft_delete(&asset, 30).expect("A deletes it");
-    let sent: &[&str] = if edit_first {
-        &["sent", "sent"]
-    } else {
-        &["sent"]
-    };
     let held = peer::status(
         &remote,
         &cli_a.store,
@@ -435,25 +431,20 @@ async fn delete_after_hand_off(edit_first: bool) {
         DelegationState::Released,
         "{released:#?}"
     );
-    let outcomes: Vec<&str> = released.deletes.iter().map(|d| d.outcome).collect();
-    assert_eq!(outcomes, sent, "{released:#?}");
+    // One line per asset, naming the action the server applied last: the stretch after the
+    // server's head goes in chain order, so with an edit first the delete chains onto it, and
+    // the server applying it (rather than refusing a stale chain) shows the edit arrived first.
+    let lines: Vec<(&str, Option<&str>)> = released
+        .deletes
+        .iter()
+        .map(|d| (d.outcome, d.action.as_deref()))
+        .collect();
+    assert_eq!(lines, vec![("sent", Some("delete"))], "{released:#?}");
     let kinds = kinds_of(&a.feed(&server).await, asset);
     assert!(
         kinds.contains(&ChangeKind::Deleted),
         "the delete reached the server after the create's custody: {kinds:?}"
     );
-    if edit_first {
-        let actions: Vec<Option<&str>> = released
-            .deletes
-            .iter()
-            .map(|d| d.action.as_deref())
-            .collect();
-        assert_eq!(
-            actions,
-            vec![Some("metadata-update"), Some("delete")],
-            "the edit went first, so the delete chained onto it"
-        );
-    }
 
     // Sent once: a later run has nothing left to send.
     let after = peer::status(
@@ -768,6 +759,12 @@ async fn e2e_case_15_a_delegate_that_dies_mid_upload_is_re_queued_and_the_origin
     assert_eq!(pushed.verified_assets, 1, "{pushed:#?}");
     assert_eq!(pushed.delegated_assets, 0);
     assert_eq!(pushed.outcomes[0].status, AssetPushStatus::Verified);
+    assert!(
+        !a.workspace
+            .has_upload_guard(&asset)
+            .expect("the catalog reads"),
+        "a custody-confirmed push releases the original's source guard"
+    );
     let released = peer::status(
         &remote,
         &cli_a.store,

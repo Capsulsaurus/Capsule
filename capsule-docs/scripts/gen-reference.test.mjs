@@ -12,18 +12,38 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+    abstractOf,
+    BINDINGS_SURFACE,
     bucketOperations,
     CLI_SURFACE,
+    curlExample,
     demoteHeadings,
+    docProse,
+    exampleFor,
     generate,
     OPENAPI_DOCUMENT,
+    OPENAPI_DOWNLOAD,
+    operationAnchor,
+    parseWasmSurface,
+    readBindingsSurface,
     readCliSurface,
     readOpenApiDocument,
+    readWasmSurface,
     renderApiPage,
+    renderBindingsPage,
     renderCliPage,
+    renderConventionsPage,
+    renderWasmPage,
+    tsSignature,
+    WASM_SURFACE,
 } from './gen-reference.mjs';
 import { headingAnchors } from './lib/markdown.mjs';
-import { API_GROUPS, groupForPath } from './reference-groups.mjs';
+import {
+    API_GROUPS,
+    groupForPath,
+    referenceSidebar,
+    SDK_PAGES,
+} from './reference-groups.mjs';
 
 /**
  * A repo-shaped temporary root: the two description artifacts at the paths the generator
@@ -37,6 +57,8 @@ function fixtureRoot() {
     const root = mkdtempSync(join(tmpdir(), 'gen-reference-'));
     mkdirSync(join(root, 'capsule-cli'), { recursive: true });
     mkdirSync(join(root, 'capsule-server'), { recursive: true });
+    mkdirSync(join(root, 'capsule-sdk'), { recursive: true });
+    mkdirSync(join(root, 'capsule-wasm'), { recursive: true });
     mkdirSync(join(root, 'capsule-docs/src/content/docs/reference'), {
         recursive: true,
     });
@@ -118,6 +140,87 @@ function writeCli(surface) {
     );
 }
 
+const MINIMAL_BINDINGS = {
+    schema: 1,
+    namespace: 'capsule_sdk',
+    uniffi: '0.31.1',
+    languages: {
+        swift: {
+            source: 'capsule_sdk.swift',
+            declarations: [
+                {
+                    kind: 'class',
+                    name: 'FfiWorkspace',
+                    signature: 'open class FfiWorkspace: FfiWorkspaceProtocol',
+                    doc: 'A local workspace. See [`FfiSession`].',
+                    members: [
+                        {
+                            kind: 'func',
+                            name: 'sealAsset',
+                            signature:
+                                'open func sealAsset(bytes: Data) throws -> FfiAssetFacts',
+                            doc: 'Seal one asset.\n\n# Errors\n\nFails on a locked workspace.',
+                            members: [],
+                        },
+                    ],
+                },
+                {
+                    kind: 'func',
+                    name: 'evaluateAlerts',
+                    signature:
+                        'public func evaluateAlerts(input: FfiNotifyInput, now: String) throws -> [FfiAlert]',
+                    doc: '',
+                    members: [],
+                },
+            ],
+        },
+        kotlin: {
+            source: 'uniffi/capsule_sdk/capsule_sdk.kt',
+            declarations: [
+                {
+                    kind: 'fun',
+                    name: 'evaluateAlerts',
+                    signature:
+                        'fun `evaluateAlerts`(`input`: FfiNotifyInput, `now`: kotlin.String): List<FfiAlert>',
+                    doc: 'Evaluate alerts.',
+                    members: [],
+                },
+            ],
+        },
+    },
+};
+
+const MINIMAL_WASM = `// The public surface of the capsule-wasm browser module.
+
+/**
+ * Whether the link is passphrase-protected. Calls [\`open_share\`] next.
+ */
+export function shareIsPassphraseProtected(wrapped_scope_b64: string): boolean;
+/**
+ * The opened scope of a share link.
+ */
+export class ShareScope {
+  private constructor();
+  free(): void;
+  /**
+   * \`"asset"\` or \`"album"\`.
+   */
+  scopeKind(): string;
+  /**
+   * The plaintext size.
+   */
+  readonly size: number;
+}
+`;
+
+function writeSdk(bindings = MINIMAL_BINDINGS, wasm = MINIMAL_WASM) {
+    writeFileSync(
+        join(root, BINDINGS_SURFACE),
+        `${JSON.stringify(bindings, null, 2)}\n`,
+    );
+    writeFileSync(join(root, WASM_SURFACE), wasm);
+}
+
 function writeOpenApi(document) {
     mkdirSync(join(root, 'capsule-server'), { recursive: true });
     writeFileSync(
@@ -128,7 +231,12 @@ function writeOpenApi(document) {
 
 const MINIMAL_OPENAPI = {
     openapi: '3.2.0',
-    info: { title: 'API', version: '0.0.0' },
+    info: {
+        title: 'API',
+        version: '0.0.0',
+        description:
+            'The shared contract.\n\n## Errors\n\nSwitch on `code`; see [i18n](../../capsule-docs/src/content/docs/design/i18n.md).',
+    },
     paths: {
         '/v1/version': {
             get: {
@@ -352,7 +460,7 @@ describe('readCliSurface', () => {
     });
 
     // A well-formed but empty document used to render an empty h2, an empty usage fence, and
-    // a `status: stable` badge — a page that builds green and documents nothing.
+    // a generated banner — a page that builds green and documents nothing.
     it('refuses a document that parses but describes nothing', () => {
         writeCli({ schema: 1 });
         expect(() => readCliSurface(root)).toThrow(/no command name/);
@@ -374,10 +482,11 @@ describe('renderCliPage', () => {
         expect(page).toContain('Import files into a local Capsule library');
     });
 
-    it('opens with frontmatter carrying a status the schema accepts', () => {
+    it('opens with generated frontmatter and no review status', () => {
         const page = renderCliPage(MINIMAL_CLI);
         expect(page.startsWith('---\n')).toBe(true);
-        expect(page).toMatch(/^status: stable$/m);
+        expect(page).toMatch(/^generated:$/m);
+        expect(page).not.toMatch(/^status:/m);
         expect(page).toMatch(/^title: "Commands"$/m);
     });
 
@@ -446,27 +555,25 @@ describe('renderCliPage', () => {
         expect(page).not.toContain('pass a <token> here');
     });
 
-    // The defect a per-fragment escape reintroduces: the help text is escaped, the fragments
-    // appended after it are not, and a `|` in a default opens a column of its own.
-    it('escapes a pipe in a default value and in an enumerated value', () => {
+    // Options are a man-page list, not a table, so a `|` in a default or an enumerated value
+    // is shown as written rather than escaped for a column it is not in.
+    it('shows a pipe in a default value and in an enumerated value as written', () => {
         const surface = structuredClone(MINIMAL_CLI);
         surface.subcommands[0].args[1].possible_values = [{ name: 'x|y' }];
         surface.subcommands[0].args[1].default_values = ['a|b'];
         const page = renderCliPage(surface);
-        expect(page).toContain('Values: `x\\|y`.');
-        expect(page).toContain('Default: `a\\|b`.');
-        expect(page).not.toContain('`x|y`');
-        expect(page).not.toContain('`a|b`');
+        expect(page).toContain('Values: `x|y`.');
+        expect(page).toContain('Default: `a|b`.');
     });
 
-    it('keeps every table row at the width of its header', () => {
-        const surface = structuredClone(MINIMAL_CLI);
-        surface.subcommands[0].args[1].default_values = ['a|b'];
-        surface.subcommands[0].args[2].help = 'takes a | and a <tag>';
-        for (const line of renderCliPage(surface).split('\n')) {
-            if (!line.startsWith('|')) continue;
-            expect(columnsOf(line)).toBe(4);
+    it('lays each command out as a man page', () => {
+        const page = renderCliPage(MINIMAL_CLI);
+        expect(page).toContain('<section class="man-cmd">');
+        for (const label of ['Synopsis', 'Options', 'Commands']) {
+            expect(page).toContain(`<p class="man-label">${label}</p>`);
         }
+        expect(page).toContain('<div class="man-options">');
+        expect(page).toMatch(/^- \[`capsule import`\]\(#capsule-import\)$/m);
     });
 
     // A pipe the help text already escapes must not gain a second backslash: `a\\|b` is an
@@ -477,10 +584,6 @@ describe('renderCliPage', () => {
         const page = renderCliPage(surface);
         expect(page).toContain('matches a\\|b, or c \\ d');
         expect(page).not.toContain('a\\\\|b');
-        for (const line of page.split('\n')) {
-            if (!line.startsWith('|')) continue;
-            expect(columnsOf(line)).toBe(4);
-        }
     });
 
     it('does not append "Repeatable." when the help already says it', () => {
@@ -522,36 +625,13 @@ describe('renderCliPage', () => {
             '**Required.** Source file or directory to import. Repeatable.',
         );
     });
-
-    it('escapes a pipe so it cannot break out of a table cell', () => {
-        const page = renderCliPage({
-            schema: 1,
-            name: 'capsule',
-            subcommands: [
-                {
-                    name: 'x',
-                    args: [
-                        {
-                            id: 'p',
-                            long: 'p',
-                            positional: false,
-                            required: false,
-                            repeatable: false,
-                            takes_value: false,
-                            help: 'reads a | b',
-                        },
-                    ],
-                },
-            ],
-        });
-        expect(page).toContain('reads a \\| b');
-    });
 });
 
 describe('generate', () => {
     it('is deterministic: two runs produce byte-identical pages', () => {
         writeCli(MINIMAL_CLI);
         writeOpenApi(MINIMAL_OPENAPI);
+        writeSdk();
         const first = generate(root).map((path) =>
             readFileSync(join(root, path), 'utf8'),
         );
@@ -560,6 +640,19 @@ describe('generate', () => {
         );
         expect(second).toEqual(first);
         expect(first.length).toBeGreaterThan(0);
+    });
+
+    it('marks only the pages of a stale artifact', () => {
+        writeCli(MINIMAL_CLI);
+        writeOpenApi(MINIMAL_OPENAPI);
+        writeSdk();
+        const written = generate(root, { stale: [CLI_SURFACE] });
+        for (const path of written) {
+            const body = readFileSync(join(root, path), 'utf8');
+            expect(/^ {2}stale: true$/m.test(body)).toBe(
+                path.includes('/cli/'),
+            );
+        }
     });
 
     it('fails, writing nothing, when an artifact is missing', () => {
@@ -580,6 +673,7 @@ describe('generate', () => {
     it('clears output it no longer emits', () => {
         writeCli(MINIMAL_CLI);
         writeOpenApi(MINIMAL_OPENAPI);
+        writeSdk();
         generate(root);
         const orphan = join(
             root,
@@ -595,6 +689,7 @@ describe('generate', () => {
     it('does not clear the hand-written overview beside the generated directory', () => {
         writeCli(MINIMAL_CLI);
         writeOpenApi(MINIMAL_OPENAPI);
+        writeSdk();
         const overview = join(
             root,
             'capsule-docs/src/content/docs/reference/cli.md',
@@ -602,6 +697,309 @@ describe('generate', () => {
         writeFileSync(overview, '---\ntitle: CLI\nstatus: draft\n---\n');
         generate(root);
         expect(existsSync(overview)).toBe(true);
+    });
+
+    // The SDK directory holds a hand-written page beside the generated ones, so it is
+    // cleared file by file: an orphan goes, the Rust page stays.
+    it('clears an orphan in the SDK directory but keeps the hand-written Rust page', () => {
+        writeCli(MINIMAL_CLI);
+        writeOpenApi(MINIMAL_OPENAPI);
+        writeSdk();
+        const sdk = join(root, 'capsule-docs/src/content/docs/reference/sdk');
+        mkdirSync(sdk, { recursive: true });
+        const rust = join(sdk, 'rust.md');
+        const orphan = join(sdk, 'retired-language.md');
+        writeFileSync(rust, '---\ntitle: Rust\nstatus: draft\n---\n');
+        writeFileSync(orphan, '---\ntitle: Gone\nstatus: stable\n---\n');
+        const written = generate(root);
+        expect(existsSync(rust)).toBe(true);
+        expect(existsSync(orphan)).toBe(false);
+        for (const page of SDK_PAGES.filter((p) => p.artifact !== null)) {
+            expect(written).toContain(
+                `capsule-docs/src/content/docs/reference/sdk/${page.slug}.md`,
+            );
+        }
+        expect(written).not.toContain(
+            'capsule-docs/src/content/docs/reference/sdk/rust.md',
+        );
+    });
+
+    it('publishes the exact OpenAPI document beside the pages', () => {
+        writeCli(MINIMAL_CLI);
+        writeOpenApi(MINIMAL_OPENAPI);
+        writeSdk();
+        generate(root);
+        expect(
+            readFileSync(
+                join(root, 'capsule-docs/public', OPENAPI_DOWNLOAD.slice(1)),
+                'utf8',
+            ),
+        ).toBe(readFileSync(join(root, OPENAPI_DOCUMENT), 'utf8'));
+    });
+
+    it('fails, naming the artifact, when an SDK dump is missing', () => {
+        writeCli(MINIMAL_CLI);
+        writeOpenApi(MINIMAL_OPENAPI);
+        expect(() => generate(root)).toThrow(/bindings-surface\.json/);
+    });
+});
+
+describe('the SDK pages', () => {
+    const swift = SDK_PAGES.find((page) => page.slug === 'swift');
+    const kotlin = SDK_PAGES.find((page) => page.slug === 'kotlin');
+    const wasm = SDK_PAGES.find((page) => page.slug === 'wasm');
+
+    it('reads a wasm digest into functions and classes, members included', () => {
+        const declarations = parseWasmSurface(MINIMAL_WASM);
+        expect(declarations.map((d) => [d.kind, d.name])).toEqual([
+            ['function', 'shareIsPassphraseProtected'],
+            ['class', 'ShareScope'],
+        ]);
+        const scope = declarations[1];
+        expect(scope.signature).toBe('export class ShareScope');
+        expect(scope.doc).toBe('The opened scope of a share link.');
+        expect(scope.members.map((m) => [m.kind, m.name])).toEqual([
+            ['method', 'free'],
+            ['method', 'scopeKind'],
+            ['property', 'size'],
+        ]);
+        expect(scope.members[1].doc).toBe('`"asset"` or `"album"`.');
+        expect(scope.members[0].doc).toBe('');
+    });
+
+    it('refuses a wasm digest line it does not recognize', () => {
+        expect(() =>
+            parseWasmSurface('export const answer: number;\n'),
+        ).toThrow(/unrecognized declaration/);
+    });
+
+    it('refuses a wasm digest that declares nothing', () => {
+        expect(() => parseWasmSurface('// banner only\n')).toThrow(
+            /declares nothing/,
+        );
+    });
+
+    it('refuses a class block that never closes', () => {
+        expect(() =>
+            parseWasmSurface('export class A {\n  free(): void;\n'),
+        ).toThrow(/never closes/);
+    });
+
+    it('renders the wasm page with signatures, prose and member headings', () => {
+        const page = renderWasmPage(wasm, parseWasmSurface(MINIMAL_WASM));
+        expect(page).toMatch(/^---\ntitle: "Browser \(WASM\)"\n/);
+        expect(page).toContain('## Functions');
+        expect(page).toContain('### `shareIsPassphraseProtected`');
+        expect(page).toContain(
+            '```ts wrap\nexport function shareIsPassphraseProtected(wrapped_scope_b64: string): boolean;\n```',
+        );
+        expect(page).toContain('## Classes');
+        expect(page).toContain('#### `scopeKind`');
+        expect(page).not.toContain('private constructor');
+        // rustdoc's shorthand link is unwrapped to its code span, not printed with brackets.
+        expect(page).toContain('Calls `open_share` next.');
+        expect(page.endsWith('\n')).toBe(true);
+        expect(page.endsWith('\n\n')).toBe(false);
+    });
+
+    it('renders each binding language from its own half of the dump', () => {
+        const swiftPage = renderBindingsPage(swift, MINIMAL_BINDINGS);
+        const kotlinPage = renderBindingsPage(kotlin, MINIMAL_BINDINGS);
+        expect(swiftPage).toContain('```swift wrap\nopen class FfiWorkspace');
+        expect(swiftPage).toContain('#### `sealAsset`');
+        expect(swiftPage).not.toContain('```kotlin');
+        expect(kotlinPage).toContain('```kotlin wrap\nfun `evaluateAlerts`');
+        expect(kotlinPage).not.toContain('FfiWorkspace');
+        // Functions are listed before classes, whatever order the dump holds them in.
+        expect(swiftPage.indexOf('## Functions')).toBeLessThan(
+            swiftPage.indexOf('## Classes'),
+        );
+    });
+
+    it('opens every SDK page as generated, with no review status', () => {
+        // A generated page tracks its artifact; it has no review state, and
+        // PageTitle.astro refuses a page that claims both.
+        for (const page of [
+            renderWasmPage(wasm, parseWasmSurface(MINIMAL_WASM)),
+            renderBindingsPage(swift, MINIMAL_BINDINGS),
+            renderBindingsPage(kotlin, MINIMAL_BINDINGS),
+        ]) {
+            const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec(page);
+            expect(frontmatter?.[1]).toMatch(/^generated:$/m);
+            expect(frontmatter?.[1]).not.toMatch(/^status:/m);
+        }
+    });
+
+    it('demotes a heading inside a member doc comment below the member', () => {
+        const page = renderBindingsPage(swift, MINIMAL_BINDINGS);
+        expect(page).toContain('##### Errors');
+        const body = page.split('\n---\n').slice(1).join('\n---\n');
+        expect(body.split('\n').filter((l) => /^# /.test(l))).toEqual([]);
+    });
+
+    it('refuses a declaration kind no section lists', () => {
+        const dump = structuredClone(MINIMAL_BINDINGS);
+        dump.languages.swift.declarations[1].kind = 'typealias';
+        expect(() => renderBindingsPage(swift, dump)).toThrow(
+            /typealias, which no section/,
+        );
+    });
+
+    it('refuses a binding dump with an unknown schema or an empty language', () => {
+        writeSdk({ ...MINIMAL_BINDINGS, schema: 2 });
+        expect(() => readBindingsSurface(root)).toThrow(/schema 2/);
+        const empty = structuredClone(MINIMAL_BINDINGS);
+        empty.languages.kotlin.declarations = [];
+        writeSdk(empty);
+        expect(() => readBindingsSurface(root)).toThrow(/no kotlin/);
+    });
+
+    it('puts the generated conventions page right after the REST overview', () => {
+        const rest = referenceSidebar().find(
+            (item) => item.label === 'REST API',
+        );
+        expect(rest.items.slice(0, 2)).toEqual([
+            { slug: 'reference/api' },
+            { slug: 'reference/api/conventions' },
+        ]);
+    });
+
+    it('lists every SDK page in the sidebar, last', () => {
+        const sidebar = referenceSidebar();
+        const sdk = sidebar.find((item) => item.label === 'SDK');
+        expect(sdk.items.map((item) => item.slug)).toEqual([
+            'reference/sdk',
+            ...SDK_PAGES.map((page) => `reference/sdk/${page.slug}`),
+        ]);
+        expect(sidebar.at(-1)).toBe(sdk);
+    });
+});
+
+describe('the native SDK layouts', () => {
+    const swift = SDK_PAGES.find((page) => page.slug === 'swift');
+    const kotlin = SDK_PAGES.find((page) => page.slug === 'kotlin');
+    const wasm = SDK_PAGES.find((page) => page.slug === 'wasm');
+
+    it('lays Swift out as DocC: eyebrow, abstract, Declaration, Topics', () => {
+        const page = renderBindingsPage(swift, MINIMAL_BINDINGS);
+        expect(page).toContain('<nav class="sdk-index" data-tool="docc"');
+        expect(page).toContain('<section class="sdk-symbol" data-tool="docc">');
+        expect(page).toContain(
+            '<p class="sdk-kind" data-kind="class">Class</p>',
+        );
+        expect(page).toContain('<p class="sdk-label">Declaration</p>');
+        expect(page).toContain('<p class="sdk-label sdk-topics">Topics</p>');
+        expect(page).toContain('<p class="sdk-label">Instance Methods</p>');
+        expect(page).toMatch(/^#### `sealAsset`$/m);
+        // The abstract is the first sentence; the rest is the Overview.
+        expect(page).toMatch(
+            /<div class="sdk-abstract">\n\nA local workspace\.\n\n<\/div>/,
+        );
+        expect(page).toContain('<p class="sdk-label">Overview</p>');
+    });
+
+    it('lays Kotlin out as Dokka: kind chip, summary table', () => {
+        const page = renderBindingsPage(kotlin, MINIMAL_BINDINGS);
+        expect(page).toContain('<nav class="sdk-index" data-tool="dokka"');
+        expect(page).toContain('<p class="sdk-kind" data-kind="fun">fun</p>');
+        expect(page).toContain('| Name | Summary |');
+        expect(page).toContain(
+            '| [`evaluateAlerts`](#evaluatealerts) | Evaluate alerts. |',
+        );
+    });
+
+    it('lays the browser module out as TypeDoc: chips, Parameters, Returns, source', () => {
+        const page = renderWasmPage(wasm, parseWasmSurface(MINIMAL_WASM));
+        expect(page).toContain('<nav class="sdk-index" data-tool="typedoc"');
+        expect(page).toContain(
+            '<p class="sdk-kind" data-kind="function">Function</p>',
+        );
+        expect(page).toContain('<p class="sdk-label">Parameters</p>');
+        expect(page).toContain('- `wrapped_scope_b64`: `string`');
+        expect(page).toContain('<p class="sdk-label">Returns</p>');
+        expect(page).toContain('<p class="sdk-label">Methods</p>');
+        expect(page).toContain('<p class="sdk-label">Properties</p>');
+        expect(page).toContain(
+            '<p class="sdk-source">Defined in <code>wasm-surface.d.ts</code></p>',
+        );
+    });
+
+    it('refuses a member kind no topic lists', () => {
+        const bindings = structuredClone(MINIMAL_BINDINGS);
+        bindings.languages.swift.declarations[0].members[0].kind = 'subscript';
+        expect(() => renderBindingsPage(swift, bindings)).toThrow(
+            /subscript, which no topic/,
+        );
+    });
+
+    it('links a rustdoc shorthand to a symbol on the page, and unwraps one that is not', () => {
+        const anchors = new Map([['ShareScope', 'sharescope']]);
+        expect(docProse('See [`ShareScope`].', 0, anchors)).toBe(
+            'See [`ShareScope`](#sharescope).',
+        );
+        expect(docProse('See [`FfiSession`].', 0, anchors)).toBe(
+            'See `FfiSession`.',
+        );
+    });
+
+    it('takes the first sentence as the abstract, ignoring a full stop inside code', () => {
+        expect(abstractOf('Reads `a.b` first. Then more.')).toBe(
+            'Reads `a.b` first.',
+        );
+        expect(abstractOf('No full stop')).toBe('No full stop');
+        expect(abstractOf('One.\n\nTwo.')).toBe('One.');
+    });
+
+    it('splits a TypeScript signature into parameters and a return type', () => {
+        expect(
+            tsSignature(
+                'export function f(a: string, b?: Map<string, number> | null): Out;',
+            ),
+        ).toEqual({
+            parameters: [
+                { name: 'a', optional: false, type: 'string' },
+                {
+                    name: 'b',
+                    optional: true,
+                    type: 'Map<string, number> | null',
+                },
+            ],
+            returns: 'Out',
+        });
+        expect(tsSignature('free(): void;')).toEqual({
+            parameters: [],
+            returns: 'void',
+        });
+        expect(tsSignature('readonly size: number;')).toBeNull();
+        expect(
+            tsSignature(
+                'export function on(cb: (x: T) => void, ...rest: U[]): R;',
+            ),
+        ).toEqual({
+            parameters: [
+                { name: 'cb', optional: false, type: '(x: T) => void' },
+                { name: '...rest', optional: false, type: 'U[]' },
+            ],
+            returns: 'R',
+        });
+    });
+});
+
+describe('renderConventionsPage', () => {
+    it('renders the document description as a generated REST page', () => {
+        const page = renderConventionsPage(MINIMAL_OPENAPI);
+        expect(page).toMatch(/^title: "Conventions"$/m);
+        expect(page).toMatch(/^generated:\n {2}surface: "REST API"$/m);
+        expect(page).toContain('## Errors');
+        expect(page).toContain('[i18n](/design/i18n/)');
+    });
+
+    it('refuses a document with no description', () => {
+        const document = structuredClone(MINIMAL_OPENAPI);
+        delete document.info.description;
+        expect(() => renderConventionsPage(document)).toThrow(
+            /no info\.description/,
+        );
     });
 });
 
@@ -916,8 +1314,107 @@ describe('renderApiPage', () => {
         );
     }
 
-    it('renders the method and path as the operation heading', () => {
-        expect(page()).toContain('## POST /v1/auth/login');
+    it('renders the method pill and path as the operation heading', () => {
+        expect(page()).toContain(
+            '## <span class="api-method" data-method="post">POST</span> /v1/auth/login',
+        );
+    });
+
+    it('lays each operation out as reference beside an examples panel', () => {
+        const rendered = page();
+        const main = rendered.indexOf('<div class="api-op-main">');
+        const panel = rendered.indexOf('<div class="api-op-panel">');
+        expect(main).toBeGreaterThan(-1);
+        expect(panel).toBeGreaterThan(main);
+        expect(rendered).toContain('```sh title="Request"');
+        expect(rendered).toMatch(/```json title="200 · application\/json"/);
+    });
+
+    it('lists parameters and responses as fields, with an unescaped nullable type', () => {
+        const document = structuredClone(MINIMAL_OPENAPI);
+        document.paths['/v1/auth/login'].post.parameters = [
+            {
+                in: 'query',
+                name: 'cursor',
+                schema: { type: ['string', 'null'] },
+                description: 'Where to resume.',
+            },
+        ];
+        const rendered = renderApiPage(
+            group,
+            bucketOperations(document).get('auth'),
+            document,
+        );
+        expect(rendered).toContain(
+            '<div class="api-fields" data-label="Parameters">',
+        );
+        expect(rendered).toContain(
+            '- `cursor` <span class="api-meta">query</span> <span class="api-meta">`string | null`</span>',
+        );
+        expect(rendered).toContain(
+            '<div class="api-fields" data-label="Responses">',
+        );
+        expect(rendered).toMatch(
+            /- <span class="api-status" data-class="2xx">200<\/span>/,
+        );
+    });
+
+    it('escapes a bare tag and a leading block marker in a field description', () => {
+        const document = structuredClone(MINIMAL_OPENAPI);
+        document.paths['/v1/auth/login'].post.parameters = [
+            {
+                in: 'header',
+                name: 'X-Nonce',
+                schema: { type: 'string' },
+                description: '# Carries <nonce>, not `Option<String>`.',
+            },
+        ];
+        const rendered = renderApiPage(
+            group,
+            bucketOperations(document).get('auth'),
+            document,
+        );
+        expect(rendered).toContain(
+            '  \\# Carries &lt;nonce>, not `Option<String>`.',
+        );
+    });
+
+    it('keeps every field list loose, so each entry is a paragraph', () => {
+        const fields = page()
+            .split('<div class="api-fields"')
+            .slice(1)
+            .map((block) => block.split('</div>')[0]);
+        expect(fields.length).toBeGreaterThan(0);
+        for (const block of fields) {
+            expect(block).not.toMatch(/\n- [^\n]*\n- /);
+        }
+    });
+
+    it('lists the schema appendix in the index, since the page has no table of contents', () => {
+        const rendered = page();
+        const index = rendered.slice(
+            rendered.indexOf('<nav class="api-index"'),
+            rendered.indexOf('</nav>'),
+        );
+        expect(index).toContain('[`LoginRequest`](#loginrequest)');
+    });
+
+    it('opens with an operation index linking to each operation', () => {
+        const rendered = page();
+        const index = rendered.indexOf('<nav class="api-index"');
+        expect(index).toBeGreaterThan(-1);
+        expect(index).toBeLessThan(rendered.indexOf('<div class="api-op"'));
+        const anchor = operationAnchor('POST', '/v1/auth/login');
+        expect(anchor).toBe('post-v1authlogin');
+        expect(rendered).toContain(`](#${anchor})`);
+        expect(headingAnchors(rendered).has(anchor)).toBe(true);
+    });
+
+    it('marks the page generated, with a download link and no table of contents', () => {
+        const rendered = page();
+        expect(rendered).toMatch(/^tableOfContents: false$/m);
+        expect(rendered).toMatch(/^generated:\n {2}surface: "REST API"$/m);
+        expect(rendered).toContain(`  download: "${OPENAPI_DOWNLOAD}"`);
     });
 
     // `openapi.json` really does carry `# Two statuses, because there are two outcomes`.
@@ -1005,8 +1502,8 @@ describe('renderApiPage', () => {
 
     it('lists responses in ascending status order', () => {
         const rendered = page();
-        expect(rendered.indexOf('| `200`')).toBeLessThan(
-            rendered.indexOf('| `401`'),
+        expect(rendered.indexOf('data-class="2xx">200<')).toBeLessThan(
+            rendered.indexOf('data-class="4xx">401<'),
         );
     });
 
@@ -1023,7 +1520,8 @@ describe('renderApiPage', () => {
     it('opens with frontmatter the content schema accepts', () => {
         const rendered = page();
         expect(rendered.startsWith('---\n')).toBe(true);
-        expect(rendered).toMatch(/^status: stable$/m);
+        expect(rendered).toMatch(/^generated:$/m);
+        expect(rendered).not.toMatch(/^status:/m);
         expect(rendered).toMatch(/^title: "[^"]+"$/m);
     });
 
@@ -1115,14 +1613,7 @@ describe('the schema appendix', () => {
             document,
         );
         expect(rendered).toContain('### WireBlobRole');
-        const headings = new Set(
-            [...rendered.matchAll(/^#{2,6} (.+)$/gm)].map((match) =>
-                match[1]
-                    .toLowerCase()
-                    .replace(/[^a-z0-9 -]/g, '')
-                    .replace(/ /g, '-'),
-            ),
-        );
+        const headings = headingAnchors(rendered);
         for (const [, anchor] of rendered.matchAll(/\]\(#([^)]+)\)/g)) {
             expect(headings.has(anchor)).toBe(true);
         }
@@ -1159,12 +1650,15 @@ describe('the committed artifacts', () => {
     // tree races the Astro build reading it, which fails intermittently and only under the
     // gate. The artifacts are the committed ones, so the assertion is still about this
     // repository.
-    it('generate one page per group plus the CLI page', () => {
-        copyFileSync(join(repoRoot, CLI_SURFACE), join(root, CLI_SURFACE));
-        copyFileSync(
-            join(repoRoot, OPENAPI_DOCUMENT),
-            join(root, OPENAPI_DOCUMENT),
-        );
+    it('generate one page per group, the CLI page, and the SDK pages', () => {
+        for (const artifact of [
+            CLI_SURFACE,
+            OPENAPI_DOCUMENT,
+            BINDINGS_SURFACE,
+            WASM_SURFACE,
+        ]) {
+            copyFileSync(join(repoRoot, artifact), join(root, artifact));
+        }
 
         const written = generate(root);
 
@@ -1180,7 +1674,39 @@ describe('the committed artifacts', () => {
         for (const path of written) {
             expect(existsSync(join(root, path))).toBe(true);
         }
-        expect(written).toHaveLength(API_GROUPS.length + 1);
+        const generatedSdk = SDK_PAGES.filter((page) => page.artifact !== null);
+        expect(written).toContain(
+            'capsule-docs/src/content/docs/reference/api/conventions.md',
+        );
+        // The CLI page, the conventions page, one page per group, and the SDK pages.
+        expect(written).toHaveLength(
+            API_GROUPS.length + 2 + generatedSdk.length,
+        );
+    });
+
+    // The verbs the native clients drive, and the browser module's two halves, reach their
+    // pages: an artifact that parsed but lost them would otherwise publish looking whole.
+    it('carry the surfaces the clients consume', () => {
+        const bindings = readBindingsSurface(repoRoot);
+        for (const language of ['swift', 'kotlin']) {
+            const names = bindings.languages[language].declarations.map(
+                (declaration) => declaration.name,
+            );
+            expect(names).toEqual(
+                expect.arrayContaining([
+                    'FfiCapsuleClient',
+                    'FfiSession',
+                    'FfiWorkspace',
+                    'evaluateAlerts',
+                ]),
+            );
+        }
+        const wasm = readWasmSurface(repoRoot).map(
+            (declaration) => declaration.name,
+        );
+        expect(wasm).toEqual(
+            expect.arrayContaining(['openShare', 'sealDrop', 'ShareScope']),
+        );
     });
 });
 
@@ -1194,5 +1720,188 @@ describe('tidyBlankLines, through the pages that use it', () => {
         expect(renderCliPage(surface)).toContain(
             'capsule import a\n\n\ncapsule import b',
         );
+    });
+});
+
+describe('exampleFor', () => {
+    const document = {
+        components: {
+            schemas: {
+                Leaf: {
+                    type: 'object',
+                    properties: { id: { type: 'string', format: 'uuid' } },
+                },
+                Loop: {
+                    type: 'object',
+                    properties: {
+                        next: { $ref: '#/components/schemas/Loop' },
+                    },
+                },
+            },
+        },
+    };
+
+    it('prefers the document: example, then default, then the first enum member', () => {
+        expect(exampleFor({ type: 'string', example: 'x' }, document)).toBe(
+            'x',
+        );
+        expect(exampleFor({ type: 'integer', default: 7 }, document)).toBe(7);
+        expect(exampleFor({ type: 'string', enum: ['a', 'b'] }, document)).toBe(
+            'a',
+        );
+    });
+
+    it('fills every type with a placeholder of the right shape', () => {
+        expect(exampleFor({ type: 'string' }, document)).toBe('string');
+        expect(exampleFor({ type: 'integer' }, document)).toBe(0);
+        expect(exampleFor({ type: 'integer', minimum: 1 }, document)).toBe(1);
+        expect(exampleFor({ type: 'boolean' }, document)).toBe(true);
+        expect(
+            exampleFor({ type: 'string', format: 'date-time' }, document),
+        ).toBe('2026-01-01T00:00:00Z');
+        expect(
+            exampleFor(
+                { type: 'string', pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' },
+                document,
+            ),
+        ).toBe('2026-01-01');
+        expect(
+            exampleFor({ type: 'array', items: { type: 'integer' } }, document),
+        ).toEqual([0]);
+    });
+
+    it('follows a reference and takes the non-null arm of a nullable', () => {
+        expect(
+            exampleFor({ $ref: '#/components/schemas/Leaf' }, document),
+        ).toEqual({ id: '01890a5d-ac96-774b-bcce-b302099a8057' });
+        expect(exampleFor({ type: ['string', 'null'] }, document)).toBe(
+            'string',
+        );
+        expect(
+            exampleFor(
+                {
+                    anyOf: [
+                        { $ref: '#/components/schemas/Leaf' },
+                        { type: 'null' },
+                    ],
+                },
+                document,
+            ),
+        ).toEqual({ id: '01890a5d-ac96-774b-bcce-b302099a8057' });
+    });
+
+    it('stops a self-reference at the schema depth bound', () => {
+        let value = exampleFor({ $ref: '#/components/schemas/Loop' }, document);
+        let depth = 0;
+        while (value && typeof value === 'object' && 'next' in value) {
+            value = value.next;
+            depth += 1;
+        }
+        // The same depth the schema appendix expands to: a model reached at depth 4 is
+        // documented, so its example is filled in, and nothing past it is.
+        expect(value).toEqual({});
+        expect(depth).toBe(5);
+    });
+});
+
+describe('curlExample', () => {
+    it('carries the bearer, required headers and query, and a JSON body', () => {
+        const command = curlExample(
+            {
+                method: 'POST',
+                path: '/v1/things',
+                operation: {
+                    security: [{ bearer: [] }],
+                    parameters: [
+                        {
+                            in: 'header',
+                            name: 'X-Capsule-Protocol',
+                            required: true,
+                            schema: {
+                                type: 'string',
+                                pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$',
+                            },
+                        },
+                        {
+                            in: 'query',
+                            name: 'direction',
+                            required: true,
+                            schema: { type: 'string' },
+                        },
+                        {
+                            in: 'query',
+                            name: 'cursor',
+                            schema: { type: 'string' },
+                        },
+                    ],
+                    requestBody: {
+                        content: {
+                            'application/json': {
+                                schema: {
+                                    type: 'object',
+                                    properties: {
+                                        note: {
+                                            type: 'string',
+                                            example: "it's",
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+            { components: { schemas: {} } },
+        );
+        expect(command).toContain(
+            "curl -X POST 'https://capsule.example/v1/things?direction=DIRECTION'",
+        );
+        // Double quotes, so the shell expands the token.
+        expect(command).toContain('-H "Authorization: Bearer $TOKEN"');
+        expect(command).toContain("-H 'X-Capsule-Protocol: 2026-01-01'");
+        expect(command).toContain("-H 'Content-Type: application/json'");
+        expect(command).toContain(`"note": "it'\\''s"`);
+        expect(command).not.toContain('cursor');
+    });
+
+    it('fills path parameters and sends HEAD with -I', () => {
+        const command = curlExample(
+            {
+                method: 'HEAD',
+                path: '/v1/upload/{id}',
+                operation: {
+                    parameters: [
+                        {
+                            in: 'path',
+                            name: 'id',
+                            required: true,
+                            schema: { type: 'string' },
+                        },
+                    ],
+                },
+            },
+            { components: { schemas: {} } },
+        );
+        expect(command).toBe("curl -I 'https://capsule.example/v1/upload/ID'");
+    });
+
+    it('sends a non-JSON body from a file', () => {
+        const command = curlExample(
+            {
+                method: 'PATCH',
+                path: '/v1/upload/{id}',
+                operation: {
+                    requestBody: {
+                        content: {
+                            'application/octet-stream': {
+                                schema: { type: 'string' },
+                            },
+                        },
+                    },
+                },
+            },
+            { components: { schemas: {} } },
+        );
+        expect(command).toContain('--data-binary @body.bin');
     });
 });

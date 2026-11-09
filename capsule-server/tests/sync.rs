@@ -11,7 +11,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use capsule_core::crypto::hash::Hash32;
 use capsule_server::blob::{BlobStore, ContentAddress};
 use capsule_server::index::{
-    AssetIndex, BlobRecord, LifecycleOp, OpAction, OpOutcome, PendingAsset, PurgeOutcome,
+    AssetIndex, BlobRecord, LifecycleOp, OpAction, OpBlob, OpOutcome, PendingAsset, PurgeOutcome,
 };
 use capsule_server::membership::{MemberRole, MembershipStore as _, RosterRecord};
 use capsule_server::store::{AlbumId, AssetId, BlobRole, OwnerId, UserId};
@@ -330,7 +330,10 @@ async fn delete(
             manifest_hash: Hash32::from_bytes([0xde; 32]),
             prior_provenance_hash: chain_head,
             amk_version: 1,
-            provenance,
+            provenance: OpBlob {
+                address: provenance,
+                size: delete_manifest.len() as u64,
+            },
             metadata: None,
             original: None,
             retention_until: Some(retention_until),
@@ -344,13 +347,30 @@ async fn delete(
     );
 }
 
-/// A tombstone carries its signed delete record and no byte reference: the record is what tells
-/// a client the retention window, and a blob list would invite a fetch of collected bytes.
+/// A tombstone carries its signed delete record and names exactly the blobs a restore needs
+/// (#1192): the record tells a client the retention window, and a device that first sees the
+/// asset at its delete adopts it from its live metadata blob and its original, which the serving
+/// path hands its readers until that window closes. No derivative and no derivative manifest:
+/// the restore's own entry names them again.
 #[tokio::test]
-async fn a_tombstone_carries_its_delete_record_and_no_byte_references() {
+async fn a_tombstone_carries_its_delete_record_and_names_what_a_restore_needs() {
     let fixture = Fixture::working();
     let bearer = bearer(&fixture).await;
     let (asset, _) = publish(&fixture, "doomed").await;
+    let original = store_blob(&fixture, b"original-of-doomed").await;
+    record(&fixture, &asset, BlobRole::Original, &original, 18).await;
+    let derivative = store_blob(&fixture, b"thumbnail-of-doomed").await;
+    record(&fixture, &asset, BlobRole::Derivative, &derivative, 19).await;
+    let derivative_manifest = store_blob(&fixture, b"derivative-manifest-of-doomed").await;
+    record(
+        &fixture,
+        &asset,
+        BlobRole::DerivativeManifest,
+        &derivative_manifest,
+        29,
+    )
+    .await;
+    let metadata = store_blob(&fixture, b"metadata-doomed").await;
     let record = b"signed-delete-for-doomed";
     delete(
         &fixture,
@@ -368,12 +388,18 @@ async fn a_tombstone_carries_its_delete_record_and_no_byte_references() {
         BASE64.encode(record),
         "a tombstone serves its delete record byte for byte, so a client can read its window"
     );
-    assert!(entry["metadata_blob"].is_null());
-    assert!(
-        entry["blobs"].as_array().expect("an array").is_empty(),
-        "a tombstone's blob list invites a client to fetch bytes GC may already have collected"
+    assert_eq!(
+        entry["metadata_blob"],
+        metadata.as_str(),
+        "the live metadata blob, which the adopting device opens the sidecar from"
     );
-    assert_eq!(entry["original_held"], false);
+    assert_eq!(
+        entry["blobs"],
+        serde_json::json!([{ "role": "original", "hash": original.as_str(), "size": 18 }]),
+        "the original alone: derivatives are not what a restore needs"
+    );
+    assert_eq!(entry["original_held"], true);
+    assert_eq!(entry["derivative_manifests"], serde_json::json!([]));
     assert_eq!(
         entry["purged"], false,
         "an asset in trash is still restorable, so its tombstone is no purge"
@@ -410,6 +436,136 @@ async fn a_purged_tombstone_carries_no_manifest_and_the_purge_signal() {
     assert_eq!(
         entry["purged"], true,
         "a purged asset's tombstone carries the signal a client records its tombstone on"
+    );
+    assert!(
+        entry["metadata_blob"].is_null(),
+        "a purge dropped the reference, so the entry names no blob to fetch"
+    );
+    assert_eq!(entry["blobs"], serde_json::json!([]));
+    assert_eq!(entry["original_held"], false);
+}
+
+/// Apply one lifecycle op to `asset`, chaining onto its head, with `manifest` as its provenance
+/// blob and `original` as the replaced original when it carries one.
+async fn apply(
+    fixture: &Fixture,
+    asset: &AssetId,
+    action: OpAction,
+    manifest: &[u8],
+    original: Option<&[u8]>,
+) {
+    let provenance = OpBlob {
+        address: store_blob(fixture, manifest).await,
+        size: manifest.len() as u64,
+    };
+    let original = match original {
+        Some(bytes) => Some(OpBlob {
+            address: store_blob(fixture, bytes).await,
+            size: bytes.len() as u64,
+        }),
+        None => None,
+    };
+    let chain_head = fixture
+        .index
+        .read(asset)
+        .await
+        .expect("the index reads")
+        .expect("the row exists")
+        .chain_head;
+    let outcome = fixture
+        .index
+        .apply_op(LifecycleOp {
+            asset_id: asset.clone(),
+            owner_id: owner(),
+            album_id: album(),
+            action,
+            manifest_hash: capsule_core::crypto::hash::hash_bytes(manifest),
+            prior_provenance_hash: chain_head,
+            amk_version: 1,
+            provenance,
+            metadata: None,
+            original,
+            retention_until: None,
+            at: Timestamp::UNIX_EPOCH,
+        })
+        .await
+        .expect("the index applies");
+    assert!(
+        matches!(outcome, OpOutcome::Applied { .. }),
+        "the {action:?} applies: {outcome:?}"
+    );
+}
+
+/// The served blobs of the only entry on a fresh page, asserting none is listed at size 0.
+async fn served_blobs(fixture: &Fixture, bearer: &str, after: &str) -> Vec<Value> {
+    let body = page(fixture, bearer, "", StatusCode::OK).await;
+    let blobs = body["entries"][0]["blobs"]
+        .as_array()
+        .expect("an array")
+        .clone();
+    assert!(!blobs.is_empty(), "after {after} the entry lists its blobs");
+    for blob in &blobs {
+        assert!(
+            blob["size"].as_u64().expect("a size") > 0,
+            "after {after} the feed served a blob at size 0, which a client budgets as free \
+             and a federation puller refuses under invariant 4: {blob}"
+        );
+    }
+    blobs
+}
+
+/// No served blob is listed at size 0 after a `derivative-add` or a `replace` (#1128).
+#[tokio::test]
+async fn a_lifecycle_op_never_serves_a_blob_at_size_zero() {
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    let (asset, _) = publish(&fixture, "sized").await;
+    let original = store_blob(&fixture, b"ciphertext-original-sized").await;
+    record(&fixture, &asset, BlobRole::Original, &original, 25).await;
+    let thumbnail = b"ciphertext-thumbnail-sized";
+    let derivative = store_blob(&fixture, thumbnail).await;
+    record(
+        &fixture,
+        &asset,
+        BlobRole::Derivative,
+        &derivative,
+        thumbnail.len() as u64,
+    )
+    .await;
+
+    apply(
+        &fixture,
+        &asset,
+        OpAction::Derivative,
+        b"signed-derivative-add-for-sized",
+        None,
+    )
+    .await;
+    served_blobs(&fixture, &bearer, "a derivative-add").await;
+
+    let replaced = b"ciphertext-replaced-original-sized, longer than the first";
+    apply(
+        &fixture,
+        &asset,
+        OpAction::Replace,
+        b"signed-replace-for-sized",
+        Some(replaced),
+    )
+    .await;
+    let blobs = served_blobs(&fixture, &bearer, "a replace").await;
+    let original = blobs
+        .iter()
+        .find(|blob| blob["role"] == "original")
+        .expect("the replaced original is served");
+    assert_eq!(
+        original["hash"],
+        support::checksum(replaced),
+        "the feed serves the replaced original"
+    );
+    assert_eq!(
+        original["size"],
+        replaced.len() as u64,
+        "at the size the replace measured"
     );
 }
 
@@ -1073,6 +1229,11 @@ async fn a_non_member_a_former_member_and_an_unknown_album_get_one_refusal() {
     )
     .await;
 
+    let (unknown, former, stranger) = (
+        support::without_request_id(unknown),
+        support::without_request_id(former),
+        support::without_request_id(stranger),
+    );
     assert_eq!(unknown, former, "one body for every refusal");
     assert_eq!(former, stranger, "one body for every refusal");
 }

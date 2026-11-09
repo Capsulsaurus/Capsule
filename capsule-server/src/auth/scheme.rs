@@ -146,8 +146,9 @@ pub struct AuthenticatedSession {
 #[security(
     name = "bearer",
     credential = AuthenticatedSession,
-    description = "A short-lived Capsule access token, issued by `POST /v1/auth/login` and \
-                   rotated by `POST /v1/auth/refresh`."
+    description = "A Capsule bearer credential: a short-lived access token, issued by \
+                   `POST /v1/auth/login` and rotated by `POST /v1/auth/refresh`, or, on the \
+                   federation pull reads, a federation capability."
 )]
 pub struct AccessToken;
 
@@ -224,6 +225,9 @@ impl<C: Sync> Authenticator<AccessToken, C> for AuthContext {
             session_id = %verified.session,
             "a request presented a valid access token for a live session"
         );
+        // Admitted, so the request span now names who made it: every event after this one,
+        // and the span's completion, carry the account and the session (ids, never the token).
+        crate::request_span::record_session(&verified.user, &verified.session);
         Ok(AuthenticatedSession {
             user: verified.user,
             session: verified.session,

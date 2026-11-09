@@ -130,6 +130,7 @@ use serde::{Deserialize, Serialize};
 use crate::album::AlbumContext;
 use crate::auth::AccessToken;
 use crate::counter::{CounterContext, CounterKey, budgets};
+use crate::federation::scheme::RequestSignatureHeader;
 use crate::federation::{
     self, CapabilityRecord, FederationContext, MAX_GRANT_LIFETIME, MintRequest, PeerId,
     Presentation, Principal, ReadBearer, Refusal, ReportClaim, Scope,
@@ -386,8 +387,10 @@ pub enum MintRejection {
         code: &'static str,
     },
 
-    /// The account's mint budget is spent.
-    #[error("this account has reached its capability mint budget")]
+    /// The account's mint budget is spent, or the mint counter is holding as many accounts as
+    /// it will hold. The code says which, so the detail names neither: a full counter is not
+    /// the caller's budget spent.
+    #[error("no capability can be minted right now; try again later")]
     #[problem(status = 429, title = "Rate budget exceeded")]
     RateLimited {
         /// The stable catalog code.
@@ -586,7 +589,9 @@ pub async fn issue_capability(
 
     // Every mint writes a capability row, so an account's mints are budgeted before any store is
     // read. Fail closed: a counter that cannot answer is a `500`, never an admission, and a full
-    // partition is the limiter working, so it is the same `429` a spent budget gets.
+    // partition is the limiter working, so it is a `429` — under its own at-capacity code, as
+    // every route that asks `is_at_capacity` answers it, because the caller's own budget is not
+    // what was spent.
     let key = CounterKey::CapabilityMints(UserId::new(credential.user.as_str()));
     match counters
         .hit(&key, budgets::CAPABILITY_MINTS)
@@ -595,7 +600,7 @@ pub async fn issue_capability(
             if let Some(retry_after) = counters.capacity_refusal(&error, budgets::CAPABILITY_MINTS) {
                 tracing::warn!(%error, user = %credential.user, %retry_after, "a mint was refused: the mint counter is at capacity");
                 MintRejection::RateLimited {
-                    code: error_codes::FEDERATION_RATE_BUDGET_EXCEEDED,
+                    code: error_codes::FEDERATION_MINT_AT_CAPACITY,
                 }
             } else {
                 tracing::error!(%error, user = %credential.user, "the mint counter could not be reached");
@@ -850,6 +855,8 @@ pub async fn refresh_capability(
     Inject(federation): Inject<FederationContext>,
     Inject(membership): Inject<MembershipContext>,
     Inject(counters): Inject<CounterContext>,
+    // Declared for the contract; `ReadBearer` has already verified it (see its module docs).
+    Headers(_signature): Headers<RequestSignatureHeader>,
 ) -> Result<Json<RefreshedCapabilityResponse>, RefreshRejection> {
     let Principal::Peer(capability) = principal else {
         tracing::info!("a session token was presented on the capability refresh");
@@ -1112,8 +1119,10 @@ pub enum ReportRejection {
         code: &'static str,
     },
 
-    /// Too many reports from this peer about this account.
-    #[error("too many reports from this server about this account")]
+    /// Too many reports from this peer about this account, or a report counter is holding as
+    /// many keys as it will hold. The code says which, so the detail names neither: a full
+    /// counter is not this peer's budget spent.
+    #[error("no report can be filed right now; try again later")]
     #[problem(status = 429, title = "Report rate limited")]
     RateLimited {
         /// The stable catalog code.
@@ -1160,19 +1169,11 @@ impl ReportRejection {
 /// `FEDERATION_ENABLED` is off, which is the default — before the body is read, a budget is
 /// charged or a store is touched.
 ///
-/// # Its only reachable answer today is `403`, where federation is on
+/// # Only a pinned peer can file
 ///
-/// A report is verified against the peer's **operator-pinned** key, and nothing can pin one:
-/// [`boot::assemble`](crate::boot::assemble) refuses the durable backend until #403 lands its
-/// adapters, so an operator command that pinned a peer could only run against `serve --memory`
-/// and would forget the moment it exited. The command is owed with #476. Until it lands this
-/// operation answers `403 error.federation.peer_unknown` to every real peer.
-///
-/// It is mounted anyway, deliberately: a peer implementing against the published contract needs
-/// the operation to exist and to answer honestly, and what is missing is the command, not the
-/// surface. What is *not* acceptable is a route that reads as protection it cannot provide —
-/// hence this paragraph, and the matching "Open: #476" notes in design/moderation.md and
-/// design/federation.md (Status).
+/// A report is verified against the peer's **operator-pinned** key, which an operator writes
+/// with `capsule-server peer pin`. A peer nobody pinned is answered
+/// `403 error.federation.peer_unknown`, whatever it signed.
 ///
 /// # No bearer, and why that is not "unauthenticated"
 ///
@@ -1422,8 +1423,8 @@ pub async fn submit_federated_report(
     )
     .await?;
     // Spent by hand rather than through `charge`: a `Limited` verdict here is a replay, which
-    // is a `401`, while a full partition is the limiter at capacity, which is the `429` every
-    // other report budget gives — never the `500` of a store that could not answer.
+    // is a `401`, while a full partition is the limiter at capacity, which is the at-capacity
+    // `429` every other report counter gives — never the `500` of a store that could not answer.
     match counters
         .hit(&nonce, budgets::FEDERATED_REPORT_NONCE)
         .await
@@ -1545,8 +1546,9 @@ async fn charge(
 /// What a report counter that refused to answer tells the peer.
 ///
 /// Fail closed either way. A full partition is the limiter working as designed and clears
-/// within its window, so it is the `429` a spent budget gets; anything else is a store that
-/// could not answer, which is the `500`.
+/// within its window, so it is a `429`, under the at-capacity code rather than the spent-budget
+/// one because no budget of the peer's was spent; anything else is a store that could not
+/// answer, which is the `500`.
 fn refused_by_counter(
     counters: &CounterContext,
     error: &crate::store::StoreError,
@@ -1556,7 +1558,7 @@ fn refused_by_counter(
     if let Some(retry_after) = counters.capacity_refusal(error, budget) {
         tracing::warn!(%error, kind = key.as_str(), %retry_after, "a report counter is at capacity");
         ReportRejection::RateLimited {
-            code: error_codes::MODERATION_REPORT_RATE_LIMITED,
+            code: error_codes::MODERATION_REPORT_AT_CAPACITY,
         }
     } else {
         tracing::error!(%error, kind = key.as_str(), "a report counter could not be reached");

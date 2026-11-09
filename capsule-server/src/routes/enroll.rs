@@ -26,6 +26,7 @@ use kynos::response::status::NoContent;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::activity::{ActivityContext, ActivityKind};
 use crate::auth::AccessToken;
 use crate::counter::{
     CounterContext, CounterKey, EnrollmentSpelling, Verdict, budgets, unix_seconds,
@@ -283,6 +284,7 @@ pub async fn issue_enrollment_code(
 pub async fn redeem_enrollment_code(
     Inject(enrollment): Inject<EnrollmentContext>,
     Inject(counters): Inject<CounterContext>,
+    Inject(activity): Inject<ActivityContext>,
     Json(request): Json<RedeemRequest>,
 ) -> Result<Json<ChannelResponse>, RedeemRejection> {
     let offered = request.code.trim();
@@ -391,6 +393,11 @@ pub async fn redeem_enrollment_code(
         })?;
 
     tracing::info!(user = %pending.user_id, "an enrollment code opened a relay channel");
+    // No subject: the channel id is the handle the relay is gated by, and the log does not need
+    // it to say that a device joined.
+    activity
+        .record(&pending.user_id, ActivityKind::DeviceEnrolled, None, None)
+        .await;
     Ok(Json(ChannelResponse {
         channel_id: channel_id.as_str().to_owned(),
         expires_at: crate::store::deadline(now, enrollment.channels().ttl()).to_string(),

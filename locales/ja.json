@@ -7211,6 +7211,10 @@
     "message": "Capsule は現在 ID プロバイダにアクセスできませんでした。もう一度お試しください。",
     "origin": "machine"
   },
+  "error.auth.password_disabled": {
+    "message": "このサーバーではシングルサインオンによるサインインのみ利用できます。",
+    "origin": "machine"
+  },
   "error.auth.password_invalid": {
     "message": "そのパスワードは使用できません。",
     "origin": "machine"
@@ -7225,6 +7229,10 @@
   },
   "error.auth.rate_limited": {
     "message": "試行回数が多すぎます。しばらくしてからもう一度お試しください。",
+    "origin": "machine"
+  },
+  "error.auth.registration_at_capacity": {
+    "message": "このサーバーは現在、多数の新規登録を処理しています。しばらくしてからもう一度お試しください。",
     "origin": "machine"
   },
   "error.auth.registration_invalid": {
@@ -7463,8 +7471,28 @@
     "message": "この提供元は繰り返しエラーが発生したため一時的にバックオフされています。",
     "origin": "machine"
   },
+  "error.federation.hint_at_capacity": {
+    "message": "このサーバーは現在、処理中の更新通知が多すぎます。しばらくしてからもう一度お試しください。",
+    "origin": "machine"
+  },
+  "error.federation.hint_malformed": {
+    "message": "その更新通知は無効です。",
+    "origin": "machine"
+  },
+  "error.federation.hint_rate_limited": {
+    "message": "このサーバーからの更新通知が多すぎます。しばらくしてからもう一度お試しください。",
+    "origin": "machine"
+  },
+  "error.federation.hint_unsigned": {
+    "message": "更新通知を検証できませんでした。",
+    "origin": "machine"
+  },
   "error.federation.member_not_on_roster": {
     "message": "その人はこのアルバムのメンバー一覧に含まれていません。",
+    "origin": "machine"
+  },
+  "error.federation.mint_at_capacity": {
+    "message": "このサーバーは現在、多数のアクセス許可を処理しています。しばらくしてからもう一度お試しください。",
     "origin": "machine"
   },
   "error.federation.not_configured": {
@@ -7487,12 +7515,20 @@
     "message": "このアクセス許可は要求されたコンテンツを対象としていません。",
     "origin": "machine"
   },
+  "error.federation.subscription_limit": {
+    "message": "他のサーバーからフォローできる共有アルバムの上限に達しました。別のアルバムを追加するには、いずれかを削除してください。",
+    "origin": "machine"
+  },
   "error.federation.unavailable": {
     "message": "Capsule は連合の記録にアクセスできませんでした。もう一度お試しください。",
     "origin": "machine"
   },
   "error.moderation.account_suspended": {
     "message": "アカウントが停止されています。復元されるまで、アップロードや共有はできません。",
+    "origin": "machine"
+  },
+  "error.moderation.report_at_capacity": {
+    "message": "このサーバーは現在、多数の報告を処理しています。しばらくしてからもう一度お試しください。",
     "origin": "machine"
   },
   "error.moderation.report_malformed": {
@@ -7569,6 +7605,10 @@
   },
   "error.request.range_not_satisfiable": {
     "message": "Capsule はファイルのその部分を送信できませんでした。",
+    "origin": "machine"
+  },
+  "error.request.too_early": {
+    "message": "そのリクエストは早すぎるタイミングで送信されました。もう一度お試しください。",
     "origin": "machine"
   },
   "error.request.too_large": {
@@ -7763,6 +7803,10 @@
     "message": "このユーザーの代わりにアップロードすることはできません。",
     "origin": "machine"
   },
+  "error.upload.range_conflict": {
+    "message": "このアップロードの一部はすでに送信中です。再開しています…",
+    "origin": "machine"
+  },
   "error.upload.rate_limited": {
     "message": "アップロードを一時停止しています。自動的に再開されます。",
     "origin": "machine"
@@ -7791,6 +7835,10 @@
     "message": "アップロードが宣言したサイズより多くのデータを送信しました。",
     "origin": "machine"
   },
+  "error.upload.source_changed": {
+    "message": "アップロード中にこのファイルが変更されたため、アップロードを停止しました。",
+    "origin": "machine"
+  },
   "error.upload.stale_revival": {
     "message": "この変更は、この項目の古いバージョンに基づいています。",
     "origin": "machine"
@@ -7805,6 +7853,14 @@
   },
   "error.upload.timestamp_out_of_range": {
     "message": "デバイスの時計が正しくないようです。日付と時刻を確認してください。",
+    "origin": "machine"
+  },
+  "error.upload.too_fragmented": {
+    "message": "このアップロードには欠けている部分が多すぎます。補っています…",
+    "origin": "machine"
+  },
+  "error.upload.too_many_in_flight": {
+    "message": "このアップロードの同時送信数が多すぎます。速度を落としています…",
     "origin": "machine"
   },
   "error.upload.unavailable": {

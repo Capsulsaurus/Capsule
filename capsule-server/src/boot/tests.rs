@@ -330,6 +330,67 @@ mod postgres_conformance {
         assembled.service().expect("the router builds");
     }
 
+    /// The durable arm's pulled albums are assembled with the configured caching budget, so
+    /// `serve` on Postgres charges [`PeerBudgetCharge`](crate::federation::pull::pulled::postgres::PeerBudgetCharge)
+    /// rather than the uncharged default.
+    #[tokio::test]
+    async fn the_durable_pulled_albums_charge_the_configured_peer_budget() {
+        let Some(database) = testing::start("the durable pulled-album budget").await else {
+            return;
+        };
+        let Some((valkey_url, _valkey)) = valkey("the durable pulled-album budget").await else {
+            return;
+        };
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let mut environment: BTreeMap<String, String> = durable_environment(root.path());
+        environment.insert("DATABASE_URL".to_owned(), database.url().to_owned());
+        environment.insert("VALKEY_URL".to_owned(), valkey_url);
+        environment.insert("FEDERATION_PEER_BUDGET_PERCENT".to_owned(), "0".to_owned());
+        let config = Config::load(&environment, &Overrides::default(), Demands::Serve)
+            .expect("it is well-formed");
+        let base = super::super::base(&config, std::sync::Arc::new(super::super::SystemClock))
+            .await
+            .expect("the base opens");
+        let connection = super::super::open_durable_database(&config)
+            .await
+            .expect("the database opens");
+        let valkey = super::super::valkey(&config).await.expect("Valkey answers");
+        let stores = base.durable(&connection, &valkey);
+        super::a_new_pulled_blob_is_refused_at_a_zero_budget(&stores).await;
+    }
+
+    /// `serve`'s and `gc`'s durable arm counts the pulled albums' claims (#1141): the page's
+    /// blob lands in the blob root through the durable adapter, and the collector over the same
+    /// database keeps it past the grace window.
+    #[tokio::test]
+    async fn the_durable_collector_keeps_the_blobs_pulled_albums_hold() {
+        let Some(database) = testing::start("the durable collector and pulled albums").await else {
+            return;
+        };
+        let Some((valkey_url, _valkey)) = valkey("the durable collector and pulled albums").await
+        else {
+            return;
+        };
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let mut environment: BTreeMap<String, String> = durable_environment(root.path());
+        environment.insert("DATABASE_URL".to_owned(), database.url().to_owned());
+        environment.insert("VALKEY_URL".to_owned(), valkey_url);
+        let config = Config::load(&environment, &Overrides::default(), Demands::Serve)
+            .expect("it is well-formed");
+        let clock = std::sync::Arc::new(crate::store::memory::ManualClock::new(
+            jiff::Timestamp::now(),
+        ));
+        let base = super::super::base(&config, clock.clone())
+            .await
+            .expect("the base opens");
+        let connection = super::super::open_durable_database(&config)
+            .await
+            .expect("the database opens");
+        let valkey = super::super::valkey(&config).await.expect("Valkey answers");
+        let stores = base.durable(&connection, &valkey);
+        super::a_pulled_blob_outlives_the_assembled_collector(&stores, &clock).await;
+    }
+
     /// A durable `gc` keeps its marks between processes, so a later pass can sweep.
     ///
     /// The reason the maintenance arm exists: the collector marks a blob on one pass and
@@ -617,6 +678,537 @@ async fn federation_url_is_published_only_when_federation_is_switched_on() {
 }
 
 #[tokio::test]
+async fn a_pull_worker_is_assembled_and_started_only_when_federation_is_switched_on() {
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let off = assemble(&memory_config_with(
+        root.path(),
+        &[("FEDERATION_URL", "https://capsule.example/v1")],
+    ))
+    .await
+    .expect("it assembles");
+    assert!(off.pull_worker.is_none(), "a URL alone federates nothing");
+    assert!(off.spawn_pull_worker().is_none(), "and nothing is pulled");
+    let federation: crate::federation::FederationContext = kynos::di::Provides::provide(&off.app);
+    assert!(federation.hints().is_none(), "and no hint reaches anything");
+
+    let on = assemble(&memory_config_with(
+        root.path(),
+        &[
+            ("FEDERATION_URL", "https://capsule.example/v1"),
+            ("FEDERATION_ENABLED", "true"),
+        ],
+    ))
+    .await
+    .expect("it assembles");
+    assert!(on.pull_worker.is_some());
+    let federation: crate::federation::FederationContext = kynos::di::Provides::provide(&on.app);
+    assert!(
+        federation.hints().is_some(),
+        "a verified hint reaches the worker the server runs"
+    );
+    let running = on
+        .spawn_pull_worker()
+        .expect("a federating server starts its worker");
+    assert!(
+        !running.is_finished(),
+        "the loop runs until the process stops"
+    );
+    running.abort();
+}
+
+/// Assert `stores` refuses a pulled page holding a blob new to its one subscriber, as the
+/// budget of `FEDERATION_PEER_BUDGET_PERCENT=0` must and a store assembled without the
+/// configured budget never does.
+async fn a_new_pulled_blob_is_refused_at_a_zero_budget(stores: &super::Stores) {
+    use crate::federation::pull::JobKey;
+    use crate::federation::pull::pulled::{Committed, PulledAlbum, ValidatedPage};
+    use crate::federation::{CapabilityToken, PeerId, Scope, Subscription};
+    use crate::store::{AlbumId, UserId};
+
+    let job = JobKey::new(PeerId::new("home.test"), AlbumId::new("budgeted"));
+    let subscriber = UserId::new("budgeted-member");
+    let now = jiff::Timestamp::from_second(1_767_225_600).expect("a representable instant");
+    stores
+        .subscriptions
+        .put(Subscription {
+            subscriber: subscriber.clone(),
+            peer: job.peer.clone(),
+            album: job.album.clone(),
+            scope: Scope::Read,
+            jti: "budgeted-jti".to_owned(),
+            token: CapabilityToken::new("header.payload.signature"),
+            issued_at: now,
+            expires_at: jiff::Timestamp::MAX,
+            min_protocol_version: capsule_core::crypto::primitives::PROTOCOL_VERSION.to_owned(),
+            subscribed_at: now,
+            updated_at: now,
+        })
+        .await
+        .expect("the subscription is recorded");
+    let bytes = b"a metadata blob new to everyone".to_vec();
+    let size = u64::try_from(bytes.len()).expect("a small blob");
+    let page = ValidatedPage {
+        entries: Vec::new(),
+        metadata_blobs: BTreeMap::from([(capsule_core::crypto::hash::hash_bytes(&bytes), bytes)]),
+        state: PulledAlbum {
+            cursor: Some("c1".to_owned()),
+            high_water: Some(1),
+            ..PulledAlbum::default()
+        },
+    };
+    match stores
+        .pulled
+        .commit(&job, None, page)
+        .await
+        .expect("the commit is answered")
+    {
+        Committed::OverBudget(over) => {
+            assert_eq!(over.subscriber, subscriber);
+            assert_eq!(
+                over.budget, 0,
+                "the configured percentage of the hard limit"
+            );
+            assert_eq!(over.used, size);
+        }
+        other => panic!("a zero budget must refuse a page holding a new blob, got {other:?}"),
+    }
+    assert_eq!(
+        stores.pulled.read(&job).await.expect("a read"),
+        PulledAlbum::default(),
+        "the refused page moved nothing"
+    );
+    assert_eq!(
+        stores
+            .quotas
+            .usage(&subscriber)
+            .await
+            .expect("reading usage")
+            .used,
+        0,
+        "and charged nobody's quota"
+    );
+}
+
+/// The bytes [`a_pulled_blob_outlives_the_assembled_collector`] pulls.
+const PULLED_METADATA: &[u8] = b"a pulled metadata blob the assembled collector must keep";
+
+/// Assert the collector and the scrub `stores` assemble — the ones `serve` and `gc` run — keep
+/// a pulled page's metadata blob in the blob root past the grace window (#1141), while sweeping
+/// an orphan beside it. The page carries [`PULLED_METADATA`], which must already be in the blob
+/// root once the commit returns; `clock` is the stores' own.
+async fn a_pulled_blob_outlives_the_assembled_collector(
+    stores: &super::Stores,
+    clock: &ManualClock,
+) {
+    use crate::blob::{BlobStore as _, ContentAddress};
+    use crate::federation::PeerId;
+    use crate::federation::pull::JobKey;
+    use crate::federation::pull::pulled::{Committed, PulledAlbum, ValidatedPage};
+    use crate::gc::{DEFAULT_GRACE_WINDOW, Mode, collect};
+    use crate::store::AlbumId;
+
+    let hash = capsule_core::crypto::hash::hash_bytes(PULLED_METADATA);
+    let job = JobKey::new(PeerId::new("home.test"), AlbumId::new("held"));
+    let page = ValidatedPage {
+        entries: Vec::new(),
+        metadata_blobs: BTreeMap::from([(hash, PULLED_METADATA.to_vec())]),
+        state: PulledAlbum {
+            cursor: Some("c1".to_owned()),
+            high_water: Some(1),
+            ..PulledAlbum::default()
+        },
+    };
+    assert_eq!(
+        stores
+            .pulled
+            .commit(&job, None, page)
+            .await
+            .expect("the commit is answered"),
+        Committed::Written
+    );
+    let held = ContentAddress::parse(&hash.to_hex()).expect("an address");
+    let orphan_bytes = b"an orphan beside the pulled blob";
+    let orphan =
+        ContentAddress::parse(&capsule_core::crypto::hash::hash_bytes(orphan_bytes).to_hex())
+            .expect("an address");
+    stores
+        .blobs
+        .put(&orphan, orphan_bytes)
+        .await
+        .expect("the orphan is stored");
+
+    let maintenance = stores.maintenance(
+        DEFAULT_GRACE_WINDOW,
+        crate::ledger::replay::LedgerKeys::default(),
+        None,
+    );
+    let report = collect(&maintenance.collection, Mode::Apply)
+        .await
+        .expect("a pass");
+    assert_eq!(report.marked, vec![orphan.clone()], "{report:?}");
+    clock.advance(jiff::SignedDuration::from_hours(72));
+    let report = collect(&maintenance.collection, Mode::Apply)
+        .await
+        .expect("a pass past the window");
+    assert_eq!(report.swept, vec![orphan], "{report:?}");
+    assert!(
+        stores.blobs.stat(&held).await.expect("stat").is_some(),
+        "the assembled collector must count the pulled albums' claims"
+    );
+    let scrubbed = crate::scrub::scrub(&maintenance.scrub, crate::scrub::Depth::Structural)
+        .await
+        .expect("a scrub pass");
+    assert_eq!(
+        scrubbed.count("orphan"),
+        0,
+        "and so must the assembled scrub: {:?}",
+        scrubbed.findings
+    );
+}
+
+/// `serve`'s and `gc`'s in-memory arm counts the pulled albums' claims (#1141).
+#[tokio::test]
+async fn the_in_memory_collector_keeps_the_blobs_pulled_albums_hold() {
+    use crate::blob::BlobStore as _;
+
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let config = memory_config(root.path());
+    let clock = std::sync::Arc::new(ManualClock::new(jiff::Timestamp::now()));
+    let stores = super::base(&config, clock.clone())
+        .await
+        .expect("the base opens")
+        .in_memory(std::sync::Arc::new(super::InMemoryReceipts::new()));
+    // The in-memory pulled albums keep their blobs in memory; put the bytes in the blob root
+    // as the durable adapter does, so the collector has something to sweep.
+    let address = crate::blob::ContentAddress::parse(
+        &capsule_core::crypto::hash::hash_bytes(PULLED_METADATA).to_hex(),
+    )
+    .expect("an address");
+    stores
+        .blobs
+        .put(&address, PULLED_METADATA)
+        .await
+        .expect("stored");
+    a_pulled_blob_outlives_the_assembled_collector(&stores, &clock).await;
+}
+
+/// A quota ledger whose drift audit names `drift`, delegating everything else to `inner`.
+///
+/// The in-memory ledger derives its pulled total and cannot drift, so only an injected audit
+/// tells a scrub that runs check 8 from one that never asked.
+#[derive(Debug, Default)]
+struct DriftedQuota {
+    inner: crate::quota::InMemoryQuota,
+    drift: Vec<crate::quota::PulledDrift>,
+}
+
+impl crate::quota::QuotaStore for DriftedQuota {
+    fn usage<'a>(
+        &'a self,
+        user: &'a crate::store::UserId,
+    ) -> crate::store::StoreFuture<'a, crate::quota::StoredUsage> {
+        self.inner.usage(user)
+    }
+
+    fn charge<'a>(
+        &'a self,
+        user: &'a crate::store::UserId,
+        address: &'a crate::blob::ContentAddress,
+        size: u64,
+        at: jiff::Timestamp,
+        limits: crate::quota::QuotaLimits,
+    ) -> crate::store::StoreFuture<'a, crate::quota::ChargeOutcome> {
+        self.inner.charge(user, address, size, at, limits)
+    }
+
+    fn reserve<'a>(
+        &'a self,
+        user: &'a crate::store::UserId,
+        address: &'a crate::blob::ContentAddress,
+        size: u64,
+        at: jiff::Timestamp,
+        until: jiff::Timestamp,
+        limits: crate::quota::QuotaLimits,
+    ) -> crate::store::StoreFuture<'a, crate::quota::ChargeOutcome> {
+        self.inner.reserve(user, address, size, at, until, limits)
+    }
+
+    fn settle<'a>(
+        &'a self,
+        address: &'a crate::blob::ContentAddress,
+    ) -> crate::store::StoreFuture<'a, bool> {
+        self.inner.settle(address)
+    }
+
+    fn expired_reservations(
+        &self,
+        now: jiff::Timestamp,
+        limit: usize,
+    ) -> crate::store::StoreFuture<'_, Vec<crate::quota::ExpiredReservation>> {
+        self.inner.expired_reservations(now, limit)
+    }
+
+    fn extend_reservation<'a>(
+        &'a self,
+        address: &'a crate::blob::ContentAddress,
+        until: jiff::Timestamp,
+    ) -> crate::store::StoreFuture<'a, bool> {
+        self.inner.extend_reservation(address, until)
+    }
+
+    fn release_expired<'a>(
+        &'a self,
+        user: &'a crate::store::UserId,
+        address: &'a crate::blob::ContentAddress,
+        now: jiff::Timestamp,
+    ) -> crate::store::StoreFuture<'a, bool> {
+        self.inner.release_expired(user, address, now)
+    }
+
+    fn release<'a>(
+        &'a self,
+        user: &'a crate::store::UserId,
+        address: &'a crate::blob::ContentAddress,
+    ) -> crate::store::StoreFuture<'a, bool> {
+        self.inner.release(user, address)
+    }
+
+    fn release_attribution<'a>(
+        &'a self,
+        address: &'a crate::blob::ContentAddress,
+    ) -> crate::store::StoreFuture<'a, Option<(crate::store::UserId, u64)>> {
+        self.inner.release_attribution(address)
+    }
+
+    fn suspend<'a>(
+        &'a self,
+        user: &'a crate::store::UserId,
+        at: jiff::Timestamp,
+    ) -> crate::store::StoreFuture<'a, bool> {
+        self.inner.suspend(user, at)
+    }
+
+    fn unsuspend<'a>(
+        &'a self,
+        user: &'a crate::store::UserId,
+    ) -> crate::store::StoreFuture<'a, bool> {
+        self.inner.unsuspend(user)
+    }
+
+    fn pulled_drift(&self) -> crate::store::StoreFuture<'_, Vec<crate::quota::PulledDrift>> {
+        let drift = self.drift.clone();
+        Box::pin(async move { Ok(drift) })
+    }
+
+    fn reconcile_pulled(&self) -> crate::store::StoreFuture<'_, Vec<crate::quota::PulledDrift>> {
+        let drift = self.drift.clone();
+        Box::pin(async move { Ok(drift) })
+    }
+}
+
+/// The assembled maintenance scrub audits the stores' own quota ledger (#1183).
+///
+/// Check 8 rides `ScrubContext::with_quotas`, so an assembly that dropped it would keep every
+/// scrub unit test green while `capsule-server scrub` silently stopped reporting drift. Only a
+/// case over `Stores::maintenance` sees it: the stores' ledger is swapped for one whose audit
+/// names a drifted account, and the assembled scrub must report exactly that account.
+#[tokio::test]
+async fn the_assembled_scrub_reports_the_drift_the_stores_quota_ledger_audits() {
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let config = memory_config(root.path());
+    let mut stores = super::base(&config, std::sync::Arc::new(ManualClock::default()))
+        .await
+        .expect("the base opens")
+        .in_memory(std::sync::Arc::new(super::InMemoryReceipts::new()));
+    let user = crate::store::UserId::new("drifted");
+    stores.quotas = std::sync::Arc::new(DriftedQuota {
+        drift: vec![crate::quota::PulledDrift {
+            user: user.clone(),
+            stored: 11,
+            derived: 8,
+            holdings: true,
+        }],
+        ..DriftedQuota::default()
+    });
+
+    let maintenance = stores.maintenance(
+        crate::gc::DEFAULT_GRACE_WINDOW,
+        crate::ledger::replay::LedgerKeys::default(),
+        None,
+    );
+    let scrubbed = crate::scrub::scrub(&maintenance.scrub, crate::scrub::Depth::Structural)
+        .await
+        .expect("a scrub pass");
+    assert_eq!(
+        scrubbed.count("pulled_quota_drift"),
+        1,
+        "the assembled scrub must audit the stores' quota ledger: {:?}",
+        scrubbed.findings
+    );
+    assert!(
+        scrubbed.findings.iter().any(|finding| matches!(
+            finding,
+            crate::scrub::Finding::PulledQuotaDrift { user: drifted, stored: 11, derived: 8, holdings: true }
+                if *drifted == user
+        )),
+        "{:?}",
+        scrubbed.findings
+    );
+}
+
+/// The in-memory arm's pulled albums are assembled with the configured caching budget.
+#[tokio::test]
+async fn the_in_memory_pulled_albums_charge_the_configured_peer_budget() {
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let config = memory_config_with(root.path(), &[("FEDERATION_PEER_BUDGET_PERCENT", "0")]);
+    let stores = super::base(&config, std::sync::Arc::new(super::SystemClock))
+        .await
+        .expect("the base opens")
+        .in_memory(std::sync::Arc::new(super::InMemoryReceipts::new()));
+    a_new_pulled_blob_is_refused_at_a_zero_budget(&stores).await;
+}
+
+/// `serve`'s in-memory arm counts pulled metadata blobs in `quota_used`, as the durable arm's
+/// usage statement does: a page the pull worker's store writes is charged in full to each of
+/// the job's subscribers, a lapsed one too, and an unsubscribe releases that subscriber only.
+#[tokio::test]
+async fn the_in_memory_quota_counts_the_blobs_pulled_albums_hold() {
+    use crate::federation::pull::JobKey;
+    use crate::federation::pull::pulled::{Committed, PulledAlbum, ValidatedPage};
+    use crate::federation::{CapabilityToken, PeerId, Scope, Subscription};
+    use crate::store::{AlbumId, UserId};
+
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let config = memory_config(root.path());
+    let stores = super::base(&config, std::sync::Arc::new(super::SystemClock))
+        .await
+        .expect("the base opens")
+        .in_memory(std::sync::Arc::new(super::InMemoryReceipts::new()));
+
+    let job = JobKey::new(PeerId::new("home.quota.test"), AlbumId::new("quota-a"));
+    let (alice, bob) = (UserId::new("quota-alice"), UserId::new("quota-bob"));
+    let lapsed = jiff::Timestamp::UNIX_EPOCH;
+    for user in [&alice, &bob] {
+        stores
+            .subscriptions
+            .put(Subscription {
+                subscriber: user.clone(),
+                peer: job.peer.clone(),
+                album: job.album.clone(),
+                scope: Scope::Read,
+                jti: format!("quota-{user}"),
+                token: CapabilityToken::new("header.payload.signature"),
+                issued_at: lapsed,
+                expires_at: lapsed,
+                min_protocol_version: capsule_core::crypto::primitives::PROTOCOL_VERSION.to_owned(),
+                subscribed_at: lapsed,
+                updated_at: lapsed,
+            })
+            .await
+            .expect("the subscription is recorded");
+    }
+
+    let held = b"a metadata blob the quota counts".to_vec();
+    let size = u64::try_from(held.len()).expect("a small blob");
+    let page = ValidatedPage {
+        entries: Vec::new(),
+        metadata_blobs: BTreeMap::from([(capsule_core::crypto::hash::hash_bytes(&held), held)]),
+        state: PulledAlbum {
+            cursor: Some("c1".to_owned()),
+            high_water: Some(1),
+            ..PulledAlbum::default()
+        },
+    };
+    assert_eq!(
+        stores
+            .pulled
+            .commit(&job, None, page)
+            .await
+            .expect("the commit is answered"),
+        Committed::Written
+    );
+    let used = |user: &UserId| {
+        let (quotas, user) = (stores.quotas.clone(), user.clone());
+        async move { quotas.usage(&user).await.expect("reading usage").used }
+    };
+    assert_eq!(
+        used(&alice).await,
+        size,
+        "charged in full to each subscriber"
+    );
+    assert_eq!(used(&bob).await, size);
+
+    assert!(
+        stores
+            .subscriptions
+            .remove(&alice, &job.peer, &job.album)
+            .await
+            .expect("unsubscribing")
+    );
+    assert_eq!(used(&alice).await, 0, "the unsubscribe released it");
+    assert_eq!(used(&bob).await, size, "for that subscriber only");
+}
+
+#[tokio::test]
+async fn the_pull_worker_reads_the_subscriptions_and_peers_the_application_writes() {
+    use kynos::di::Provides as _;
+
+    use crate::federation::pull::{JobKey, JobOutcome};
+    use crate::federation::{CapabilityToken, FederationContext, PeerId, Scope, Subscription};
+    use crate::store::{AlbumId, UserId};
+
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let assembled = assemble(&memory_config_with(
+        root.path(),
+        &[
+            ("FEDERATION_URL", "https://capsule.example/v1"),
+            ("FEDERATION_ENABLED", "true"),
+        ],
+    ))
+    .await
+    .expect("it assembles");
+    let federation: FederationContext = assembled.app.provide();
+    let now = federation.clock().now();
+    let peer = PeerId::new("home.test");
+    let album = AlbumId::new("album");
+    federation
+        .subscriptions()
+        .put(Subscription {
+            subscriber: UserId::new("member"),
+            peer: peer.clone(),
+            album: album.clone(),
+            scope: Scope::Read,
+            jti: "jti".to_owned(),
+            token: CapabilityToken::new("header.payload.signature"),
+            issued_at: now,
+            expires_at: jiff::Timestamp::MAX,
+            min_protocol_version: capsule_core::crypto::primitives::PROTOCOL_VERSION.to_owned(),
+            subscribed_at: now,
+            updated_at: now,
+        })
+        .await
+        .expect("the subscription is recorded");
+    // Blocked through the application's own peer store, so the round reaches the job and stops
+    // before any request leaves the process.
+    federation
+        .peers()
+        .block(&peer, now, None)
+        .await
+        .expect("the peer is blocked");
+
+    let worker = assembled
+        .pull_worker
+        .expect("a federating server has a worker");
+    let report = worker.tick().await;
+    assert_eq!(
+        report.outcomes,
+        vec![(JobKey::new(peer, album), JobOutcome::PeerBlocked)],
+        "the subscription the application recorded is the worker's job, and the block the \
+         application recorded is the worker's"
+    );
+}
+
+#[tokio::test]
 async fn the_published_protocol_window_is_the_configured_one() {
     let root = tempfile::tempdir().expect("a scratch directory");
     let config = memory_config(root.path());
@@ -811,6 +1403,48 @@ async fn the_assembled_maintenance_workers_see_the_links_the_application_issues(
 }
 
 #[tokio::test]
+async fn the_assembled_collector_sweeps_the_activity_the_application_records() {
+    // #1112: the sweep rides the collection context, so an assembly that dropped
+    // `with_activity_sweep` would keep every unit test green and leave expired rows forever.
+    // Only a case over the assembled `Maintenance` and the application's own store sees it.
+    use crate::activity::{ActivityEvent, ActivityKind};
+
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let assembled = assemble(&memory_config(root.path()))
+        .await
+        .expect("it assembles");
+    let store = assembled.app.activity().store();
+    store
+        .record(
+            ActivityEvent {
+                event_id: "expired-1".to_owned(),
+                user_id: crate::store::UserId::new("gone-quiet"),
+                kind: ActivityKind::SignOut,
+                at: jiff::Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_hours(24),
+                request_id: None,
+                session_id: None,
+                subject: None,
+            },
+            jiff::Timestamp::MIN,
+        )
+        .await
+        .expect("a record");
+    let horizon = crate::activity::horizon(jiff::Timestamp::now());
+
+    let dry = crate::gc::collect(&assembled.maintenance.collection, crate::gc::Mode::DryRun)
+        .await
+        .expect("a dry run");
+    assert_eq!(dry.expired_activity, 1, "the assembled pass counts it");
+    assert_eq!(store.count_expired(horizon).await.expect("a count"), 1);
+
+    let applied = crate::gc::collect(&assembled.maintenance.collection, crate::gc::Mode::Apply)
+        .await
+        .expect("an applied pass");
+    assert_eq!(applied.expired_activity, 1, "the assembled pass deletes it");
+    assert_eq!(store.count_expired(horizon).await.expect("a count"), 0);
+}
+
+#[tokio::test]
 async fn a_locked_account_recovers_through_the_login_route_once_the_window_passes() {
     // Asserted through the **route** rather than against the adapter, because that is where
     // the property actually has to hold: `login` asks the directory first and answers `423`
@@ -939,4 +1573,100 @@ async fn a_wrong_password_is_refused_rather_than_granted() {
         .send()
         .await
         .assert_status(kynos::http::StatusCode::UNAUTHORIZED);
+}
+
+/// Sign in through the credential route at `path` and return the refresh token it issued.
+async fn signed_in_refresh_token(
+    client: &kynos::test::TestClient<App>,
+    path: &str,
+    password: &str,
+) -> String {
+    let body: serde_json::Value = client
+        .post(path)
+        .header(
+            "x-capsule-protocol",
+            capsule_core::crypto::primitives::PROTOCOL_VERSION,
+        )
+        .header("accept", "application/json")
+        .json(&serde_json::json!({ "email": "somebody@example.test", "password": password }))
+        .send()
+        .await
+        .assert_status(kynos::http::StatusCode::OK)
+        .json();
+    body["refresh_token"]
+        .as_str()
+        .expect("a sign-in issues a refresh token")
+        .to_owned()
+}
+
+/// Exchange `token` at the refresh route: the rotated refresh token, or the refusing status.
+async fn refresh(
+    client: &kynos::test::TestClient<App>,
+    token: &str,
+) -> Result<String, kynos::http::StatusCode> {
+    let response = client
+        .post("/v1/auth/refresh")
+        .header(
+            "x-capsule-protocol",
+            capsule_core::crypto::primitives::PROTOCOL_VERSION,
+        )
+        .header("accept", "application/json")
+        .json(&serde_json::json!({ "refresh_token": token }))
+        .send()
+        .await;
+    let status = response.status();
+    if status != kynos::http::StatusCode::OK {
+        return Err(status);
+    }
+    let body: serde_json::Value = response.json();
+    Ok(body["refresh_token"]
+        .as_str()
+        .expect("a refresh answers with a rotated refresh token")
+        .to_owned())
+}
+
+#[tokio::test]
+async fn the_configured_session_window_and_hard_cap_reach_the_session_store() {
+    // Through the refresh route on the assembly `serve --memory` runs, so what is asserted is
+    // that `SESSION_TTL_DAYS` and `SESSION_HARD_CAP_DAYS` reach the store boot builds, not that
+    // the store honours a lifetime it was handed (the store's own tests do that). A one-day
+    // window under a two-day cap, crossed on an injected clock that starts at the real present
+    // for the reason the lockout case above records.
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let config = memory_config_with(
+        root.path(),
+        &[("SESSION_TTL_DAYS", "1"), ("SESSION_HARD_CAP_DAYS", "2")],
+    );
+    let clock = ManualClock::new(jiff::Timestamp::now());
+    let assembled = assemble_on(&config, std::sync::Arc::new(clock.clone()))
+        .await
+        .expect("it assembles");
+    let client = kynos::test::TestClient::new(assembled.service().expect("the router builds"));
+    let password = "correct horse battery staple";
+
+    let mut token = signed_in_refresh_token(&client, "/v1/auth/register", password).await;
+    // Each refresh inside the one-day window slides it on.
+    for _ in 0..2 {
+        clock.advance(jiff::SignedDuration::from_hours(23));
+        token = refresh(&client, &token)
+            .await
+            .expect("inside the sliding window the session refreshes");
+    }
+    // 49 hours after sign-in and three after the last refresh: the window is open and the
+    // two-day cap is not, so the refusal is the cap's.
+    clock.advance(jiff::SignedDuration::from_hours(3));
+    assert_eq!(
+        refresh(&client, &token).await,
+        Err(kynos::http::StatusCode::UNAUTHORIZED),
+        "the configured hard cap ends the session however recently it refreshed"
+    );
+
+    // A fresh session left idle past the one-day window ends well inside the default 180.
+    let idle = signed_in_refresh_token(&client, "/v1/auth/login", password).await;
+    clock.advance(jiff::SignedDuration::from_hours(25));
+    assert_eq!(
+        refresh(&client, &idle).await,
+        Err(kynos::http::StatusCode::UNAUTHORIZED),
+        "the configured sliding window ends an idle session"
+    );
 }

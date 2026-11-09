@@ -353,6 +353,50 @@ fn the_signal_on_a_live_entry_is_ignored() {
     assert!(!decoded.purged);
 }
 
+// ─── Wire decoding: what a restore needs (#1192) ─────────────────────────────
+
+/// A tombstone in trash names its live metadata blob and its original, and both decode as they
+/// do on a live entry: they are what a device that first sees the asset at its delete fetches,
+/// with the records before it, to adopt the asset and restore it.
+#[test]
+fn a_tombstone_in_trash_decodes_the_blobs_a_restore_needs() {
+    let decoded = decode_entry(wire_entry(serde_json::json!({
+        "change": "deleted",
+        "metadata_blob": "live-metadata",
+        "blobs": [{ "role": "original", "hash": "original", "size": 4096 }],
+        "original_held": true,
+    })))
+    .unwrap();
+    assert_eq!(decoded.kind, ChangeKind::Deleted);
+    assert!(!decoded.purged);
+    assert_eq!(decoded.metadata_blob, b"live-metadata");
+    assert_eq!(
+        decoded.blobs.original,
+        Some(BlobRef {
+            ciphertext_hash: "original".into(),
+            role: "original".into(),
+            size: 4096,
+        })
+    );
+    assert!(decoded.blobs.derivatives.is_empty());
+    assert!(decoded.original_held);
+}
+
+/// A server that predates naming them sends a tombstone with none, which decodes to a delete
+/// carrying no blob to fetch rather than to a malformed entry.
+#[test]
+fn a_tombstone_naming_no_blob_decodes_to_none() {
+    let decoded = decode_entry(wire_entry(serde_json::json!({
+        "change": "deleted",
+        "metadata_blob": null,
+        "blobs": [],
+    })))
+    .unwrap();
+    assert!(decoded.metadata_blob.is_empty());
+    assert_eq!(decoded.blobs, BlobManifest::default());
+    assert!(!decoded.original_held);
+}
+
 // ─── Sync epoch (#697) ───────────────────────────────────────────────────────
 
 /// A stale cursor is recognised by its code, and nothing else is.
@@ -433,4 +477,251 @@ async fn a_feed_pull_is_served_and_latches_the_window() {
         crate::net::negotiation::upgrade_required_for(&origin).map(|refusal| refusal.reason),
         Some(crate::net::negotiation::UpgradeReason::BuildBelowFloor)
     );
+}
+
+// ─── Provenance history ──────────────────────────────────────────────────────
+
+/// A blob source holding a set of blobs at their addresses, answering `404` for any other, and
+/// counting what it was asked for.
+struct Blobs {
+    held: HashMap<String, Vec<u8>>,
+    asked: std::sync::Mutex<Vec<String>>,
+}
+
+impl Blobs {
+    fn new(blobs: impl IntoIterator<Item = Vec<u8>>) -> Self {
+        Self {
+            held: blobs
+                .into_iter()
+                .map(|bytes| {
+                    (
+                        capsule_core::crypto::hash::hash_bytes(&bytes).to_hex(),
+                        bytes,
+                    )
+                })
+                .collect(),
+            asked: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    fn asked(&self) -> Vec<String> {
+        self.asked.lock().unwrap().clone()
+    }
+}
+
+impl crate::fetch::BlobSource for Blobs {
+    async fn get_range(
+        &self,
+        hash: &str,
+        start: u64,
+        _max_len: Option<u64>,
+    ) -> crate::fetch::RangeOutcome {
+        self.asked.lock().unwrap().push(hash.to_owned());
+        match self.held.get(hash) {
+            Some(bytes) => crate::fetch::RangeOutcome::Complete {
+                bytes: bytes[usize::try_from(start).unwrap().min(bytes.len())..].to_vec(),
+            },
+            None => crate::fetch::RangeOutcome::Status {
+                status: 404,
+                code: None,
+            },
+        }
+    }
+}
+
+/// A real asset's chain: created, edited twice and deleted, each record its canonical CBOR,
+/// oldest first. The library is returned so it outlives the bytes' borrow-free contents.
+fn real_chain() -> (tempfile::TempDir, Vec<Vec<u8>>) {
+    use capsule_library::lifecycle::Workspace;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let lib = dir.path().join("library");
+    std::fs::create_dir_all(&lib).unwrap();
+    let src = dir.path().join("photo.jpg");
+    std::fs::write(&src, b"\xFF\xD8\xFF a chain walked back to its create").unwrap();
+    let fast = capsule_core::crypto::primitives::Argon2Params {
+        mem_kib: 64,
+        t_cost: 1,
+        p_cost: 1,
+    };
+    let mut ws = Workspace::create_with_params(&lib, b"passphrase", fast).unwrap();
+    let album = ws.default_album_id();
+    ws.ensure_album(album, "Imports").unwrap();
+    let asset = ws.import_asset(album, &src).unwrap();
+    ws.tag_add(&asset, "dusk").unwrap();
+    ws.tag_add(&asset, "night").unwrap();
+    ws.soft_delete(&asset, 30).unwrap();
+    let records = ws
+        .asset(&asset)
+        .unwrap()
+        .chain
+        .records()
+        .iter()
+        .map(|record| capsule_core::cbor::to_canonical_vec(record).unwrap())
+        .collect();
+    (dir, records)
+}
+
+fn fetcher() -> crate::fetch::RangedFetcher {
+    crate::fetch::RangedFetcher::new(crate::net::ConnectionClass::Unmetered)
+}
+
+/// The walk follows each record's link back to the create and hands the records before the
+/// head over oldest first, byte for byte as the server holds them, asking for each once.
+#[tokio::test]
+async fn the_history_walk_follows_the_links_back_to_the_create() {
+    let (_lib, chain) = real_chain();
+    let (head, before) = chain.split_last().unwrap();
+    let source = Blobs::new(chain.clone());
+
+    let history = fetch_history(&fetcher(), &source, head).await.unwrap();
+    assert_eq!(history, before.to_vec());
+    assert_eq!(source.asked().len(), before.len(), "{:?}", source.asked());
+}
+
+/// A create is its own start: nothing to walk, and nothing asked for.
+#[tokio::test]
+async fn a_create_has_no_history_to_fetch() {
+    let (_lib, chain) = real_chain();
+    let source = Blobs::new(chain.clone());
+    let history = fetch_history(&fetcher(), &source, &chain[0]).await.unwrap();
+    assert!(history.is_empty());
+    assert!(source.asked().is_empty());
+}
+
+/// A record the server will not serve stops the walk and names the link it could not follow.
+#[tokio::test]
+async fn a_record_the_server_refuses_stops_the_walk_at_its_link() {
+    let (_lib, chain) = real_chain();
+    let missing = capsule_core::crypto::hash::hash_bytes(&chain[1]).to_hex();
+    let source = Blobs::new([chain[0].clone(), chain[2].clone()]);
+    match fetch_history(&fetcher(), &source, &chain[3]).await {
+        Err(HistoryError::Fetch { hash, source }) => {
+            assert_eq!(hash, missing);
+            assert!(source.is_permanent(), "{source:?}");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Bytes that are not the record a link names are refused by the fetch's content check, and a
+/// head that is not a record is refused before anything is fetched.
+#[tokio::test]
+async fn what_is_not_the_named_record_is_refused() {
+    let (_lib, chain) = real_chain();
+    let wanted = capsule_core::crypto::hash::hash_bytes(&chain[2]).to_hex();
+    let mut source = Blobs::new(chain.clone());
+    source.held.insert(wanted.clone(), chain[0].clone());
+    match fetch_history(&fetcher(), &source, &chain[3]).await {
+        Err(HistoryError::Fetch {
+            hash,
+            source: crate::fetch::FetchError::IntegrityFailed { .. },
+        }) => assert_eq!(hash, wanted),
+        other => panic!("{other:?}"),
+    }
+
+    let source = Blobs::new(chain);
+    match fetch_history(&fetcher(), &source, b"not a record").await {
+        Err(HistoryError::Malformed { hash, .. }) => assert_eq!(hash, "head"),
+        other => panic!("{other:?}"),
+    }
+    assert!(source.asked().is_empty());
+}
+
+fn core_of(bytes: &[u8]) -> capsule_core::crypto::provenance::ManifestCore {
+    capsule_core::crypto::provenance::ProvenanceRecord::decode(bytes)
+        .unwrap()
+        .manifest
+        .core
+}
+
+/// A delete binds no metadata blob, so the live one is the newest record before it that binds
+/// one (the second edit's, not the create's), and the original is the one the delete commits
+/// to, sized to its exact ciphertext.
+#[test]
+fn a_delete_names_the_newest_bound_metadata_blob_and_its_original() {
+    let (_lib, chain) = real_chain();
+    let (head, before) = chain.split_last().unwrap();
+
+    let sources = history_sources(head, before).unwrap();
+    let delete = core_of(head);
+    assert_eq!(delete.metadata_blob_hash, None, "a delete binds none");
+    assert_eq!(
+        Some(sources.metadata_blob_hash),
+        core_of(&chain[2]).metadata_blob_hash
+    );
+    assert_ne!(
+        Some(sources.metadata_blob_hash),
+        core_of(&chain[0]).metadata_blob_hash,
+        "the create's blob is superseded"
+    );
+    assert_eq!(sources.original_hash, delete.ciphertext_hash);
+    assert_eq!(
+        sources.original_size,
+        capsule_core::crypto::encryption::ciphertext_len(delete.plaintext_size)
+    );
+}
+
+/// A head that binds a metadata blob names its own and reads none of its history; a create
+/// needs none.
+#[test]
+fn a_head_that_binds_a_metadata_blob_names_its_own() {
+    let (_lib, chain) = real_chain();
+    let sources = history_sources(&chain[2], &[b"not a record".to_vec()]).unwrap();
+    assert_eq!(
+        Some(sources.metadata_blob_hash),
+        core_of(&chain[2]).metadata_blob_hash
+    );
+    let create = history_sources(&chain[0], &[]).unwrap();
+    assert_eq!(
+        Some(create.metadata_blob_hash),
+        core_of(&chain[0]).metadata_blob_hash
+    );
+}
+
+/// A delete with no history binds nothing, and bytes that are not a record are named by where
+/// they sit.
+#[test]
+fn an_unbound_or_malformed_chain_names_no_sources() {
+    let (_lib, chain) = real_chain();
+    assert!(matches!(
+        history_sources(&chain[3], &[]),
+        Err(HistoryError::Unbound)
+    ));
+    match history_sources(&chain[3], &[chain[0].clone(), b"not a record".to_vec()]) {
+        Err(HistoryError::Malformed { hash, .. }) => assert_eq!(hash, "history[1]"),
+        other => panic!("{other:?}"),
+    }
+    match history_sources(b"not a record", &chain[..3]) {
+        Err(HistoryError::Malformed { hash, .. }) => assert_eq!(hash, "head"),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A delete's window is closed from its signed `retention_until` on, and open strictly before
+/// it; a record that is not a delete has no window at any instant.
+#[test]
+fn a_delete_window_closes_at_its_retention_until() {
+    let (_lib, chain) = real_chain();
+    let until: jiff::Timestamp = core_of(&chain[3])
+        .retention_until
+        .expect("a delete signs its window")
+        .parse()
+        .unwrap();
+    let second = jiff::SignedDuration::from_secs(1);
+    assert!(!retention_closed(&chain[3], until - second).unwrap());
+    assert!(retention_closed(&chain[3], until).unwrap());
+    assert!(retention_closed(&chain[3], until + second).unwrap());
+    for record in &chain[..3] {
+        assert!(!retention_closed(record, until + second).unwrap());
+    }
+}
+
+/// A head that is not a record is named as the head, as the history walk names it.
+#[test]
+fn a_malformed_head_has_no_window_to_judge() {
+    match retention_closed(b"not a record", jiff::Timestamp::UNIX_EPOCH) {
+        Err(HistoryError::Malformed { hash, .. }) => assert_eq!(hash, "head"),
+        other => panic!("{other:?}"),
+    }
 }

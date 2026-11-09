@@ -338,7 +338,10 @@ impl Server {
                 manifest_hash,
                 prior_provenance_hash: prior,
                 amk_version: 0,
-                provenance: address,
+                provenance: crate::index::OpBlob {
+                    address,
+                    size: bytes.len() as u64,
+                },
                 metadata: None,
                 original: None,
                 retention_until: (action == OpAction::Delete).then(retention),
@@ -1036,6 +1039,21 @@ async fn a_ledgered_delete_is_replayed_into_the_rebuilt_row() {
         "the tombstone, its retention floor, the re-pointed head and the superseded create \
          all come back"
     );
+    // #1128: the re-pointed head comes back at the size its bytes have, not at 0.
+    let head = &rows(&empty).await[0];
+    let head = head
+        .blobs
+        .iter()
+        .find(|blob| blob.role == BlobRole::Provenance)
+        .expect("the tombstone keeps its delete record");
+    let held = server
+        .blobs
+        .stat(&head.address)
+        .await
+        .expect("stat")
+        .expect("the delete record is stored");
+    assert!(head.size > 0);
+    assert_eq!(head.size, held.size);
 }
 
 #[tokio::test]
@@ -1126,7 +1144,10 @@ async fn refused_restore(server: &Server, owner: &OwnerId, asset: &AssetId, late
             manifest_hash,
             prior_provenance_hash: Some(prior),
             amk_version: 0,
-            provenance: address,
+            provenance: crate::index::OpBlob {
+                address,
+                size: bytes.len() as u64,
+            },
             metadata: None,
             original: None,
             retention_until: None,

@@ -4,7 +4,7 @@ description: How clients lay out a library on disk — desktop, mobile, local in
 status: draft
 ---
 
-Clients hold keys, so a client stores plaintext. A library routinely holds assets whose original is server-only, depending on the [sync scope](/design/sync/#synchronization-scope), so the layout represents an asset with or without its original. The layout is a contract: rebuild assumes exactly these names. The offline-first requirements it serves are owned by [Local Gallery](/design/local-gallery/).
+Clients hold keys, so a client stores plaintext. Depending on the [sync scope](/design/sync/#synchronization-scope), a library routinely holds assets whose original is server-only, so the layout represents an asset with or without its original. The layout is a contract: rebuild assumes exactly these names. [](/design/local-gallery/) owns the offline-first requirements it serves.
 
 ## Desktop Library Layout
 
@@ -19,43 +19,53 @@ Clients hold keys, so a client stores plaintext. A library routinely holds asset
 └── .library/
     ├── version, config, lock
     ├── docs/{albums,stacks}/{uuid}.cbor  # signed album and stack label records
-    ├── trash/{uuid}.{ext}
     └── quarantine/{uuid}.{ext} + {uuid}.reason.json
 ```
 
-- **`media/`** is canonical: original, [sidecar](/design/metadata/#sidecar-schema-v1), and [provenance chain](/design/cryptography/provenance/#provenance-of-library-modifications). The library MUST be reconstructible from these three files alone. Stems are UUIDv7; extensions lowercase. The provenance file is never deleted, so a hard-deleted asset leaves a tombstone-with-history.
-- The date bucket is fixed at import from the capture timestamp then known. A later capture-date correction does not move the bundle; the sidecar is authoritative and [maintenance](/design/filesystem/maintenance/#self-validation) repairs drift opportunistically.
-- **`cache/`** is derived and deletable at any time; never a source of truth. Formats: [Thumbnails](/design/thumbnails/#thumbnail-and-preview-formats).
-- **`index/library.sqlite`** is a query cache over the sidecars, the `sqlite-vec` index for [AI](/design/ai/), and the substrate for [view albums](/design/organization/#system--smart-albums-views). It is **migrated forward in place**, not dropped: a rebuild cannot recover projections never written to disk ([Versioning](/design/versioning/#client-catalog-migration)).
-- **`.library/`**: the `lock` file MUST prevent two processes opening one library. `quarantine/` preserves irreplaceable bytes that failed validation, verbatim, with the rejection reason ([Quarantine Surfaces](/design/threat-model/scenarios/#quarantine-surfaces)). A `version` bump rebuilds derived structures only and never touches canonical files. `docs/` holds each album's and stack's signed [label record](/design/organization/#labels) as canonical CBOR, plaintext at rest like a sidecar and sealed under the album's AMK whenever it leaves the device.
+- **`media/`** is canonical: original, [sidecar](/design/metadata/#sidecar-schema-v1) and [provenance chain](/design/cryptography/provenance/#provenance-of-library-modifications). The library MUST be reconstructible from these three files alone. Stems are UUIDv7 and extensions lowercase. The provenance file is never deleted, so a hard-deleted asset leaves a tombstone-with-history.
+- **Trash and purge.** Trash is a signed `delete` record in the chain, not a location: a trashed asset keeps its original, sidecar and chain in its `media/` bundle until purge, no file moves, and a rebuild derives Trashed from the chain ([](/design/organization/#deletion-state-machine)). Purge removes the original, the sidecar and every `cache/` derivative, and leaves the chain. A bundle holding only a chain headed by a `delete` is the asset's [peering tombstone](/design/organization/#deletion-state-machine). No file outside `media/` records a purge, so a rebuild reproduces Purged from the chain alone.
+- **Date bucket.** Fixed at import from the capture timestamp known then. A later capture-date correction does not move the bundle: the sidecar is authoritative and [maintenance](/design/filesystem/maintenance/#self-validation) repairs drift opportunistically.
+- **`cache/`** is derived, deletable at any time, and never a source of truth. Formats: [](/design/thumbnails/#thumbnail-and-preview-formats).
+- **`index/library.sqlite`** is a query cache over the sidecars, the `sqlite-vec` index for [AI](/design/ai/), and the substrate for [view albums](/design/organization/#system--smart-albums-views). It is **migrated forward in place**, not dropped, because a rebuild cannot recover projections never written to disk ([](/design/versioning/#client-catalog-migration)).
+- **`.library/`.** The `lock` file MUST prevent two processes opening one library. `quarantine/` preserves irreplaceable bytes that failed validation verbatim, with the rejection reason ([](/design/threat-model/scenarios/#quarantine-surfaces)). A `version` bump rebuilds derived structures only and never touches canonical files. `docs/` holds each album's and stack's signed [label record](/design/organization/#labels) as canonical CBOR: plaintext at rest like a sidecar, sealed under the album's AMK whenever it leaves the device.
 
 ## Mobile Clients
 
-Android and iOS use the app's private sandbox with the same logical model. Rebuildable derivatives MUST NOT be placed in OS-managed cache locations: the OS evicts indiscriminately, and an expensive-to-regenerate thumbnail is not disposable.
+Android and iOS use the app's private sandbox with the same logical model. Rebuildable derivatives MUST NOT go in OS-managed cache locations: the OS evicts indiscriminately, and an expensive-to-regenerate thumbnail is not disposable.
 
 ## Local Index Staleness
 
-SQLite may lag the filesystem. The client checks file existence before acting on a row and rebuilds from sidecars on structural inconsistency ([Maintenance](/design/filesystem/maintenance/)).
+SQLite may lag the filesystem. The client checks a file exists before acting on its row and rebuilds from sidecars on structural inconsistency ([](/design/filesystem/maintenance/)).
 
 ## Space Recovery
 
-Capsule reclaims space itself. Eligible: `cache/` and fetched-but-unpinned originals. **Never** eligible: canonical `media/` files the device holds as source of truth, sidecars, provenance chains, and `library.sqlite`. An evicted representation re-fetches transparently via [tiered fetch](/design/transfer/download/#tiered-on-demand-fetch).
+Capsule reclaims space itself. Eligible: `cache/` and fetched-but-unpinned originals. **Never** eligible: canonical `media/` files the device holds as source of truth, sidecars, provenance chains and `library.sqlite`. An evicted representation re-fetches transparently via [tiered fetch](/design/transfer/download/#tiered-on-demand-fetch).
 
 ### Automatic cache management
 
 The reclaimable set is held within a user-configurable budget ([`capsule-library::library::cache_sweep`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-library/src/library/cache.rs)):
 
 - Viewing stamps a last-access time; eviction is least-recently-accessed first.
-- At equal recency, evict original → preview → thumbnail. The metadata tier (sidecar + LQIP) is never reclaimed, so an asset always stays listable.
+- At equal recency, evict original, then preview, then thumbnail. The metadata tier (sidecar + LQIP) is never reclaimed, so an asset always stays listable.
 - Pinned representations and device-owned originals are exempt from automatic eviction.
 
-The budget follows the [connection class](/design/networking/#connection-classes) ([`capsule-sdk::cache_budget`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-sdk/src/cache_budget.rs)). The user's base budget (default 2 GiB) is retained as-is on `unmetered`, doubled on `metered` and `constrained`, tripled on `adverse` and quadrupled on `offline`, because re-fetching an evicted representation grows costlier in that order. Every class but `unmetered` also defers bulk transfers: a push on such a class runs [staged](/design/transfer/upload/#upload-tiering-staged-uploads) whatever the device's upload policy, so the index tier still publishes each asset while preview and original wait for an unmetered link. The client samples the class through a port before each sweep and each transfer, and re-plans when it changes; a desktop with no OS signal reports `unmetered`. The base budget is a user setting (`capsule cache budget --set`); `capsule cache sweep` runs the sweep under the current plan.
+The budget scales with the [connection class](/design/networking/#connection-classes) ([`capsule-sdk::cache_budget`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-sdk/src/cache_budget.rs)), because re-fetching an evicted representation grows costlier down the table:
 
-**Releasing a device-owned original** (via the user-driven path or [streaming import](/design/import/pipeline/#import-upload-streaming-mode)) MUST pass the [verify-before-destroy](/design/transfer/durability/#verify-before-destroy) gate. Once released it is an ordinary server-only, re-fetchable asset.
+| Class | Budget (× base) | Bulk transfers |
+| --- | --- | --- |
+| `unmetered` | 1 | Run |
+| `metered` | 2 | Deferred |
+| `constrained` | 2 | Deferred |
+| `adverse` | 3 | Deferred |
+| `offline` | 4 | Deferred |
+
+The base budget is a user setting (default 2 GiB, `capsule cache budget --set`); `capsule cache sweep` runs the sweep under the current plan. On a deferring class a push runs [staged](/design/transfer/upload/#upload-tiering-staged-uploads) whatever the device's upload policy, so the index tier still publishes each asset while preview and original wait for an unmetered link. The client samples the class through a port before each sweep and each transfer and re-plans when it changes. A desktop with no OS signal reports `unmetered`.
+
+**Releasing a device-owned original** (by the user or through [streaming import](/design/import/pipeline/#import-upload-streaming-mode)) MUST pass the [verify-before-destroy](/design/transfer/durability/#verify-before-destroy) gate. Once released it is an ordinary server-only, re-fetchable asset.
 
 ### User-driven reclamation
 
-The client surfaces the largest consumers and lets the user delete selectively, including pinned content. It never touches canonical `media/` files, and releasing a device-owned original is gated as above.
+The client surfaces the largest consumers and lets the user delete selectively, pinned content included. It never touches canonical `media/` files, and releasing a device-owned original is gated as above.
 
 ## Validation
 

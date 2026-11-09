@@ -20,7 +20,7 @@ The navigation graph in `App.kt` is the template's list/detail flow keyed by an
 `objectId: Int`, not by a Capsule asset. No screen reads a Capsule library, and nothing in
 this module calls `capsule-core-kotlin`.
 
-Treat every file under `src/androidMain/` as scaffolding to be replaced rather than as a
+Treat every file under `src/main/` as scaffolding to be replaced rather than as a
 partial implementation to be extended.
 
 `capsule-core-kotlin` — the shared library this app is meant to sit on — now binds the
@@ -33,7 +33,7 @@ Android-capable host (#634). So the app layer is placeholder scaffolding, and th
 library is unverified rather than known-good.
 
 The client contract this app must satisfy is [Clients](../capsule-docs/src/content/docs/design/clients.md);
-the shared-core boundary is [Module Map](../capsule-docs/src/content/docs/design/module-map.md).
+the shared-core boundary is the [`capsule-core-ffi` crate docs](../capsule-core-ffi/src/lib.rs).
 Work items are tracked as GitHub issues; see the repo-root `ROADMAP.md`.
 
 ## Build

@@ -83,6 +83,130 @@ fn upload_bundle_ciphertext_matches_the_manifest_hash() {
     assert_eq!(Some(blob_hash), bundle.metadata_blob_hash);
 }
 
+/// **An upload carries the create, whatever the chain holds now** (issue #1053). The server
+/// takes nothing but a `create` through an upload, so an asset deleted and restored before its
+/// first upload is bundled as the create it began as: its provenance blob is the genesis
+/// record, its envelope projection the create's, and its metadata blob the one the create
+/// binds, which a delete and a restore leave in place.
+#[test]
+fn a_bundle_carries_the_create_record_after_a_delete_and_a_restore() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (_album, asset_id) = library_with_one_asset(&lib, &src);
+    let mut ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+    let before = ws.upload_bundle(&asset_id).expect("the create's bundle");
+    ws.soft_delete(&asset_id, 30).expect("deleted");
+    ws.restore(&asset_id).expect("restored");
+
+    let records = ws.asset(&asset_id).unwrap().chain.records();
+    assert_eq!(records.len(), 3, "create, delete, restore");
+    let create = &records[0];
+    let bundle = ws.upload_bundle(&asset_id).expect("bundle");
+    assert_eq!(
+        bundle.provenance_blob,
+        cbor::to_canonical_vec(create).unwrap(),
+        "the genesis record, not the head"
+    );
+    assert_eq!(bundle.action, Action::Create);
+    assert_eq!(bundle.prior_provenance_hash, None);
+    assert_eq!(bundle.retention_until, None);
+    assert_eq!(bundle.timestamp, create.manifest.core.timestamp);
+    assert_eq!(
+        bundle.metadata_blob_hash,
+        create.manifest.core.metadata_blob_hash
+    );
+    assert_eq!(
+        Some(blob_ciphertext_hash(&bundle.metadata_blob)),
+        bundle.metadata_blob_hash
+    );
+    assert_eq!(bundle.provenance_blob, before.provenance_blob);
+    assert_eq!(bundle.metadata_blob, before.metadata_blob);
+    assert_eq!(bundle.ciphertext_hash, before.ciphertext_hash);
+}
+
+/// The content address the asset's `create` record binds for its metadata blob.
+fn create_binding(ws: &Workspace, asset_id: &Uuid) -> Hash32 {
+    ws.asset(asset_id).unwrap().chain.records()[0]
+        .manifest
+        .core
+        .metadata_blob_hash
+        .expect("a create binds a metadata blob")
+}
+
+/// **An asset edited before its first upload uploads its create** (issue #1091). The first edit
+/// keeps the blob the create binds before it replaces it, so the bundle carries the create's
+/// exact bytes, not the edit's, across a reopen and through a second edit, and the current blob
+/// is still the edit's.
+#[test]
+fn an_edited_assets_bundle_carries_the_blob_its_create_binds() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (_album, asset_id) = library_with_one_asset(&lib, &src);
+    let mut ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+    let before = ws.upload_bundle(&asset_id).expect("bundle before the edit");
+    let kept = ws.create_metadata_blob_path(&asset_id).unwrap();
+    assert!(
+        !kept.exists(),
+        "nothing is kept until an edit supersedes it"
+    );
+
+    ws.tag_add(&asset_id, "beach").expect("tagged");
+    ws.set_caption(&asset_id, "at the beach")
+        .expect("captioned");
+    assert!(kept.exists(), "the first edit kept the create's blob");
+    let current = blob_ciphertext_hash(&ws.asset(&asset_id).unwrap().metadata_blob);
+    assert_ne!(
+        current,
+        create_binding(&ws, &asset_id),
+        "the edits re-sealed"
+    );
+
+    let live = ws.upload_bundle(&asset_id).expect("the create uploads");
+    drop(ws);
+    let reopened = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+    let after_reopen = reopened
+        .upload_bundle(&asset_id)
+        .expect("and after a reopen");
+    for bundle in [live, after_reopen] {
+        assert_eq!(bundle.action, Action::Create);
+        assert_eq!(
+            bundle.metadata_blob, before.metadata_blob,
+            "the create's exact sealed bytes"
+        );
+        assert_eq!(
+            bundle.metadata_blob_hash,
+            Some(blob_ciphertext_hash(&bundle.metadata_blob))
+        );
+        assert_eq!(bundle.provenance_blob, before.provenance_blob);
+    }
+}
+
+/// **A library edited before the create's blob was kept still refuses** — typed, before anything
+/// is sent, because the server would refuse other bytes under the address the create signed. A
+/// kept copy that does not answer that address is refused the same way, never shipped.
+#[test]
+fn a_create_whose_blob_no_copy_answers_is_refused() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (_album, asset_id) = library_with_one_asset(&lib, &src);
+    let mut ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+    ws.tag_add(&asset_id, "beach").expect("tagged");
+    let kept = ws.create_metadata_blob_path(&asset_id).unwrap();
+
+    let current = ws.asset(&asset_id).unwrap().metadata_blob.clone();
+    fs::write(&kept, &current).unwrap();
+    assert!(matches!(
+        ws.upload_bundle(&asset_id),
+        Err(LifecycleError::CreateMetadataSuperseded(id)) if id == asset_id
+    ));
+
+    fs::remove_file(&kept).unwrap();
+    assert!(matches!(
+        ws.upload_bundle(&asset_id),
+        Err(LifecycleError::CreateMetadataSuperseded(id)) if id == asset_id
+    ));
+}
+
 /// An original is never refused for its type (issue #695): one the protocol's closed
 /// `content_type` enum names declares itself, any other declares the opaque type, and the
 /// sidecar keeps the true one either way.
@@ -1074,18 +1198,13 @@ impl std::io::Write for ZeroSink {
 fn push_and_restore_peak(size: u64, window: usize) -> usize {
     use std::io::Write as _;
 
-    use capsule_core::crypto::encryption::{NONCE_PREFIX_LEN, StreamDecryptor};
+    use capsule_core::crypto::encryption::StreamDecryptor;
     use capsule_core::crypto::hash::Sha256Hasher;
 
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("original.bin");
     fs::File::create(&path).unwrap().set_len(size).unwrap();
-    let original = OriginalCiphertext {
-        path,
-        file_key: [0x42; 32],
-        nonce_prefix: [7; NONCE_PREFIX_LEN],
-        plaintext_size: size,
-    };
+    let original = sealed_original(path, size);
 
     let ((pushed_hash, restored), peak) = crate::test_heap::peak_during(|| {
         let mut sent = Sha256Hasher::new();
@@ -1294,4 +1413,354 @@ fn a_streamed_import_signs_what_the_buffered_writer_would() {
             "{name}: staged copies left behind: {leftovers:?}"
         );
     }
+}
+
+/// An original over a fresh plaintext file of `len` bytes, its guards recorded now.
+fn original_over(dir: &TempDir, len: usize) -> (std::path::PathBuf, OriginalCiphertext) {
+    let path = dir.path().join("original.bin");
+    fs::write(&path, vec![0x5a; len]).unwrap();
+    (path.clone(), sealed_original(path, len as u64))
+}
+
+/// The original over the plaintext at `path`, after the hashing pass that records its guards.
+fn sealed_original(path: std::path::PathBuf, size: u64) -> OriginalCiphertext {
+    use capsule_core::crypto::encryption::NONCE_PREFIX_LEN;
+
+    OriginalCiphertext::seal(path, [0x42; 32], [7; NONCE_PREFIX_LEN], size)
+        .unwrap()
+        .0
+}
+
+/// The plaintext an original whose chunks are told apart is sealed from: byte `i` is `i % 251`,
+/// so no two chunks hold the same bytes.
+fn distinct_plaintext(len: usize) -> Vec<u8> {
+    (0..len).map(|i| (i % 251) as u8).collect()
+}
+
+/// Overwrite one byte of the plaintext at `path`, keeping its length.
+fn poke(path: &std::path::Path, at: u64) {
+    use std::io::{Seek as _, Write as _};
+
+    let mut file = fs::OpenOptions::new().write(true).open(path).unwrap();
+    file.seek(std::io::SeekFrom::Start(at)).unwrap();
+    file.write_all(&[0xff]).unwrap();
+}
+
+/// Whether `error` carries [`OriginalChanged`] — what the SDK maps to a typed source change.
+fn carries_original_changed(error: &std::io::Error) -> bool {
+    matches!(error.get_ref(), Some(inner) if inner.is::<OriginalChanged>())
+}
+
+#[test]
+fn the_hashing_pass_records_one_tag_per_stream_chunk() {
+    use capsule_core::crypto::encryption::{
+        CIPHERTEXT_CHUNK, PLAINTEXT_CHUNK, TAG_LEN, chunk_count,
+    };
+
+    let dir = TempDir::new().unwrap();
+    for len in [
+        0,
+        1,
+        PLAINTEXT_CHUNK - 1,
+        PLAINTEXT_CHUNK,
+        PLAINTEXT_CHUNK + 1,
+        3 * PLAINTEXT_CHUNK + 17,
+    ] {
+        let path = dir.path().join(format!("p{len}.bin"));
+        fs::write(&path, distinct_plaintext(len)).unwrap();
+        let original = sealed_original(path, len as u64);
+        assert_eq!(
+            original.chunk_tags() as u64,
+            chunk_count(len as u64),
+            "{len} B"
+        );
+        let ciphertext = original.to_vec().unwrap();
+        for (index, tag) in original.tags.iter().enumerate() {
+            let end = ((index + 1) * CIPHERTEXT_CHUNK).min(ciphertext.len());
+            assert_eq!(
+                &ciphertext[end - TAG_LEN..end],
+                tag,
+                "{len} B, chunk {index}"
+            );
+        }
+    }
+}
+
+/// The tag recorder sees the same tags however the ciphertext is split across writes.
+#[test]
+fn the_tag_recorder_does_not_depend_on_how_writes_are_split() {
+    use std::io::Write as _;
+
+    use capsule_core::crypto::encryption::PLAINTEXT_CHUNK;
+
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("p.bin");
+    fs::write(&path, distinct_plaintext(2 * PLAINTEXT_CHUNK + 100)).unwrap();
+    let original = sealed_original(path, 2 * PLAINTEXT_CHUNK as u64 + 100);
+    let ciphertext = original.to_vec().unwrap();
+    for split in [1, 7, 16, 17, 4096, 65_535] {
+        let mut recorder = TagRecorder::new(std::io::sink());
+        for piece in ciphertext.chunks(split) {
+            recorder.write_all(piece).unwrap();
+        }
+        assert_eq!(
+            &recorder.finish().unwrap()[..],
+            &original.tags[..],
+            "split {split}"
+        );
+    }
+}
+
+/// An edit inside one STREAM chunk refuses the read of every 4 KiB-grid range touching that
+/// chunk, carrying [`OriginalChanged`], and of no other range: those still return the verified
+/// ciphertext's bytes.
+#[test]
+fn an_edit_inside_one_chunk_refuses_exactly_the_ranges_touching_it() {
+    use capsule_core::crypto::encryption::{CIPHERTEXT_CHUNK, PLAINTEXT_CHUNK};
+
+    const GRID: u64 = 4096;
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("p.bin");
+    let len = 4 * PLAINTEXT_CHUNK + 1000;
+    fs::write(&path, distinct_plaintext(len)).unwrap();
+    let original = sealed_original(path.clone(), len as u64);
+    let verified = original.to_vec().unwrap();
+
+    // One byte in the middle of chunk 2; the length, and so every chunk boundary, is kept.
+    let edited = 2u64;
+    poke(&path, edited * PLAINTEXT_CHUNK as u64 + 1234);
+
+    let chunk = CIPHERTEXT_CHUNK as u64;
+    let total = original.size();
+    let (mut refused, mut served) = (0, 0);
+    for span in [GRID, 3 * GRID, 20 * GRID] {
+        let mut offset = 0;
+        while offset < total {
+            let end = (offset + span).min(total);
+            let touches = offset / chunk <= edited && edited <= (end - 1) / chunk;
+            match original.read_at(offset, span as usize) {
+                Ok(window) => {
+                    assert!(
+                        !touches,
+                        "a range over the edited chunk was served at {offset}"
+                    );
+                    assert_eq!(
+                        window,
+                        verified[offset as usize..end as usize],
+                        "at {offset}"
+                    );
+                    served += 1;
+                }
+                Err(error) => {
+                    assert!(
+                        touches,
+                        "a range clear of the edit was refused at {offset}: {error}"
+                    );
+                    assert!(carries_original_changed(&error), "{error}");
+                    refused += 1;
+                }
+            }
+            offset += span;
+        }
+    }
+    assert!(
+        refused > 0 && served > 0,
+        "refused {refused}, served {served}"
+    );
+}
+
+#[test]
+fn a_bundles_guard_is_persisted_and_survives_a_library_restart() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (_, asset_id) = library_with_one_asset(&lib, &src);
+    let id = asset_id.to_string();
+    let recorded = {
+        let ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+        let bundle = ws.upload_bundle(&asset_id).expect("bundle");
+        let row = ws
+            .db()
+            .upload_guard(&id)
+            .unwrap()
+            .expect("a guard is recorded");
+        assert_eq!(
+            row.chunk_tags,
+            bundle
+                .original
+                .tags
+                .iter()
+                .flatten()
+                .copied()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(row.nonce_prefix, bundle.original.nonce_prefix.to_vec());
+        assert_eq!(FileIdentity::of_row(&row), bundle.original.identity);
+        row
+    };
+
+    let ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+    assert_eq!(
+        ws.db().upload_guard(&id).unwrap().as_ref(),
+        Some(&recorded),
+        "the guard survives a restart"
+    );
+    let bundle = ws.upload_bundle(&asset_id).expect("the bundle rebuilds");
+    assert_eq!(
+        ws.db().upload_guard(&id).unwrap().as_ref(),
+        Some(&recorded),
+        "an unchanged original leaves its recorded guard as it was"
+    );
+    assert_eq!(bundle.original.chunk_tags() * 16, recorded.chunk_tags.len());
+}
+
+#[test]
+fn a_released_guard_is_forgotten_and_recorded_again_by_the_next_bundle() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (_, asset_id) = library_with_one_asset(&lib, &src);
+    let ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+    assert!(!ws.has_upload_guard(&asset_id).unwrap());
+    assert!(
+        !ws.release_upload_guard(&asset_id).unwrap(),
+        "no bundle built yet"
+    );
+    ws.upload_bundle(&asset_id).unwrap();
+    assert!(ws.has_upload_guard(&asset_id).unwrap());
+    assert!(ws.release_upload_guard(&asset_id).unwrap());
+    assert!(!ws.has_upload_guard(&asset_id).unwrap());
+    ws.upload_bundle(&asset_id).unwrap();
+    assert!(ws.has_upload_guard(&asset_id).unwrap());
+}
+
+/// A recorded guard whose tags are not the verified ciphertext's is replaced by the verified
+/// one: the signed content address, which the rebuild re-checked, is the authority.
+#[test]
+fn a_recorded_guard_that_disagrees_with_the_verified_ciphertext_is_replaced() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (_, asset_id) = library_with_one_asset(&lib, &src);
+    let ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+    let id = asset_id.to_string();
+    let bundle = ws.upload_bundle(&asset_id).unwrap();
+    let mut corrupt = ws.db().upload_guard(&id).unwrap().unwrap();
+    corrupt.chunk_tags[0] ^= 1;
+    ws.db().upsert_upload_guard(&corrupt).unwrap();
+    ws.upload_bundle(&asset_id).unwrap();
+    let row = ws.db().upload_guard(&id).unwrap().unwrap();
+    assert_eq!(
+        row.chunk_tags,
+        bundle
+            .original
+            .tags
+            .iter()
+            .flatten()
+            .copied()
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_bundles_original_with_a_changed_file_is_refused_at_build() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (_, asset_id) = library_with_one_asset(&lib, &src);
+    let ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+    ws.upload_bundle(&asset_id).unwrap();
+    let path = ws.original_path(&asset_id).unwrap();
+    poke(&path, 3);
+    assert!(matches!(
+        ws.upload_bundle(&asset_id),
+        Err(LifecycleError::CiphertextMismatch(id)) if id == asset_id
+    ));
+}
+
+#[test]
+fn a_purged_asset_forgets_its_guard() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (_, asset_id) = library_with_one_asset(&lib, &src);
+    let ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+    ws.upload_bundle(&asset_id).unwrap();
+    ws.db().purge_asset(&asset_id.to_string()).unwrap();
+    assert_eq!(ws.db().upload_guard(&asset_id.to_string()).unwrap(), None);
+}
+
+#[test]
+fn an_untouched_original_affirms_it_is_unchanged() {
+    let dir = TempDir::new().unwrap();
+    let (_, original) = original_over(&dir, 8192);
+    let _ = original.read_at(0, 4096).unwrap();
+    assert_eq!(original.check_unchanged(), Ok(()));
+    assert_eq!(original.check_unchanged(), Ok(()));
+}
+
+#[test]
+fn a_bundles_original_affirms_it_is_unchanged() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (_, asset_id) = library_with_one_asset(&lib, &src);
+    let ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+    let bundle = ws.upload_bundle(&asset_id).expect("bundle");
+    assert_eq!(bundle.original.check_unchanged(), Ok(()));
+}
+
+#[test]
+fn an_original_whose_length_changed_is_refused() {
+    use std::io::Write as _;
+
+    let dir = TempDir::new().unwrap();
+    let (path, original) = original_over(&dir, 8192);
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(b"x")
+        .unwrap();
+    let changed = original.check_unchanged().unwrap_err();
+    assert!(changed.reason.contains("length"), "{changed}");
+}
+
+#[test]
+fn an_original_edited_in_place_is_refused() {
+    use std::io::Write as _;
+
+    let dir = TempDir::new().unwrap();
+    let (path, original) = original_over(&dir, 8192);
+    let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+    (&file).write_all(&[0xa5; 16]).unwrap();
+    // A write inside one clock tick can leave the time as it was; set it apart explicitly, as
+    // any real edit some time after the bundle was built does.
+    file.set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1))
+        .unwrap();
+    drop(file);
+    assert!(original.check_unchanged().is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn an_original_replaced_by_a_rename_is_refused() {
+    let dir = TempDir::new().unwrap();
+    let (path, original) = original_over(&dir, 8192);
+    let replacement = dir.path().join("replacement.bin");
+    fs::write(&replacement, vec![0x5a; 8192]).unwrap();
+    let modified = fs::metadata(&path).unwrap().modified().unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&replacement)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
+    fs::rename(&replacement, &path).unwrap();
+    // Same length and modification time: the inode tells them apart.
+    let changed = original.check_unchanged().unwrap_err();
+    assert!(changed.reason.contains("replaced"), "{changed}");
+}
+
+#[test]
+fn an_original_deleted_from_disk_is_refused() {
+    let dir = TempDir::new().unwrap();
+    let (path, original) = original_over(&dir, 8192);
+    fs::remove_file(&path).unwrap();
+    let changed = original.check_unchanged().unwrap_err();
+    assert!(changed.reason.contains("no longer be read"), "{changed}");
 }

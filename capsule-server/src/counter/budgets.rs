@@ -86,6 +86,20 @@ pub const DROP_LINK: Budget = Budget::new(30, SignedDuration::from_hours(1));
 /// the proxy's budget.
 pub const DROP_SOURCE: Budget = Budget::new(60, SignedDuration::from_hours(1));
 
+/// Registration attempts from one source address (#1001).
+///
+/// Ten an hour against each
+/// [`CounterKey::RegistrationSource`](crate::counter::CounterKey::RegistrationSource) bucket.
+/// Registration is the one unauthenticated write on the surface, and its `409` is an account
+/// oracle by decision, so this is the budget that bounds the oracle: a sweep of addresses from
+/// one source learns ten answers an hour. A household behind one address creates a handful of
+/// accounts once, so ten is far above its honest rate. Every attempt whose body parses is charged, a
+/// refused one included, so probing costs the prober whatever the answer. Keyed on
+/// [`ClientAddr::source_key`](crate::client_addr::ClientAddr::source_key), so behind a proxy the
+/// deployment must name it in `TRUSTED_PROXIES` or `TRUSTED_PROXY_HOPS`, or every registrant
+/// shares the proxy's budget.
+pub const REGISTRATION_SOURCE: Budget = Budget::new(10, SignedDuration::from_hours(1));
+
 /// Code attempts against one second-factor challenge.
 ///
 /// Five in five minutes, which is the challenge's whole lifetime — so the budget is really
@@ -190,6 +204,60 @@ pub const UPLOAD_LIVE_SESSIONS: usize = 1_000;
 /// hour to turn rather than trickling back in.
 pub const PEER_REQUESTS: Budget = Budget::new(10_000, SignedDuration::from_hours(1));
 
+/// Ciphertext served to one federated peer, in kibibytes, at `GET /v1/blob/{hash}` (#476).
+///
+/// Twenty gibibytes an hour — the bytes half of invariant 21's transfer budget. A household's
+/// evening of photos and a few videos is a few gibibytes; twenty leaves room for a peer
+/// catching up on a large shared album, and bounds what a hostile peer can make this server
+/// read off disk and send to a little under six megabytes a second. Charged in one weighted
+/// call per delivery ([`CounterStore::charge`](super::CounterStore::charge)), so a blob bigger
+/// than what is left is refused whole rather than half-served.
+pub const PEER_KIBIBYTES: Budget = Budget::new(20 * 1024 * 1024, SignedDuration::from_hours(1));
+
+/// How long a peer is on probation, from when this server first recorded it (#476).
+///
+/// Seven days. design/federation.md's probation tier gives a new peer "tighter quotas … until
+/// it has behaved", and the serving side has one fact to measure that by: how long the operator
+/// has known the peer ([`PeerRecord::first_seen_at`](crate::federation::PeerRecord)). A week is
+/// long enough that a peer pinned in a hurry and misbehaving is noticed while its budget is still
+/// the small one, and short enough that an honest peer is not waiting on anything but the
+/// calendar. A peer with no record at all is on probation by definition.
+pub const PEER_PROBATION: SignedDuration = SignedDuration::from_hours(24 * 7);
+
+/// [`PEER_REQUESTS`] for a peer on probation: a tenth.
+///
+/// A thousand an hour is still a few hundred photos with their derivatives — a new peer can do
+/// real work — while a peer that turns out hostile in its first week gets a tenth of the reach.
+pub const PEER_REQUESTS_PROBATION: Budget = Budget::new(1_000, SignedDuration::from_hours(1));
+
+/// [`PEER_KIBIBYTES`] for a peer on probation: one gibibyte an hour.
+pub const PEER_KIBIBYTES_PROBATION: Budget =
+    Budget::new(1024 * 1024, SignedDuration::from_hours(1));
+
+/// Pulls from one source peer whose input failed validation, before its circuit opens (#964).
+///
+/// Ten an hour — the egress pull worker's **error budget** (design/federation.md, Egress Pull
+/// Worker). Every job of a peer pulls every fifteen minutes, so an honest peer with a dozen
+/// subscribed albums and one bad manifest spends a unit an hour; a peer whose every page is
+/// malformed spends the budget inside its first few rounds and has its circuit opened.
+/// Transport failures are never charged here.
+pub const PEER_PULL_ERRORS: Budget = Budget::new(10, SignedDuration::from_hours(1));
+
+/// [`PEER_PULL_ERRORS`] for a peer on probation: three an hour.
+pub const PEER_PULL_ERRORS_PROBATION: Budget = Budget::new(3, SignedDuration::from_hours(1));
+
+/// Validation time this server spends on one source peer's pulled input, in milliseconds (#964).
+///
+/// One CPU-minute an hour — the receiving half of invariant 21's CPU-per-hour budget. Validating
+/// a page of manifests is signature checks and a strict CBOR parse, microseconds to a few
+/// milliseconds per asset, so a minute is tens of thousands of assets an hour; a peer that makes
+/// this server spend more has its jobs queued until the window turns rather than failed.
+pub const PEER_PULL_CPU_MILLIS: Budget = Budget::new(60_000, SignedDuration::from_hours(1));
+
+/// [`PEER_PULL_CPU_MILLIS`] for a peer on probation: a tenth, six CPU-seconds an hour.
+pub const PEER_PULL_CPU_MILLIS_PROBATION: Budget =
+    Budget::new(6_000, SignedDuration::from_hours(1));
+
 /// Federated moderation reports from one peer against one account (invariant 24).
 ///
 /// Twenty an hour per `(reporting_server, reported_user)`. A real report is one message; a
@@ -220,6 +288,30 @@ pub const FEDERATED_INTAKE: Budget = Budget::new(300, SignedDuration::from_hours
 /// A limit of one over [`REPORT_NONCE_WINDOW`](crate::federation::REPORT_NONCE_WINDOW): the
 /// second report carrying a nonce inside the span its first could still be fresh in is a replay.
 pub const FEDERATED_REPORT_NONCE: Budget = Budget::new(1, crate::federation::REPORT_NONCE_WINDOW);
+
+/// One use of one request-signature nonce, per verified peer (#949).
+///
+/// A limit of one over [`REQUEST_NONCE_WINDOW`](crate::federation::scheme::REQUEST_NONCE_WINDOW):
+/// the second capability presentation carrying a nonce inside the span its first signature could
+/// still be fresh in is a replay.
+pub const FEDERATED_REQUEST_NONCE: Budget =
+    Budget::new(1, crate::federation::scheme::REQUEST_NONCE_WINDOW);
+
+/// Signed pull hints at `POST /v1/federation/hints` from one **verified** home server (#1158).
+///
+/// Six hundred an hour, ten a minute, charged once the signature has verified under the peer's
+/// pinned key. A hint is one schedule write and moves a job no sooner than
+/// [`HINT_FLOOR`](crate::federation::pull::HINT_FLOOR) after its last pull, so a peer hinting
+/// at the whole budget still costs at most one pull a minute per album; the budget bounds the
+/// writes, not the pulls. A spent budget costs a peer nothing but its albums' next interval.
+pub const FEDERATED_HINTS: Budget = Budget::new(600, SignedDuration::from_hours(1));
+
+/// One use of one hint nonce, per verified home server (#1158).
+///
+/// A limit of one over [`HINT_NONCE_WINDOW`](crate::federation::hints::HINT_NONCE_WINDOW): the
+/// second hint carrying a nonce inside the span its first could still be fresh in is a replay.
+pub const FEDERATED_HINT_NONCE: Budget =
+    Budget::new(1, crate::federation::hints::HINT_NONCE_WINDOW);
 
 /// Capability mints per account (#529).
 ///

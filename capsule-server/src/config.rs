@@ -3,7 +3,7 @@
 //! # Environment only, and why there is no file
 //!
 //! `--config PATH` is accepted on the command line and **refused**: a configuration-file crate
-//! would be a new dependency in a domain `design/dependencies.md` has no row for, and the
+//! would be a new dependency in a domain the workspace has no pin for, and the
 //! server this replaces was environment-only plus `dotenvy`
 //! (`legacy-review/server-salvo/environment/`), so an operator loses nothing familiar. The flag
 //! exists rather than being absent so the refusal is a sentence rather than clap's "unexpected
@@ -353,6 +353,16 @@ pub struct Config {
     /// a deployment has to ask for it. Turning it on demands `FEDERATION_URL` on `serve`; a URL
     /// without the switch is a deployment that does not federate, and says so at startup.
     pub federation_enabled: bool,
+    /// How much of a local account's hard quota limit one source peer's pulled albums may hold
+    /// for it, in percent (`FEDERATION_PEER_BUDGET_PERCENT`, 0 to 100). Defaults to
+    /// [`DEFAULT_PEER_BUDGET_PERCENT`](crate::federation::pull::pulled::DEFAULT_PEER_BUDGET_PERCENT),
+    /// 25 (design/quota.md).
+    pub peer_budget_percent: u8,
+    /// How many refused federated hashes the soft-fail table keeps
+    /// (`FEDERATION_REJECTED_HASH_CAPACITY`, at least 1, default 100,000), and for how many days
+    /// after their last reference (`FEDERATION_REJECTED_HASH_TTL_DAYS`, at least 1, default 90).
+    /// design/federation.md, Soft-Fail Semantics.
+    pub rejected_hash_bounds: crate::federation::rejected_hashes::RejectedHashBounds,
     /// The filesystem tree ciphertext blobs are written to. There is no object store.
     pub blob_root: Option<PathBuf>,
     /// The Postgres URL, once an adapter reads it (#402).
@@ -377,8 +387,24 @@ pub struct Config {
     pub lockout_window: SignedDuration,
     /// How many consecutive failures inside that window lock it.
     pub lockout_attempts: u32,
+    /// A session's sliding inactivity window (`SESSION_TTL_DAYS`): how long it survives without
+    /// an access-token issuance. Defaults to
+    /// [`DEFAULT_SESSION_TTL`](crate::store::auth::DEFAULT_SESSION_TTL), 180 days.
+    pub session_ttl: SignedDuration,
+    /// A session's hard cap from sign-in (`SESSION_HARD_CAP_DAYS`), which no refresh extends.
+    /// Defaults to [`DEFAULT_SESSION_HARD_CAP`](crate::store::auth::DEFAULT_SESSION_HARD_CAP),
+    /// 365 days, and is never shorter than [`Self::session_ttl`].
+    pub session_hard_cap: SignedDuration,
     /// The OIDC relying party, if `OIDC_ISSUER` is set.
     pub oidc: Option<OidcConfig>,
+    /// Whether password registration and sign-in are refused (`PASSWORD_AUTH_DISABLED`, #1004).
+    /// Off by default.
+    ///
+    /// An OIDC-only deployment: `register`, `login` and `reauthenticate` answer
+    /// `error.auth.password_disabled` before any password is hashed or verified, and
+    /// `server-info` says so. `serve` refuses it without `OIDC_ISSUER`, because a server with
+    /// neither door admits nobody.
+    pub password_auth_disabled: bool,
     /// How long a shutdown may take to drain.
     pub shutdown_timeout: std::time::Duration,
     /// The accepted-connection ceiling.
@@ -386,12 +412,14 @@ pub struct Config {
     /// How long a client may take to send a request head, which also bounds how long a
     /// kept-alive connection may idle before its next one (`HEADER_READ_TIMEOUT_SECONDS`).
     pub header_read_timeout: std::time::Duration,
-    /// How long one upload chunk's body may take to arrive (`CHUNK_READ_TIMEOUT_SECONDS`).
+    /// When an upload chunk's body is cut: no bytes for the stall bound
+    /// (`CHUNK_STALL_TIMEOUT_SECONDS`), or a sustained rate below the floor
+    /// (`CHUNK_MIN_RATE_BYTES_PER_SECOND`). Never for its total duration.
     ///
     /// The body-read half of the per-connection bound, applied by
     /// [`ChunkBody`](crate::upload::body::ChunkBody) and therefore over before finalization
-    /// starts: see [`crate::upload::policy::DEFAULT_CHUNK_READ_TIMEOUT`].
-    pub chunk_read_timeout: std::time::Duration,
+    /// starts: see [`crate::upload::policy::DEFAULT_CHUNK_STALL_TIMEOUT`].
+    pub chunk_pace: crate::upload::policy::ChunkPace,
     /// Which reverse-proxy hops may name the client, and through which forwarding field
     /// (`TRUSTED_PROXY_HOPS`, `TRUSTED_PROXIES`, `TRUSTED_PROXY_HEADER`).
     ///
@@ -543,6 +571,8 @@ impl fmt::Debug for Config {
             api_base_url,
             federation_url,
             federation_enabled,
+            peer_budget_percent,
+            rejected_hash_bounds,
             blob_root,
             database_url,
             valkey_url,
@@ -555,11 +585,14 @@ impl fmt::Debug for Config {
             grace_window,
             lockout_window,
             lockout_attempts,
+            session_ttl,
+            session_hard_cap,
             oidc,
+            password_auth_disabled,
             shutdown_timeout,
             max_connections,
             header_read_timeout,
-            chunk_read_timeout,
+            chunk_pace,
             trusted_proxies,
             log_format,
             backends,
@@ -570,6 +603,8 @@ impl fmt::Debug for Config {
             .field("api_base_url", api_base_url)
             .field("federation_url", federation_url)
             .field("federation_enabled", federation_enabled)
+            .field("peer_budget_percent", peer_budget_percent)
+            .field("rejected_hash_bounds", rejected_hash_bounds)
             .field("blob_root", blob_root)
             .field("database_url", &database_url.as_deref().map(redacted_url))
             .field("valkey_url", &valkey_url.as_deref().map(redacted_url))
@@ -591,11 +626,14 @@ impl fmt::Debug for Config {
             .field("grace_window", grace_window)
             .field("lockout_window", lockout_window)
             .field("lockout_attempts", lockout_attempts)
+            .field("session_ttl", session_ttl)
+            .field("session_hard_cap", session_hard_cap)
             .field("oidc", oidc)
+            .field("password_auth_disabled", password_auth_disabled)
             .field("shutdown_timeout", shutdown_timeout)
             .field("max_connections", max_connections)
             .field("header_read_timeout", header_read_timeout)
-            .field("chunk_read_timeout", chunk_read_timeout)
+            .field("chunk_pace", chunk_pace)
             .field("trusted_proxies", trusted_proxies)
             .field("log_format", log_format)
             .field("backends", backends)
@@ -686,6 +724,42 @@ impl Config {
             "FEDERATION_ENABLED",
             &mut faults,
         );
+        // A share of a whole, so past 100 is refused rather than clamped: an operator who typed
+        // 250 meant something, and a budget larger than the hard limit is not it.
+        let peer_budget_percent =
+            parse_number::<u8>(env, "FEDERATION_PEER_BUDGET_PERCENT", &mut faults)
+                .and_then(|percent| {
+                    if percent > 100 {
+                        faults.push(ConfigFault::Invalid {
+                            key: "FEDERATION_PEER_BUDGET_PERCENT",
+                            detail: format!("{percent} is not a percentage of a whole"),
+                        });
+                        None
+                    } else {
+                        Some(percent)
+                    }
+                })
+                .unwrap_or(crate::federation::pull::pulled::DEFAULT_PEER_BUDGET_PERCENT);
+        // Both bounds are counts that must not be zero: a table that keeps nothing, or keeps
+        // it for no time, is not a bound but a switch, and nothing asks for one.
+        let rejected_hash_bounds = {
+            let mut bounds = crate::federation::rejected_hashes::RejectedHashBounds::default();
+            if let Some(capacity) = parse_number::<std::num::NonZeroU32>(
+                env,
+                "FEDERATION_REJECTED_HASH_CAPACITY",
+                &mut faults,
+            ) {
+                bounds = bounds.with_capacity(capacity);
+            }
+            if let Some(days) = parse_number::<std::num::NonZeroU32>(
+                env,
+                "FEDERATION_REJECTED_HASH_TTL_DAYS",
+                &mut faults,
+            ) {
+                bounds = bounds.with_ttl_days(days);
+            }
+            bounds
+        };
 
         // ── Storage ─────────────────────────────────────────────────────────────────────
         // `UPLOAD_DIR` is the name the retired deployment used, accepted so an operator's
@@ -756,6 +830,13 @@ impl Config {
 
         // ── The OIDC relying party ──────────────────────────────────────────────────────
         let oidc = read_oidc(env, &mut faults);
+        // Off unless asked for (#1004). Read beside the relying party because it only makes
+        // sense with one: `serve` refuses it without `OIDC_ISSUER` below.
+        let password_auth_disabled = parse_flag(
+            env.var("PASSWORD_AUTH_DISABLED").as_deref(),
+            "PASSWORD_AUTH_DISABLED",
+            &mut faults,
+        );
 
         // ── Protocol window ─────────────────────────────────────────────────────────────
         //
@@ -836,6 +917,34 @@ impl Config {
                 }
             })
             .unwrap_or(DEFAULT_LOCKOUT_ATTEMPTS);
+        // The session lifetime (design/authentication.md, Session Expiry and Revocation; #1085):
+        // a sliding window under a hard cap from sign-in. A cap shorter than the window is
+        // refused rather than accepted: every session would then die at the cap, so the window
+        // the operator set would never be the one that applies. Compared only when both parsed,
+        // so a malformed value is reported once rather than again against its default.
+        let faults_before_session = faults.len();
+        let session_ttl = parse_days(
+            env,
+            "SESSION_TTL_DAYS",
+            crate::store::auth::DEFAULT_SESSION_TTL,
+            &mut faults,
+        );
+        let session_hard_cap = parse_days(
+            env,
+            "SESSION_HARD_CAP_DAYS",
+            crate::store::auth::DEFAULT_SESSION_HARD_CAP,
+            &mut faults,
+        );
+        if faults.len() == faults_before_session && session_hard_cap < session_ttl {
+            faults.push(ConfigFault::Invalid {
+                key: "SESSION_HARD_CAP_DAYS",
+                detail: format!(
+                    "{} days is shorter than the {}-day SESSION_TTL_DAYS window",
+                    session_hard_cap.as_hours() / 24,
+                    session_ttl.as_hours() / 24,
+                ),
+            });
+        }
         let shutdown_timeout = std::time::Duration::from_secs(
             parse_number::<u64>(env, "SHUTDOWN_TIMEOUT_SECONDS", &mut faults)
                 .unwrap_or(DEFAULT_SHUTDOWN_TIMEOUT),
@@ -856,18 +965,32 @@ impl Config {
             });
         // The per-connection bounds (transfer/upload.md, Hostile Clients; #717). Zero is refused
         // for both: a zero header timeout closes every connection before its first request, and
-        // a zero chunk deadline refuses every chunk, so either is an outage spelled as a setting.
+        // a zero stall bound refuses every chunk, so either is an outage spelled as a setting. A
+        // zero minimum rate is accepted: it turns the rate floor off and leaves the stall bound.
         let header_read_timeout = parse_timeout(
             env,
             "HEADER_READ_TIMEOUT_SECONDS",
             std::time::Duration::from_secs(DEFAULT_HEADER_READ_TIMEOUT),
             &mut faults,
         );
-        let chunk_read_timeout = parse_timeout(
-            env,
-            "CHUNK_READ_TIMEOUT_SECONDS",
-            crate::upload::policy::DEFAULT_CHUNK_READ_TIMEOUT,
-            &mut faults,
+        // A chunk is cut on stall, never for its total duration (#1041), so the total-duration
+        // setting it replaces means nothing any more; warned about rather than refused, as the
+        // other retired names are, so an existing environment still boots.
+        if env.var("CHUNK_READ_TIMEOUT_SECONDS").is_some() {
+            tracing::warn!(
+                "CHUNK_READ_TIMEOUT_SECONDS is no longer read: a chunk is cut only when it stalls \
+                 (CHUNK_STALL_TIMEOUT_SECONDS) or falls below CHUNK_MIN_RATE_BYTES_PER_SECOND"
+            );
+        }
+        let chunk_pace = crate::upload::policy::ChunkPace::new(
+            parse_timeout(
+                env,
+                "CHUNK_STALL_TIMEOUT_SECONDS",
+                crate::upload::policy::DEFAULT_CHUNK_STALL_TIMEOUT,
+                &mut faults,
+            ),
+            parse_number::<u64>(env, "CHUNK_MIN_RATE_BYTES_PER_SECOND", &mut faults)
+                .unwrap_or(crate::upload::policy::DEFAULT_CHUNK_MIN_RATE),
         );
         // Which proxy hops may name the client (#704). Unset trusts nobody, the one default a
         // spoofed `X-Forwarded-For` cannot move; a malformed entry is a fault rather than an entry
@@ -959,6 +1082,13 @@ impl Config {
                 if federation_enabled {
                     require(federation_url.is_some(), "FEDERATION_URL", &mut faults);
                 }
+                // A server that refuses passwords and has no identity provider admits nobody,
+                // not even the operator who meant to restrict it. Keyed on the issuer itself
+                // rather than on `oidc`, so a half-configured relying party — which has already
+                // faulted above for what it lacks — is not also told its issuer is missing.
+                if password_auth_disabled {
+                    require(env.var("OIDC_ISSUER").is_some(), "OIDC_ISSUER", &mut faults);
+                }
                 require_durable_backends(&mut faults);
                 if durable {
                     // Required rather than derived; see the key-material section above for what
@@ -981,6 +1111,8 @@ impl Config {
                 api_base_url,
                 federation_url,
                 federation_enabled,
+                peer_budget_percent,
+                rejected_hash_bounds,
                 blob_root,
                 database_url,
                 valkey_url,
@@ -993,11 +1125,14 @@ impl Config {
                 grace_window,
                 lockout_window,
                 lockout_attempts,
+                session_ttl,
+                session_hard_cap,
                 oidc,
+                password_auth_disabled,
                 shutdown_timeout,
                 max_connections,
                 header_read_timeout,
-                chunk_read_timeout,
+                chunk_pace,
                 trusted_proxies,
                 log_format,
                 backends,
@@ -1191,6 +1326,40 @@ fn parse_timeout(
             default
         }
         Some(seconds) => std::time::Duration::from_secs(seconds),
+    }
+}
+
+/// Read `key` as a positive whole number of days, or `default` when unset.
+///
+/// Zero and negative values are faults: a zero-day session dies the moment it opens, and a
+/// negative one is a typo rather than a policy. So is a count too large to express as a
+/// duration, which no deployment means.
+fn parse_days(
+    env: &dyn Environment,
+    key: &'static str,
+    default: SignedDuration,
+    faults: &mut Vec<ConfigFault>,
+) -> SignedDuration {
+    const SECONDS_PER_DAY: i64 = 24 * 60 * 60;
+    match parse_number::<i64>(env, key, faults) {
+        None => default,
+        Some(days) if days <= 0 => {
+            faults.push(ConfigFault::Invalid {
+                key,
+                detail: format!("{days} days would end every session as it opens"),
+            });
+            default
+        }
+        Some(days) => days.checked_mul(SECONDS_PER_DAY).map_or_else(
+            || {
+                faults.push(ConfigFault::Invalid {
+                    key,
+                    detail: format!("{days} days is too long to express as a duration"),
+                });
+                default
+            },
+            SignedDuration::from_secs,
+        ),
     }
 }
 

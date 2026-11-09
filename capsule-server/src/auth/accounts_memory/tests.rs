@@ -105,21 +105,22 @@ async fn a_taken_address_is_reported_and_nothing_is_written() {
 
 #[tokio::test]
 async fn an_unknown_address_and_a_wrong_password_are_one_answer() {
-    // The port collapses them into one value on purpose, so no caller *can* tell them apart.
+    // The port collapses them into one variant on purpose, so no caller's answer can differ;
+    // only the wrong password names an account, for that account's activity log.
     let accounts = seeded().await;
     assert_eq!(
         accounts
             .authenticate("nobody@example.test", PASSWORD)
             .await
             .expect("it answers"),
-        Authentication::Refused
+        Authentication::Refused(None)
     );
     assert_eq!(
         accounts
             .authenticate(EMAIL, "the wrong password")
             .await
             .expect("it answers"),
-        Authentication::Refused
+        Authentication::Refused(Some(user()))
     );
 }
 
@@ -135,7 +136,7 @@ async fn enough_failures_lock_the_account_and_a_correct_password_is_told_so() {
                 .authenticate(EMAIL, "wrong")
                 .await
                 .expect("it answers"),
-            Authentication::Refused
+            Authentication::Refused(Some(user()))
         );
     }
     assert_eq!(
@@ -143,7 +144,7 @@ async fn enough_failures_lock_the_account_and_a_correct_password_is_told_so() {
             .authenticate(EMAIL, PASSWORD)
             .await
             .expect("it answers"),
-        Authentication::Locked
+        Authentication::Locked(user())
     );
 }
 
@@ -160,7 +161,7 @@ async fn a_lockout_decays_because_nothing_else_can_clear_it() {
             .authenticate(EMAIL, PASSWORD)
             .await
             .expect("it answers"),
-        Authentication::Locked
+        Authentication::Locked(user())
     );
 
     // One second short of the window: still locked. The boundary is asserted because an
@@ -171,7 +172,7 @@ async fn a_lockout_decays_because_nothing_else_can_clear_it() {
             .authenticate(EMAIL, PASSWORD)
             .await
             .expect("it answers"),
-        Authentication::Locked
+        Authentication::Locked(user())
     );
 
     clock.advance(SignedDuration::from_secs(1));
@@ -210,7 +211,7 @@ async fn attempts_during_a_lockout_do_not_extend_it() {
             .authenticate(EMAIL, PASSWORD)
             .await
             .expect("it answers"),
-        Authentication::Locked
+        Authentication::Locked(user())
     );
     // Past it: open, and the hammering did not move the deadline.
     clock.advance(WINDOW);
@@ -292,7 +293,7 @@ async fn a_cancelled_attempt_keeps_its_charge() {
             .authenticate(EMAIL, PASSWORD)
             .await
             .expect("it answers"),
-        Authentication::Locked
+        Authentication::Locked(user())
     );
 }
 
@@ -322,7 +323,7 @@ async fn a_password_change_clears_a_lockout() {
             .authenticate(EMAIL, PASSWORD)
             .await
             .expect("it answers"),
-        Authentication::Refused
+        Authentication::Refused(Some(user()))
     );
 }
 
@@ -342,7 +343,7 @@ async fn re_authentication_takes_the_account_from_the_credential_and_not_the_req
             .authenticate_user(&stranger, PASSWORD)
             .await
             .expect("it answers"),
-        Authentication::Refused
+        Authentication::Refused(None)
     );
 }
 
@@ -436,6 +437,6 @@ async fn addresses_are_compared_verbatim() {
             .authenticate("Somebody@Example.test", PASSWORD)
             .await
             .expect("it answers"),
-        Authentication::Refused
+        Authentication::Refused(None)
     );
 }

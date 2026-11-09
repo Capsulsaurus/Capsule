@@ -214,13 +214,15 @@ pub async fn a_taken_address_is_reported_and_nothing_is_written(h: &dyn Harness)
     );
 }
 
-/// An unknown address and a wrong password are one answer.
+/// An unknown address and a wrong password are one answer, and only the wrong password names an
+/// account.
 ///
-/// The port collapses them into one value on purpose, so no caller *can* tell them apart and no
-/// future caller can reintroduce an enumeration oracle by branching on something the port does
-/// not offer.
+/// The port collapses them into one variant, so the answer a caller gives cannot depend on which
+/// it was. What the refusal carries is the account the attempt was charged against, for that
+/// account's activity log: the account whose password was wrong, and nobody for an address no
+/// account answers to — an unknown address must leave nothing in anybody's log.
 pub async fn an_unknown_address_and_a_wrong_password_are_one_answer(h: &dyn Harness) {
-    let (address, _) = seed(h, "oracle").await;
+    let (address, id) = seed(h, "oracle").await;
     assert_eq!(
         ok(
             h.directory()
@@ -228,7 +230,7 @@ pub async fn an_unknown_address_and_a_wrong_password_are_one_answer(h: &dyn Harn
                 .await,
             "authenticate an unknown address",
         ),
-        Authentication::Refused,
+        Authentication::Refused(None),
     );
     assert_eq!(
         ok(
@@ -237,7 +239,7 @@ pub async fn an_unknown_address_and_a_wrong_password_are_one_answer(h: &dyn Harn
                 .await,
             "authenticate with a wrong password",
         ),
-        Authentication::Refused,
+        Authentication::Refused(Some(id)),
     );
 }
 
@@ -257,7 +259,7 @@ pub async fn addresses_are_compared_verbatim(h: &dyn Harness) {
                 .await,
             "authenticate a differently-cased address",
         ),
-        Authentication::Refused,
+        Authentication::Refused(None),
     );
 }
 
@@ -280,7 +282,7 @@ pub async fn re_authentication_takes_the_account_from_the_credential(h: &dyn Har
             h.directory().authenticate_user(&stranger, PASSWORD).await,
             "re-authenticate as a stranger",
         ),
-        Authentication::Refused,
+        Authentication::Refused(None),
     );
 }
 
@@ -294,14 +296,15 @@ pub async fn re_authentication_takes_the_account_from_the_credential(h: &dyn Har
 /// value: a client showing "wrong password" here would send somebody round a loop that cannot
 /// succeed.
 pub async fn enough_failures_lock_the_account_and_a_correct_password_is_told_so(h: &dyn Harness) {
-    let (address, _) = seed(h, "lockout").await;
+    let (address, id) = seed(h, "lockout").await;
     fail(h, &address, h.lockout_attempts()).await;
     assert_eq!(
         ok(
             h.directory().authenticate(&address, PASSWORD).await,
             "authenticate a locked account",
         ),
-        Authentication::Locked,
+        Authentication::Locked(id),
+        "a lockout names the locked account, for its activity log",
     );
 }
 
@@ -341,7 +344,7 @@ pub async fn a_lockout_decays_because_nothing_else_can_clear_it(h: &dyn Harness)
             h.directory().authenticate(&address, PASSWORD).await,
             "authenticate a locked account",
         ),
-        Authentication::Locked,
+        Authentication::Locked(id.clone()),
     );
 
     ok_store(
@@ -353,7 +356,7 @@ pub async fn a_lockout_decays_because_nothing_else_can_clear_it(h: &dyn Harness)
             h.directory().authenticate(&address, PASSWORD).await,
             "authenticate one second inside the window",
         ),
-        Authentication::Locked,
+        Authentication::Locked(id.clone()),
     );
 
     ok_store(h.advance(SignedDuration::from_secs(1)).await);
@@ -386,7 +389,7 @@ pub async fn attempts_during_a_lockout_do_not_extend_it(h: &dyn Harness) {
             h.directory().authenticate(&address, PASSWORD).await,
             "authenticate inside the window",
         ),
-        Authentication::Locked,
+        Authentication::Locked(id.clone()),
     );
     ok_store(h.advance(h.lockout_window()).await);
     assert_eq!(
@@ -407,7 +410,7 @@ pub async fn attempts_during_a_lockout_do_not_extend_it(h: &dyn Harness) {
 /// turned away answers `Locked`. At most the ceiling may be `Refused`, and the account must be
 /// locked afterwards — to a correct password too.
 pub async fn parallel_guesses_admit_at_most_the_ceiling(h: &dyn Harness) {
-    let (address, _) = seed(h, "burst").await;
+    let (address, id) = seed(h, "burst").await;
     let ceiling = h.lockout_attempts();
     let guesses = (0..ceiling * 3)
         .map(|_| h.directory().authenticate(&address, "wrong"))
@@ -417,8 +420,8 @@ pub async fn parallel_guesses_admit_at_most_the_ceiling(h: &dyn Harness) {
     let mut admitted = 0_u32;
     for outcome in outcomes {
         match ok(outcome, "authenticate a parallel guess") {
-            Authentication::Refused => admitted += 1,
-            Authentication::Locked => {}
+            Authentication::Refused(_) => admitted += 1,
+            Authentication::Locked(_) => {}
             Authentication::Granted(_) => panic!("a wrong password must never be granted"),
         }
     }
@@ -431,7 +434,7 @@ pub async fn parallel_guesses_admit_at_most_the_ceiling(h: &dyn Harness) {
             h.directory().authenticate(&address, PASSWORD).await,
             "authenticate after the burst",
         ),
-        Authentication::Locked,
+        Authentication::Locked(id),
     );
 }
 
@@ -461,7 +464,7 @@ const CANCELLED_ATTEMPT_POLLS: u32 = 1_000;
 /// case does not assert about. Between polls the case yields, so a driver that needs the
 /// runtime to make progress gets it; a fixed poll budget bounds the wait.
 pub async fn a_cancelled_attempt_keeps_its_charge(h: &dyn Harness) {
-    let (address, _) = seed(h, "cancelled").await;
+    let (address, id) = seed(h, "cancelled").await;
     let ceiling = h.lockout_attempts();
     fail(h, &address, ceiling - 1).await;
 
@@ -498,7 +501,7 @@ pub async fn a_cancelled_attempt_keeps_its_charge(h: &dyn Harness) {
             h.directory().authenticate(&address, PASSWORD).await,
             "authenticate after a cancelled attempt",
         ),
-        Authentication::Locked,
+        Authentication::Locked(id),
         "a cancelled attempt must keep its charge, or disconnecting is a free guess",
     );
 }
@@ -583,14 +586,14 @@ pub async fn a_password_change_grants_the_new_password_and_refuses_the_old(h: &d
                 .await,
             "authenticate with the new password",
         ),
-        Authentication::Granted(id),
+        Authentication::Granted(id.clone()),
     );
     assert_eq!(
         ok(
             h.directory().authenticate(&address, PASSWORD).await,
             "authenticate with the old password",
         ),
-        Authentication::Refused,
+        Authentication::Refused(Some(id)),
     );
 }
 
@@ -925,8 +928,8 @@ pub async fn addressless_identities_are_accounts_too(h: &dyn Harness) {
 /// A federated account's credential is null, and a null credential never authenticates.
 ///
 /// "No password for OIDC accounts" made structural (#460): by its verified address or by its id,
-/// every presentation is `Refused` — the timing-equalized miss an unknown account gets — and
-/// never `Granted`. It is never charged either, so past the lockout ceiling it is still `Refused`
+/// every presentation is `Refused` naming no account — the timing-equalized miss an unknown
+/// account gets, which leaves nothing in an activity log — and never `Granted`. It is never charged either, so past the lockout ceiling it is still `Refused`
 /// rather than `Locked`, which would be a refusal only a real credential can earn. A password
 /// change reports no such account, and leaves nothing behind that a later presentation could
 /// match.
@@ -944,7 +947,7 @@ pub async fn a_null_credential_never_authenticates(h: &dyn Harness) {
                 h.directory().authenticate(&address, presented).await,
                 "authenticate a federated account by address",
             ),
-            Authentication::Refused,
+            Authentication::Refused(None),
             "{presented:?} by address"
         );
         assert_eq!(
@@ -952,7 +955,7 @@ pub async fn a_null_credential_never_authenticates(h: &dyn Harness) {
                 h.directory().authenticate_user(&id, presented).await,
                 "authenticate a federated account by id",
             ),
-            Authentication::Refused,
+            Authentication::Refused(None),
             "{presented:?} by id"
         );
     }
@@ -964,7 +967,7 @@ pub async fn a_null_credential_never_authenticates(h: &dyn Harness) {
             h.directory().authenticate(&address, PASSWORD).await,
             "authenticate past the ceiling",
         ),
-        Authentication::Refused,
+        Authentication::Refused(None),
         "a federated account is never charged, so never locked"
     );
     assert_eq!(
@@ -981,7 +984,7 @@ pub async fn a_null_credential_never_authenticates(h: &dyn Harness) {
             h.directory().authenticate_user(&id, PASSWORD).await,
             "authenticate after the refused change",
         ),
-        Authentication::Refused,
+        Authentication::Refused(None),
         "the refused change wrote no credential"
     );
 }

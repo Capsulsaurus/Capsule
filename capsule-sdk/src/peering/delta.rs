@@ -1,20 +1,30 @@
 //! Determining the delta: what each side is missing.
 //!
 //! Before building an artifact the two devices must agree on what to move. Peering **reuses the
-//! sync-cursor model** rather than inventing a diff: each side offers its set of held
-//! [ciphertext content addresses](capsule_core::crypto::hash::Hash32) and its cursor, and the
-//! delta is the *complement*. "What changed" is already defined by the sync feed — peering
-//! borrows that definition wholesale. Because every blob is content-addressed, dedup is free:
-//! the complement already excludes anything the receiver holds.
+//! sync-cursor model** rather than inventing a diff: each side offers the set of
+//! [addresses](capsule_core::crypto::hash::Hash32) it holds and its cursor, and the delta is
+//! the *complement*. "What changed" is already defined by the sync feed — peering borrows that
+//! definition wholesale. Because every address names an exact state, dedup is free: the
+//! complement already excludes anything the receiver holds.
+//!
+//! The addresses a sync offer carries are the **head record hashes** of the assets a device
+//! holds ([`record_hash`] of each chain's last record): an asset whose head the
+//! receiver already holds is what the complement leaves out, and a metadata edit that keeps the
+//! ciphertext still moves, because it changes the head.
 //!
 //! On the wire an offer is split into pages of at most [`OFFER_PAGE_CAP`] addresses, and each
 //! page is **padded to a size bucket** (a power of two of address slots, at least
 //! [`MIN_OFFER_BUCKET`]), so the encrypted channel's record sizes reveal only a coarse bucket of
-//! how much a device holds, and no single request can carry an unbounded offer.
+//! how much a device holds, and no single request can carry an unbounded offer. A whole offer is
+//! at most [`MAX_OFFER_PAGES`] pages.
+//!
+//! [`record_hash`]: capsule_core::crypto::provenance::ProvenanceRecord::record_hash
 
 use std::collections::BTreeSet;
 
+use capsule_core::backup::BackupAsset;
 use capsule_core::crypto::hash::Hash32;
+use capsule_core::crypto::provenance::ProvenanceRecord;
 
 use super::PeeringError;
 
@@ -24,11 +34,18 @@ pub const OFFER_PAGE_CAP: usize = 4096;
 /// The smallest size bucket, in address slots, a page is padded to.
 pub const MIN_OFFER_BUCKET: usize = 64;
 
+/// The most pages one offer is carried in, so a whole offer (at most
+/// `MAX_OFFER_PAGES * OFFER_PAGE_CAP` addresses) is bounded too, not only each page.
+pub const MAX_OFFER_PAGES: usize = 256;
+
 /// Bytes of a page header: the cursor (`u64`) then the real address count (`u32`), big-endian.
 const PAGE_HEADER: usize = 12;
 
 /// Bytes of one address slot.
 const SLOT: usize = 32;
+
+/// The largest encoded page: a full page padded to the cap's bucket.
+pub(crate) const MAX_OFFER_PAGE_BYTES: usize = PAGE_HEADER + OFFER_PAGE_CAP * SLOT;
 
 /// The bucket, in address slots, a page holding `count` addresses is padded to.
 #[must_use]
@@ -45,12 +62,12 @@ pub struct OfferPage {
     pub addresses: Vec<Hash32>,
 }
 
-/// One side's offer in the delta negotiation: the content addresses it currently holds and its
-/// sync cursor high-water mark. The cursor is carried for parity with server sync (a peer only
+/// One side's offer in the delta negotiation: the addresses it currently holds and its sync
+/// cursor high-water mark. The cursor is carried for parity with server sync (a peer only
 /// offers state it has itself reconciled up to); the set is what the complement is computed over.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Offer {
-    /// The ciphertext content addresses this device holds.
+    /// The head record hashes ([`head_address`]) of the assets this device holds.
     pub addresses: BTreeSet<Hash32>,
     /// This device's sync-cursor high-water mark.
     pub cursor: u64,
@@ -168,4 +185,33 @@ pub fn symmetric_difference(a: &Offer, b: &Offer) -> BTreeSet<Hash32> {
         .symmetric_difference(&b.addresses)
         .copied()
         .collect()
+}
+
+/// The address an asset is offered under: its chain's head record hash. `None` for an asset with
+/// no provenance, which no offer can name.
+#[must_use]
+pub fn head_address(asset: &BackupAsset) -> Option<Hash32> {
+    asset.provenance.last().map(ProvenanceRecord::record_hash)
+}
+
+/// Cut `assets` to the ones `receiver` is missing: [`missing_from`]`(receiver, ours)` over their
+/// [`head_address`]es. Returns what remains and how many the receiver's offer excluded. An asset
+/// with no head address is kept, since no offer can show the receiver holds it.
+#[must_use]
+pub fn cut_to_missing(assets: Vec<BackupAsset>, receiver: &Offer) -> (Vec<BackupAsset>, usize) {
+    let ours = Offer::new(assets.iter().filter_map(head_address).collect(), 0);
+    let missing = missing_from(receiver, &ours);
+    let before = assets.len();
+    let kept: Vec<BackupAsset> = assets
+        .into_iter()
+        .filter(|asset| head_address(asset).is_none_or(|head| missing.contains(&head)))
+        .collect();
+    let excluded = before - kept.len();
+    tracing::debug!(
+        offered = receiver.addresses.len(),
+        kept = kept.len(),
+        excluded,
+        "peering: delta cut from the receiver's offer"
+    );
+    (kept, excluded)
 }

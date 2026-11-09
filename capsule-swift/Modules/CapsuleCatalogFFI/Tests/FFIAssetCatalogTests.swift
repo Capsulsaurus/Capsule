@@ -61,6 +61,44 @@ struct CapsuleCatalogTests {
         }
     }
 
+    @Test("a caption is set, survives an upsert of the row, and clears with nil")
+    func captionRegister() async throws {
+        let catalog = try FFIAssetCatalog.inMemory()
+        try await catalog.insertAsset(makeAsset(id: "captioned"))
+
+        try await catalog.setCaption("harbour", assetID: "captioned")
+        var row = try #require(try await catalog.asset(id: "captioned"))
+        #expect(row.caption == "harbour")
+
+        row.rating = 1
+        try await catalog.upsertAsset(row)
+        #expect(try await catalog.asset(id: "captioned")?.caption == "harbour")
+
+        try await catalog.setCaption(nil, assetID: "captioned")
+        #expect(try await catalog.asset(id: "captioned")?.caption == nil)
+    }
+
+    @Test("a caption for an asset the catalog does not hold is refused")
+    func captionForUnknownAssetIsRefused() async throws {
+        let catalog = try FFIAssetCatalog.inMemory()
+        await #expect(throws: CapsuleCatalog.CatalogError.invalidArgument(message: "no asset: ghost")) {
+            try await catalog.setCaption("harbour", assetID: "ghost")
+        }
+    }
+
+    @Test("an import's GPS fix and caption round-trip through SQLite")
+    func locationRoundTrip() async throws {
+        let catalog = try FFIAssetCatalog.inMemory()
+        var asset = makeAsset(id: "located")
+        asset.caption = "on the pier"
+        asset.latitude = -33.8568
+        asset.longitude = 151.2153
+
+        try await catalog.insertAsset(asset)
+
+        #expect(try await catalog.asset(id: "located") == asset)
+    }
+
     @Test("the timeline is ordered by capture time, newest first")
     func timelineOrdering() async throws {
         let catalog = try FFIAssetCatalog.inMemory()
@@ -84,16 +122,16 @@ struct CapsuleCatalogTests {
         #expect(page.map(\.id) == ["a7", "a6", "a5"])
     }
 
-    @Test("soft delete hides an asset; restore returns it")
-    func softDeleteAndRestore() async throws {
+    @Test("a trashed row is absent from the timeline")
+    func trashedRowLeavesTheTimeline() async throws {
         let catalog = try FFIAssetCatalog.inMemory()
-        try await catalog.insertAsset(makeAsset(id: "trashed"))
+        var trashed = makeAsset(id: "trashed")
+        trashed.isDeleted = true
+        trashed.deletedAt = 1720000500
+        try await catalog.insertAsset(trashed)
+        try await catalog.insertAsset(makeAsset(id: "kept"))
 
-        try await catalog.softDeleteAsset(id: "trashed", deletedAt: 1720000500)
-        #expect(try await catalog.timeline(offset: 0, limit: 100).isEmpty)
-
-        try await catalog.restoreAsset(id: "trashed")
-        #expect(try await catalog.timeline(offset: 0, limit: 100).count == 1)
+        #expect(try await catalog.timeline(offset: 0, limit: 100).map(\.id) == ["kept"])
     }
 
     @Test("a filtered timeline restricts by catalog asset type")

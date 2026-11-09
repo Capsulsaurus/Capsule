@@ -134,6 +134,10 @@ async fn a_valid_proof_closes_every_session_including_the_callers() {
         .send()
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        fixture.activity_kinds(&support::user()).await[0],
+        capsule_server::activity::ActivityKind::SessionsRevokedAll
+    );
 }
 
 #[tokio::test]

@@ -338,8 +338,14 @@ async fn a_restore_on_a_later_page_beats_a_deadline_passed_on_the_device_clock()
     );
     persist_page(&db, &restored).await.unwrap();
 
-    let at = judged_at(ts("2026-06-01T00:00:00Z"), latest_changed_at(&restored));
-    assert_eq!(record_elapsed_purges(&db, at).await.unwrap(), 0);
+    // Even judged past the deadline (as a device clock far ahead would), the restore that
+    // landed has taken the asset out of the sweep.
+    assert_eq!(
+        record_elapsed_purges(&db, ts("2026-06-01T00:00:00Z"))
+            .await
+            .unwrap(),
+        0
+    );
     assert!(
         peering_tombstone::Entity::find()
             .all(&db)
@@ -399,7 +405,7 @@ async fn a_window_closes_at_its_deadline_and_not_before() {
 }
 
 #[tokio::test]
-async fn the_server_clock_in_the_page_floors_a_slow_device_clock() {
+async fn the_sweep_judges_at_the_latest_server_clock_reading_in_the_page() {
     let (db, path) = temp_db().await;
     let asset = Uuid::from_u128(6);
     let other = Uuid::from_u128(7);
@@ -419,7 +425,7 @@ async fn the_server_clock_in_the_page_floors_a_slow_device_clock() {
         0x61,
     );
     persist_page(&db, &landed).await.unwrap();
-    let at = judged_at(Timestamp::UNIX_EPOCH, latest_changed_at(&landed));
+    let at = latest_changed_at(&landed).expect("a server clock reading");
     assert_eq!(at, ts("2026-03-01T00:00:00Z"));
     record_elapsed_purges(&db, at).await.unwrap();
     assert_eq!(load_tombstones(&db).await.unwrap(), BTreeSet::from([asset]));
@@ -437,14 +443,7 @@ async fn the_server_clock_in_the_page_floors_a_slow_device_clock() {
 }
 
 #[test]
-fn the_device_clock_is_floored_by_the_server_clock_and_never_lowered() {
-    let now = ts("2026-02-01T00:00:00Z");
-    assert_eq!(judged_at(now, None), now);
-    assert_eq!(judged_at(now, Some(ts("2026-01-01T00:00:00Z"))), now);
-    assert_eq!(
-        judged_at(now, Some(ts("2026-03-01T00:00:00Z"))),
-        ts("2026-03-01T00:00:00Z")
-    );
+fn an_unparsable_changed_at_is_no_server_clock_reading() {
     let unparsable = page(
         vec![FeedEntry {
             changed_at: "yesterday".to_string(),
@@ -455,7 +454,7 @@ fn the_device_clock_is_floored_by_the_server_clock_and_never_lowered() {
     assert_eq!(
         latest_changed_at(&unparsable),
         None,
-        "an unparsable changed_at is no floor"
+        "an unparsable changed_at is no reading, so the sweep judges nothing"
     );
 }
 
@@ -486,7 +485,7 @@ async fn a_device_first_syncing_after_a_purge_records_its_tombstone() {
         load_tombstones(&db).await.unwrap().is_empty(),
         "landing a page records no purge; the sweep does, at the feed's head"
     );
-    let at = judged_at(Timestamp::UNIX_EPOCH, latest_changed_at(&landed));
+    let at = latest_changed_at(&landed).expect("a server clock reading");
     assert_eq!(record_elapsed_purges(&db, at).await.unwrap(), 2);
     assert_eq!(
         load_tombstones(&db).await.unwrap(),

@@ -19,7 +19,8 @@ use jiff::Timestamp;
 use super::{
     AssetIndex, AssetRow, AssetState, BlobOutcome, BlobRecord, BlobRef, Custody, FeedEntry,
     HoldOutcome, IndexFuture, LifecycleOp, OpAction, OpOutcome, PendingAsset, PurgeOutcome,
-    Receipted, Reservation, RestoreOutcome, ServingHold, entry_for, is_singular, set_singular,
+    Receipted, Reservation, RestoreOutcome, ServingHold, SizeRepair, entry_for, is_singular,
+    set_singular,
 };
 use crate::attestation::InMemoryReceipts;
 use crate::blob::ContentAddress;
@@ -459,8 +460,12 @@ impl AssetIndex for InMemoryAssetIndex {
         Box::pin(async move {
             let inner = lock(&self.inner);
             // Two passes rather than a sort: live references come before tombstoned ones, each
-            // in the map's asset-id order, and pending rows are not references at all.
-            let holds = |row: &&AssetRow| row.blobs.iter().any(|blob| &blob.address == address);
+            // in the map's asset-id order, and pending rows are not references at all. A
+            // superseded manifest is a provenance reference of the asset it was superseded in.
+            let holds = |row: &&AssetRow| {
+                row.blobs.iter().any(|blob| &blob.address == address)
+                    || row.superseded.contains(address)
+            };
             let reference = |row: &AssetRow| super::BlobReference {
                 asset_id: row.asset_id.clone(),
                 album_id: row.album_id.clone(),
@@ -469,10 +474,11 @@ impl AssetIndex for InMemoryAssetIndex {
                     .blobs
                     .iter()
                     .find(|blob| &blob.address == address)
-                    .map_or(BlobRole::Original, |blob| blob.role),
+                    .map_or(BlobRole::Provenance, |blob| blob.role),
                 state: row.state,
                 original_held: row.original_held(),
                 hold: row.hold,
+                retention_until: row.retention_until,
             };
             let in_state = |state: AssetState| {
                 inner
@@ -532,6 +538,37 @@ impl AssetIndex for InMemoryAssetIndex {
                 tracing::info!(%asset, "an asset's serving hold was lifted");
             }
             Ok(HoldOutcome::Applied)
+        })
+    }
+
+    fn repair_blob_size<'a>(
+        &'a self,
+        asset: &'a AssetId,
+        role: BlobRole,
+        address: &'a ContentAddress,
+        size: u64,
+    ) -> IndexFuture<'a, SizeRepair> {
+        Box::pin(async move {
+            let mut inner = lock(&self.inner);
+            let Some(mut row) = inner.rows.get(asset).cloned() else {
+                return Ok(SizeRepair::NotFound);
+            };
+            let Some(blob) = row.blobs.iter_mut().find(|blob| {
+                size > 0 && blob.size == 0 && blob.role == role && &blob.address == address
+            }) else {
+                return Ok(SizeRepair::Unchanged);
+            };
+            blob.size = size;
+            // A published row moves to the feed's head, so a device that already synced it at
+            // size 0 is sent it again at its real size. An unpublished row has no position.
+            if row.sync_seq.is_some() {
+                let owner = row.owner_id.clone();
+                row.sync_seq = Some(inner.mint(&owner));
+            }
+            let sync_seq = row.sync_seq;
+            inner.rows.insert(asset.clone(), row);
+            tracing::info!(%asset, role = role.as_str(), %address, size, ?sync_seq, "a blob reference recorded at size 0 now carries its size");
+            Ok(SizeRepair::Repaired)
         })
     }
 

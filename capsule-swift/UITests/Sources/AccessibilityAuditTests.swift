@@ -146,6 +146,47 @@ extension AccessibilityAuditTests {
         auditAccessibility()
     }
 
+    /// The cull pass, audited with no exclusions: the culling contract makes a
+    /// full audit a condition of shipping it.
+    ///
+    /// Reached through the timeline's Cull button rather than ⇧⌘R, because
+    /// that is the door a phone with no keyboard has.
+    func testCullingIsAccessible() {
+        openCulling()
+        auditAccessibility()
+    }
+
+    /// The pass after a verdict, once the flag reads as something other than
+    /// unflagged — the badge's symbol and word are what the audit checks for
+    /// contrast and description.
+    func testCullingAfterAVerdictIsAccessible() {
+        openCulling()
+        require(app.buttons["culling.verb.pick"]).tap()
+        require(app.buttons["culling.verb.previous"]).tap()
+        auditAccessibility()
+    }
+
+    /// The in-app shortcut list: the phone's only way to discover the keys.
+    func testCullingShortcutsAreAccessible() {
+        openCulling()
+        require(app.descendants(matching: .any).matching(identifier: "culling.shortcuts").firstMatch).tap()
+        require(app.navigationBars.firstMatch)
+        auditAccessibility()
+    }
+
+    /// Open the cull pass over the library and wait for its first photo.
+    private func openCulling() {
+        launch(scenario: .healthy)
+        require(
+            app.descendants(matching: .any).matching(identifier: "timeline.cull").firstMatch,
+            timeout: 20
+        ).tap()
+        require(
+            app.descendants(matching: .any).matching(identifier: "culling.asset").firstMatch,
+            timeout: 15
+        )
+    }
+
     /// Tap a tab by its visible label.
     ///
     /// By label rather than identifier because the tab bar's buttons are built

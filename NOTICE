@@ -86,6 +86,23 @@ CDLA-Permissive-2.0, which requires that this notice accompany the data.
   <https://cdla.dev/permissive-2-0/>
 
 --------------------------------------------------------------------------------
+Geist and Geist Mono — SIL Open Font License, Version 1.1 (OFL-1.1)
+--------------------------------------------------------------------------------
+
+The documentation site serves the Geist and Geist Mono 1.9.2 variable fonts,
+copied unmodified from the upstream `geist` npm package into
+`capsule-docs/src/assets/fonts/`. No client or server artifact contains them.
+
+  Copyright (c) 2023 Vercel, in collaboration with basement.studio
+  <https://github.com/vercel/geist-font>
+
+  This Font Software is licensed under the SIL Open Font License, Version 1.1.
+  <https://openfontlicense.org>
+
+The OFL applies to the font files only; it does not extend to the documents
+that use them.
+
+--------------------------------------------------------------------------------
 Mozilla Public License 2.0 components
 --------------------------------------------------------------------------------
 

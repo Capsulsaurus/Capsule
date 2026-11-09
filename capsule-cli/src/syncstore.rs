@@ -206,21 +206,16 @@ fn ceil_second(at: Timestamp) -> i64 {
 }
 
 /// The latest `changed_at` among `page`'s entries, or `None` when none parses. A `changed_at`
-/// is a reading of the server's clock, the one that refuses a late `trash-restore`.
+/// is a reading of the server's clock, the one that refuses a late `trash-restore`, and the
+/// latest one a drain saw is the only instant retention deadlines are judged at
+/// ([`record_elapsed_purges`]): never this device's clock, which running ahead would record a
+/// purge early and then refuse a peer's copy of an asset the server restored in time.
 #[must_use]
 pub fn latest_changed_at(page: &SyncPage) -> Option<Timestamp> {
     page.entries
         .iter()
         .filter_map(|entry| entry.changed_at.parse::<Timestamp>().ok())
         .max()
-}
-
-/// The time retention deadlines are judged at: the device's clock `now`, floored by `server`,
-/// the latest server clock reading the drain saw ([`latest_changed_at`]). A deadline the server's
-/// clock has passed has passed on the server too, however far behind this device's clock is.
-#[must_use]
-pub fn judged_at(now: Timestamp, server: Option<Timestamp>) -> Timestamp {
-    server.map_or(now, |server| server.max(now))
 }
 
 /// Land a validated page: upsert every asset and advance the stored cursor, in one transaction.
@@ -296,8 +291,10 @@ pub async fn persist_page<C: ConnectionTrait + TransactionTrait>(
 /// recorded once; recording an asset again would keep its first record anyway, so the sweep is
 /// safe to repeat. A sync run runs it once the drain has reached the feed's head, and only
 /// then: a delete on one page may be restored on a later one, and the restore clears the
-/// deadline only when that page lands. It runs on a run that landed no page too, since a window
-/// closes on the clock and not on a feed entry.
+/// deadline only when that page lands. `at` is the latest server `changed_at` the drain saw
+/// ([`latest_changed_at`]), so a run that landed no entry has no reading to judge by and does
+/// not sweep: a window the server's clock has closed is recorded by the next drain that lands
+/// one, and a late record loses nothing.
 ///
 /// # Errors
 ///

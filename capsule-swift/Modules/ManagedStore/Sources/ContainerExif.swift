@@ -29,10 +29,16 @@ public struct ContainerExif: Sendable, Equatable {
     /// The fields `data`'s container declares — container properties only,
     /// never a pixel decode. Bytes ImageIO cannot open yield every field empty.
     public static func parse(_ data: Data) -> ContainerExif {
-        var exif = ContainerExif()
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
-        else { return exif }
+        else { return ContainerExif() }
+        return parse(properties: properties)
+    }
+
+    /// The fields an already-read property dictionary declares — for a caller
+    /// that opened the image source itself and should not open it twice.
+    static func parse(properties: [CFString: Any]) -> ContainerExif {
+        var exif = ContainerExif()
         if let tiff = properties[kCGImagePropertyTIFFDictionary] as? [CFString: Any] {
             exif.cameraMake = tiff[kCGImagePropertyTIFFMake] as? String
             exif.cameraModel = tiff[kCGImagePropertyTIFFModel] as? String

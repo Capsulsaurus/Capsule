@@ -1,0 +1,114 @@
+name: Apps parity benchmark
+
+# Clients - Responsiveness: each tier-1 client against the platform photo app, on the same
+# physical device and library, judged against that device's committed baseline
+# (`mise run bench-apps`). A regression past the baseline fails the run; parity with the
+# platform app is printed in the log and does not gate.
+#
+# Manual only, on self-hosted bench runners. The numbers mean something only on a real device
+# prepared per the runbook in `mise-tasks/bench-apps`, which no hosted runner has, and a
+# scheduled run with no bench runner registered would sit queued until GitHub expires it.
+# TODO(track:deferred): add a weekly `schedule:` once the bench runners exist - mobile resumes
+# with #389 (Android) and #391-#393 (Apple).
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Which client to benchmark
+        required: true
+        type: choice
+        options: [android, apple]
+      device:
+        description: Device key (names the baseline file, e.g. pixel-8-pro)
+        required: true
+        type: string
+
+concurrency:
+  # One benchmark per device at a time: two runs on one device measure each other.
+  group: bench-apps-${{ inputs.platform }}-${{ inputs.device }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  MISE_AUTO_INSTALL: "false"
+  BENCH_LIBRARY_SIZE: "100000"
+
+jobs:
+  android:
+    name: Android parity on ${{ inputs.device }} (self-hosted)
+    if: inputs.platform == 'android'
+    # A runner with the bench device attached over adb, and the selectors for its platform
+    # app (BENCH_PLATFORM_*) in the runner's environment.
+    runs-on: [self-hosted, android, parity-bench]
+    timeout-minutes: 120
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # `mise run bench-apps` needs mise on PATH, and the `-Pcapsule.wireFfi` staging shells
+      # out to `mise run gen-bindings` - but install nothing implicitly, as build-android.yml.
+      - name: Set up mise (exec shim)
+        uses: jdx/mise-action@v2
+        with:
+          install: false
+
+      # `-Pcapsule.wireFfi` builds the per-ABI libcapsule_sdk.so through cargo-ndk, so every
+      # Android target build-android.yml adds is needed here too. The NDK and cargo-ndk come
+      # from the bench runner.
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
+
+      - name: Run the benchmark and compare with the baseline
+        # Through the environment, never interpolated into the script.
+        env:
+          DEVICE: ${{ inputs.device }}
+        run: mise run bench-apps android "$DEVICE"
+
+      - name: Upload the report and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-apps-android-${{ inputs.device }}
+          path: target/bench-apps/android/
+
+  apple:
+    name: Apple parity on ${{ inputs.device }} (self-hosted)
+    if: inputs.platform == 'apple'
+    # A macOS runner with a provisioned device attached; signing, BENCH_APPLE_DESTINATION and
+    # BENCH_PLATFORM_VIEWER_ID come from the runner, configured out-of-band.
+    runs-on: [self-hosted, macos, parity-bench]
+    timeout-minutes: 120
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up mise
+        uses: jdx/mise-action@v2
+        with:
+          working_directory: capsule-swift
+          install_args: tuist xcbeautify
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+
+      - name: Run the benchmark and compare with the baseline
+        env:
+          DEVICE: ${{ inputs.device }}
+        run: mise run bench-apps apple "$DEVICE"
+
+      - name: Upload the report and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-apps-apple-${{ inputs.device }}
+          path: target/bench-apps/apple/

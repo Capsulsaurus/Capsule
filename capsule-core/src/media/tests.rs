@@ -38,7 +38,10 @@ use uuid::Uuid;
 
 #[cfg(feature = "media-avif-decode")]
 use super::decode::check_avif_frames;
-use super::decode::{Decoder, RawshiftDecoder, decode_guarded, probe_raw};
+use super::decode::{
+    Decoder, RawshiftDecoder, decode_embedded_preview, decode_guarded, embedded_preview_within,
+    extract_embedded_preview, probe_raw,
+};
 use super::derivative::{
     DerivativeContext, DerivativeSealer, DerivativeTier, SealedDerivative, StillDerivatives,
     generate_still_derivatives,
@@ -1047,17 +1050,37 @@ fn tiff_file(
 ) -> Vec<u8> {
     let mut writer = TiffWriter::new(Cursor::new(Vec::new()), ByteOrder::LittleEndian);
     writer.write_header().expect("TIFF header");
-    // `TiffWriter` writes a payload as `u16` words in file order, so packing the bytes
-    // little-endian lands them verbatim. An odd payload gains one pad byte that the IFD's byte
-    // count does not include.
-    let words: Vec<u16> = payload
+    let offset = write_blob(&mut writer, payload);
+    let ifd0 = ifds(&mut writer, offset, payload.len() as u32);
+    writer.update_ifd0_offset(ifd0 as u32).expect("IFD0 offset");
+    writer.finish().into_inner()
+}
+
+/// Write `bytes` verbatim at the writer's position and return their offset.
+///
+/// `TiffWriter` writes a payload as `u16` words in file order, so packing the bytes
+/// little-endian lands them verbatim. An odd payload gains one pad byte that the IFD's byte
+/// count does not include.
+fn write_blob(writer: &mut TiffWriter<Cursor<Vec<u8>>>, bytes: &[u8]) -> u32 {
+    let words: Vec<u16> = bytes
         .chunks(2)
         .map(|pair| u16::from_le_bytes([pair[0], pair.get(1).copied().unwrap_or(0)]))
         .collect();
     let (offset, _) = writer.write_image_strip_rgb16(&words).expect("payload");
-    let ifd0 = ifds(&mut writer, offset as u32, payload.len() as u32);
-    writer.update_ifd0_offset(ifd0 as u32).expect("IFD0 offset");
-    writer.finish().into_inner()
+    offset as u32
+}
+
+/// Point `entries` at an embedded JPEG written at `offset`, the way IFD0 of an ARW (and the
+/// fallback of a DNG) locates one.
+fn locate_preview(entries: &mut Vec<IfdEntry>, offset: u32, preview: &[u8]) {
+    set_entry(
+        entries,
+        IfdEntry::long(TiffTag::JPEGInterchangeFormat, offset),
+    );
+    set_entry(
+        entries,
+        IfdEntry::long(TiffTag::JPEGInterchangeFormatLength, preview.len() as u32),
+    );
 }
 
 /// A neutral CFA scene: every site in the left half `bright`, every site in the right half
@@ -1093,8 +1116,20 @@ fn dng_cfa_with(
     samples: &[u16],
     edit: impl FnOnce(&mut Vec<IfdEntry>, u32, u32),
 ) -> Vec<u8> {
+    dng_cfa_previewed(width, height, samples, &[], edit)
+}
+
+/// [`dng_cfa_with`] that also carries `preview` (when it is not empty) as IFD0's embedded JPEG.
+fn dng_cfa_previewed(
+    width: u32,
+    height: u32,
+    samples: &[u16],
+    preview: &[u8],
+    edit: impl FnOnce(&mut Vec<IfdEntry>, u32, u32),
+) -> Vec<u8> {
     let payload: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
     tiff_file(&payload, |writer, offset, length| {
+        let preview_at = (!preview.is_empty()).then(|| write_blob(writer, preview));
         let mut entries = vec![
             IfdEntry::long(TiffTag::ImageWidth, width),
             IfdEntry::long(TiffTag::ImageLength, height),
@@ -1113,6 +1148,9 @@ fn dng_cfa_with(
             IfdEntry::long(TiffTag::WhiteLevel, 65535),
             IfdEntry::rationals(TiffTag::AsShotNeutral, &[(1, 1), (1, 1), (1, 1)]),
         ];
+        if let Some(at) = preview_at {
+            locate_preview(&mut entries, at, preview);
+        }
         edit(&mut entries, offset, length);
         writer.write_ifd(&mut entries, 0).expect("IFD0")
     })
@@ -1229,8 +1267,21 @@ fn sony_arw(
     ifd0: impl FnOnce(&mut Vec<IfdEntry>),
     raw: impl FnOnce(&mut Vec<IfdEntry>),
 ) -> Vec<u8> {
+    sony_arw_previewed(width, height, samples, &[], ifd0, raw)
+}
+
+/// [`sony_arw`] that also carries `preview` (when it is not empty) as IFD0's embedded JPEG.
+fn sony_arw_previewed(
+    width: u32,
+    height: u32,
+    samples: &[u16],
+    preview: &[u8],
+    ifd0: impl FnOnce(&mut Vec<IfdEntry>),
+    raw: impl FnOnce(&mut Vec<IfdEntry>),
+) -> Vec<u8> {
     let stream = ljpeg_encode(width, height, 14, samples);
     tiff_file(&stream, |writer, offset, length| {
+        let preview_at = (!preview.is_empty()).then(|| write_blob(writer, preview));
         let mut raw_entries = vec![
             IfdEntry::long(TiffTag::ImageWidth, width),
             IfdEntry::long(TiffTag::ImageLength, height),
@@ -1253,6 +1304,9 @@ fn sony_arw(
             IfdEntry::ascii(TiffTag::Model, "ILCE-SYNTHETIC"),
             IfdEntry::long(TiffTag::SubIFDs, raw_ifd as u32),
         ];
+        if let Some(at) = preview_at {
+            locate_preview(&mut entries, at, preview);
+        }
         ifd0(&mut entries);
         writer.write_ifd(&mut entries, 0).expect("IFD0")
     })
@@ -1796,6 +1850,198 @@ fn nikon_nef_is_recognised_and_refused() {
 #[test]
 fn fujifilm_raf_is_recognised_and_refused() {
     assert_refused_raw_family(&decodable_arw(), "raf", StillFormat::Raf);
+}
+
+// ── Embedded RAW previews ────────────────────────────────────────────────────
+
+/// The JPEG the embedded-preview fixtures carry: a 40x24 quadrant frame.
+fn preview_jpeg() -> Vec<u8> {
+    jpeg_bytes(&quadrants(40, 24), None)
+}
+
+/// Both RAW families this build decodes hand back the JPEG they carry, byte for byte, with its
+/// dimensions, and without the sensor data being developed.
+#[test]
+fn a_raw_embedded_preview_is_extracted_with_its_dimensions() {
+    let jpeg = preview_jpeg();
+    let samples = split_cfa(16, 8, 12_000, 1_200);
+    let cases = [
+        (
+            sony_arw_previewed(16, 8, &samples, &jpeg, |_| {}, |_| {}),
+            "arw",
+        ),
+        (
+            dng_cfa_previewed(16, 8, &samples, &jpeg, |_, _, _| {}),
+            "dng",
+        ),
+    ];
+    for (bytes, ext) in cases {
+        let preview = extract_embedded_preview(&bytes, ext)
+            .expect("extracts")
+            .expect("the fixture carries a preview");
+        assert_eq!(preview.jpeg, jpeg, "{ext}: the JPEG exactly as carried");
+        assert_eq!((preview.width, preview.height), (40, 24), "{ext}");
+        assert_eq!(preview.orientation, 1, "{ext}");
+        let decoded = decode_embedded_preview(&preview).expect("decodes");
+        assert_eq!((decoded.width(), decoded.height()), (40, 24), "{ext}");
+        assert_eq!(decoded.format, StillFormat::Jpeg);
+        assert_eq!(decoded.orientation_applied, 1);
+    }
+}
+
+/// A camera writes the orientation into the RAW's IFD0 and leaves the preview untagged, so the
+/// RAW's orientation is the preview's: its upright dimensions transpose, and decoding applies it.
+#[test]
+fn an_untagged_embedded_preview_takes_the_raw_orientation() {
+    let jpeg = preview_jpeg();
+    let samples = split_cfa(16, 8, 12_000, 1_200);
+    let arw = sony_arw_previewed(
+        16,
+        8,
+        &samples,
+        &jpeg,
+        |ifd0| set_entry(ifd0, IfdEntry::short(TiffTag::Orientation, 6)),
+        |_| {},
+    );
+    let preview = extract_embedded_preview(&arw, "arw")
+        .expect("extracts")
+        .expect("carried");
+    assert_eq!(preview.orientation, 6);
+    assert_eq!((preview.width, preview.height), (24, 40));
+    let decoded = decode_embedded_preview(&preview).expect("decodes");
+    assert_eq!((decoded.width(), decoded.height()), (24, 40));
+    assert_eq!(decoded.orientation_applied, 6);
+}
+
+/// A JPEG that carries its own orientation keeps it: the RAW's does not override it, and it is
+/// applied once.
+#[test]
+fn a_tagged_embedded_preview_keeps_its_own_orientation() {
+    let jpeg = jpeg_bytes(&quadrants(40, 24), Some(&oriented(8)));
+    let samples = split_cfa(16, 8, 12_000, 1_200);
+    let arw = sony_arw_previewed(
+        16,
+        8,
+        &samples,
+        &jpeg,
+        |ifd0| set_entry(ifd0, IfdEntry::short(TiffTag::Orientation, 3)),
+        |_| {},
+    );
+    let preview = extract_embedded_preview(&arw, "arw")
+        .expect("extracts")
+        .expect("carried");
+    assert_eq!(preview.orientation, 8);
+    assert_eq!((preview.width, preview.height), (24, 40));
+    let decoded = decode_embedded_preview(&preview).expect("decodes");
+    assert_eq!((decoded.width(), decoded.height()), (24, 40));
+}
+
+/// No preview is an answer, not an error: a RAW that carries none, and a still that is not a
+/// RAW at all.
+#[test]
+fn a_still_without_an_embedded_preview_has_none() {
+    assert_eq!(extract_embedded_preview(&decodable_arw(), "arw"), Ok(None));
+    let jpeg = preview_jpeg();
+    assert_eq!(extract_embedded_preview(&jpeg, "jpg"), Ok(None));
+    assert_eq!(
+        extract_embedded_preview(b"not an image", "txt"),
+        Err(MediaError::NotAStillImage)
+    );
+}
+
+/// A RAW family this build does not decode is refused with the typed gap, like a decode.
+#[test]
+fn an_undecodable_raw_family_has_no_embedded_preview_here() {
+    let jpeg = preview_jpeg();
+    let arw = sony_arw_previewed(
+        16,
+        8,
+        &split_cfa(16, 8, 12_000, 1_200),
+        &jpeg,
+        |_| {},
+        |_| {},
+    );
+    assert_eq!(
+        extract_embedded_preview(&arw, "nef"),
+        Err(MediaError::UnsupportedFormat {
+            format: StillFormat::Nef,
+            op: FormatOp::Decode,
+        })
+    );
+}
+
+/// `RawFile::thumbnail` allocates the length IFD0 states before it reads a byte, so a few-byte
+/// file stating a 4 GiB preview is refused before the reader runs — and the RAW itself still
+/// passes the walk, because a broken preview must not refuse the decode.
+#[test]
+fn an_embedded_preview_longer_than_its_file_is_refused_before_the_reader_allocates() {
+    let bytes = hand_tiff(&[&[
+        (TiffTag::Make.as_u16(), 2, 4, u32::from_le_bytes(*b"SON\0")),
+        (TiffTag::JPEGInterchangeFormat.as_u16(), T_LONG, 1, 8),
+        (
+            TiffTag::JPEGInterchangeFormatLength.as_u16(),
+            T_LONG,
+            1,
+            u32::MAX,
+        ),
+    ]]);
+    let walk = check_ifd_bounds(&bytes).expect("nothing the IFD reader allocates is oversized");
+    assert_eq!(walk.max_jpeg_length, u64::from(u32::MAX));
+    for ext in ["arw", "dng"] {
+        match extract_embedded_preview(&bytes, ext) {
+            Err(MediaError::Decode { detail, .. }) => assert!(
+                detail.contains("embedded preview claims 4294967295 bytes"),
+                "{ext}: {detail}"
+            ),
+            other => panic!("{ext}: expected a decode failure, got {other:?}"),
+        }
+    }
+}
+
+/// The preview's frame is held to the decode budget like any other still's.
+#[test]
+fn an_oversized_embedded_preview_is_refused() {
+    let jpeg = preview_jpeg();
+    let arw = sony_arw_previewed(
+        16,
+        8,
+        &split_cfa(16, 8, 12_000, 1_200),
+        &jpeg,
+        |_| {},
+        |_| {},
+    );
+    assert_eq!(
+        embedded_preview_within(&arw, StillFormat::Arw, 40 * 24 - 1),
+        Err(MediaError::PixelBudgetExceeded {
+            pixels: 40 * 24,
+            limit: 40 * 24 - 1,
+        })
+    );
+    assert!(
+        embedded_preview_within(&arw, StillFormat::Arw, 40 * 24)
+            .expect("at the budget")
+            .is_some()
+    );
+}
+
+/// Whatever IFD0 points at must be a JPEG; anything else does not fill a rung.
+#[test]
+fn an_embedded_preview_that_is_not_a_jpeg_is_a_decode_failure() {
+    let png = png_bytes(&quadrants(8, 8));
+    let arw = sony_arw_previewed(
+        16,
+        8,
+        &split_cfa(16, 8, 12_000, 1_200),
+        &png,
+        |_| {},
+        |_| {},
+    );
+    match extract_embedded_preview(&arw, "arw") {
+        Err(MediaError::Decode { detail, .. }) => {
+            assert!(detail.contains("not a JPEG"), "{detail}");
+        }
+        other => panic!("expected a decode failure, got {other:?}"),
+    }
 }
 
 // ── RAW IFD value counts (issue #644) ────────────────────────────────────────

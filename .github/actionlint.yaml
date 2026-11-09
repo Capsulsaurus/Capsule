@@ -6,8 +6,11 @@
 #   android / strongbox   — an Android device (or attached host) with a StrongBox secure
 #                           element, for the hardware-signer and hardware-DEK runs.
 #   macos / secure-enclave — a provisioned Apple device for the Secure Enclave runs.
+#   parity-bench          — a physical bench device prepared for the apps' responsiveness
+#                           parity benchmark (`bench-apps.yml`), with `android` or `macos`.
 self-hosted-runner:
   labels:
     - android
     - strongbox
     - secure-enclave
+    - parity-bench

@@ -91,6 +91,9 @@ struct AppEnvironment {
     /// off until the user turns it on in Security & Privacy.
     let placeNames: any PlaceNameResolver
     let importer: LibraryImporter
+    /// One sync of the managed lane with its server; `nil` for a lane with no
+    /// session to sync over. See ``syncManagedLane()``.
+    private let managedSync: ManagedLaneSync?
 
     /// The local-authentication gate in front of Trash and Hidden (*SR1*).
     ///
@@ -138,8 +141,21 @@ struct AppEnvironment {
     var places: any PlacesPort { mock.places }
     var search: any SearchPort { mock.search }
 
+    /// Labels on regions, stacks and albums, and the regions themselves.
+    ///
+    /// Stored rather than forwarded, like ``transferEvents``: it is one of the
+    /// ``LanePorts`` a lane supplies, so the FFI lane's Rust-backed adapter
+    /// replaces the mock one here and nowhere else.
+    let labels: any LabelPort
+    /// What the cull pass reads and writes. Stored rather than forwarded, like
+    /// ``labels``: the FFI lane's workspace adapter replaces the mock one here.
+    let cull: any CullPort
+
     var importing: any ImportPort { mock.importing }
     var uploads: any UploadPort { mock.uploads }
+    /// The step-by-step transfer event stream the real-time transfer view
+    /// draws.
+    let transferEvents: any TransferEventPort
     var sync: any SyncPort { mock.sync }
     var storage: any StoragePort { mock.storage }
     var quota: any QuotaPort { mock.quota }
@@ -219,19 +235,29 @@ struct AppEnvironment {
         return .fromLaunchArguments(processInfo, persisted: persisted, clock: clock)
     }
 
+    /// The world over `mock`, with `lane`'s ports in place of the mock world's
+    /// own where it supplies them.
+    ///
     /// - Parameters:
     ///   - mock: the world every port reads.
+    ///   - lane: the ports a lane supplies; `nil` is the mock world's own.
     ///   - alertAdapters: what the alert loop arms with. Defaults to the mock
     ///     lane, so a test that builds an environment never reaches the OS.
-    init(mock: MockEnvironment, alertAdapters: AlertAdapters = .mock) {
+    init(mock: MockEnvironment, lane: LanePorts? = nil, alertAdapters: AlertAdapters = .mock) {
         self.mock = mock
         CapsuleLog.app.info("mock scenario: \(mock.scenario.rawValue, privacy: .public)")
+
+        let lane = lane ?? .mock(mock)
+        labels = lane.labels
+        cull = lane.cull
+        transferEvents = lane.transferEvents
 
         // Held concretely for a moment: the info panel's metadata source wants
         // this provider's `AssetLocationSource` conformance, which the erased
         // `any AssetProvider` the rest of the app sees does not carry.
         let library = PortBackedAssetProvider(library: mock.library, organize: mock.organize)
-        let managed = Self.makeManagedLane(root: Self.libraryRoot())
+        let managed = Self.makeManagedLane(root: Self.libraryRoot(), lane: lane, uploads: mock.uploads)
+        managedSync = managed.sync
         assetProvider = Self.composeTimeline(library: library, managed: managed.provider)
         captionStore = Self.composeCaptions(
             library: PortBackedCaptionStore(library: mock.library, organize: mock.organize),
@@ -302,6 +328,13 @@ struct AppEnvironment {
         /// and the managed one never opens on its own — nor through the system
         /// `LAContext` sheet this lane keeps out.
         let trashGate: SecondaryTrashGate
+        /// The render ladder the store's pixels are drawn through.
+        let renderLadder: RenderLadder
+        /// Where a RAW original's embedded preview is read, when the lane can.
+        let embeddedPreviews: (any EmbeddedPreviewPort)?
+        /// One sync of the store with its server, handing each drain to
+        /// ``provider``; `nil` for a lane with no session.
+        var sync: ManagedLaneSync?
     }
 
     /// The picker-driven import flow and the provider that reads what it writes.
@@ -313,29 +346,112 @@ struct AppEnvironment {
     /// authorization. The one `ManagedProvider` built here is shared by the
     /// importer and, through ``composeTimeline(library:managed:)``, the
     /// timeline, which is what makes an import visible once it completes.
-    static func makeManagedLane(root: URL) -> ManagedLane {
+    ///
+    /// - Parameter openLibrary: the lane's store over the layout. The FFI lane
+    ///   supplies one whose writes are the Rust workspace's verbs; with none,
+    ///   there is no Rust core, so the store is an in-memory catalog written
+    ///   through a `LocalManagedWorkspace`.
+    /// - Parameter uploads: the upload sessions a managed delete redacts the
+    ///   deleted asset's in-flight upload from. With none, a delete redacts
+    ///   nothing.
+    /// - Parameter renderLadder: the lane's render ladder. The default is the
+    ///   mock lane's stand-in; the FFI lane passes `RenderLadder.ffi`.
+    /// - Parameter embeddedPreviews: where a RAW's embedded preview is read.
+    ///   With none, every rung is drawn from the original.
+    /// - Parameter openSync: the lane's sync of the store over the layout,
+    ///   handing each drain to the provider built here. With none (signed
+    ///   out, the mock lane), nothing syncs.
+    static func makeManagedLane(
+        root: URL,
+        openLibrary: (@Sendable (ManagedLibraryLayout) -> ManagedLibrary)? = nil,
+        uploads: (any UploadPort)? = nil,
+        renderLadder: RenderLadder = MockRenderLadder.ladder,
+        embeddedPreviews: (any EmbeddedPreviewPort)? = nil,
+        openSync: OpenManagedLaneSync? = nil
+    ) -> ManagedLane {
         let layout = ManagedLibraryLayout(root: root)
-        let library = ManagedLibrary(layout: layout, catalogOpener: InMemoryCatalogOpener())
-        let importService = ImportService(
-            library: library,
-            fileStore: SystemFileStore(),
-            hasher: CryptoKitHasher(),
-            metadataExtractor: ImageIOMetadataExtractor(),
-            sidecarCoder: JSONSidecarCoder()
-        )
+        let fileStore = SystemFileStore()
+        let library = openLibrary?(layout)
+            ?? ManagedLibrary(layout: layout, fileStore: fileStore, catalog: InMemoryAssetCatalog())
+        let importService = ImportService(library: library, fileStore: fileStore, hasher: CryptoKitHasher())
         let trashGate = SecondaryTrashGate()
-        let provider = ManagedProvider(library: library, authGate: trashGate)
+        let provider = ManagedProvider(
+            library: library,
+            authGate: trashGate,
+            uploads: uploads,
+            purgeDelivery: library.purgeDelivery,
+            lifecycleDelivery: library.lifecycleDelivery
+        )
         CapsuleLog.app.debug("managed lane composed at \(root.path, privacy: .private)")
+        redeliverHeldRecords(
+            provider,
+            purges: library.purgeDelivery != nil,
+            lifecycles: library.lifecycleDelivery != nil
+        )
         return ManagedLane(
             provider: provider,
             importer: LibraryImporter(importService: importService, managedProvider: provider),
             reader: ManagedMediaReader(library: library),
-            trashGate: trashGate
+            trashGate: trashGate,
+            renderLadder: renderLadder,
+            embeddedPreviews: embeddedPreviews,
+            sync: openSync?(layout, provider)
         )
     }
 
+    /// ``makeManagedLane(root:openLibrary:uploads:renderLadder:embeddedPreviews:openSync:)``
+    /// with every lane-supplied part taken from `lane`.
+    private static func makeManagedLane(root: URL, lane: LanePorts, uploads: any UploadPort) -> ManagedLane {
+        makeManagedLane(
+            root: root,
+            openLibrary: lane.openManagedLibrary,
+            uploads: uploads,
+            renderLadder: lane.renderLadder,
+            embeddedPreviews: lane.embeddedPreviews,
+            openSync: lane.openManagedSync
+        )
+    }
+
+    /// Sync the managed lane with its server, when it has one: one drain of
+    /// the feed, whose newly indexed assets release the held records the
+    /// provider waits to deliver.
+    ///
+    /// The scene runs it at launch and on every return to the foreground,
+    /// which is when the platform lets the app run without a background
+    /// task. A sync asked for while one runs joins it, so the two triggers
+    /// landing together cost one drain. With no session it does nothing.
+    func syncManagedLane() async {
+        guard let managedSync else { return }
+        await managedSync()
+    }
+
+    /// Send the purges the workspace kept, and the deletes and restores of
+    /// the assets it still holds, whose delivery failed or was held, once a
+    /// lane is composed with somewhere to send them.
+    ///
+    /// A lane composed with a delivery is a signed-in one, so this is the
+    /// retry a relaunch and a sign-in run: each rebuilds the world with the
+    /// session. It runs detached, because a launch never waits on the
+    /// network; the provider logs each delivery's fate, and a record left
+    /// undelivered stays on its chain for the next walk. The walk is
+    /// `ManagedProvider.redeliverHeldRecords()`: the purges go first, then the
+    /// held assets, one after the other so both read one feed drain, and a
+    /// sync's walk asked for meanwhile queues behind it. Each walk lists everything the workspace holds of its kind, but an
+    /// asset whose head the feed already lists sends nothing, so the cost is
+    /// one feed drain plus what the server still lacks. With no delivery
+    /// (signed out, the mock lane) there is nothing to send.
+    private static func redeliverHeldRecords(_ provider: ManagedProvider, purges: Bool, lifecycles: Bool) {
+        guard purges || lifecycles else { return }
+        CapsuleLog.app.info(
+            "redelivering held records for the signed-in lane, purges=\(purges, privacy: .public) lifecycles=\(lifecycles, privacy: .public)"
+        )
+        Task {
+            await provider.redeliverHeldRecords()
+        }
+    }
+
     /// Recently Deleted over both stores: the composite timeline's `delete`
-    /// soft-deletes an import in the managed catalog, and this is where it can
+    /// moves an import to the managed store's trash, and this is where it can
     /// then be listed, restored and purged.
     static func composeTrash(library: any TrashProvider, managed: ManagedLane) -> any TrashProvider {
         CompositeTrashProvider(
@@ -351,7 +467,12 @@ struct AppEnvironment {
     /// lookup), while the mock renderer paints any identifier whose shape it
     /// decodes, which a freshly minted import id can happen to match.
     static func composeThumbnails(library: any ThumbnailProvider, managed: ManagedLane) -> any ThumbnailProvider {
-        CompositeThumbnailProvider(providers: [ManagedThumbnailProvider(reader: managed.reader), library])
+        let managedThumbnails = ManagedThumbnailProvider(
+            reader: managed.reader,
+            ladder: managed.renderLadder,
+            embeddedPreviews: managed.embeddedPreviews
+        )
+        return CompositeThumbnailProvider(providers: [managedThumbnails, library])
     }
 
     /// The info panel's metadata over both stores, the managed file's real EXIF
@@ -392,3 +513,11 @@ struct AppEnvironment {
         return URL.temporaryDirectory.appending(path: "CapsuleLibrary", directoryHint: .isDirectory)
     }
 }
+
+/// One sync of the managed lane with its server. It logs its own failure and
+/// keeps what the pages before it applied, so a caller has nothing to handle.
+typealias ManagedLaneSync = @Sendable () async -> Void
+
+/// A lane's sync of the managed store at a layout, handing each drain to the
+/// provider that reads the store.
+typealias OpenManagedLaneSync = @Sendable (ManagedLibraryLayout, ManagedProvider) -> ManagedLaneSync

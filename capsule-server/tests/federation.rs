@@ -7,19 +7,25 @@
 //! behind it. What is asserted against the *stores* is asserted against the stores the server
 //! actually read, never against a second reading of the response body.
 //!
-//! The cases named `E2E case 4` are the server half of module-map.md's fourth case; the client
+//! The cases named `E2E case 4` are the server half of the fourth E2E case (the index is in
+//! `capsule-e2e/src/lib.rs`); the client
 //! half (Bob's client renders) is `capsule-e2e`'s.
 
 mod support;
 
+use capsule_core::crypto::hash::Hash32;
 use capsule_core::crypto::keys::HybridSigningKey;
+use capsule_server::activity::ActivityStore as _;
 use capsule_server::blob::{BlobStore, ContentAddress};
 use capsule_server::counter::{CounterKey, CounterStore as _, budgets};
+use capsule_server::federation::scheme::REQUEST_FRESHNESS;
 use capsule_server::federation::{
-    CapabilityCodec, CapabilityRecord, CapabilityStore as _, FederationCollaborators,
-    FederationContext, MintRequest, PeerId, PeerStore as _, Scope,
+    CapabilityCodec, CapabilityRecord, CapabilityStore as _, MintRequest, PeerAdministration,
+    PeerId, PeerStore as _, Scope,
 };
-use capsule_server::index::{AssetIndex, BlobRecord, PendingAsset, ServingHold};
+use capsule_server::index::{
+    AssetIndex, BlobRecord, LifecycleOp, OpAction, OpBlob, OpOutcome, PendingAsset, ServingHold,
+};
 use capsule_server::membership::{MemberRole, MembershipStore as _, RosterRecord};
 use capsule_server::moderation::ModerationStore as _;
 use capsule_server::store::{AlbumId, AssetId, BlobRole, Clock as _, UserId};
@@ -165,8 +171,22 @@ async fn capability(
     .await
 }
 
-/// As [`capability`], over `codec` and `album`.
+/// As [`capability`], over `codec` and `album`, with `peer`'s request key pinned as an operator
+/// pins it — the key [`page`], [`fetch`] and [`refresh`] sign with.
 async fn capability_over(
+    fixture: &Fixture,
+    codec: &CapabilityCodec,
+    peer: &str,
+    album: &AlbumId,
+    scope: Scope,
+    granted_epoch: u64,
+) -> (String, String) {
+    support::pin_request_key(fixture, peer).await;
+    unpinned_capability(fixture, codec, peer, album, scope, granted_epoch).await
+}
+
+/// As [`capability_over`], leaving the peer store as it is.
+async fn unpinned_capability(
     fixture: &Fixture,
     codec: &CapabilityCodec,
     peer: &str,
@@ -207,7 +227,11 @@ async fn capability_over(
 /// A fixture with the album provisioned, Bob on its roster at epoch 1, two assets in the
 /// album and one elsewhere; returns the fixture and the album's two sequence numbers.
 async fn shared() -> (Fixture, Vec<u64>) {
-    let fixture = Fixture::working();
+    shared_on(Fixture::working()).await
+}
+
+/// As [`shared`], on `fixture`.
+async fn shared_on(fixture: Fixture) -> (Fixture, Vec<u64>) {
     let owner_bearer = fixture.bearer().await;
     provision(&fixture, &owner_bearer).await;
     let first = publish_into(&fixture, "shared-1", &album()).await;
@@ -217,21 +241,42 @@ async fn shared() -> (Fixture, Vec<u64>) {
     (fixture, vec![first, third])
 }
 
-/// Ask for a page as `bearer` and return the raw response.
+/// Ask for a page as `bearer`, signed as the peer signs, and return the raw response.
+///
+/// Every helper signs whatever it presents: a session token ignores the header, so signing it
+/// too is the case that proves it does.
 async fn page(fixture: &Fixture, bearer: &str, query: &str) -> kynos::test::TestResponse {
     let path = if query.is_empty() {
         "/v1/sync".to_owned()
     } else {
         format!("/v1/sync?{query}")
     };
-    fixture
-        .client
-        .get(&path)
-        .header("authorization", bearer)
-        .header("accept", "application/json")
-        .send()
-        .await
+    let signature = support::request_signature(fixture, "GET", &path, bearer);
+    page_signed(fixture, bearer, &path, Some(&signature)).await
 }
+
+/// `GET path` as `bearer`, carrying `signature` verbatim, or none.
+async fn page_signed(
+    fixture: &Fixture,
+    bearer: &str,
+    path: &str,
+    signature: Option<&str>,
+) -> kynos::test::TestResponse {
+    let request = fixture
+        .client
+        .get(path)
+        .header("authorization", bearer)
+        .header("accept", "application/json");
+    match signature {
+        Some(signature) => request.header(SIGNATURE, signature),
+        None => request,
+    }
+    .send()
+    .await
+}
+
+/// The request-signature header, as the contract names it.
+const SIGNATURE: &str = "x-capsule-request-signature";
 
 /// The seeded album's page query.
 fn album_query() -> String {
@@ -336,6 +381,100 @@ async fn a_session_token_on_the_feed_is_unchanged_by_the_capability_arm() {
             .collect::<Vec<_>>(),
         expected
     );
+}
+
+/// Move `asset` to trash with a signed delete chained onto its head, its window still open.
+async fn trash(fixture: &Fixture, asset: &AssetId) {
+    let delete = b"signed-delete-for-shared-1";
+    let provenance = store_blob(fixture, delete).await;
+    let chain_head = fixture
+        .index
+        .read(asset)
+        .await
+        .expect("the index reads")
+        .expect("the row exists")
+        .chain_head;
+    let outcome = fixture
+        .index
+        .apply_op(LifecycleOp {
+            asset_id: asset.clone(),
+            owner_id: owner(),
+            album_id: album(),
+            action: OpAction::Delete,
+            manifest_hash: Hash32::from_bytes([0xde; 32]),
+            prior_provenance_hash: chain_head,
+            amk_version: 1,
+            provenance: OpBlob {
+                address: provenance,
+                size: delete.len() as u64,
+            },
+            metadata: None,
+            original: None,
+            retention_until: Some(Timestamp::MAX),
+            at: Timestamp::UNIX_EPOCH,
+        })
+        .await
+        .expect("the index applies");
+    assert!(
+        matches!(outcome, OpOutcome::Applied { .. }),
+        "the delete applies: {outcome:?}"
+    );
+}
+
+/// The tombstone named by `asset` on `body`'s page.
+fn tombstone<'a>(body: &'a Value, asset: &str) -> &'a Value {
+    body["entries"]
+        .as_array()
+        .expect("an array")
+        .iter()
+        .find(|entry| entry["asset_id"] == asset && entry["change"] == "deleted")
+        .expect("the page carries the tombstone")
+}
+
+/// A tombstone names the blobs a restore needs on the owner's own feed only. On the album page,
+/// the peer's and a member's alike, it carries its record and no byte reference: a peer's
+/// puller binds a delete to no metadata blob, so one on an older server would refuse the page.
+#[tokio::test]
+async fn a_tombstone_names_restore_blobs_on_the_owners_feed_and_none_on_an_album_page() {
+    let (fixture, _) = shared().await;
+    let asset = AssetId::new("shared-1");
+    let original = store_blob(&fixture, b"original-of-shared-1").await;
+    record(&fixture, &asset, BlobRole::Original, &original).await;
+    trash(&fixture, &asset).await;
+
+    let owner_bearer = fixture.bearer().await;
+    let own = page(&fixture, &owner_bearer, "").await;
+    own.assert_status(StatusCode::OK);
+    let own: Value = own.json();
+    let entry = tombstone(&own, "shared-1");
+    assert!(
+        entry["metadata_blob"].is_string(),
+        "the owner's feed names the live metadata blob a restore needs"
+    );
+    assert_eq!(
+        entry["blobs"],
+        serde_json::json!([{ "role": "original", "hash": original.as_str(), "size": 32 }])
+    );
+    assert_eq!(entry["original_held"], true);
+
+    let (peer, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+    let bob = fixture.other_bearer(BOB).await;
+    for (who, bearer) in [("a peer", &peer), ("a member", &bob)] {
+        let body = page(&fixture, bearer, &album_query()).await;
+        body.assert_status(StatusCode::OK);
+        let body: Value = body.json();
+        let entry = tombstone(&body, "shared-1");
+        assert!(
+            entry["manifest_cbor"].is_string(),
+            "{who}: the delete record still rides the tombstone"
+        );
+        assert!(
+            entry["metadata_blob"].is_null(),
+            "{who}: an album page's tombstone names no metadata blob"
+        );
+        assert_eq!(entry["blobs"], serde_json::json!([]), "{who}");
+        assert_eq!(entry["original_held"], false, "{who}");
+    }
 }
 
 #[tokio::test]
@@ -594,6 +733,344 @@ async fn a_store_that_cannot_answer_a_peer_is_an_outage_never_an_admission() {
 }
 
 // ===========================================================================================
+// The binding: a capability is presented by its peer (#949)
+// ===========================================================================================
+
+#[tokio::test]
+async fn a_capability_without_its_peers_signature_over_this_request_is_unauthenticated() {
+    let (fixture, _) = shared().await;
+    // Off the epoch, so an instant before "now" is still a Unix second the header can carry.
+    fixture.clock.advance(SignedDuration::from_hours(1));
+    let (bearer, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+    let (sibling, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+    let path = format!("/v1/sync?{}", album_query());
+    let now = fixture.clock.now();
+    let (pair, _) = support::request_keypair();
+    let (stranger, _) = support::peer_keypair();
+    let past_freshness = REQUEST_FRESHNESS + SignedDuration::from_secs(1);
+
+    let cases = [
+        ("absent", None),
+        ("malformed", Some("t=0, n=short, s=none".to_owned())),
+        (
+            "stale",
+            Some(support::request_signature_by(
+                &pair,
+                now - past_freshness,
+                "GET",
+                &path,
+                &bearer,
+            )),
+        ),
+        (
+            "pre-signed for later",
+            Some(support::request_signature_by(
+                &pair,
+                now + past_freshness,
+                "GET",
+                &path,
+                &bearer,
+            )),
+        ),
+        (
+            "made by another key",
+            Some(support::request_signature_by(
+                &stranger, now, "GET", &path, &bearer,
+            )),
+        ),
+        (
+            "made for another path",
+            Some(support::request_signature_by(
+                &pair,
+                now,
+                "GET",
+                "/v1/blob/aaaa",
+                &bearer,
+            )),
+        ),
+        (
+            "made for another method",
+            Some(support::request_signature_by(
+                &pair, now, "POST", &path, &bearer,
+            )),
+        ),
+        (
+            "made for another capability",
+            Some(support::request_signature_by(
+                &pair, now, "GET", &path, &sibling,
+            )),
+        ),
+    ];
+    for (case, signature) in &cases {
+        page_signed(&fixture, &bearer, &path, signature.as_deref())
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+        assert!(
+            fixture
+                .counters
+                .peek(
+                    &CounterKey::PeerRequests(PEER.to_owned()),
+                    budgets::PEER_REQUESTS,
+                    fixture.clock.now(),
+                )
+                .await
+                .expect("the counter answers")
+                .admits(),
+            "{case}: the budget is untouched"
+        );
+    }
+    uncharged(
+        &fixture,
+        &CounterKey::PeerRequests(PEER.to_owned()),
+        budgets::PEER_REQUESTS,
+    )
+    .await;
+
+    // The edges of the window are inside it, and the peer's own signature over this request is
+    // the one that is admitted.
+    for at in [now - REQUEST_FRESHNESS, now + REQUEST_FRESHNESS, now] {
+        let signature = support::request_signature_by(&pair, at, "GET", &path, &bearer);
+        page_signed(&fixture, &bearer, &path, Some(&signature))
+            .await
+            .assert_status(StatusCode::OK);
+    }
+}
+
+#[tokio::test]
+async fn a_signed_request_is_accepted_once_and_a_replay_costs_the_peer_nothing() {
+    let (fixture, _) = shared().await;
+    let (bearer, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+    let path = format!("/v1/sync?{}", album_query());
+    let signature = support::request_signature(&fixture, "GET", &path, &bearer);
+
+    page_signed(&fixture, &bearer, &path, Some(&signature))
+        .await
+        .assert_status(StatusCode::OK);
+    page_signed(&fixture, &bearer, &path, Some(&signature))
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    // Still a replay a minute later, while the signature is fresh.
+    fixture.clock.advance(SignedDuration::from_mins(1));
+    page_signed(&fixture, &bearer, &path, Some(&signature))
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    assert_eq!(
+        fixture
+            .counters
+            .peek(
+                &CounterKey::PeerRequests(PEER.to_owned()),
+                budgets::PEER_REQUESTS,
+                fixture.clock.now(),
+            )
+            .await
+            .expect("the counter answers"),
+        capsule_server::counter::Verdict::Admitted {
+            remaining: budgets::PEER_REQUESTS.limit - 1
+        },
+        "only the first presentation was charged to the peer"
+    );
+
+    // The same nonce under another request is the same replay: it is the peer's nonce, not the
+    // request's.
+    let blob = format!("/v1/blob/{}", support::checksum(b"anything"));
+    let nonce = capsule_server::federation::scheme::RequestSignature::parse(&signature)
+        .expect("the suite's signature parses")
+        .nonce;
+    let replayed = resign_with_nonce(&fixture, "GET", &blob, &bearer, &nonce);
+    fixture
+        .client
+        .get(&blob)
+        .header("authorization", &bearer)
+        .header(SIGNATURE, &replayed)
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+}
+
+/// A signature by the suite's request key over `method path` and `bearer`, now, reusing `nonce`.
+fn resign_with_nonce(
+    fixture: &Fixture,
+    method: &str,
+    path: &str,
+    bearer: &str,
+    nonce: &str,
+) -> String {
+    use capsule_server::federation::scheme::{RequestClaim, RequestSignature};
+
+    let token = bearer.strip_prefix("Bearer ").unwrap_or(bearer);
+    let claim = RequestClaim::new(method, path, token, fixture.clock.now().as_second(), nonce);
+    let signature = support::request_keypair()
+        .0
+        .sign(&claim.signing_bytes().expect("a claim encodes"));
+    RequestSignature {
+        signed_at: claim.signed_at,
+        nonce: nonce.to_owned(),
+        signature: signature.as_ref().try_into().expect("64 bytes"),
+    }
+    .to_header_value()
+}
+
+#[tokio::test]
+async fn a_peer_with_no_pinned_key_cannot_present_a_capability() {
+    let (fixture, _) = shared().await;
+
+    // Never recorded at all.
+    let (never, _) = unpinned_capability(
+        &fixture,
+        &fixture.codec,
+        "unpinned.test",
+        &album(),
+        Scope::Read,
+        1,
+    )
+    .await;
+    page(&fixture, &never, &album_query())
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    // Recorded by a block alone, which carries no key.
+    fixture
+        .peers
+        .block(&PeerId::new("blocked.test"), fixture.clock.now(), None)
+        .await
+        .expect("blocks");
+    let (blocked, _) = unpinned_capability(
+        &fixture,
+        &fixture.codec,
+        "blocked.test",
+        &album(),
+        Scope::Read,
+        1,
+    )
+    .await;
+    page(&fixture, &blocked, &album_query())
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    // Pinning the key is what admits it.
+    support::pin_request_key(&fixture, "unpinned.test").await;
+    page(&fixture, &never, &album_query())
+        .await
+        .assert_status(StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_request_the_route_refuses_with_a_code_spends_no_nonce() {
+    // A blocked peer is told `403` and a peer over budget `429`, each by the route; neither
+    // spends the nonce, so the same signed request is admitted once the refusal lifts.
+    let (fixture, _) = shared().await;
+    let (bearer, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+    let path = format!("/v1/sync?{}", album_query());
+
+    let signature = support::request_signature(&fixture, "GET", &path, &bearer);
+    fixture
+        .peers
+        .block(&PeerId::new(PEER), fixture.clock.now(), None)
+        .await
+        .expect("blocks");
+    page_signed(&fixture, &bearer, &path, Some(&signature))
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    fixture
+        .peers
+        .unblock(&PeerId::new(PEER))
+        .await
+        .expect("unblocks");
+    page_signed(&fixture, &bearer, &path, Some(&signature))
+        .await
+        .assert_status(StatusCode::OK);
+
+    let signature = support::request_signature(&fixture, "GET", &path, &bearer);
+    let key = CounterKey::PeerRequests(PEER.to_owned());
+    for _ in 1..budgets::PEER_REQUESTS.limit {
+        fixture
+            .counters
+            .hit(&key, budgets::PEER_REQUESTS, fixture.clock.now())
+            .await
+            .expect("the counter answers");
+    }
+    page_signed(&fixture, &bearer, &path, Some(&signature))
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+    fixture
+        .counters
+        .reset(&key)
+        .await
+        .expect("the counter resets");
+    page_signed(&fixture, &bearer, &path, Some(&signature))
+        .await
+        .assert_status(StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_full_request_nonce_partition_refuses_closed_never_open() {
+    // One window per partition, so the first admitted request fills the nonce partition and a
+    // second, honestly signed with a fresh nonce, meets it full.
+    let (fixture, _) = shared_on(Fixture::with_counter_ceiling(1)).await;
+    let (bearer, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+    page(&fixture, &bearer, &album_query())
+        .await
+        .assert_status(StatusCode::OK);
+
+    page(&fixture, &bearer, &album_query())
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    // Room returns as the windows lapse, and so does the peer.
+    fixture
+        .clock
+        .advance(budgets::FEDERATED_REQUEST_NONCE.window);
+    page(&fixture, &bearer, &album_query())
+        .await
+        .assert_status(StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_session_token_ignores_the_request_signature_header() {
+    let (fixture, _) = shared().await;
+    let owner_bearer = fixture.bearer().await;
+    for signature in [None, Some("not a signature")] {
+        page_signed(&fixture, &owner_bearer, "/v1/sync", signature)
+            .await
+            .assert_status(StatusCode::OK);
+    }
+}
+
+#[tokio::test]
+async fn the_blob_and_refresh_routes_are_bound_to_the_peer_too() {
+    let (fixture, _) = shared().await;
+    let (bearer, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+    let blob = format!("/v1/blob/{}", support::checksum(b"anything"));
+    fixture
+        .client
+        .get(&blob)
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    fixture
+        .client
+        .post("/v1/federation/capabilities/refresh")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    // A signature over the read does not admit the refresh.
+    let read = support::request_signature(&fixture, "GET", &blob, &bearer);
+    fixture
+        .client
+        .post("/v1/federation/capabilities/refresh")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .header(SIGNATURE, &read)
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+}
+
+// ===========================================================================================
 // The pull path: blob bytes under a capability
 // ===========================================================================================
 
@@ -603,10 +1080,13 @@ async fn fetch(
     bearer: &str,
     address: &ContentAddress,
 ) -> kynos::test::TestResponse {
+    let path = format!("/v1/blob/{address}");
+    let signature = support::request_signature(fixture, "GET", &path, bearer);
     fixture
         .client
-        .get(&format!("/v1/blob/{address}"))
+        .get(&path)
         .header("authorization", bearer)
+        .header(SIGNATURE, &signature)
         .send()
         .await
 }
@@ -657,6 +1137,196 @@ async fn a_peer_fetches_the_albums_blobs_and_a_derivative_only_grant_is_refused_
         .assert_status(StatusCode::OK);
 }
 
+/// The owner's `peer.served` events, newest first, read past the HTTP surface.
+async fn peer_served(fixture: &Fixture) -> Vec<capsule_server::activity::ActivityEvent> {
+    fixture.activity_settled().await;
+    fixture
+        .activity
+        .recent(&support::user(), Timestamp::MIN, 1_000)
+        .await
+        .expect("the in-memory log reads")
+        .into_iter()
+        .filter(|event| event.kind == capsule_server::activity::ActivityKind::PeerServed)
+        .collect()
+}
+
+#[tokio::test]
+async fn a_peers_fetches_land_in_the_owners_log_once_per_window_naming_the_peer_only() {
+    let (fixture, _) = shared().await;
+    let (original, derivative) = two_roles(&fixture, "served", &album()).await;
+
+    // The owner's own fetches are not an event about the account.
+    let owner_bearer = fixture.bearer().await;
+    fetch(&fixture, &owner_bearer, &original)
+        .await
+        .assert_status(StatusCode::OK);
+    assert!(peer_served(&fixture).await.is_empty());
+
+    // A refused fetch serves nothing and records nothing.
+    let (thumbs, _) = capability(&fixture, PEER, Scope::ReadDerivativeOnly, 1).await;
+    fetch(&fixture, &thumbs, &original)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    assert!(peer_served(&fixture).await.is_empty());
+
+    let (bearer, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+    for address in [&original, &derivative, &original] {
+        fetch(&fixture, &bearer, address)
+            .await
+            .assert_status(StatusCode::OK);
+    }
+    let events = peer_served(&fixture).await;
+    assert_eq!(events.len(), 1, "three blobs in one window are one event");
+    assert_eq!(events[0].subject.as_deref(), Some(PEER));
+    assert_eq!(events[0].session_id, None);
+    for address in [&original, &derivative] {
+        assert!(
+            !format!("{:?}", events[0]).contains(address.as_str()),
+            "the event carries no content address"
+        );
+    }
+
+    // Another peer is its own window, and the next window writes the first again.
+    let (other, _) = capability(&fixture, "third.test", Scope::Read, 1).await;
+    fetch(&fixture, &other, &original)
+        .await
+        .assert_status(StatusCode::OK);
+    fixture
+        .clock
+        .advance(capsule_server::activity::DETACHED_COALESCE_WINDOW);
+    let (bearer, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+    fetch(&fixture, &bearer, &original)
+        .await
+        .assert_status(StatusCode::OK);
+    let subjects: Vec<Option<String>> = peer_served(&fixture)
+        .await
+        .into_iter()
+        .map(|event| event.subject)
+        .collect();
+    assert_eq!(
+        subjects,
+        [
+            Some(PEER.to_owned()),
+            Some("third.test".to_owned()),
+            Some(PEER.to_owned()),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_peers_bytes_budget_refuses_a_delivery_that_does_not_fit_and_charges_no_revalidation() {
+    // Invariant 21's bytes half (#476). The budget is spent through the counter port up to its
+    // last kibibyte, and the refusal is the route's: a blob that does not fit what is left is a
+    // `429` in place of its body.
+    let (fixture, _) = shared().await;
+    let (original, _) = two_roles(&fixture, "shared-bytes", &album()).await;
+    let (bearer, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+    let key = CounterKey::PeerBytes(PEER.to_owned());
+    fixture
+        .counters
+        .charge(
+            &key,
+            budgets::PEER_KIBIBYTES.limit,
+            budgets::PEER_KIBIBYTES,
+            fixture.clock.now(),
+        )
+        .await
+        .expect("the counter answers");
+
+    let refused = fetch(&fixture, &bearer, &original).await;
+    refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.federation.rate_budget_exceeded");
+
+    // A revalidation sends none of the blob, so a spent bytes budget does not refuse it.
+    let path = format!("/v1/blob/{original}");
+    let signature = support::request_signature(&fixture, "GET", &path, &bearer);
+    fixture
+        .client
+        .get(&path)
+        .header("authorization", &bearer)
+        .header(SIGNATURE, &signature)
+        .header("if-none-match", &format!("\"{original}\""))
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_MODIFIED);
+
+    // Another peer is its own boundary, and the window turning gives the bytes back.
+    let (other, _) = capability(&fixture, "third.test", Scope::Read, 1).await;
+    fetch(&fixture, &other, &original)
+        .await
+        .assert_status(StatusCode::OK);
+    fixture.clock.advance(budgets::PEER_KIBIBYTES.window);
+    fetch(&fixture, &bearer, &original)
+        .await
+        .assert_status(StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_peer_on_probation_is_held_to_the_smaller_events_budget() {
+    // A peer the operator pinned just now is on probation (#476): its events budget is the
+    // probation one, spent here through the counter port up to its last hit.
+    let (fixture, _) = shared().await;
+    let newcomer = "newcomer.test";
+    support::pin_request_key_now(&fixture, newcomer).await;
+    let (bearer, _) =
+        unpinned_capability(&fixture, &fixture.codec, newcomer, &album(), Scope::Read, 1).await;
+    let key = CounterKey::PeerRequests(newcomer.to_owned());
+    for _ in 1..budgets::PEER_REQUESTS_PROBATION.limit {
+        fixture
+            .counters
+            .hit(&key, budgets::PEER_REQUESTS_PROBATION, fixture.clock.now())
+            .await
+            .expect("the counter answers");
+    }
+    page(&fixture, &bearer, &album_query())
+        .await
+        .assert_status(StatusCode::OK);
+    page(&fixture, &bearer, &album_query())
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn a_probation_peer_refused_for_its_budget_spends_no_nonce() {
+    // The authenticator foresees the `429` under the probation budget `admit` charges. Read
+    // under the established budget, the spent probation window would look open, the nonce
+    // would be spent, and the same signature would be a replay once the window resets.
+    let (fixture, _) = shared().await;
+    let newcomer = "probation-nonce.test";
+    support::pin_request_key_now(&fixture, newcomer).await;
+    let (bearer, _) =
+        unpinned_capability(&fixture, &fixture.codec, newcomer, &album(), Scope::Read, 1).await;
+    let path = format!("/v1/sync?{}", album_query());
+    let key = CounterKey::PeerRequests(newcomer.to_owned());
+    for _ in 0..budgets::PEER_REQUESTS_PROBATION.limit {
+        fixture
+            .counters
+            .hit(&key, budgets::PEER_REQUESTS_PROBATION, fixture.clock.now())
+            .await
+            .expect("the counter answers");
+    }
+    const {
+        assert!(
+            budgets::PEER_REQUESTS_PROBATION.limit < budgets::PEER_REQUESTS.limit,
+            "the established budget must still have room for this case to tell the tiers apart"
+        );
+    }
+
+    let signature = support::request_signature(&fixture, "GET", &path, &bearer);
+    page_signed(&fixture, &bearer, &path, Some(&signature))
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+    fixture
+        .counters
+        .reset(&key)
+        .await
+        .expect("the counter resets");
+    page_signed(&fixture, &bearer, &path, Some(&signature))
+        .await
+        .assert_status(StatusCode::OK);
+}
+
 #[tokio::test]
 async fn a_capability_for_another_album_gets_the_answer_an_unknown_address_gets() {
     // The disclosure boundary: a `403` would confirm the address is referenced by somebody, so
@@ -677,7 +1347,10 @@ async fn a_capability_for_another_album_gets_the_answer_an_unknown_address_gets(
     .await;
     unknown.assert_status(StatusCode::NOT_FOUND);
     let unknown: Value = unknown.json();
-    assert_eq!(refused, unknown);
+    assert_eq!(
+        support::without_request_id(refused),
+        support::without_request_id(unknown)
+    );
 }
 
 #[tokio::test]
@@ -842,6 +1515,8 @@ async fn anchored(dsk: &HybridSigningKey) -> (Fixture, String) {
         .await
         .assert_status(StatusCode::OK);
     provision(&fixture, &bearer).await;
+    // The peer the owner mints for, with the key its requests are signed under.
+    support::pin_request_key(&fixture, PEER).await;
     (fixture, bearer)
 }
 
@@ -916,10 +1591,15 @@ async fn revoke(
 
 /// POST the refresh, presenting `credential`.
 async fn refresh(fixture: &Fixture, credential: &str) -> kynos::test::TestResponse {
+    let path = "/v1/federation/capabilities/refresh";
     fixture
         .client
-        .post("/v1/federation/capabilities/refresh")
+        .post(path)
         .header("authorization", credential)
+        .header(
+            SIGNATURE,
+            &support::request_signature(fixture, "POST", path, credential),
+        )
         .header("accept", "application/json")
         .send()
         .await
@@ -1237,8 +1917,10 @@ async fn a_deployment_that_does_not_federate_answers_404_before_any_work() {
     provision(&fixture, &bearer).await;
     roster(&fixture, 1, &[(BOB, MemberRole::Reader)]).await;
     publish_into(&fixture, "unfederated-1", &album()).await;
-    let (signer, public) = support::peer_keypair();
-    pin(&fixture, public).await;
+    // One key for the peer's reports and its requests, as a real peer has one operational key.
+    // A grant recorded as though it were minted while federation was on, which pins that key.
+    let (capability, jti) = capability(&fixture, PEER, Scope::Read, 1).await;
+    let (signer, _) = support::request_keypair();
     let hash = support::checksum(b"the reported bytes");
 
     let pinned = fixture
@@ -1246,8 +1928,6 @@ async fn a_deployment_that_does_not_federate_answers_404_before_any_work() {
         .read(&PeerId::new(PEER))
         .await
         .expect("the store answers");
-    // A grant recorded as though it were minted while federation was on.
-    let (capability, jti) = capability(&fixture, PEER, Scope::Read, 1).await;
 
     assert_not_federating(&mint(&fixture, &bearer, mint_body("read")).await, "mint");
     assert_not_federating(&revoke(&fixture, &bearer, &album(), &jti).await, "revoke");
@@ -1656,24 +2336,18 @@ async fn blocking_a_peer_cuts_and_publishes_every_grant_it_holds() {
     let (_, second_jti) = capability(&fixture, PEER, Scope::ReadDerivativeOnly, 1).await;
     let (other, other_jti) = capability(&fixture, "third.test", Scope::Read, 1).await;
 
-    fixture
-        .peers
-        .block(&PeerId::new(PEER), fixture.clock.now(), None)
+    // The operator's act, over the *same* stores the server holds, so what the cascade writes
+    // is what the published list and the next presentation read.
+    let admin = PeerAdministration::new(
+        fixture.peers.clone(),
+        fixture.revocations.clone(),
+        fixture.clock.clone(),
+    );
+    let blocked = admin
+        .block(&PeerId::new(PEER), None)
         .await
-        .expect("blocks");
-    // Over the *same* stores the server holds, so what the cascade writes is what the
-    // published list and the next presentation read.
-    let federation = FederationContext::new(FederationCollaborators {
-        codec: fixture.codec.clone(),
-        capabilities: fixture.revocations.clone(),
-        peers: fixture.peers.clone(),
-        clock: fixture.clock.clone(),
-        enabled: std::sync::Arc::new(true),
-    });
-    let cut = capsule_server::federation::on_peer_blocked(&federation, &PeerId::new(PEER))
-        .await
-        .expect("the cascade runs");
-    assert_eq!(cut, 2);
+        .expect("the block and its cascade run");
+    assert_eq!(blocked.revoked, 2);
 
     let list: Value = fixture
         .client
@@ -2268,8 +2942,8 @@ async fn saturate(
 
 #[tokio::test]
 async fn a_full_mint_partition_is_a_429_never_a_500() {
-    // #912: a full partition is the limiter working, so it answers as a spent budget does, not
-    // as the outage a `500` reports.
+    // #912: a full partition is the limiter working, so it is a `429`, not the outage a `500`
+    // reports. #919: under the at-capacity code, because the account's own budget is unspent.
     let dsk = support::identity_key();
     let (fixture, bearer) = anchored(&dsk).await;
     publish_roster(&fixture, &bearer, &dsk, 1, &[(BOB, MemberRole::Reader)])
@@ -2286,7 +2960,44 @@ async fn a_full_mint_partition_is_a_429_never_a_500() {
     let refused = mint(&fixture, &bearer, mint_body("read")).await;
     refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
     let refused: Value = refused.json();
-    assert_eq!(refused["code"], "error.federation.rate_budget_exceeded");
+    assert_eq!(refused["code"], "error.federation.mint_at_capacity");
+    assert_eq!(
+        refused["detail"], "no capability can be minted right now; try again later",
+        "the detail must not tell the caller its own budget is spent"
+    );
+}
+
+#[tokio::test]
+async fn a_full_report_intake_partition_is_an_at_capacity_429() {
+    // #919: a report counter charged through `charge` that is full answers the at-capacity
+    // code, never the spent-budget one, since this peer's intake budget is untouched.
+    let (fixture, _) = shared().await;
+    let (signer, public) = support::peer_keypair();
+    pin(&fixture, public).await;
+    saturate(
+        &fixture,
+        &CounterKey::FederatedIntake(PEER.to_owned()),
+        budgets::FEDERATED_INTAKE,
+        |i| CounterKey::FederatedIntake(format!("filler-{i}.test")),
+    )
+    .await;
+
+    let refused = file(
+        &fixture,
+        support::sign_report(
+            &signer,
+            &claim("0192f1a8-7c4e-4b6a-9d3e-00000000000a", support::REPORTED_AT),
+        ),
+    )
+    .await;
+    refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.moderation.report_at_capacity");
+    assert_eq!(
+        refused["detail"], "no report can be filed right now; try again later",
+        "the detail must not tell the peer its own budget is spent"
+    );
+    assert_eq!(queued(&fixture).await, 0, "nothing is filed");
 }
 
 #[tokio::test]
@@ -2312,7 +3023,7 @@ async fn a_full_report_nonce_partition_is_a_429_never_a_500_or_a_replay() {
     .await;
     refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
     let refused: Value = refused.json();
-    assert_eq!(refused["code"], "error.moderation.report_rate_limited");
+    assert_eq!(refused["code"], "error.moderation.report_at_capacity");
     assert_eq!(queued(&fixture).await, 0, "nothing is filed");
 }
 

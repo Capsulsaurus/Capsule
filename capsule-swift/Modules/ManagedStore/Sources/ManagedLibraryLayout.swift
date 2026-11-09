@@ -11,7 +11,7 @@ import Foundation
 /// <root>/
 ///   media/{YYYY}/{YYYY-MM}/{uuid}.{ext}   — imported media files
 ///   media/{YYYY}/{YYYY-MM}/{uuid}.cbor    — the paired sidecar
-///   index/catalog.sqlite                  — the rebuildable catalog
+///   index/library.sqlite                  — the rebuildable catalog
 ///   index/thumbnails/                     — the thumbnail cache
 ///   .library/trash/                       — soft-deleted files
 /// ```
@@ -47,9 +47,10 @@ public struct ManagedLibraryLayout: Sendable, Equatable {
         root.appending(path: "index", directoryHint: .isDirectory)
     }
 
-    /// The SQLite catalog file.
+    /// The SQLite catalog file: the workspace's own index, which the FFI
+    /// lane's catalog reads, so the name is `capsule-library`'s.
     public var catalogFile: URL {
-        indexDirectory.appending(path: "catalog.sqlite")
+        indexDirectory.appending(path: "library.sqlite")
     }
 
     /// The thumbnail cache directory.

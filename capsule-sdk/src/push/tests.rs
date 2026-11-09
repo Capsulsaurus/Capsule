@@ -381,7 +381,8 @@ async fn a_fully_held_bundle_pushes_nothing() {
     let seen = requests.clone();
     let server = MockServer::start(move |_req: &MockRequest| {
         seen.fetch_add(1, Ordering::SeqCst);
-        MockResponse::new(500, "Internal Server Error")
+        // A refusal the client never retries: a `5xx` would be waited out.
+        MockResponse::new(403, "Forbidden")
     })
     .await;
 
@@ -404,7 +405,7 @@ async fn a_fully_held_bundle_pushes_nothing() {
 
     // `--force` ignores server truth and re-drives the ladder anyway.
     let forced = push_bundle(&client, &scheduler, &bundle, &held, true).await;
-    assert!(forced.is_err(), "force re-drives and surfaces the 500");
+    assert!(forced.is_err(), "force re-drives and surfaces the 403");
     assert!(requests.load(Ordering::SeqCst) > 0);
 }
 
@@ -499,8 +500,9 @@ struct Faults {
     /// answer the server gives, read naively as success.
     finalize_lost: bool,
     /// Finalization fails terminally after the bytes are committed (the stage and the session's
-    /// byte count disagree). An outage is no fixture for this: `unavailable` asks the client to
-    /// wait and resume, so it does not fail the push.
+    /// byte count disagree): the completing chunk is answered `500 storage_inconsistent`, which
+    /// the client waits out, and the `HEAD` it resumes from reports the session
+    /// `failed_processing` with that code.
     finalize_fails: bool,
     /// The verdict is honest per blob and says nothing is held.
     not_durable: bool,
@@ -562,6 +564,7 @@ impl CustodyServer {
             ("POST", "/storage/verify") => self.verdict(&body),
             ("POST", _) => self.create(&body),
             ("PATCH", path) => self.chunk(req, path),
+            ("HEAD", path) if self.faults.finalize_fails => self.failed_head(path),
             ("GET", path) if path.ends_with("/receipts") => self.receipts(),
             other => panic!("unexpected request {other:?}"),
         }
@@ -627,6 +630,21 @@ impl CustodyServer {
             }
         }
         MockResponse::new(204, "No Content").header("X-Capsule-Offset", next.to_string())
+    }
+
+    /// The `HEAD` a client resumes from after a failed finalize: every byte held, and the
+    /// session refused at finalization with the code the completing chunk was answered.
+    fn failed_head(&self, path: &str) -> MockResponse {
+        let id = path.rsplit('/').next().unwrap();
+        let (_, size) = self.sessions.lock().unwrap()[id].clone();
+        MockResponse::new(200, "OK")
+            .header("X-Capsule-Offset", size.to_string())
+            .header("X-Capsule-Content-Length", size.to_string())
+            .header("X-Capsule-Upload-Status", "failed_processing")
+            .header(
+                "X-Capsule-Upload-Error",
+                error_codes::UPLOAD_STORAGE_INCONSISTENT,
+            )
     }
 
     fn receipts(&self) -> MockResponse {
@@ -861,8 +879,9 @@ async fn a_lost_finalize_is_not_custody() {
 }
 
 /// **The failed finalize.** Finalization fails terminally after the commit; the chunk that
-/// triggered it is refused with the server's code, so the push fails before custody is ever
-/// asked about.
+/// triggered it is answered `500 storage_inconsistent`, which the client waits out and resumes
+/// from `HEAD`, and the `failed_processing` that `HEAD` reports fails the push with the
+/// server's code before custody is ever asked about.
 #[tokio::test]
 async fn a_failed_finalize_fails_the_push() {
     let (_dir, _bundle, run) = custody_run(Faults {
@@ -1151,4 +1170,698 @@ async fn a_refused_non_create_is_a_plain_upload_failure() {
         .await
         .expect_err("the refusal fails the push");
     assert!(matches!(error, PushError::Upload(_)), "{error:?}");
+}
+
+// ─── Redaction ────────────────────────────────────────────────────────────────
+
+/// One listed upload session: `(id, asset_id, status)`.
+type ListedSession = (&'static str, &'static str, &'static str);
+
+/// A mock upload server holding `sessions`, answering each `DELETE /{id}` from `cancel`, and
+/// recording every request line it served.
+async fn session_server(
+    sessions: &'static [ListedSession],
+    cancel: fn(&str) -> MockResponse,
+) -> (MockServer, Arc<Mutex<Vec<String>>>) {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = seen.clone();
+    let server = MockServer::start(move |req: &MockRequest| {
+        log.lock()
+            .unwrap()
+            .push(format!("{} {}", req.method, req.path));
+        match req.method.as_str() {
+            "GET" if req.path.ends_with("/sessions") => {
+                let rows: Vec<String> = sessions
+                    .iter()
+                    .map(|(id, asset, status)| {
+                        format!(
+                            r#"{{"id":"{id}","asset_id":"{asset}","album_id":null,"blob_role":"original","status":"{status}","received_bytes":4096,"total_size":8192,"created_at":"2026-01-01T00:00:00Z","last_progress_at":"2026-01-01T00:00:00Z"}}"#
+                        )
+                    })
+                    .collect();
+                MockResponse::new(200, "OK")
+                    .json_body(format!(r#"{{"sessions":[{}]}}"#, rows.join(",")))
+            }
+            "DELETE" => cancel(req.path.rsplit('/').next().unwrap_or_default()),
+            _ => MockResponse::new(500, "Internal Server Error"),
+        }
+    })
+    .await;
+    (server, seen)
+}
+
+/// **A delete aborts only that asset's sessions.** Every listed session of the deleted asset
+/// is cancelled; another asset's session is never touched.
+#[tokio::test]
+async fn redaction_cancels_every_session_of_the_asset_and_no_other() {
+    static SESSIONS: &[ListedSession] = &[
+        ("s-meta", "asset-a", "uploading"),
+        ("s-other", "asset-b", "uploading"),
+        ("s-orig", "asset-a", "pending"),
+    ];
+    let (server, seen) = session_server(SESSIONS, |_| MockResponse::new(204, "No Content")).await;
+    let client = server.client("2026-01-01");
+
+    let redaction = redact_asset(&client, "asset-a").await.expect("redacts");
+
+    assert_eq!(redaction.cancelled, vec!["s-meta", "s-orig"]);
+    assert!(redaction.finalizing.is_empty());
+    let deletes: Vec<String> = seen
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|line| line.starts_with("DELETE"))
+        .cloned()
+        .collect();
+    assert_eq!(deletes.len(), 2, "{deletes:?}");
+    assert!(
+        deletes.iter().all(|line| !line.ends_with("/s-other")),
+        "another asset's session was cancelled: {deletes:?}"
+    );
+}
+
+/// **The finalize race.** A session whose finalization began before the abort reached it
+/// answers `409 session_not_active`; that is not a failure, it is reported as finalizing so the
+/// delete that follows supersedes the create it completes. A session already gone (`404`) is a
+/// cancellation.
+#[tokio::test]
+async fn a_session_finalizing_during_the_abort_is_reported_not_failed() {
+    static SESSIONS: &[ListedSession] = &[
+        ("s-done", "asset-a", "waiting_for_processing"),
+        ("s-gone", "asset-a", "uploading"),
+    ];
+    let (server, _) = session_server(SESSIONS, |id| {
+        if id == "s-done" {
+            MockResponse::api_error(
+                409,
+                "Conflict",
+                error_codes::UPLOAD_SESSION_NOT_ACTIVE,
+                "Session not active",
+            )
+        } else {
+            MockResponse::new(404, "Not Found")
+        }
+    })
+    .await;
+    let client = server.client("2026-01-01");
+
+    let redaction = redact_asset(&client, "asset-a").await.expect("redacts");
+
+    assert_eq!(redaction.finalizing, vec!["s-done"]);
+    assert_eq!(redaction.cancelled, vec!["s-gone"]);
+}
+
+/// Any other refusal fails the redaction, so the caller knows a session may still be open.
+#[tokio::test]
+async fn an_unexpected_cancel_refusal_fails_the_redaction() {
+    static SESSIONS: &[ListedSession] = &[("s-1", "asset-a", "uploading")];
+    let (server, _) = session_server(SESSIONS, |_| {
+        MockResponse::api_error(403, "Forbidden", "error.auth.forbidden", "no")
+    })
+    .await;
+    let client = server.client("2026-01-01");
+
+    let error = redact_asset(&client, "asset-a")
+        .await
+        .expect_err("a 403 is not a cancellation");
+    assert!(
+        matches!(error, UploadError::Rejected { status: 403, .. }),
+        "{error:?}"
+    );
+}
+
+/// **A settled session is not cancelled.** The listing keeps `completed` and
+/// `failed_processing` records until their lifetime cap; deleting an asset whose upload already
+/// settled sends no `DELETE` for them and reports none of them as finalizing.
+#[tokio::test]
+async fn a_terminal_session_is_skipped_not_cancelled_or_finalizing() {
+    static SESSIONS: &[ListedSession] = &[
+        ("s-done", "asset-a", "completed"),
+        ("s-failed", "asset-a", "failed_processing"),
+        ("s-open", "asset-a", "waiting_for_processing"),
+    ];
+    let (server, seen) = session_server(SESSIONS, |id| {
+        if id == "s-open" {
+            MockResponse::new(204, "No Content")
+        } else {
+            MockResponse::new(500, "a settled session was cancelled")
+        }
+    })
+    .await;
+    let client = server.client("2026-01-01");
+
+    let redaction = redact_asset(&client, "asset-a").await.expect("redacts");
+
+    assert_eq!(redaction.cancelled, vec!["s-open"]);
+    assert!(redaction.finalizing.is_empty(), "{redaction:?}");
+    let deletes: Vec<String> = seen
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|line| line.starts_with("DELETE"))
+        .cloned()
+        .collect();
+    assert_eq!(deletes.len(), 1, "{deletes:?}");
+}
+
+/// An asset with no open session costs one listing and no cancel.
+#[tokio::test]
+async fn an_asset_with_no_open_session_redacts_to_nothing() {
+    static SESSIONS: &[ListedSession] = &[("s-1", "asset-b", "uploading")];
+    let (server, seen) = session_server(SESSIONS, |_| MockResponse::new(500, "boom")).await;
+    let client = server.client("2026-01-01");
+
+    let redaction = redact_asset(&client, "asset-a").await.expect("redacts");
+
+    assert_eq!(redaction, Redaction::default());
+    assert_eq!(seen.lock().unwrap().len(), 1, "only the listing was asked");
+}
+
+// ─── Pushing many bundles across lanes ───────────────────────────────────────
+
+/// A server that opens a fresh session per create, acknowledges every chunk whole, and records
+/// which asset each create was for, in arrival order.
+async fn lane_server() -> (MockServer, Arc<Mutex<Vec<String>>>) {
+    let creates = Arc::new(Mutex::new(Vec::new()));
+    let seen = creates.clone();
+    let sessions = AtomicUsize::new(0);
+    let server = MockServer::start(move |req: &MockRequest| {
+        if req.method == "POST" {
+            let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+            let asset = body["manifest_envelope"]["file_id"].as_str().unwrap();
+            seen.lock().unwrap().push(asset.to_owned());
+            let id = format!("s-{}", sessions.fetch_add(1, Ordering::SeqCst));
+            return MockResponse::new(201, "Created")
+                .header("X-Capsule-Offset", "0")
+                .json_body(format!(
+                    r#"{{"id":{id:?},"upload_url":"/upload/{id}","suggested_chunk_size":262144}}"#
+                ));
+        }
+        let offset: u64 = req
+            .header("X-Capsule-Offset")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        MockResponse::new(204, "No Content").header(
+            "X-Capsule-Offset",
+            (offset + req.body.len() as u64).to_string(),
+        )
+    })
+    .await;
+    (server, creates)
+}
+
+/// Push two real bundles on one lane under `sessions` and the lane's `session_cap`, with a
+/// one-byte budget, and return each bundle's asset id and the asset each create was for.
+async fn push_two_on_one_lane(
+    sessions: u32,
+    session_cap: Option<u32>,
+) -> (String, String, Vec<String>) {
+    let (_dir_a, a) = real_bundle();
+    let (_dir_b, b) = real_bundle();
+    let (server, creates) = lane_server().await;
+    let client = server.client(&a.protocol_version);
+    let scheduler = StagedScheduler::new(
+        capsule_library::import::UploadPolicy::Full,
+        ConnectionClass::Unmetered,
+    );
+    let held = HashSet::new();
+    let lanes = [LanePush {
+        server: ServerKey::new(server.base_url()),
+        client: &client,
+        bundles: vec![
+            LaneBundle {
+                bundle: &a,
+                held: &held,
+            },
+            LaneBundle {
+                bundle: &b,
+                held: &held,
+            },
+        ],
+        session_cap,
+    }];
+    // One byte of budget: every range reserves all of it, so the two bundles' ranges take
+    // turns, and the run still finishes.
+    let results = push_lanes(&scheduler, &lanes, false, 1, LaneWindows::new(sessions, 1)).await;
+    assert_eq!(results.len(), 1);
+    for result in &results[0] {
+        let report = result.as_ref().expect("both bundles push");
+        assert_eq!(
+            report.tier_sequence(),
+            vec![UploadTier::Index, UploadTier::Index, UploadTier::Original],
+            "each bundle still drives its ladder in order"
+        );
+    }
+    assert_eq!(
+        results[0][0].as_ref().unwrap().asset_id,
+        a.asset_id.to_string()
+    );
+    assert_eq!(
+        results[0][1].as_ref().unwrap().asset_id,
+        b.asset_id.to_string()
+    );
+    let order = creates.lock().unwrap().clone();
+    (a.asset_id.to_string(), b.asset_id.to_string(), order)
+}
+
+/// **W bundles of a lane run at once.** With a sessions window of two, the second asset's
+/// first session opens before the first asset's ladder is done; with a window of one, the
+/// lane pushes one asset after the other.
+#[tokio::test]
+async fn a_lane_runs_up_to_w_bundles_at_once() {
+    let (a, b, order) = push_two_on_one_lane(2, None).await;
+    assert_eq!(order.len(), 6, "three sessions per asset: {order:?}");
+    let first_b = order.iter().position(|asset| *asset == b).unwrap();
+    let last_a = order.iter().rposition(|asset| *asset == a).unwrap();
+    assert!(first_b < last_a, "the two ladders overlapped: {order:?}");
+
+    let (a, b, order) = push_two_on_one_lane(1, None).await;
+    assert_eq!(
+        order,
+        [&a, &a, &a, &b, &b, &b].map(String::clone),
+        "one asset at a time"
+    );
+}
+
+/// **W never exceeds the account's live-session cap.** A lane whose cap is one pushes one asset
+/// after the other even under a window of two.
+#[tokio::test]
+async fn a_lanes_session_cap_bounds_its_window() {
+    let (a, b, order) = push_two_on_one_lane(2, Some(1)).await;
+    assert_eq!(
+        order,
+        [&a, &a, &a, &b, &b, &b].map(String::clone),
+        "the cap holds the lane to one session at a time"
+    );
+}
+
+/// How long [`push_original_under`]'s server holds each range's answer.
+const RANGE_DELAY: Duration = Duration::from_millis(200);
+
+/// Push one real 2 MiB bundle through [`push_lanes`] with a client left at its own default
+/// window, a server that advises four ranges and answers each after [`RANGE_DELAY`], under a
+/// lane P of `lane_ranges`; return when each range of the original arrived, in arrival order.
+async fn push_original_under(lane_ranges: u32) -> Vec<std::time::Instant> {
+    let (_dir, bundle, _path) = real_bundle_of(2 << 20);
+    let original_hash = bundle.ciphertext_hash.to_hex();
+    let sessions: Arc<Mutex<HashMap<String, String>>> = Arc::default();
+    let arrivals: Arc<Mutex<Vec<std::time::Instant>>> = Arc::default();
+    let server = MockServer::start({
+        let arrivals = arrivals.clone();
+        move |req: &MockRequest| {
+            if req.method == "POST" {
+                let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+                let hash = body["hash"].as_str().unwrap().to_owned();
+                let id = format!("sess-{}", &hash[..16]);
+                sessions.lock().unwrap().insert(id.clone(), hash);
+                return MockResponse::new(201, "Created")
+                    .header("X-Capsule-Offset", "0")
+                    .header(
+                        "X-Capsule-Advice",
+                        "chunk=262144, sessions=4, ranges=4, ttl=300",
+                    )
+                    .json_body(format!(
+                        r#"{{"id":{id:?},"upload_url":"/upload/{id}","suggested_chunk_size":262144}}"#
+                    ));
+            }
+            let id = req.path.rsplit('/').next().unwrap().to_owned();
+            let offset: u64 = req
+                .header("X-Capsule-Offset")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            let response = MockResponse::new(204, "No Content").header(
+                "X-Capsule-Offset",
+                (offset + req.body.len() as u64).to_string(),
+            );
+            if sessions.lock().unwrap()[&id] == original_hash && !req.body.is_empty() {
+                arrivals.lock().unwrap().push(std::time::Instant::now());
+                return response.after(RANGE_DELAY);
+            }
+            response
+        }
+    })
+    .await;
+
+    let client = server.client(&bundle.protocol_version);
+    assert_eq!(
+        client.ranges_window(),
+        crate::upload::DEFAULT_CLIENT_RANGES,
+        "the client keeps its own window; only the lane lowers it"
+    );
+    let scheduler = StagedScheduler::new(
+        capsule_library::import::UploadPolicy::Full,
+        ConnectionClass::Unmetered,
+    );
+    let held = HashSet::new();
+    let lanes = [LanePush {
+        server: ServerKey::new(server.base_url()),
+        client: &client,
+        bundles: vec![LaneBundle {
+            bundle: &bundle,
+            held: &held,
+        }],
+        session_cap: None,
+    }];
+    let results = push_lanes(
+        &scheduler,
+        &lanes,
+        false,
+        PUSH_BYTE_BUDGET,
+        LaneWindows::new(1, lane_ranges),
+    )
+    .await;
+    results[0][0].as_ref().expect("the bundle pushes");
+    let arrivals = arrivals.lock().unwrap().clone();
+    assert!(
+        arrivals.len() >= 4,
+        "the original went out in several ranges: {}",
+        arrivals.len()
+    );
+    arrivals
+}
+
+/// **The lane's P lowers each session's window.** A client whose own window is four, under a
+/// server advising four, sends a verifying original's ranges four at once; the same client on a
+/// lane whose P is one sends them one at a time, each waiting for the one before it.
+#[tokio::test]
+async fn a_lanes_ranges_window_lowers_each_sessions_window() {
+    let parallel = push_original_under(4).await;
+    assert!(
+        parallel[3] - parallel[0] < RANGE_DELAY / 2,
+        "under P=4 the first four ranges were in flight together: {parallel:?}"
+    );
+
+    let sequential = push_original_under(1).await;
+    for pair in sequential.windows(2) {
+        assert!(
+            pair[1] - pair[0] >= RANGE_DELAY * 3 / 4,
+            "under P=1 each range waited for the one before it: {sequential:?}"
+        );
+    }
+}
+
+/// An empty run returns at once, and the run's future can move across threads.
+#[tokio::test]
+async fn an_empty_push_run_returns_nothing() {
+    fn assert_send<T: Send>(value: T) -> T {
+        value
+    }
+    let scheduler = StagedScheduler::new(
+        capsule_library::import::UploadPolicy::Full,
+        ConnectionClass::Unmetered,
+    );
+    let lanes: [LanePush<'_, std::hash::RandomState>; 0] = [];
+    let run = assert_send(push_lanes(
+        &scheduler,
+        &lanes,
+        false,
+        1,
+        LaneWindows::default(),
+    ));
+    assert!(run.await.is_empty());
+}
+
+/// **The gate a bundle runs under** waits for the shared budget and wakes when a reservation is
+/// released, and applies the server's advice to its lane and its session.
+#[tokio::test]
+async fn the_queue_gate_waits_for_the_budget_and_applies_advice() {
+    use std::time::{Duration, Instant};
+
+    let server = ServerKey::new("https://lane.test");
+    let mut queue =
+        UploadQueue::new(100, Duration::from_secs(3600)).with_windows(LaneWindows::new(4, 4));
+    queue.enqueue(&server, QueuedJob::new(UploadTier::Original, (0, 0)));
+    queue.enqueue(&server, QueuedJob::new(UploadTier::Original, (0, 1)));
+    let now = Instant::now();
+    let a = queue.next(now).unwrap();
+    let b = queue.next(now).unwrap();
+    let shared = LaneShared {
+        queue: Mutex::new(queue),
+        freed: tokio::sync::Notify::new(),
+    };
+    let gate_a = QueueGate {
+        shared: &shared,
+        server: &server,
+        grant: a.id,
+    };
+    let gate_b = QueueGate {
+        shared: &shared,
+        server: &server,
+        grant: b.id,
+    };
+    let pending = Duration::from_millis(50);
+
+    let whole = gate_a.reserve(100).await.expect("the whole budget");
+    let mut waiting = gate_b.reserve(10);
+    assert!(
+        tokio::time::timeout(pending, &mut waiting).await.is_err(),
+        "b waits while the budget is full"
+    );
+    gate_a.release(whole);
+    let range = tokio::time::timeout(Duration::from_secs(5), waiting)
+        .await
+        .expect("the release wakes the waiting range")
+        .expect("reserved");
+    assert_eq!(shared.queue().in_use(), 10);
+
+    gate_b.advised(&ServerAdvice::parse(Some("sessions=1, ranges=1, ttl=60")));
+    assert_eq!(shared.queue().sessions_window(&server, Instant::now()), 1);
+    let mut second = gate_b.reserve(10);
+    assert!(
+        tokio::time::timeout(pending, &mut second).await.is_err(),
+        "b's session now holds one range at a time"
+    );
+    gate_b.release(range);
+    tokio::time::timeout(Duration::from_secs(5), second)
+        .await
+        .expect("woken once b's range returned")
+        .expect("reserved");
+
+    shared.queue().complete(b.id, Instant::now());
+    assert_eq!(
+        gate_b.reserve(10).await,
+        None,
+        "a finished grant reserves nothing"
+    );
+}
+
+/// **The gates serve waiting ranges first-come.** A holder of the whole budget that releases it
+/// and asks again at once goes behind the ranges already waiting; and a waiter woken by that
+/// release but refused for being behind another is woken again once the one ahead is served.
+#[tokio::test]
+async fn the_queue_gates_serve_waiting_ranges_first_come() {
+    use std::time::{Duration, Instant};
+
+    let server = ServerKey::new("https://lane.test");
+    let mut queue =
+        UploadQueue::new(100, Duration::from_secs(3600)).with_windows(LaneWindows::new(4, 1));
+    for bundle in 0..3 {
+        queue.enqueue(&server, QueuedJob::new(UploadTier::Original, (0, bundle)));
+    }
+    let now = Instant::now();
+    let grants: Vec<_> = std::iter::from_fn(|| queue.next(now)).collect();
+    let shared = LaneShared {
+        queue: Mutex::new(queue),
+        freed: tokio::sync::Notify::new(),
+    };
+    let gate = |at: usize| QueueGate {
+        shared: &shared,
+        server: &server,
+        grant: grants[at].id,
+    };
+    let (holder, first, second) = (gate(0), gate(1), gate(2));
+    let pending = Duration::from_millis(50);
+
+    let whole = holder.reserve(100).await.expect("the whole budget");
+    let mut first_waits = first.reserve(10);
+    assert!(
+        tokio::time::timeout(pending, &mut first_waits)
+            .await
+            .is_err()
+    );
+    let mut second_waits = second.reserve(10);
+    assert!(
+        tokio::time::timeout(pending, &mut second_waits)
+            .await
+            .is_err()
+    );
+
+    holder.release(whole);
+    let mut again = holder.reserve(100);
+    assert!(
+        tokio::time::timeout(pending, &mut again).await.is_err(),
+        "the holder asks again behind the ranges already waiting"
+    );
+    // The second waiter is polled first: refused behind the first, it is woken again once the
+    // first is served.
+    let (second_range, first_range) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(second_waits, first_waits)
+    })
+    .await
+    .expect("both waiting ranges are served");
+    assert_eq!(shared.queue().in_use(), 20);
+    assert!(
+        tokio::time::timeout(pending, &mut again).await.is_err(),
+        "the whole-budget range waits for the budget to drain"
+    );
+
+    first.release(first_range.expect("reserved"));
+    second.release(second_range.expect("reserved"));
+    tokio::time::timeout(Duration::from_secs(5), again)
+        .await
+        .expect("the holder is served once the line ahead of it drains")
+        .expect("reserved");
+    assert_eq!(shared.queue().in_use(), 100);
+}
+
+// ─── A source that changes under the push ────────────────────────────────────
+
+/// A real workspace with one imported asset whose original is `len` bytes, its bundle, and the
+/// path of the plaintext the bundle re-derives the original's ciphertext from.
+fn real_bundle_of(len: usize) -> (tempfile::TempDir, UploadBundle, std::path::PathBuf) {
+    let dir = tempfile::TempDir::new().unwrap();
+    let lib = dir.path().join("library");
+    std::fs::create_dir_all(&lib).unwrap();
+    let src = dir.path().join("photo.jpg");
+    let mut bytes: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+    bytes[..3].copy_from_slice(b"\xFF\xD8\xFF");
+    std::fs::write(&src, bytes).unwrap();
+
+    let mut ws = Workspace::create_with_params(&lib, b"passphrase", FAST).unwrap();
+    let album = ws.default_album_id();
+    ws.ensure_album(album, "Imports").unwrap();
+    let asset_id = ws.import_asset(album, &src).unwrap();
+    let bundle = ws.upload_bundle(&asset_id).unwrap();
+    let path = ws.original_path(&asset_id).unwrap();
+    (dir, bundle, path)
+}
+
+/// Overwrite one plaintext byte at `at`, keeping the length, and move the modification time
+/// apart as any real edit some time after the bundle was built does.
+fn edit_plaintext(path: &std::path::Path, at: u64) {
+    use std::io::{Seek as _, Write as _};
+
+    let mut file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+    file.seek(std::io::SeekFrom::Start(at)).unwrap();
+    file.write_all(&[0xee]).unwrap();
+    file.set_modified(std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1))
+        .unwrap();
+}
+
+/// A re-derived chunk whose tag differs from the one the bundle recorded refuses the read
+/// with the SDK's own [`SourceChanged`], which the upload client types as a source change; the
+/// refusal names the tag, which the read checks before the identity.
+#[test]
+fn an_originals_changed_chunk_refuses_its_read_as_a_source_change() {
+    let (_dir, bundle, path) = real_bundle_of(200_000);
+    let source = BlobBytes::Original(&bundle.original);
+    assert!(source.verifies_rederived());
+    source.read_at(0, 4096).unwrap();
+    edit_plaintext(&path, 10);
+
+    let error = source.read_at(0, 4096).unwrap_err();
+    let changed = error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<SourceChanged>())
+        .expect("the read carries SourceChanged");
+    assert!(changed.reason.contains("tag"), "{changed}");
+}
+
+/// **A push over a real original that changes mid-upload** ends typed as a source change: the
+/// session is cancelled, nothing more of the original is sent, and every byte the server
+/// received is the verified ciphertext's.
+#[tokio::test]
+async fn a_push_whose_original_changes_mid_upload_ends_as_a_source_change() {
+    let (_dir, bundle, path) = real_bundle_of(3 << 20);
+    let verified = bundle.original.to_vec().unwrap();
+    let original_hash = bundle.ciphertext_hash.to_hex();
+
+    let sessions: Arc<Mutex<HashMap<String, String>>> = Arc::default();
+    let edited = Arc::new(Mutex::new(false));
+    // Every range of the original the server received, as (offset, bytes).
+    type Received = Vec<(u64, Vec<u8>)>;
+    let received: Arc<Mutex<Received>> = Arc::default();
+    let cancelled = Arc::new(AtomicUsize::new(0));
+    let server = MockServer::start({
+        let (received, cancelled) = (received.clone(), cancelled.clone());
+        move |req: &MockRequest| {
+            if req.method == "POST" {
+                let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+                let hash = body["hash"].as_str().unwrap().to_owned();
+                let id = format!("sess-{}", &hash[..16]);
+                sessions.lock().unwrap().insert(id.clone(), hash);
+                return MockResponse::new(201, "Created")
+                    .header("X-Capsule-Offset", "0")
+                    .header(
+                        "X-Capsule-Advice",
+                        "chunk=262144, sessions=4, ranges=4, ttl=300",
+                    )
+                    .json_body(format!(
+                        r#"{{"id":{id:?},"upload_url":"/upload/{id}","suggested_chunk_size":262144}}"#
+                    ));
+            }
+            if req.method == "DELETE" {
+                cancelled.fetch_add(1, Ordering::SeqCst);
+                return MockResponse::new(204, "No Content");
+            }
+            let id = req.path.rsplit('/').next().unwrap().to_owned();
+            let hash = sessions.lock().unwrap()[&id].clone();
+            let offset: u64 = req
+                .header("X-Capsule-Offset")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            if hash == original_hash {
+                // The first range of the original to land edits the plaintext, and no range
+                // of it is answered before the edit is on disk.
+                let mut done = edited.lock().unwrap();
+                if !*done {
+                    edit_plaintext(&path, 2 << 20);
+                    *done = true;
+                }
+                received.lock().unwrap().push((offset, req.body.clone()));
+            }
+            MockResponse::new(204, "No Content").header(
+                "X-Capsule-Offset",
+                (offset + req.body.len() as u64).to_string(),
+            )
+        }
+    })
+    .await;
+
+    let scheduler = StagedScheduler::new(
+        capsule_library::import::UploadPolicy::Full,
+        ConnectionClass::Unmetered,
+    );
+    let pushed = push_bundle(
+        &server.client(&bundle.protocol_version),
+        &scheduler,
+        &bundle,
+        &HashSet::new(),
+        false,
+    )
+    .await;
+
+    let error = pushed.expect_err("a changed original fails the push");
+    assert!(
+        matches!(error, PushError::Upload(UploadError::SourceChanged(_))),
+        "{error:?}"
+    );
+    assert_eq!(error.kind(), "source_changed");
+    assert_eq!(
+        cancelled.load(Ordering::SeqCst),
+        1,
+        "the original's session is cancelled"
+    );
+    let received = received.lock().unwrap();
+    assert!(!received.is_empty(), "the original was mid-upload");
+    let sent: u64 = received.iter().map(|(_, body)| body.len() as u64).sum();
+    assert!(sent < verified.len() as u64, "nothing more of it was sent");
+    for (offset, body) in received.iter() {
+        let at = usize::try_from(*offset).unwrap();
+        assert_eq!(
+            body[..],
+            verified[at..at + body.len()],
+            "every byte the server received is the verified ciphertext's (at {offset})"
+        );
+    }
 }

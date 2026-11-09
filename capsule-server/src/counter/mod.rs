@@ -217,12 +217,12 @@ pub enum CounterKey {
     SecondFactor(String),
     /// Account registrations from one source address.
     ///
-    /// Declared and consumed nowhere yet. The client address it needs now exists
-    /// ([`crate::client_addr`], #704) and the share and drop paths charge their source keys with
-    /// it; registration is the one **unauthenticated write** on the surface, so it is the next
-    /// place that fact is owed — recorded here rather than replaced by an email-keyed limiter,
-    /// which would bound repeated probes against one address while doing nothing about a sweep
-    /// across many.
+    /// Charged by `POST /v1/auth/register` with
+    /// [`ClientAddr::source_key`](crate::client_addr::ClientAddr::source_key) against
+    /// [`budgets::REGISTRATION_SOURCE`] (#1001): registration is the one **unauthenticated
+    /// write** on the surface, and this is what bounds its account oracle. Keyed on the source
+    /// rather than the email, because an email-keyed limiter would bound repeated probes against
+    /// one address while doing nothing about a sweep across many.
     RegistrationSource(String),
     /// Begun OIDC ceremonies naming one **admitted** redirect host.
     ///
@@ -266,8 +266,7 @@ pub enum CounterKey {
     ///
     /// Keyed on the peer's origin, never on the capability: a peer holding ten capabilities is
     /// one blast-radius boundary, and a budget per token would be a budget a peer widens by
-    /// asking for more tokens. Events per hour only; bytes and CPU per hour need a weighted
-    /// counter this port does not have and are post-v1.
+    /// asking for more tokens. Events per hour; bytes per hour is [`Self::PeerBytes`].
     PeerRequests(String),
     /// Federated moderation reports from one peer against one account (invariant
     /// 24), keyed on `"{reporting_server}:{reported_user}"` as the contract bounds them.
@@ -292,6 +291,48 @@ pub enum CounterKey {
     /// window", so the counter port is the replay cache and no second store exists for it. Charged
     /// after the signature verifies, so a third party cannot burn a peer's nonces.
     FederatedReportNonce(String),
+    /// One request-signature nonce from one peer, keyed on `"{peer}:{nonce}"` (#949).
+    ///
+    /// The replay memory of the signature every capability presentation carries
+    /// ([`ReadBearer`](crate::federation::ReadBearer)), for the reason
+    /// [`Self::FederatedReportNonce`] is the report's: a one-hit budget whose window starts at
+    /// the first hit is "seen inside this window". Charged only once the signature has verified
+    /// under the peer's pinned key, and not for a peer that is blocked or over its events budget,
+    /// so the key space is what pinned peers' admitted requests make it.
+    FederatedRequestNonce(String),
+    /// Pull hints at `POST /v1/federation/hints` from one **verified** home server (#1158).
+    ///
+    /// Charged only once the hint's signature has verified under the peer's pinned key, for the
+    /// reason [`Self::FederatedIntake`] is: keyed on an origin a body merely claims, it would be a
+    /// budget a stranger spends to silence a real peer's hints.
+    FederatedHints(String),
+    /// One hint nonce from one verified home server, keyed on `"{home_server}:{nonce}"` (#1158).
+    ///
+    /// The hint's replay memory, for the reason [`Self::FederatedReportNonce`] is the report's.
+    /// A partition of its own rather than the report's, so a peer hinting at its whole budget
+    /// cannot fill the memory reports are refused closed by.
+    FederatedHintNonce(String),
+    /// Ciphertext served to one federated peer at `GET /v1/blob/{hash}`, in kibibytes (#476).
+    ///
+    /// The bytes-per-hour half of invariant 21's transfer budget, keyed on the peer's origin for
+    /// the reason [`Self::PeerRequests`] is. Charged with [`CounterStore::charge`], one weighted
+    /// call per delivery, and never as a loop of hits: kibibytes rather than bytes so a `u32`
+    /// budget reaches terabytes an hour.
+    PeerBytes(String),
+    /// Validation failures of input pulled from one source peer by the egress pull worker (#964).
+    ///
+    /// The **error budget** design/federation.md's circuit breaker spends: one unit per pull
+    /// whose input failed validation, keyed on the source peer's origin. A transport failure
+    /// never charges it — an unreachable peer is backed off, not distrusted. A spent budget
+    /// opens the peer's circuit ([`crate::federation::pull`]).
+    PeerPullErrors(String),
+    /// Validation time the egress pull worker spent on one source peer's input, in
+    /// milliseconds (#964).
+    ///
+    /// The receiving half's CPU-per-hour budget: the one per-peer CPU this server spends that a
+    /// counter can measure. Charged with [`CounterStore::charge`], one weighted call per pull,
+    /// for the reason [`Self::PeerBytes`] is.
+    PeerPullCpu(String),
     /// Capability mints by one account (#529).
     ///
     /// Keyed on the authenticated owner: every mint writes a capability row, and nothing else
@@ -355,6 +396,12 @@ impl CounterKey {
             Self::PeerReports(_) => "peer_reports",
             Self::FederatedIntake(_) => "federated_intake",
             Self::FederatedReportNonce(_) => "federated_report_nonce",
+            Self::FederatedRequestNonce(_) => "federated_request_nonce",
+            Self::FederatedHints(_) => "federated_hints",
+            Self::FederatedHintNonce(_) => "federated_hint_nonce",
+            Self::PeerBytes(_) => "peer_bytes",
+            Self::PeerPullErrors(_) => "peer_pull_errors",
+            Self::PeerPullCpu(_) => "peer_pull_cpu",
             Self::CapabilityMints(_) => "capability_mints",
         }
     }
@@ -389,6 +436,12 @@ impl CounterKey {
             Self::PeerReports(_) => Slot::PeerReports,
             Self::FederatedIntake(_) => Slot::FederatedIntake,
             Self::FederatedReportNonce(_) => Slot::FederatedReportNonce,
+            Self::FederatedRequestNonce(_) => Slot::FederatedRequestNonce,
+            Self::FederatedHints(_) => Slot::FederatedHints,
+            Self::FederatedHintNonce(_) => Slot::FederatedHintNonce,
+            Self::PeerBytes(_) => Slot::PeerBytes,
+            Self::PeerPullErrors(_) => Slot::PeerPullErrors,
+            Self::PeerPullCpu(_) => Slot::PeerPullCpu,
             Self::CapabilityMints(_) => Slot::CapabilityMints,
         }
     }
@@ -420,10 +473,17 @@ impl CounterKey {
             Self::OidcAuthorize(_) => ceilings::OIDC_AUTHORIZE,
             Self::OidcAuthorizeRefused => ceilings::OIDC_AUTHORIZE_REFUSED,
             Self::OidcDevice => ceilings::OIDC_DEVICE,
-            Self::PeerRequests(_) | Self::PeerReports(_) => ceilings::PEER_ORIGIN,
+            Self::PeerRequests(_)
+            | Self::PeerReports(_)
+            | Self::PeerBytes(_)
+            | Self::PeerPullErrors(_)
+            | Self::PeerPullCpu(_) => ceilings::PEER_ORIGIN,
             Self::FederatedReports(_) => ceilings::FEDERATED_REPORTS,
             Self::FederatedIntake(_) => ceilings::FEDERATED_INTAKE,
             Self::FederatedReportNonce(_) => ceilings::FEDERATED_REPORT_NONCE,
+            Self::FederatedRequestNonce(_) => ceilings::FEDERATED_REQUEST_NONCE,
+            Self::FederatedHints(_) => ceilings::FEDERATED_HINTS,
+            Self::FederatedHintNonce(_) => ceilings::FEDERATED_HINT_NONCE,
             Self::CapabilityMints(_) => ceilings::CAPABILITY_MINTS,
         }
     }
@@ -447,10 +507,16 @@ impl CounterKey {
             | Self::SecondFactor(scope)
             | Self::OidcAuthorize(scope)
             | Self::PeerRequests(scope)
+            | Self::PeerBytes(scope)
+            | Self::PeerPullErrors(scope)
+            | Self::PeerPullCpu(scope)
             | Self::FederatedReports(scope)
             | Self::PeerReports(scope)
             | Self::FederatedIntake(scope)
             | Self::FederatedReportNonce(scope)
+            | Self::FederatedRequestNonce(scope)
+            | Self::FederatedHints(scope)
+            | Self::FederatedHintNonce(scope)
             | Self::RegistrationSource(scope) => scope,
             // The two unit variants are each **one** global bucket by construction — that is why
             // they are unit variants rather than a scoped one carrying a sentinel string (see
@@ -525,6 +591,39 @@ pub trait CounterStore: std::fmt::Debug + Send + Sync {
     fn hit<'a>(
         &'a self,
         key: &'a CounterKey,
+        budget: Budget,
+        at: Timestamp,
+    ) -> StoreFuture<'a, Verdict> {
+        self.charge(key, 1, budget, at)
+    }
+
+    /// Charge `units` against `key`'s budget and decide, as one operation (#476).
+    ///
+    /// The weighted form of [`Self::hit`], which is `charge(key, 1, …)`. It exists because a
+    /// budget measured in something other than requests — bytes served to a peer — cannot be
+    /// charged as `units` calls to [`Self::hit`]: that is a loop of separate decisions, and a
+    /// burst interleaving with it reads a half-charged window, which is the read-then-write this
+    /// port exists to forbid. One call, one critical section, whatever `units` is.
+    ///
+    /// **All or nothing.** A charge that would take an open window past its limit is refused
+    /// whole and charges nothing, exactly as a refused hit charges nothing; it does not spend the
+    /// remainder and fail on the rest.
+    ///
+    /// **A fresh window admits any charge.** The first charge of a window is admitted whatever
+    /// its size, and one larger than the whole limit leaves the window spent until it ends. That
+    /// is the rule [`Self::hit`] already follows for a zero limit, and it is what keeps a single
+    /// unit of work larger than the budget — one blob bigger than a peer's hourly allowance —
+    /// servable once a window rather than never.
+    ///
+    /// A charge of zero units writes nothing and answers what [`Self::peek`] answers.
+    ///
+    /// The errors are [`Self::hit`]'s: [`StoreError::Rejected`](crate::store::StoreError::Rejected)
+    /// when the key's partition is full, and any other store error when the adapter could not
+    /// answer.
+    fn charge<'a>(
+        &'a self,
+        key: &'a CounterKey,
+        units: u32,
         budget: Budget,
         at: Timestamp,
     ) -> StoreFuture<'a, Verdict>;
@@ -676,9 +775,12 @@ pub mod ceilings {
     /// window.
     pub const OIDC_DEVICE: usize = 1;
 
-    /// [`CounterKey::PeerRequests`](super::CounterKey::PeerRequests) and
-    /// [`CounterKey::PeerReports`](super::CounterKey::PeerReports) — both keyed on a peer's
-    /// origin, so both are bounded by the same thing and share one number.
+    /// [`CounterKey::PeerRequests`](super::CounterKey::PeerRequests),
+    /// [`CounterKey::PeerBytes`](super::CounterKey::PeerBytes) and
+    /// [`CounterKey::PeerReports`](super::CounterKey::PeerReports), and the pull worker's
+    /// [`CounterKey::PeerPullErrors`](super::CounterKey::PeerPullErrors) and
+    /// [`CounterKey::PeerPullCpu`](super::CounterKey::PeerPullCpu) — all keyed on a peer's
+    /// origin, so all are bounded by the same thing and share one number.
     ///
     /// Not caller-controlled: a peer origin reaches either key only off a capability this
     /// server minted, so the true bound is the size of the peer list an operator pinned. Ten
@@ -713,6 +815,35 @@ pub mod ceilings {
     /// peer holds at most fifty live windows here. Twenty thousand is four hundred peers doing
     /// that at once.
     pub const FEDERATED_REPORT_NONCE: usize = 20_000;
+
+    /// [`CounterKey::FederatedRequestNonce`](super::CounterKey::FederatedRequestNonce) —
+    /// 10-minute window, keyed on a verified peer and a nonce it chose.
+    ///
+    /// A nonce is spent only for a request a pinned peer signed while inside
+    /// [`budgets::PEER_REQUESTS`](super::budgets::PEER_REQUESTS), which is ten thousand an hour
+    /// in a fixed window — so one peer holds at most twenty thousand live windows here, its whole
+    /// budget at the end of one hour and again at the start of the next. Two hundred thousand is
+    /// ten peers doing that at once. Full, the partition refuses every capability presentation
+    /// closed until windows lapse, which is the cost of a replay memory that never fails open.
+    pub const FEDERATED_REQUEST_NONCE: usize = 200_000;
+
+    /// [`CounterKey::FederatedHints`](super::CounterKey::FederatedHints) — 1-hour window, keyed
+    /// on a **verified** home server.
+    ///
+    /// Only a peer an operator pinned can hold a window here, so the key space is the pinned
+    /// list, which is what [`PEER_ORIGIN`] is sized for.
+    pub const FEDERATED_HINTS: usize = PEER_ORIGIN;
+
+    /// [`CounterKey::FederatedHintNonce`](super::CounterKey::FederatedHintNonce) — 10-minute
+    /// window, keyed on a verified home server and a nonce it chose.
+    ///
+    /// A nonce is spent only for a hint inside
+    /// [`budgets::FEDERATED_HINTS`](super::budgets::FEDERATED_HINTS), six hundred an hour in a
+    /// fixed window — so one peer holds at most twelve hundred live windows here, its whole
+    /// budget at the end of one hour and again at the start of the next. A hundred thousand is
+    /// eighty peers doing that at once. Full, the partition refuses every hint closed until
+    /// windows lapse, and a refused hint costs nothing but the wait for the next interval.
+    pub const FEDERATED_HINT_NONCE: usize = 100_000;
 
     /// [`CounterKey::CapabilityMints`](super::CounterKey::CapabilityMints) — 1-hour window, keyed
     /// on an authenticated account. Bounded by the directory, as `LOGIN_ATTEMPTS` is.
@@ -791,6 +922,12 @@ partition_slots!(
     PeerReports,
     FederatedIntake,
     FederatedReportNonce,
+    FederatedRequestNonce,
+    FederatedHints,
+    FederatedHintNonce,
+    PeerBytes,
+    PeerPullErrors,
+    PeerPullCpu,
     CapabilityMints,
 );
 
@@ -946,12 +1083,22 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Decide `window` against `budget` at `at`, treating an elapsed window as absent.
-fn verdict(window: Option<Window>, budget: Budget, at: Timestamp) -> (Verdict, Option<Window>) {
+/// Decide a charge of `units` against `window` and `budget` at `at`, treating an elapsed window
+/// as absent.
+///
+/// An open window refuses a charge that would take it past its limit; a fresh one admits any
+/// charge (see [`CounterStore::charge`]). With `units` of one this is exactly the hit rule:
+/// `hits + 1 > limit` is `hits >= limit`.
+fn verdict(
+    window: Option<Window>,
+    units: u32,
+    budget: Budget,
+    at: Timestamp,
+) -> (Verdict, Option<Window>) {
     let live = window.filter(|open| at < crate::store::deadline(open.opened_at, budget.window));
 
     match live {
-        Some(open) if open.hits >= budget.limit => (
+        Some(open) if u64::from(open.hits) + u64::from(units) > u64::from(budget.limit) => (
             Verdict::Limited {
                 retry_after: crate::store::deadline(open.opened_at, budget.window),
             },
@@ -974,12 +1121,16 @@ fn verdict(window: Option<Window>, budget: Budget, at: Timestamp) -> (Verdict, O
 }
 
 impl CounterStore for InMemoryCounters {
-    fn hit<'a>(
+    fn charge<'a>(
         &'a self,
         key: &'a CounterKey,
+        units: u32,
         budget: Budget,
         at: Timestamp,
     ) -> StoreFuture<'a, Verdict> {
+        if units == 0 {
+            return self.peek(key, budget, at);
+        }
         Box::pin(async move {
             let own = key.partition_index();
             let partition = self.partition(key);
@@ -1018,12 +1169,13 @@ impl CounterStore for InMemoryCounters {
                     ),
                 });
             }
-            let (decision, live) = verdict(held, budget, at);
+            let (decision, live) = verdict(held, units, budget, at);
 
             match decision {
                 Verdict::Limited { retry_after } => {
                     tracing::info!(
                         counter = key.as_str(),
+                        units,
                         %retry_after,
                         "a rate limit engaged"
                     );
@@ -1034,12 +1186,12 @@ impl CounterStore for InMemoryCounters {
                     // observe the state in between, which is the whole property.
                     let updated = match live {
                         Some(open) => Window {
-                            hits: open.hits.saturating_add(1),
+                            hits: open.hits.saturating_add(units),
                             opened_at: open.opened_at,
                             purge_after: crate::store::deadline(open.opened_at, budget.window),
                         },
                         None => Window {
-                            hits: 1,
+                            hits: units,
                             opened_at: at,
                             purge_after: crate::store::deadline(at, budget.window),
                         },
@@ -1063,7 +1215,7 @@ impl CounterStore for InMemoryCounters {
         Box::pin(async move {
             let partition = self.partition(key);
             let held = lock(&partition.windows).get(key).copied();
-            Ok(verdict(held, budget, at).0)
+            Ok(verdict(held, 1, budget, at).0)
         })
     }
 
@@ -1104,6 +1256,22 @@ impl CounterContext {
         budget: Budget,
     ) -> Result<Verdict, crate::store::StoreError> {
         self.counters.hit(key, budget, self.clock.now()).await
+    }
+
+    /// Charge `units` and decide: the weighted [`Self::hit`] (see [`CounterStore::charge`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::hit`], under the same rule: an error is a refusal, never an admission.
+    pub async fn charge(
+        &self,
+        key: &CounterKey,
+        units: u32,
+        budget: Budget,
+    ) -> Result<Verdict, crate::store::StoreError> {
+        self.counters
+            .charge(key, units, budget, self.clock.now())
+            .await
     }
 
     /// The verdict a hit would get.

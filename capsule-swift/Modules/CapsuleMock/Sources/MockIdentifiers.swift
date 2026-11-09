@@ -29,6 +29,7 @@ public enum MockIdentifiers {
         case blob = 12
         case importRun = 13
         case peer = 14
+        case region = 15
     }
 
     /// A UUIDv7-shaped string: a monotonic-looking prefix plus derived entropy.
@@ -75,6 +76,10 @@ public enum MockIdentifiers {
 
     public static func stackID(seed: UInt64, ordinal: Int) -> StackID {
         StackID(timeOrdered(seed, .stack, ordinal))
+    }
+
+    public static func regionID(seed: UInt64, ordinal: Int) -> RegionID {
+        RegionID(timeOrdered(seed, .region, ordinal))
     }
 
     public static func shareID(seed: UInt64, ordinal: Int) -> ShareID {

@@ -111,30 +111,27 @@ struct VisibilityFlagTests {
     }
 }
 
-/// The trash retention window is a cryptographic floor, not a server setting.
-@Suite("Trash retention is signed into the delete manifest")
+/// The trash retention window is the workspace's judgement, carried, not
+/// re-computed.
+@Suite("A trash entry carries the workspace's retention judgement")
 struct TrashRetentionTests {
-    @Test("an asset is restorable before its signed deadline and not after")
-    func restorableWithinWindow() {
-        let entry = TrashEntry(
-            assetID: "asset",
-            deletedAt: Fixtures.epoch,
-            retentionUntil: Fixtures.time(offsetSeconds: 30 * 86400)
-        )
-        #expect(entry.isRestorable(at: Fixtures.time(offsetSeconds: 15 * 86400)))
-        #expect(!entry.isRestorable(at: Fixtures.time(offsetSeconds: 31 * 86400)))
+    @Test("restorability is what the workspace said, whatever the deadline reads")
+    func restorabilityIsCarried() {
+        let deadline = Fixtures.time(offsetSeconds: 30 * 86400)
+        let open = TrashEntry(assetID: "asset", deletedAt: Fixtures.epoch, retentionUntil: deadline, isRestorable: true)
+        let closed = TrashEntry(assetID: "asset", deletedAt: Fixtures.epoch, retentionUntil: deadline, isRestorable: false)
+
+        #expect(open.isRestorable)
+        #expect(!closed.isRestorable)
+        #expect(open != closed)
+        #expect(open.retentionUntil == deadline)
     }
 
-    @Test("days remaining floors at zero rather than going negative")
-    func daysRemainingFloors() {
-        let entry = TrashEntry(
-            assetID: "asset",
-            deletedAt: Fixtures.epoch,
-            retentionUntil: Fixtures.time(offsetSeconds: 30 * 86400)
-        )
-        #expect(entry.daysRemaining(at: Fixtures.epoch) == 30)
-        #expect(entry.daysRemaining(at: Fixtures.time(offsetSeconds: 29 * 86400)) == 1)
-        #expect(entry.daysRemaining(at: Fixtures.time(offsetSeconds: 40 * 86400)) == 0)
+    @Test("a delete with no readable window carries none")
+    func noWindow() {
+        let entry = TrashEntry(assetID: "asset", deletedAt: Fixtures.epoch, retentionUntil: nil, isRestorable: true)
+        #expect(entry.retentionUntil == nil)
+        #expect(entry.id == "asset")
     }
 }
 

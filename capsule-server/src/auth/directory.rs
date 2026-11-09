@@ -22,10 +22,21 @@
 //! - [`Authentication::Locked`] — the account exists and is refusing attempts.
 //! - [`Authentication::Refused`] — no such account, **or** the wrong password.
 //!
-//! The last one is deliberately a single value. The Salvo tree already went to the trouble of
+//! The last one is deliberately a single variant. The Salvo tree already went to the trouble of
 //! verifying a dummy hash for an unknown email so the two paths take the same time; collapsing
-//! them into one outcome means no caller *can* tell them apart, and no future caller can
-//! reintroduce an enumeration oracle by branching on something this port does not offer.
+//! them into one outcome means the *answer* a caller gives cannot depend on which it was.
+//!
+//! # The refused account, named for the owner's log only
+//!
+//! A refusal carries the account it was charged against — `Some` for a wrong password, `None`
+//! for an address no credential answers to — and a lockout always names its account. Both exist
+//! for one reader: the account activity log (design/activity-log.md), which records a refused or
+//! locked sign-in against the account it was attempted on. They are **not** an input to the
+//! response. A route maps `Refused(_)` onto one answer whatever it holds, and records the event
+//! off the response path, so neither the body nor the time it takes says whether an address
+//! exists. A route that branched its answer on the id would be the enumeration oracle this port
+//! was shaped to prevent; the HTTP tests compare a wrong password and an unknown address
+//! byte for byte.
 //!
 //! # What is deliberately absent
 //!
@@ -33,10 +44,10 @@
 //! the Salvo lockout is a column on the user row, not a windowed counter — so this port
 //! records nothing and windows nothing. That is also why the login route charges no
 //! `CounterKey::LoginAttempts`: the per-account ceiling is this lockout, reserved atomically
-//! with the account row, and a second counter keyed on the account would need the route to
-//! learn *which* account a refused password belonged to — the one thing this port withholds. Rate limiting *is* a counter, it has no port anywhere
-//! in this crate yet; see `routes::auth` for what that costs the ported
-//! surface today.
+//! with the account row, and a second counter keyed on the account the refusal names would
+//! stall a known address and not an unknown one — a timing difference the port exists to
+//! deny. Rate limiting *is* a counter, it has no port anywhere in this crate yet; see
+//! `routes::auth` for what that costs the ported surface today.
 
 use std::fmt;
 use std::future::Future;
@@ -66,9 +77,14 @@ pub enum Authentication {
     /// Distinct from [`Self::Refused`] because it is the one refusal a *correct* password also
     /// receives, so the user needs telling — a client that showed "wrong password" here would
     /// send them round a loop that cannot succeed.
-    Locked,
-    /// No such account, or the wrong password. One value on purpose — see the module docs.
-    Refused,
+    ///
+    /// Names the locked account, for its activity log only (module docs).
+    Locked(UserId),
+    /// No such account, or the wrong password. One variant on purpose — see the module docs.
+    ///
+    /// `Some` names the account whose password was wrong, `None` an address no credential
+    /// answers to. For the activity log only: a caller's answer must not depend on which.
+    Refused(Option<UserId>),
 }
 
 /// What can go wrong reaching the account directory.

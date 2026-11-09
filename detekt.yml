@@ -9,6 +9,10 @@ naming:
     constantPattern: '[A-Z][_A-Z0-9]*'
 
 style:
+  # The same limit ktlint_official (.editorconfig) formats to, so the two linters never disagree
+  # about a line ktlintFormat leaves alone.
+  MaxLineLength:
+    maxLineLength: 140
   # Too noisy for crypto/byte-size code (e.g. 32, 64); renderers of intent, not bugs.
   MagicNumber:
     active: false

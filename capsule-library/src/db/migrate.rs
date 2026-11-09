@@ -45,6 +45,9 @@
 //! | v2    | *still* v2 after `albums`, `idx_albums_created`, `idx_assets_type` arrived from a branch that had independently bumped 1 → 2 for its own change (`3e19de0`, merged `3ebb16d`) |
 //! | v3    | + `embeddings` + its two indexes (`09ae1d1`) |
 //! | v4    | + `assets.is_hidden`, `idx_assets_hidden`, widened `idx_assets_timeline` (`5d3ef26`) |
+//! | v5    | + `assets.caption`, `assets.latitude`, `assets.longitude` |
+//! | v6    | + `idx_assets_album_recency` |
+//! | v7    | + `upload_guards` |
 //!
 //! Two consequences the original plan did not anticipate, both handled below:
 //!
@@ -273,8 +276,86 @@ const STEP_3_TO_4: Step = Step {
     ],
 };
 
+/// v4 → v5. Adds `assets.caption`, `assets.latitude` and `assets.longitude`, the index
+/// projections of the sidecar `caption` LWW register and of its effective location.
+///
+/// Existing rows read `NULL` — no caption, no location — until their sidecars are re-projected
+/// (the next signed write to the asset, or `rebuild_index`). SQL cannot read a sealed sidecar,
+/// so the step cannot backfill them; the sidecar stays the only copy of record either way, so
+/// nothing is lost while the projection trails it.
+const STEP_4_TO_5: Step = Step {
+    from: 4,
+    to: 5,
+    name: "v4_to_v5_caption_and_location",
+    ddl: &[
+        Ddl::IfColumnMissing {
+            table: "assets",
+            column: "caption",
+            sql: "ALTER TABLE assets ADD COLUMN caption TEXT;",
+        },
+        Ddl::IfColumnMissing {
+            table: "assets",
+            column: "latitude",
+            sql: "ALTER TABLE assets ADD COLUMN latitude REAL;",
+        },
+        Ddl::IfColumnMissing {
+            table: "assets",
+            column: "longitude",
+            sql: "ALTER TABLE assets ADD COLUMN longitude REAL;",
+        },
+    ],
+};
+
+/// v5 → v6. Adds `idx_assets_album_recency`, the covering index the album order reads: the
+/// latest effective capture among each album's assets that are neither hidden nor trashed.
+///
+/// Index-only: no column is added and no row is touched, so the step cannot lose or reorder
+/// anything a v5 catalog holds. Recency is derived from columns every v5 row already carries.
+const STEP_5_TO_6: Step = Step {
+    from: 5,
+    to: 6,
+    name: "v5_to_v6_album_recency_index",
+    ddl: &[Ddl::Always(
+        "CREATE INDEX IF NOT EXISTS idx_assets_album_recency
+             ON assets(album_id, is_deleted, is_hidden, capture_utc, capture_timestamp);",
+    )],
+};
+
+/// v6 → v7. Adds the `upload_guards` table: an original's source guard — its identity and
+/// every STREAM chunk's authentication tag — recorded when its upload bundle is built.
+///
+/// Additive: a new table, no row of an existing one touched. A v6 catalog holds no guard, and
+/// none is needed for it: every bundle re-records its guard in the hashing pass that builds it.
+const STEP_6_TO_7: Step = Step {
+    from: 6,
+    to: 7,
+    name: "v6_to_v7_upload_guards",
+    ddl: &[Ddl::Always(
+        "CREATE TABLE IF NOT EXISTS upload_guards (
+             asset_id        TEXT    PRIMARY KEY,
+             nonce_prefix    BLOB    NOT NULL,
+             plaintext_size  INTEGER NOT NULL,
+             source_len      INTEGER NOT NULL,
+             modified_ns     INTEGER,
+             file_dev        INTEGER,
+             file_ino        INTEGER,
+             ctime_secs      INTEGER,
+             ctime_nanos     INTEGER,
+             chunk_tags      BLOB    NOT NULL,
+             recorded_at     INTEGER NOT NULL
+         );",
+    )],
+};
+
 /// Every shipped step, in ascending order. Append only.
-pub(crate) const STEPS: &[Step] = &[STEP_1_TO_2, STEP_2_TO_3, STEP_3_TO_4];
+pub(crate) const STEPS: &[Step] = &[
+    STEP_1_TO_2,
+    STEP_2_TO_3,
+    STEP_3_TO_4,
+    STEP_4_TO_5,
+    STEP_5_TO_6,
+    STEP_6_TO_7,
+];
 
 /// SHA-256 (hex) of each shipped step's canonical rendering, parallel to [`STEPS`].
 ///
@@ -289,6 +370,12 @@ const STEP_FINGERPRINTS: &[&str] = &[
     "15ff0fc10221e1d01deebaafd9b8855b8a9f59491285379a11bf90ba7756f2f6",
     // v3 -> v4  v3_to_v4_hidden_assets
     "420ac7077cf5dd3d5888ce07594263e8ace4558adc79f8972096d80ef9a6fe14",
+    // v4 -> v5  v4_to_v5_caption_and_location
+    "a11341c354995462fad47c5f15f02450d4a90d8d0ab3e69fa5cba55da5982004",
+    // v5 -> v6  v5_to_v6_album_recency_index
+    "249e75f76146b3efea9bb2b371937f45132872edade608b72272cd415f4ab747",
+    // v6 -> v7  v6_to_v7_upload_guards
+    "def046c476a8ce231351c0f2feb2dbba3bb3cf547675e11b01a576d317f28caf",
 ];
 
 // ── Errors ──────────────────────────────────────────────────────────────────

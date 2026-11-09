@@ -83,8 +83,14 @@ private let frameworkSettings: Settings = .settings(
 )
 
 /// App settings: a Release build merges its mergeable framework dependencies.
+///
+/// The FFI lane also sets `CAPSULE_FFI`, the one compilation condition the
+/// composition root's Rust-backed half is fenced by: without it the app target
+/// does not depend on `CapsuleCatalogFFI`, so nothing may import it.
 private let appSettings: Settings = .settings(
-    base: baseSettings,
+    base: ffiEnabled
+        ? baseSettings.merging(["SWIFT_ACTIVE_COMPILATION_CONDITIONS": "$(inherited) CAPSULE_FFI"]) { _, new in new }
+        : baseSettings,
     configurations: [
         .debug(name: "Debug"),
         .release(name: "Release", settings: ["MERGED_BINARY_TYPE": "automatic"]),
@@ -216,11 +222,13 @@ private let moduleTargets: [Target] =
 
     // Catalog (FFI) — the Rust-backed half: the generated uniffi glue for
     // both namespaces (the `capsule_core_ffi` catalog and `capsule-sdk`'s
-    // `capsule_sdk` user flows), the record conversions, and the
-    // error mapping onto the FFI-free `CatalogError`. Present only when
-    // `TUIST_FFI=1`; nothing above it names a generated type.
+    // `capsule_sdk` user flows), the record conversions, the
+    // error mapping onto the FFI-free `CatalogError`, and the port adapters
+    // (labels, the transfer event stream, the alert policy) over the
+    // `capsule_sdk` objects. Present only when `TUIST_FFI=1`; nothing above it
+    // names a generated type.
     //
-    // It also holds the Rust-backed `AlertPolicyPort`, because a uniffi
+    // The Rust-backed `AlertPolicyPort` lives here because a uniffi
     // namespace's glue compiles into exactly one module: a second module over
     // `capsule_sdk.swift` would be a second copy of every generated type.
     + (ffiEnabled
@@ -282,6 +290,9 @@ private let moduleTargets: [Target] =
     // Image decode / downsample / cache / prefetch pipeline.
     + module("ImagePipeline", dependencies: [
         .target(name: "CapsuleFoundation"),
+        // The render ladder's records (`RenderLadder`, `Rendition`) the
+        // providers draw through.
+        .target(name: "CapsuleDomain"),
         .target(name: "AssetKit"),
         // `ContainerExif`, the one ImageIO EXIF parser the viewer shares.
         .target(name: "ManagedStore"),
@@ -323,8 +334,11 @@ private let moduleTargets: [Target] =
             .target(name: "CapsuleUI"),
             .target(name: "AssetKit"),
             .target(name: "ImagePipeline"),
+            // The label and region editor reads and writes through `LabelPort`.
+            .target(name: "CapsuleDomain"),
+            .target(name: "CapsulePorts"),
         ],
-        testDependencies: [supportDependency]
+        testDependencies: [supportDependency, .target(name: "CapsuleMock")]
     )
     + module(
         "FeatureAlbums",
@@ -626,6 +640,17 @@ let project = Project(
             buildAction: .buildAction(targets: ["Capsule", "CapsuleAppUITests"]),
             testAction: .targets(["CapsuleAppUITests"]),
             runAction: .runAction(executable: "Capsule")
+        ),
+        // The responsiveness parity benchmark (`ParityBenchmarkTests`), on a physical device via
+        // `mise run bench-apps apple <device>`. Release, because a Debug build times unoptimized
+        // code and would regress against nothing a user runs; the same bundle as the UI
+        // automation, which is the one place XCTest is sanctioned.
+        .scheme(
+            name: "CapsuleParityBenchmark",
+            shared: true,
+            buildAction: .buildAction(targets: ["Capsule", "CapsuleAppUITests"]),
+            testAction: .targets(["CapsuleAppUITests"], configuration: .release),
+            runAction: .runAction(configuration: .release, executable: "Capsule")
         ),
     ]
 )

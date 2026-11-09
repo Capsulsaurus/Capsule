@@ -30,7 +30,9 @@ pub mod vendor;
 pub use dataset::{DeviceInfo, ObjectInfo, PtpDateTime};
 pub use error::Error;
 pub use ptp::{ObjectFormat, ObjectHandle, OperationCode, ResponseCode, StorageId};
-pub use session::{InitiatorIdentity, ResponderIdentity, Session};
+pub use session::{
+    Event, EventsServed, InitiatorIdentity, ResponderIdentity, Session, serve_events,
+};
 pub use vendor::{VendorExtension, extension_for};
 
 #[cfg(test)]

@@ -135,7 +135,14 @@ async fn sync_once(
         versions: &a_versions,
     };
     let offered = offer_over_peer(&pair.a, local_a, &pair.trust, &options);
-    let pulled = receive(&mut pair.b, &pair.trust, &b_versions, tombstones, &listener);
+    let pulled = receive(
+        &mut pair.b,
+        &pair.trust,
+        &b_versions,
+        tombstones,
+        0,
+        &listener,
+    );
     tokio::join!(offered, pulled)
 }
 
@@ -198,11 +205,129 @@ async fn a_purged_asset_offered_after_a_restart_is_tombstoned_and_the_rest_appli
         pair.a.local_heads().get(&kept)
     );
 
-    let (_, again) = sync_once(&mut pair, &tombstones, BTreeSet::new()).await;
+    // The receiver's offer now names the kept asset's head, so it is never sent again; the
+    // purged one it holds no head for is, and is refused again.
+    let (offered_again, again) = sync_once(&mut pair, &tombstones, BTreeSet::new()).await;
+    assert_eq!(offered_again.assets, vec![purged]);
+    assert_eq!(offered_again.excluded, 1);
     assert!(again.failed.is_empty(), "{:?}", again.failed);
-    assert_eq!(again.identical, vec![kept], "a held asset is a no-op");
+    assert!(again.identical.is_empty(), "a held asset is not sent");
     assert_eq!(again.tombstoned, vec![purged]);
     assert!(again.applied.is_empty());
+}
+
+/// An offer to a receiver that already holds every asset at the same head sends an artifact
+/// with no assets, and the `--json` summary counts what the receiver's offer excluded.
+#[tokio::test]
+async fn an_offer_to_a_receiver_holding_every_head_sends_no_assets() {
+    let scratch = Scratch::new();
+    let mut pair = pair(&scratch);
+    let album = pair.album;
+    let one = photo(&scratch, &mut pair.a, album, "one.jpg");
+    let two = photo(&scratch, &mut pair.a, album, "two.jpg");
+    let none = BTreeSet::new();
+
+    let (first, pulled) = sync_once(&mut pair, &none, BTreeSet::new()).await;
+    assert_eq!(first.excluded, 0, "the receiver held nothing");
+    assert_eq!(sorted(pulled.applied), sorted(vec![one, two]));
+
+    let (offered, pulled) = sync_once(&mut pair, &none, BTreeSet::new()).await;
+    assert!(offered.failed.is_empty(), "{:?}", offered.failed);
+    assert!(offered.assets.is_empty(), "{:?}", offered.assets);
+    assert_eq!(offered.excluded, 2);
+    let artifact = offered
+        .artifact
+        .clone()
+        .expect("an empty artifact is still offered");
+    assert_eq!(pulled.artifacts, vec![artifact]);
+    assert!(pulled.failed.is_empty(), "{:?}", pulled.failed);
+    assert!(pulled.applied.is_empty() && pulled.identical.is_empty());
+
+    let json = serde_json::to_value(&offered).expect("serializes");
+    assert_eq!(json["excluded"], 2);
+}
+
+/// An offer to a receiver that sends no offer pages (one that opens the channel without one, as
+/// an older build does) still sends every managed asset, and the receiver's ingest reports each
+/// one it holds `identical`.
+#[tokio::test]
+async fn an_offer_to_a_receiver_that_sends_no_offer_sends_every_asset() {
+    let scratch = Scratch::new();
+    let mut pair = pair(&scratch);
+    let album = pair.album;
+    let one = photo(&scratch, &mut pair.a, album, "one.jpg");
+    let two = photo(&scratch, &mut pair.a, album, "two.jpg");
+    let none = BTreeSet::new();
+    let (_, pulled) = sync_once(&mut pair, &none, BTreeSet::new()).await;
+    assert_eq!(sorted(pulled.applied), sorted(vec![one, two]));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("binds");
+    let options = OfferOptions {
+        peer: listener.local_addr().expect("bound").to_string(),
+        to: Some(pair.b.device_id()),
+        assets: BTreeSet::new(),
+    };
+    let (a_versions, b_versions) = (
+        MemoryDirectoryVersions::default(),
+        MemoryDirectoryVersions::default(),
+    );
+    let local_a = LocalPeer {
+        device_id: pair.a.device_id(),
+        signer: pair.a.device_signer(),
+        trust: &pair.trust,
+        versions: &a_versions,
+    };
+    let local_b = LocalPeer {
+        device_id: pair.b.device_id(),
+        signer: pair.b.device_signer(),
+        trust: &pair.trust,
+        versions: &b_versions,
+    };
+    // A receiver that offers nothing: it opens the session with no offer and pulls the listing.
+    let limiter = HandshakeLimiter::default();
+    let no_offer = async {
+        let (tcp, _) = listener.accept().await.expect("a peer dials");
+        let channel = capsule_sdk::peering::accept(tcp, local_b, &limiter)
+            .await
+            .expect("verified");
+        let client = PeerClient::open(channel).await.expect("the listing reads");
+        let mut artifacts = Vec::new();
+        for offered in client.listing().to_vec() {
+            let mut held = Vec::new();
+            let bytes = pull_over_channel(&client, &offered.address, offered.len, &mut held)
+                .await
+                .expect("pulled");
+            artifacts.push(bytes);
+        }
+        client.finish().await.expect("done");
+        (client.peer().artifact_secret.clone(), artifacts)
+    };
+    let (offered, (secret, artifacts)) = tokio::join!(
+        offer_over_peer(&pair.a, local_a, &pair.trust, &options),
+        no_offer
+    );
+    assert!(offered.failed.is_empty(), "{:?}", offered.failed);
+    assert_eq!(offered.excluded, 0);
+    assert_eq!(sorted(offered.assets.clone()), sorted(vec![one, two]));
+
+    let exporter = pair
+        .trust
+        .directory
+        .device(&pair.a.device_id())
+        .expect("a is listed")
+        .dsk_public
+        .clone();
+    let heads = pair.b.local_heads();
+    let local = LocalLibrary {
+        heads: &heads,
+        tombstones: &none,
+    };
+    assert_eq!(artifacts.len(), 1);
+    let restored = ingest(&artifacts[0], &secret, &exporter, local).expect("ingests");
+    assert_eq!(sorted(restored.identical), sorted(vec![one, two]));
+    assert!(restored.applied.is_empty());
 }
 
 /// `--asset` narrows the artifact to the named assets, and one this library does not hold is
@@ -258,7 +383,7 @@ async fn an_offer_to_another_device_than_named_sends_nothing() {
     };
     let (offered, pulled) = tokio::join!(
         offer_over_peer(&pair.a, local_a, &pair.trust, &options),
-        receive(&mut pair.b, &pair.trust, &versions, &none, &listener)
+        receive(&mut pair.b, &pair.trust, &versions, &none, 0, &listener)
     );
     assert_eq!(offered.artifact, None);
     assert_eq!(offered.failed[0].kind, "peer_mismatch");
@@ -283,6 +408,7 @@ async fn a_pull_with_no_peer_reports_the_timeout() {
         &pair.trust,
         &versions,
         &BTreeSet::new(),
+        0,
         &listener,
     )
     .await;

@@ -46,11 +46,7 @@ fn main() -> Result<()> {
     color_eyre::install()?;
     let cli = Cli::parse();
 
-    // Pretty-printed with a trailing newline: the artifact is reviewed as a diff, so a
-    // one-line blob would hide exactly the change a reviewer is there to see.
-    let mut json = serde_json::to_string_pretty(&capsule_cli::cli::command_tree())
-        .wrap_err("serializing the command tree to JSON")?;
-    json.push('\n');
+    let json = capsule_cli::cli::command_tree_json();
 
     if cli.check {
         let committed = std::fs::read_to_string(&cli.output).wrap_err_with(|| {

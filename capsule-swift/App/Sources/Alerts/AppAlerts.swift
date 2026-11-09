@@ -5,7 +5,7 @@ import CapsuleMock
 import CapsuleNavigation
 import CapsulePorts
 import Foundation
-#if canImport(CapsuleCatalogFFI)
+#if CAPSULE_FFI
     import CapsuleCatalogFFI
 #endif
 
@@ -32,7 +32,7 @@ enum AlertAdapters {
     /// The adapters this build launches with: the system lane wherever the
     /// Rust core is linked (`TUIST_FFI=1`), the mock lane everywhere else.
     static var launch: AlertAdapters {
-        #if canImport(CapsuleCatalogFFI)
+        #if CAPSULE_FFI
             .system(policy: FFIAlertPolicy())
         #else
             .mock

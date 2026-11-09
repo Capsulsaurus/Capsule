@@ -41,6 +41,11 @@
 //! [`OidcDevicePoll`] — keep polling, slow down, or the [`LoginOutcome`] a password login gives.
 //! The wait between polls is the caller's; these send one request each.
 //!
+//! [`AuthClient::sign_in_options`] reads which sign-ins the server offers from its `server-info`
+//! record, also through the generated client, so a client can leave out a password form the
+//! server would refuse (`auth.password_disabled`, issue #1004). It is advice: the server's own
+//! `403 error.auth.password_disabled` stays the authority.
+//!
 //! ## Testing
 //!
 //! The wire flows (login/refresh/logout, `401` recovery, error mapping) are proven
@@ -158,10 +163,17 @@ pub enum AuthError {
     #[error("account locked after repeated failed logins")]
     AccountLocked,
     /// The server asked the client to back off.
+    ///
+    /// One variant for every `429`, because the client's response is the same: wait
+    /// `retry_after_secs` and try again. `code` keeps which cause the server named (a spent
+    /// budget `error.auth.rate_limited`, a full limiter `error.auth.registration_at_capacity`),
+    /// so [`AuthError::error_code`] renders the server's own message.
     #[error("rate limited; retry after {retry_after_secs}s")]
     RateLimited {
         /// Seconds to wait before retrying, from the `Retry-After` header.
         retry_after_secs: u64,
+        /// The server's `error.*` code, when it sent one; `error.auth.rate_limited` otherwise.
+        code: Option<String>,
     },
     /// The session is gone (refresh token expired or revoked). The user must
     /// re-authenticate interactively.
@@ -262,7 +274,9 @@ impl AuthError {
     pub fn error_code(&self) -> Option<&str> {
         match self {
             Self::InvalidCredentials => Some(error_codes::AUTH_INVALID_CREDENTIALS),
-            Self::RateLimited { .. } => Some(error_codes::AUTH_RATE_LIMITED),
+            Self::RateLimited { code, .. } => {
+                Some(code.as_deref().unwrap_or(error_codes::AUTH_RATE_LIMITED))
+            }
             Self::OidcNotConfigured => Some(error_codes::AUTH_OIDC_NOT_CONFIGURED),
             Self::OidcRedirectInvalid => Some(error_codes::AUTH_OIDC_REDIRECT_INVALID),
             Self::OidcAddressTaken => Some(error_codes::AUTH_OIDC_ADDRESS_TAKEN),
@@ -288,6 +302,7 @@ enum Endpoint {
     OidcCallback,
     OidcDevice,
     OidcDevicePoll,
+    ServerInfo,
 }
 
 impl Endpoint {
@@ -302,6 +317,7 @@ impl Endpoint {
             Self::OidcCallback => "oidc/callback",
             Self::OidcDevice => "oidc/device",
             Self::OidcDevicePoll => "oidc/device/poll",
+            Self::ServerInfo => "server-info",
         }
     }
 
@@ -323,7 +339,9 @@ impl Endpoint {
             // The poll's remaining `401`s — a refused exchange, a refused token — are the
             // callback's and mean the same; its denial and expiry are matched by code first.
             Self::OidcCallback | Self::OidcDevicePoll => AuthError::OidcRejected { code },
-            Self::OidcAuthorize | Self::OidcDevice => AuthError::Unexpected {
+            // The record is unauthenticated, so a `401` from it is a server this client does not
+            // model either.
+            Self::OidcAuthorize | Self::OidcDevice | Self::ServerInfo => AuthError::Unexpected {
                 status: 401,
                 endpoint: self.name(),
                 detail: String::new(),
@@ -605,6 +623,23 @@ fn oidc_binding_challenge(binding: &SecretString) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
 }
 
+/// How a server signs people in, as its `.well-known/capsule/server-info` record publishes it.
+///
+/// Advisory, by contract: the server refuses a password it does not accept with
+/// `403 error.auth.password_disabled` whatever a client read here, so this decides only what a
+/// client offers — never whether a request is safe to send.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignInOptions {
+    /// The server's canonical origin.
+    pub server_id: String,
+    /// Whether the server has an identity provider (`auth.oidc` is not `null`).
+    pub oidc: bool,
+    /// Whether the server refuses password registration and sign-in
+    /// (`auth.password_disabled`). A server that predates the switch omits the field, and a
+    /// missing field reads `false`: that server accepts passwords.
+    pub password_disabled: bool,
+}
+
 /// What a password login answered with.
 ///
 /// Two variants because the server has two outcomes and says so with a status: `200` with a
@@ -702,7 +737,7 @@ impl AuthClient {
         // the typed client (issue #674). The OIDC legs are session upkeep, so only the server's
         // own `426` refuses them — see `NegotiatedSend`.
         let backend: Arc<dyn rest::HttpBackend> = Arc::new(crate::client::Negotiate::observing(
-            Arc::new(rest::ReqwestBackend::new(http.clone())),
+            crate::net::backend(http.clone()),
         ));
         let rest = rest::Client::with_backend(backend, &base.server_root).map_err(|e| {
             AuthError::InvalidBaseUrl {
@@ -766,6 +801,43 @@ impl AuthClient {
         Ok(outcome)
     }
 
+    /// Read how this server signs people in from its unauthenticated
+    /// `.well-known/capsule/server-info` record (one generated call, nothing sent but the
+    /// handshake).
+    ///
+    /// # Errors
+    ///
+    /// [`AuthError::Network`] when the server cannot be reached, [`AuthError::Unexpected`] for a
+    /// status the record does not answer with, and [`AuthError::MalformedResponse`] for a body
+    /// that is not the record. A caller treats every one as "unknown" rather than as a refusal:
+    /// the record is advisory.
+    #[instrument(skip_all)]
+    pub async fn sign_in_options(&self) -> Result<SignInOptions, AuthError> {
+        let info = self
+            .rest
+            .server_info()
+            .await
+            .map_err(|error| {
+                map_rest_error(
+                    Endpoint::ServerInfo,
+                    error,
+                    |rest::ServerInfoError(problem)| Some(problem),
+                )
+            })?
+            .into_inner();
+        let options = SignInOptions {
+            server_id: info.server_id,
+            oidc: info.auth.oidc.is_some(),
+            password_disabled: info.auth.password_disabled.unwrap_or(false),
+        };
+        tracing::debug!(
+            oidc = options.oidc,
+            password_disabled = options.password_disabled,
+            "read the server's sign-in options"
+        );
+        Ok(options)
+    }
+
     /// Begin a sign-in through the server's identity provider.
     ///
     /// `redirect_uri` is where the provider will send the person back — this client's own
@@ -802,6 +874,7 @@ impl AuthClient {
                     | rest::BeginOidcLoginError::Status404(problem)
                     | rest::BeginOidcLoginError::Status415(problem)
                     | rest::BeginOidcLoginError::Status422(problem)
+                    | rest::BeginOidcLoginError::Status425(problem)
                     | rest::BeginOidcLoginError::Status426(problem)
                     | rest::BeginOidcLoginError::Status429(problem)
                     | rest::BeginOidcLoginError::Status500(problem)
@@ -878,6 +951,7 @@ impl AuthClient {
                     | rest::CompleteOidcLoginError::Status409(problem)
                     | rest::CompleteOidcLoginError::Status415(problem)
                     | rest::CompleteOidcLoginError::Status422(problem)
+                    | rest::CompleteOidcLoginError::Status425(problem)
                     | rest::CompleteOidcLoginError::Status426(problem)
                     | rest::CompleteOidcLoginError::Status500(problem)
                     | rest::CompleteOidcLoginError::Status413(problem) => Some(*problem),
@@ -941,6 +1015,7 @@ impl AuthClient {
                     | rest::BeginOidcDeviceLoginError::Status404(problem)
                     | rest::BeginOidcDeviceLoginError::Status415(problem)
                     | rest::BeginOidcDeviceLoginError::Status422(problem)
+                    | rest::BeginOidcDeviceLoginError::Status425(problem)
                     | rest::BeginOidcDeviceLoginError::Status426(problem)
                     | rest::BeginOidcDeviceLoginError::Status429(problem)
                     | rest::BeginOidcDeviceLoginError::Status500(problem)
@@ -1014,6 +1089,7 @@ impl AuthClient {
                             | rest::PollOidcDeviceLoginError::Status409(problem)
                             | rest::PollOidcDeviceLoginError::Status415(problem)
                             | rest::PollOidcDeviceLoginError::Status422(problem)
+                            | rest::PollOidcDeviceLoginError::Status425(problem)
                             | rest::PollOidcDeviceLoginError::Status426(problem)
                             | rest::PollOidcDeviceLoginError::Status429(problem)
                             | rest::PollOidcDeviceLoginError::Status500(problem)
@@ -1195,6 +1271,20 @@ pub struct Session {
 }
 
 impl Session {
+    /// This session — the same token store and refresh gate — sending through `http` instead.
+    ///
+    /// How a transfer leaves a path behind: a new path generation builds a new client
+    /// ([`GenerationPool`](crate::net::path::GenerationPool)), and requests sent through it never
+    /// ride a connection pooled on the old path. `http` **must** come from
+    /// [`crate::net::http_builder`] or [`crate::net::http_client`], so it carries the handshake.
+    #[must_use]
+    pub fn with_http_client(&self, http: reqwest::Client) -> Self {
+        Self {
+            http,
+            ..self.clone()
+        }
+    }
+
     /// Whether the session currently holds tokens.
     pub async fn is_authenticated(&self) -> bool {
         self.inner.tokens.read().await.is_some()
@@ -1444,6 +1534,7 @@ fn error_for(
         423 => AuthError::AccountLocked,
         429 => AuthError::RateLimited {
             retry_after_secs: retry_after.unwrap_or(0),
+            code,
         },
         other => AuthError::Unexpected {
             status: other,

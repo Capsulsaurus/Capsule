@@ -5,8 +5,8 @@
 //!
 //! Only the cross-cutting machinery lives in this module. Each adapter lives beside the port it
 //! implements — `index/postgres.rs`, `auth/accounts_postgres.rs`, `store/cohorts_postgres.rs`,
-//! `quota/postgres.rs`, `membership/postgres.rs` — because design/module-map.md assigns
-//! contract ownership per *behaviour module* rather than per backend, and the tree already does it that way for the blob store
+//! `quota/postgres.rs`, `membership/postgres.rs` — because contract ownership is assigned
+//! per *behaviour module* rather than per backend, and the tree already does it that way for the blob store
 //! (`blob/fs.rs`, `blob/memory.rs`). A `postgres/` tree holding every adapter would make one
 //! directory the co-owner of every durable contract in the crate.
 //!
@@ -147,6 +147,34 @@ pub const EXPECTED_MIGRATIONS: &[ExpectedMigration] = &[
     ExpectedMigration {
         name: "m20260902_000023_album_key_escrows",
         checksum: "06357c61b5e6dafbd8a1c8ebd0b90884b1bd91a11ea62af0d13fd22900739b7b",
+    },
+    ExpectedMigration {
+        name: "m20260902_000024_activity_log",
+        checksum: "d2ff4f49eba9bf4575d0eb39dce7a1963bab5100211745b5e1327d07d207fca1",
+    },
+    ExpectedMigration {
+        name: "m20260902_000025_federation_subscriptions",
+        checksum: "1e54bb2dd7acc24fa3b07ab3f56180a4fd30e790113c170aa86343634a341d33",
+    },
+    ExpectedMigration {
+        name: "m20260902_000026_activity_events_at_index",
+        checksum: "9bae6d6933662825b0078f9c6a9b29a4f1db9214446d41c11958e2c27fd7a80a",
+    },
+    ExpectedMigration {
+        name: "m20260902_000027_upload_reservations",
+        checksum: "476e419f899a991cabe33db0f213c35208bbf2eb61d5113ce55c19670f939d1b",
+    },
+    ExpectedMigration {
+        name: "m20260902_000028_federation_pulled_albums",
+        checksum: "08d856e544a5eae810f9224f9ddbdc35e7efcfbedddf77d105a628eb70ed14bf",
+    },
+    ExpectedMigration {
+        name: "m20260902_000029_federation_rejected_hashes",
+        checksum: "ce98bf2d6e32b9bfcec8d6afba5afe50bc668c50bbd6cf675d2c1c00ed0962f4",
+    },
+    ExpectedMigration {
+        name: "m20260902_000030_quota_pulled_holdings",
+        checksum: "795624559ec2649b17981cc1614eee6d3fcc7b7332db39dbcbc84eacef6cad08",
     },
 ];
 

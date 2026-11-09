@@ -235,22 +235,34 @@ struct ManagedLaneTests {
         #expect(facts == AssetExifMetadata())
     }
 
-    @Test("an import's caption is refused by its owner instead of landing in the mock library")
+    @Test("an import's caption is kept by its owner instead of landing in the mock library")
     func importedCaptionIsRouted() async throws {
         let root = Self.temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let mock = MockEnvironment(scenario: .emptyLibrary)
+        let libraryCaptions = PortBackedCaptionStore(library: mock.library, organize: mock.organize)
         let lane = AppEnvironment.makeManagedLane(root: root.appending(path: "Library", directoryHint: .isDirectory))
-        let captions = AppEnvironment.composeCaptions(
-            library: PortBackedCaptionStore(library: mock.library, organize: mock.organize),
-            managed: lane
-        )
+        let captions = AppEnvironment.composeCaptions(library: libraryCaptions, managed: lane)
         let imported = try await Self.importPhoto(through: lane, in: root).id
 
-        await #expect(throws: CaptionStoreError.unsupported) {
-            try await captions.setCaption("harbour", for: imported)
-        }
-        #expect(await captions.caption(for: imported) == nil)
+        try await captions.setCaption("harbour", for: imported)
+
+        #expect(await captions.caption(for: imported) == "harbour")
+        #expect(await libraryCaptions.caption(for: imported) == nil)
+    }
+
+    @Test("an import's GPS fix reaches the composed timeline's locations, which map screens read")
+    func importedLocationReachesTimeline() async throws {
+        let root = Self.temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let mock = MockEnvironment(scenario: .emptyLibrary)
+        let library = PortBackedAssetProvider(library: mock.library, organize: mock.organize)
+        let lane = AppEnvironment.makeManagedLane(root: root.appending(path: "Library", directoryHint: .isDirectory))
+        let timeline = AppEnvironment.composeTimeline(library: library, managed: lane.provider)
+        let imported = try await Self.importPhoto(through: lane, in: root).id
+
+        let coordinate = try #require(await timeline.locations(for: [imported])[imported])
+        #expect(abs(coordinate.latitude - Self.fixtureLatitude) < 0.001)
     }
 
     // MARK: - Fixtures
@@ -259,7 +271,7 @@ struct ManagedLaneTests {
     private static let fixtureLatitude = 48.8584
 
     /// Import a real JPEG through the lane's importer and return its asset.
-    private static func importPhoto(through lane: AppEnvironment.ManagedLane, in root: URL) async throws -> Asset {
+    static func importPhoto(through lane: AppEnvironment.ManagedLane, in root: URL) async throws -> Asset {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let url = root.appending(path: "picked-photo.jpg")
         try jpeg(width: 320, height: 240).write(to: url)
@@ -270,7 +282,7 @@ struct ManagedLaneTests {
 
     /// Real JPEG bytes with a camera make and a GPS fix, encoded at test time so
     /// no image ships in the repository.
-    private static func jpeg(width: Int, height: Int) throws -> Data {
+    static func jpeg(width: Int, height: Int) throws -> Data {
         let context = try #require(CGContext(
             data: nil,
             width: width,
@@ -304,7 +316,7 @@ struct ManagedLaneTests {
         return output as Data
     }
 
-    private static func temporaryRoot() -> URL {
+    static func temporaryRoot() -> URL {
         URL.temporaryDirectory.appending(path: "ManagedLaneTests-\(UUID().uuidString)", directoryHint: .isDirectory)
     }
 
@@ -316,5 +328,65 @@ struct ManagedLaneTests {
         let url = root.appending(path: "picked.jpg")
         try Data("picked-photo-\(UUID().uuidString)".utf8).write(to: url)
         return ImportSource(url: url, originalFilename: "picked.jpg")
+    }
+}
+
+/// The managed lane's sync is opened over the store it syncs and the provider
+/// whose redelivery walk its drains feed.
+@MainActor
+@Suite("Managed lane sync composition")
+struct ManagedLaneSyncTests {
+    @Test("a lane's sync is opened over the store's layout and the provider it hands drains to")
+    func syncOpensOverTheLane() async {
+        let root = ManagedLaneTests.temporaryRoot().appending(path: "Library", directoryHint: .isDirectory)
+        let probe = SyncProbe()
+        let lane = AppEnvironment.makeManagedLane(root: root, openSync: { layout, provider in
+            probe.opened(root: layout.root, provider: provider)
+            return { probe.ran() }
+        })
+
+        await lane.sync?()
+
+        #expect(probe.root == root)
+        #expect(probe.provider === lane.provider)
+        #expect(probe.runs == 1)
+    }
+
+    @Test("a lane opened with no sync has none")
+    func noSyncWithoutOne() {
+        let root = ManagedLaneTests.temporaryRoot().appending(path: "Library", directoryHint: .isDirectory)
+
+        #expect(AppEnvironment.makeManagedLane(root: root).sync == nil)
+    }
+}
+
+/// Records what a lane's sync was opened over and how often it ran.
+private final class SyncProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var openedRoot: URL?
+    private var openedProvider: ManagedProvider?
+    private var runCount = 0
+
+    var root: URL? {
+        lock.withLock { openedRoot }
+    }
+
+    var provider: ManagedProvider? {
+        lock.withLock { openedProvider }
+    }
+
+    var runs: Int {
+        lock.withLock { runCount }
+    }
+
+    func opened(root: URL, provider: ManagedProvider) {
+        lock.withLock {
+            openedRoot = root
+            openedProvider = provider
+        }
+    }
+
+    func ran() {
+        lock.withLock { runCount += 1 }
     }
 }

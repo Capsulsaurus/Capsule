@@ -57,6 +57,8 @@
 
 use std::borrow::Cow;
 use std::collections::HashSet;
+use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
 use capsule_core::crypto::hash::{Hash32, hash_bytes};
 use capsule_core::crypto::keys::HybridVerifyingKey;
@@ -65,16 +67,20 @@ use capsule_library::import::UploadTier;
 use capsule_library::library::{
     BlobRole as CoreBlobRole, CustodyReceipt, ReceiptExpectations, ReceiptRejection, verify_receipt,
 };
-use capsule_library::lifecycle::{OriginalCiphertext, UploadBundle};
+use capsule_library::lifecycle::{OriginalChanged, OriginalCiphertext, UploadBundle};
 use serde::Serialize;
 use tracing::instrument;
 
 use crate::albums::{AlbumClient, AlbumError, ProvisionedAlbum};
 use crate::events::{TransferEvent, TransferEvents};
 use crate::staged::{StagedAsset, StagedScheduler, TierBlob, TierSessionOutcome, remaining_tiers};
+use crate::upload::advice::ServerAdvice;
+use crate::upload::queue::{
+    GrantId, LaneWindows, QueuedJob, RangeId, RangeRefused, ServerKey, UploadQueue,
+};
 use crate::upload::{
-    BlobRole, CreateUploadRequest, ManifestEnvelope, UploadClient, UploadError, UploadOutcome,
-    UploadSource,
+    BlobRole, CreateUploadRequest, ManifestEnvelope, SourceChanged, SourceIdentity, TransferGate,
+    UploadClient, UploadError, UploadOutcome, UploadSource,
 };
 use crate::verify::{AssetQuery, StorageVerifyClient, VerifyError};
 
@@ -150,10 +156,54 @@ impl UploadSource for BlobBytes<'_> {
         match self {
             Self::Inline(bytes) => bytes.read_at(offset, len),
             Self::Original(original) => {
-                let window = original.read_at(offset, len)?;
+                // The original checks every chunk it re-derives against the tag its bundle
+                // recorded, and refuses the read carrying `OriginalChanged` on a mismatch: that
+                // is a changed source, typed as one.
+                let window = original.read_at(offset, len).map_err(source_change_of)?;
+                // The check before the read cannot see an edit made while the window was being
+                // sealed; this one refuses that window before it is sent.
+                original
+                    .check_unchanged()
+                    .map_err(|changed| std::io::Error::other(SourceChanged::new(changed.reason)))?;
                 Ok(Cow::Owned(window))
             }
         }
+    }
+
+    /// Inline bytes cannot change and affirm it. An original affirms while its plaintext file
+    /// still has the length, modification time and (on Unix) inode and status-change time it
+    /// had when the bundle verified its ciphertext, and is changed otherwise.
+    fn check_unchanged(&self) -> Result<SourceIdentity, SourceChanged> {
+        match self {
+            Self::Inline(bytes) => bytes.check_unchanged(),
+            Self::Original(original) => original
+                .check_unchanged()
+                .map(|()| SourceIdentity::Affirmed)
+                .map_err(|changed| SourceChanged::new(changed.reason)),
+        }
+    }
+
+    /// Both verify what they return: inline bytes cannot change, and an original checks every
+    /// re-derived STREAM chunk against the tag its bundle recorded.
+    fn verifies_rederived(&self) -> bool {
+        true
+    }
+}
+
+/// A failed read of an original, with an [`OriginalChanged`] it carries re-carried as the
+/// SDK's [`SourceChanged`], which the upload client types as
+/// [`UploadError::SourceChanged`].
+fn source_change_of(error: std::io::Error) -> std::io::Error {
+    if !matches!(error.get_ref(), Some(inner) if inner.is::<OriginalChanged>()) {
+        return error;
+    }
+    let kind = error.kind();
+    match error.into_inner() {
+        Some(inner) => match inner.downcast::<OriginalChanged>() {
+            Ok(changed) => std::io::Error::other(SourceChanged::new(changed.reason)),
+            Err(inner) => std::io::Error::new(kind, inner),
+        },
+        None => kind.into(),
     }
 }
 
@@ -492,6 +542,7 @@ impl PushError {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Album(_) => "album",
+            Self::Upload(UploadError::SourceChanged(_)) => "source_changed",
             Self::Upload(_) => "upload",
             Self::CreateRefused { .. } => "create_refused",
             Self::UnknownBlob { .. } => "unknown_blob",
@@ -506,14 +557,11 @@ impl PushError {
     #[must_use]
     pub fn error_code(&self) -> Option<&str> {
         match self {
-            Self::Upload(UploadError::Rejected { code, .. }) => code.as_deref(),
-            Self::CreateRefused { source, .. } => match source.as_ref() {
-                UploadError::Rejected { code, .. } => code.as_deref(),
-                _ => None,
-            },
+            Self::CreateRefused { source, .. } => source.error_code(),
             Self::Upload(UploadError::UpgradeRequired { .. }) => {
                 Some(capsule_i18n::error_codes::PROTOCOL_VERSION_UNSUPPORTED)
             }
+            Self::Upload(error) => error.error_code(),
             Self::Verify(error) => error.error_code(),
             Self::Album(error) => error.error_code(),
             _ => None,
@@ -583,6 +631,18 @@ pub async fn push_bundle<H: std::hash::BuildHasher + Sync>(
     held: &HashSet<String, H>,
     force: bool,
 ) -> Result<AssetPushReport, PushError> {
+    push_bundle_with(client, scheduler, bundle, held, force, None).await
+}
+
+/// [`push_bundle`], with every range reserved through `gate` when there is one.
+async fn push_bundle_with<H: std::hash::BuildHasher + Sync>(
+    client: &UploadClient,
+    scheduler: &StagedScheduler,
+    bundle: &UploadBundle,
+    held: &HashSet<String, H>,
+    force: bool,
+    gate: Option<&dyn TransferGate>,
+) -> Result<AssetPushReport, PushError> {
     let asset_id = bundle.asset_id.to_string();
     let planned = plan(scheduler, bundle, held, force);
     let blobs = bundle_blobs(bundle);
@@ -618,10 +678,11 @@ pub async fn push_bundle<H: std::hash::BuildHasher + Sync>(
             content_type = %blob.content_type,
             "push: opening upload session"
         );
-        let uploaded = client
-            .upload(&request, &blob.bytes)
-            .await
-            .map_err(|error| classify_refusal(bundle, blob, error))?;
+        let uploaded = match gate {
+            Some(gate) => client.upload_gated(&request, &blob.bytes, gate).await,
+            None => client.upload(&request, &blob.bytes).await,
+        }
+        .map_err(|error| classify_refusal(bundle, blob, error))?;
         let outcome = match uploaded {
             UploadOutcome::Completed { session_id } => {
                 tracing::info!(tier = ?tier_blob.tier, hash = %hash, %session_id, "push: blob transferred");
@@ -646,6 +707,258 @@ pub async fn push_bundle<H: std::hash::BuildHasher + Sync>(
         "push: bundle complete"
     );
     Ok(report)
+}
+
+// ─── Pushing many bundles across lanes ───────────────────────────────────────
+
+/// One bundle queued on a lane, with the server truth its plan prunes against (see
+/// [`push_bundle`]'s `held`).
+pub struct LaneBundle<'a, H> {
+    /// The bundle to push.
+    pub bundle: &'a UploadBundle,
+    /// The blob content addresses the lane's server already holds.
+    pub held: &'a HashSet<String, H>,
+}
+
+// By hand: a derive would demand `H: Clone`, but only references are copied.
+impl<H> Clone for LaneBundle<'_, H> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<H> Copy for LaneBundle<'_, H> {}
+
+/// One server's share of a [`push_lanes`] run: the client that reaches it, and the bundles
+/// queued for it.
+pub struct LanePush<'a, H> {
+    /// The lane's key: the server's canonical origin.
+    pub server: ServerKey,
+    /// The client every session on the lane is driven through.
+    pub client: &'a UploadClient,
+    /// The bundles queued on the lane, in the order they were planned.
+    pub bundles: Vec<LaneBundle<'a, H>>,
+    /// The account's live-session cap on the server, where the caller knows it: the lane's W
+    /// never exceeds it ([`UploadQueue::set_session_cap`]). `None` leaves W at the run's window
+    /// and the server's advice.
+    pub session_cap: Option<u32>,
+}
+
+/// The device-wide byte budget a push run's ranges reserve against when the caller has no
+/// narrower one: four of the protocol's largest chunks in flight at once, however many sessions
+/// and servers the run drives.
+pub const PUSH_BYTE_BUDGET: u64 = 4 * crate::upload::PROTOCOL_MAX_CHUNK;
+
+/// The most bundles a caller pushing a long list of assets should hold at once: it pushes them
+/// in batches of this many, each batch through one [`push_lanes`] run. Four times the widest
+/// sessions window keeps that window full for most of a batch, while a list of any length holds
+/// at most this many bundles' derivatives in memory.
+pub const PUSH_BATCH_BUNDLES: usize = 4 * crate::upload::queue::MAX_SESSIONS_WINDOW as usize;
+
+/// What every lane of a run shares: the device's one upload queue, and the signal a released
+/// reservation or a finished session sends to the ranges waiting on the budget.
+struct LaneShared {
+    queue: Mutex<UploadQueue<(usize, usize)>>,
+    freed: tokio::sync::Notify,
+}
+
+impl LaneShared {
+    fn queue(&self) -> MutexGuard<'_, UploadQueue<(usize, usize)>> {
+        // A panic while holding the lock left a scheduler of plain values; it stays usable.
+        self.queue.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// The gate one admitted bundle's transfers run under: every range reserves its length in the
+/// shared queue under the bundle's grant, and the server's advice lowers its lane's windows.
+struct QueueGate<'s> {
+    shared: &'s LaneShared,
+    server: &'s ServerKey,
+    grant: GrantId,
+}
+
+impl TransferGate for QueueGate<'_> {
+    fn reserve(
+        &self,
+        len: u64,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<RangeId>> + Send + '_>> {
+        Box::pin(async move {
+            loop {
+                // Register for the next release before asking, so one that lands between the
+                // refusal and the wait is not missed.
+                let mut freed = std::pin::pin!(self.shared.freed.notified());
+                freed.as_mut().enable();
+                let (asked, still_waiting) = {
+                    let mut queue = self.shared.queue();
+                    let asked = queue.reserve_range(self.grant, len, Instant::now());
+                    (asked, queue.waiting_for_budget())
+                };
+                match asked {
+                    Ok(range) => {
+                        // The budget serves its line first-come: a waiter woken by the release
+                        // this range was served from, and refused for being behind it, asks
+                        // again now that it is next.
+                        if still_waiting > 0 {
+                            self.shared.freed.notify_waiters();
+                        }
+                        return Some(range);
+                    }
+                    Err(RangeRefused::NotInFlight) => {
+                        tracing::warn!(server = %self.server, "push: a range asked for a grant no longer in flight");
+                        return None;
+                    }
+                    Err(refused @ (RangeRefused::WindowFull | RangeRefused::BudgetFull)) => {
+                        tracing::trace!(server = %self.server, len, ?refused, "push: waiting for a range reservation");
+                    }
+                }
+                freed.await;
+            }
+        })
+    }
+
+    fn release(&self, range: RangeId) {
+        self.shared.queue().release_range(range, Instant::now());
+        self.shared.freed.notify_waiters();
+    }
+
+    fn advised(&self, advice: &ServerAdvice) {
+        let mut queue = self.shared.queue();
+        queue.set_advice(self.server, *advice, Instant::now());
+        queue.set_session_ranges(self.grant, advice);
+    }
+}
+
+/// Push every lane's bundles through one device-wide [`UploadQueue`], up to W at once per lane.
+///
+/// Each bundle is one job on its server's lane, queued at its lowest planned tier. The queue
+/// admits up to `windows.sessions` bundles per lane at once, lowered by the advice each server
+/// sends and by the lane's [`session_cap`](LanePush::session_cap), serving lanes round-robin; a bundle drives its own blobs one session at a time in
+/// ladder order, exactly as [`push_bundle`] does, so W bundles in flight are W sessions, each on
+/// its own HTTP/1.1 connection. Every range any of them sends reserves its length against the
+/// one `budget` before its bytes are read, and waits while the budget is full. A session holds
+/// up to the lane's P ranges in flight (`windows.ranges`, never more than the lane client's own
+/// window), lowered by the server's advice. Each lane's
+/// client spends from its lane's shared retry budget, so a failing server costs a bounded number
+/// of retries across all of its bundles.
+///
+/// Returns each lane's results in the order of its bundles. One bundle's failure is its own:
+/// the others still run.
+#[instrument(skip_all, fields(lanes = lanes.len(), budget, sessions = windows.sessions, ranges = windows.ranges, force))]
+pub async fn push_lanes<H: std::hash::BuildHasher + Sync>(
+    scheduler: &StagedScheduler,
+    lanes: &[LanePush<'_, H>],
+    force: bool,
+    budget: u64,
+    windows: LaneWindows,
+) -> Vec<Vec<Result<AssetPushReport, PushError>>> {
+    // No stall reclaim here: each request's own stall bound already cuts a link that stops
+    // moving (`RequestBounds`), and the transfer resumes or fails inside its bundle.
+    let mut queue = UploadQueue::new(budget, Duration::from_secs(3600)).with_windows(windows);
+    let mut clients = Vec::with_capacity(lanes.len());
+    for (lane_at, lane) in lanes.iter().enumerate() {
+        // Each session plans no more ranges than the lane's P lets it reserve; a source that
+        // does not verify what it re-derives is still sent one at a time.
+        let ranges = lane.client.ranges_window().min(windows.ranges);
+        clients.push(
+            lane.client
+                .clone()
+                .with_ranges_window(ranges)
+                .with_lane_retries(queue.lane_retries(&lane.server)),
+        );
+        if let Some(cap) = lane.session_cap {
+            queue.set_session_cap(&lane.server, cap);
+        }
+        for (bundle_at, queued) in lane.bundles.iter().enumerate() {
+            let tier = plan(scheduler, queued.bundle, queued.held, force)
+                .blobs
+                .first()
+                .map_or(UploadTier::Index, |blob| blob.tier);
+            queue.enqueue(&lane.server, QueuedJob::new(tier, (lane_at, bundle_at)));
+        }
+    }
+    let shared = LaneShared {
+        queue: Mutex::new(queue),
+        freed: tokio::sync::Notify::new(),
+    };
+    let mut results: Vec<Vec<Option<Result<AssetPushReport, PushError>>>> = lanes
+        .iter()
+        .map(|lane| lane.bundles.iter().map(|_| None).collect())
+        .collect();
+
+    type Running<'f> = std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = (usize, usize, GrantId, Result<AssetPushReport, PushError>),
+                > + Send
+                + 'f,
+        >,
+    >;
+    let mut running: Vec<Running<'_>> = Vec::new();
+    loop {
+        let admitted: Vec<_> = {
+            let mut queue = shared.queue();
+            let now = Instant::now();
+            std::iter::from_fn(|| queue.next(now)).collect()
+        };
+        for grant in admitted {
+            let (lane_at, bundle_at) = grant.job;
+            let lane = &lanes[lane_at];
+            let queued = lane.bundles[bundle_at];
+            let client = &clients[lane_at];
+            let shared = &shared;
+            tracing::info!(
+                server = %lane.server,
+                asset_id = %queued.bundle.asset_id,
+                ranges = grant.ranges,
+                "push: bundle admitted to its lane"
+            );
+            running.push(Box::pin(async move {
+                let gate = QueueGate {
+                    shared,
+                    server: &lane.server,
+                    grant: grant.id,
+                };
+                let pushed = push_bundle_with(
+                    client,
+                    scheduler,
+                    queued.bundle,
+                    queued.held,
+                    force,
+                    Some(&gate),
+                )
+                .await;
+                (lane_at, bundle_at, grant.id, pushed)
+            }));
+        }
+        if running.is_empty() {
+            break;
+        }
+        let (at, (lane_at, bundle_at, grant, pushed)) = std::future::poll_fn(|cx| {
+            for (at, bundle) in running.iter_mut().enumerate() {
+                if let std::task::Poll::Ready(done) = bundle.as_mut().poll(cx) {
+                    return std::task::Poll::Ready((at, done));
+                }
+            }
+            std::task::Poll::Pending
+        })
+        .await;
+        drop(running.swap_remove(at));
+        shared.queue().complete(grant, Instant::now());
+        shared.freed.notify_waiters();
+        if let Err(error) = &pushed {
+            tracing::warn!(server = %lanes[lane_at].server, kind = error.kind(), %error, "push: a bundle on the lane failed");
+        }
+        results[lane_at][bundle_at] = Some(pushed);
+    }
+    debug_assert!(shared.queue().is_empty(), "no lane is ever paused here");
+    results
+        .into_iter()
+        .map(|lane| {
+            lane.into_iter()
+                .map(|pushed| pushed.expect("every queued bundle runs before the queue drains"))
+                .collect()
+        })
+        .collect()
 }
 
 /// Name a transfer failure [`PushError::CreateRefused`] when it is the one a stale-epoch create
@@ -677,6 +990,90 @@ fn classify_refusal(bundle: &UploadBundle, blob: &BundleBlob<'_>, error: UploadE
         };
     }
     PushError::Upload(error)
+}
+
+// ─── Redacting a deleted asset ────────────────────────────────────────────────
+
+/// What [`redact_asset`] did to one asset's open upload sessions.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Redaction {
+    /// The sessions cancelled (`DELETE /upload/{id}` answered `204` or `404`): no further byte
+    /// of them is sent, and the server dropped what they had staged.
+    pub cancelled: Vec<String>,
+    /// The sessions the server would not cancel because their finalization was already running
+    /// or done (`409 error.upload.session_not_active`). Their blob lands; the asset's `delete`
+    /// record, sent after, supersedes the create it completes.
+    pub finalizing: Vec<String>,
+}
+
+/// Abort every open upload session this account holds for `asset_id`: the network half of
+/// redacting an asset deleted before its upload finished
+/// ([Organization — Deletion State Machine]).
+///
+/// The sessions come from `GET /upload/sessions`, filtered by the asset each names, so a
+/// session a previous run left behind (a staged tier that never finished, a push killed
+/// mid-ladder) is found without any client-side state. A session the listing names as terminal
+/// (`completed`, `failed_processing`) is skipped: its outcome is decided and it is neither
+/// cancelled nor finalizing. Each other session is cancelled with `DELETE /upload/{id}`:
+///
+/// - `204` or `404` is a cancelled session: its staged bytes and quota reservation are released.
+/// - `409 error.upload.session_not_active` is the race with a finalization that started before
+///   the abort reached it. Finalization is not interruptible, so that blob lands; the session is
+///   reported in [`Redaction::finalizing`] and the caller's `delete` supersedes the create.
+///
+/// Any other answer fails the redaction. Re-running it is safe: a session already cancelled is a
+/// `404`, and the listing no longer names it.
+///
+/// Pending tiers need no call: a deferred tier has no session, and a push of a trashed asset
+/// plans nothing, so the abort is the whole of what the server has to forget.
+///
+/// [Organization — Deletion State Machine]: https://docs/design/organization/#deletion-state-machine
+#[instrument(skip(client), fields(%asset_id))]
+pub async fn redact_asset(client: &UploadClient, asset_id: &str) -> Result<Redaction, UploadError> {
+    let sessions = client.list_sessions().await?;
+    let mut redaction = Redaction::default();
+    let mut settled = 0_usize;
+    for session in sessions.iter().filter(|s| s.asset_id == asset_id) {
+        if is_settled(&session.status) {
+            tracing::debug!(session_id = %session.id, status = %session.status, "redact: the session already settled; nothing to cancel");
+            settled += 1;
+            continue;
+        }
+        match client.delete(&session.id).await {
+            Ok(()) => {
+                tracing::info!(session_id = %session.id, status = %session.status, received = session.received_bytes, "redact: upload session cancelled");
+                redaction.cancelled.push(session.id.clone());
+            }
+            Err(UploadError::Rejected {
+                status: 409,
+                code: Some(code),
+                ..
+            }) if code == capsule_i18n::error_codes::UPLOAD_SESSION_NOT_ACTIVE => {
+                tracing::info!(session_id = %session.id, status = %session.status, "redact: the session is already finalizing; its delete will supersede it");
+                redaction.finalizing.push(session.id.clone());
+            }
+            Err(error) => {
+                tracing::warn!(session_id = %session.id, %error, "redact: an upload session could not be cancelled");
+                return Err(error);
+            }
+        }
+    }
+    tracing::info!(
+        listed = sessions.len(),
+        settled,
+        cancelled = redaction.cancelled.len(),
+        finalizing = redaction.finalizing.len(),
+        "redact: the asset's open upload sessions are aborted"
+    );
+    Ok(redaction)
+}
+
+/// Whether a listed session status is terminal (`completed`, `failed_processing`): the server
+/// keeps such a record until its lifetime cap, but there is nothing left to cancel and its
+/// outcome is already decided. Any other status, including one this client does not know, is
+/// treated as open, so a newer server's state is still cancelled rather than silently kept.
+fn is_settled(status: &str) -> bool {
+    matches!(status, "completed" | "failed_processing")
 }
 
 // ─── Confirming custody ───────────────────────────────────────────────────────

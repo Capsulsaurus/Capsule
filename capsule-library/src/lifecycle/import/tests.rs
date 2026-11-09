@@ -874,3 +874,20 @@ fn the_live_index_row_projects_capture_time_from_the_sidecar() {
     assert_eq!(row.capture_timestamp, 0);
     assert_eq!(row.capture_utc, Some(0));
 }
+
+/// Every media type the suffix fallback writes names an extension in the shared table, so an
+/// adopted or restored video keeps its type in its name. Only the unknown type is `bin`.
+#[test]
+fn every_fallback_content_type_has_an_extension() {
+    use capsule_core::content_type::extension_for;
+
+    for ext in ["mp4", "m4v", "mov", "qt", "mkv", "webm", "avi"] {
+        let content_type = content_type_for(ext);
+        assert_ne!(
+            extension_for(&content_type),
+            "bin",
+            "{ext} ({content_type})"
+        );
+    }
+    assert_eq!(extension_for(&content_type_for("xyz")), "bin");
+}

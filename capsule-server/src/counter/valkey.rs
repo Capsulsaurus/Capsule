@@ -50,13 +50,17 @@ const COUNTERS: &str = COUNTER_STORE;
 const AT_CEILING: i64 = -2;
 
 // KEYS: counter, its partition's index. ARGV: at (µs), window (µs), limit, window (ms, for the
-// collector), ceiling, scope (the index member).
+// collector), ceiling, scope (the index member), units (this charge's weight, at least 1).
 // Returns {hits after this call, or -1 when limited, or -2 when the partition is full; the
 // instant the window ends (µs), or the partition's occupancy when full}.
+//
+// A fresh window takes the whole charge whatever its size; an open one refuses a charge that
+// would take it past the limit and charges nothing (`CounterStore::charge`, all or nothing).
 static HIT: Lua = Lua::new(
     "local at = tonumber(ARGV[1])
 local window = tonumber(ARGV[2])
 local limit = tonumber(ARGV[3])
+local units = tonumber(ARGV[7])
 local opened = redis.call('HGET', KEYS[1], 'opened_at')
 if not opened or tonumber(opened) + window <= at then
   redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', ARGV[1])
@@ -64,18 +68,18 @@ if not opened or tonumber(opened) + window <= at then
   if occupancy >= tonumber(ARGV[5]) and not redis.call('ZSCORE', KEYS[2], ARGV[6]) then
     return {-2, occupancy}
   end
-  redis.call('HSET', KEYS[1], 'hits', 1, 'opened_at', ARGV[1])
+  redis.call('HSET', KEYS[1], 'hits', units, 'opened_at', ARGV[1])
   redis.call('PEXPIRE', KEYS[1], ARGV[4])
   redis.call('ZADD', KEYS[2], at + window, ARGV[6])
   if redis.call('PTTL', KEYS[2]) < tonumber(ARGV[4]) then
     redis.call('PEXPIRE', KEYS[2], ARGV[4])
   end
-  return {1, at + window}
+  return {units, at + window}
 end
 local ends = tonumber(opened) + window
 local hits = tonumber(redis.call('HGET', KEYS[1], 'hits') or 0)
-if hits >= limit then return {-1, ends} end
-hits = redis.call('HINCRBY', KEYS[1], 'hits', 1)
+if hits + units > limit then return {-1, ends} end
+hits = redis.call('HINCRBY', KEYS[1], 'hits', units)
 return {hits, ends}",
 );
 
@@ -188,12 +192,16 @@ fn admitted(limit: u32, hits: i64) -> Verdict {
 }
 
 impl CounterStore for ValkeyCounters {
-    fn hit<'a>(
+    fn charge<'a>(
         &'a self,
         key: &'a CounterKey,
+        units: u32,
         budget: Budget,
         at: Timestamp,
     ) -> StoreFuture<'a, Verdict> {
+        if units == 0 {
+            return self.peek(key, budget, at);
+        }
         Box::pin(async move {
             let (window_micros, window_millis) = window_args(budget);
             let ceiling = self.ceiling_for(key);
@@ -208,6 +216,7 @@ impl CounterStore for ValkeyCounters {
                         window_millis,
                         ceiling.to_string(),
                         key.scope().to_owned(),
+                        units.to_string(),
                     ],
                 )
                 .await?;
@@ -216,10 +225,10 @@ impl CounterStore for ValkeyCounters {
             }
             if hits < 0 {
                 let retry_after = from_micros(COUNTERS, "Window", ends)?;
-                tracing::info!(counter = key.as_str(), %retry_after, "a rate limit engaged");
+                tracing::info!(counter = key.as_str(), units, %retry_after, "a rate limit engaged");
                 return Ok(Verdict::Limited { retry_after });
             }
-            tracing::trace!(counter = key.as_str(), hits, "charged a counter");
+            tracing::trace!(counter = key.as_str(), units, hits, "charged a counter");
             Ok(admitted(budget.limit, hits))
         })
     }

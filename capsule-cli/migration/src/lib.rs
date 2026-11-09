@@ -1,3 +1,5 @@
+//! Forward migrations for the CLI's local SQLite store, the tables `capsule-cli-entity` maps.
+
 pub use sea_orm_migration::prelude::*;
 
 mod m20250718_000000_initialize;

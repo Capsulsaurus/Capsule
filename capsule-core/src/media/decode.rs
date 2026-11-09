@@ -912,6 +912,184 @@ fn decode_raw(bytes: &[u8], format: StillFormat) -> Result<DecodedImage, MediaEr
     })
 }
 
+/// A RAW file's embedded, camera-rendered JPEG, extracted without developing the RAW.
+///
+/// SSoT: [Thumbnails — Embedded Previews](https://docs/design/thumbnails/#embedded-previews).
+/// Local only: it is read from an original this device holds and is never uploaded, signed or
+/// listed as a tier. Its dimensions are what the render ladder places it by.
+#[derive(Clone, PartialEq, Eq)]
+pub struct EmbeddedPreview {
+    /// The JPEG exactly as the RAW file carries it.
+    pub jpeg: Vec<u8>,
+    /// Width in pixels **upright**, i.e. after [`orientation`](Self::orientation) is applied.
+    pub width: u32,
+    /// Height in pixels upright.
+    pub height: u32,
+    /// The EXIF orientation (1..=8) a renderer applies to `jpeg`'s stored pixels: the JPEG's own
+    /// tag where it carries one, else the RAW's, since a camera writes the orientation into the
+    /// RAW's IFD0 and usually leaves the preview unrotated and untagged. `1` when neither does.
+    /// [`decode_embedded_preview`] applies it; a platform decoder handed `jpeg` must apply it
+    /// itself, and must not apply the JPEG's own tag a second time.
+    pub orientation: u16,
+}
+
+impl std::fmt::Debug for EmbeddedPreview {
+    // The JPEG never reaches the log.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmbeddedPreview")
+            .field("bytes", &self.jpeg.len())
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("orientation", &self.orientation)
+            .finish()
+    }
+}
+
+/// Extract the embedded preview of a RAW still, behind the pixel budget and the unwind guard.
+///
+/// `Ok(None)` when the bytes are a still that is not RAW, or a RAW that carries no embedded
+/// JPEG. Reads no sensor data, so it works for a RAW variant whose pixels this build cannot
+/// decode, provided the family is one it decodes.
+///
+/// The bounds are the ones every input gets: the IFD walk before `RawFile::open`, and before the
+/// thumbnail read, the walk's largest stated JPEG length held to the file's own length (the
+/// reader allocates it before it reads); then the JPEG's header is probed and its frame held to
+/// [`MAX_DECODE_PIXELS`], so a renderer that decodes it allocates no more than any other still.
+///
+/// # Errors
+///
+/// [`MediaError::NotAStillImage`] and [`MediaError::UnsupportedFormat`] as [`Decoder::probe`],
+/// [`MediaError::PixelBudgetExceeded`] for a preview frame over budget, [`MediaError::Decode`]
+/// for a RAW or a preview that does not read, and [`MediaError::DecoderPanic`] when the reader
+/// panics. Every one leaves the rung to the next source.
+#[tracing::instrument(level = "debug", skip_all, fields(bytes = bytes.len(), ext))]
+pub fn extract_embedded_preview(
+    bytes: &[u8],
+    ext: &str,
+) -> Result<Option<EmbeddedPreview>, MediaError> {
+    let format = gate(bytes, ext, FormatOp::Decode)?;
+    if !format.is_raw() {
+        return Ok(None);
+    }
+    guarded("embedded preview", || {
+        embedded_preview_within(bytes, format, MAX_DECODE_PIXELS)
+    })
+}
+
+/// [`extract_embedded_preview`] for a RAW `format`, with the budget as a parameter so a test can
+/// exceed it with a small fixture.
+pub(super) fn embedded_preview_within(
+    bytes: &[u8],
+    format: StillFormat,
+    limit: u64,
+) -> Result<Option<EmbeddedPreview>, MediaError> {
+    let walk = check_ifd_bounds(bytes).map_err(|refusal| MediaError::Decode {
+        format,
+        detail: format!("RAW IFD bounds: {refusal}"),
+    })?;
+    let file_len = bytes.len() as u64;
+    if walk.max_jpeg_length > file_len {
+        tracing::warn!(
+            %format,
+            stated = walk.max_jpeg_length,
+            file_len,
+            "media: refused an embedded preview longer than its file"
+        );
+        return Err(MediaError::Decode {
+            format,
+            detail: format!(
+                "embedded preview claims {} bytes, more than the {file_len}-byte file holds",
+                walk.max_jpeg_length
+            ),
+        });
+    }
+    let mut raw = RawFile::open(Cursor::new(bytes)).map_err(|e| raw_error(format, "open", e))?;
+    let raw_orientation = raw_layout(&raw, format)
+        .ok()
+        .and_then(|layout| layout.orientation)
+        .filter(|o| (1..=8).contains(o));
+    let Some(jpeg) = raw
+        .thumbnail()
+        .map_err(|e| raw_error(format, "embedded preview", e))?
+    else {
+        tracing::debug!(%format, "media: the RAW carries no embedded preview");
+        return Ok(None);
+    };
+    let not_jpeg = || MediaError::Decode {
+        format,
+        detail: "embedded preview is not a JPEG".to_owned(),
+    };
+    if StillFormat::from_bytes(&jpeg) != Some(StillFormat::Jpeg) {
+        return Err(not_jpeg());
+    }
+    let probe = probe_standard_image(&jpeg).map_err(|e| MediaError::Decode {
+        format,
+        detail: format!("embedded preview header: {e}"),
+    })?;
+    let stored = (probe.size.width, probe.size.height);
+    check_raw_frame(format, "embedded preview", stored, limit)?;
+    let orientation = orientation_of(&jpeg, StillFormat::Jpeg)
+        .or(raw_orientation)
+        .unwrap_or(ORIENTATION_NORMAL);
+    let (width, height) = match orientation {
+        5..=8 => (stored.1, stored.0),
+        _ => stored,
+    };
+    tracing::debug!(
+        %format,
+        bytes = jpeg.len(),
+        width,
+        height,
+        orientation,
+        "media: extracted an embedded preview"
+    );
+    Ok(Some(EmbeddedPreview {
+        jpeg,
+        width,
+        height,
+        orientation,
+    }))
+}
+
+/// Decode an [`EmbeddedPreview`] to upright, packed RGBA8, behind the unwind guard.
+///
+/// Its own orientation is the one applied — the RAW's where the JPEG carries none — never the
+/// JPEG's tag on top of it.
+///
+/// # Errors
+///
+/// As [`Decoder::decode`] for a JPEG.
+#[tracing::instrument(level = "debug", skip_all, fields(bytes = preview.jpeg.len()))]
+pub fn decode_embedded_preview(preview: &EmbeddedPreview) -> Result<DecodedImage, MediaError> {
+    guarded("embedded preview decode", || {
+        let format = StillFormat::Jpeg;
+        let probed = RawshiftDecoder.probe(&preview.jpeg, "jpg")?;
+        if probed.format != format {
+            return Err(MediaError::Decode {
+                format: probed.format,
+                detail: "embedded preview is not a JPEG".to_owned(),
+            });
+        }
+        let mut rgb = decode_standard_image(&preview.jpeg, StandardFormat::Jpeg).map_err(|e| {
+            MediaError::Decode {
+                format,
+                detail: e.to_string(),
+            }
+        })?;
+        check_rgb_buffer(&rgb, format)?;
+        if preview.orientation != ORIENTATION_NORMAL {
+            apply_orientation(&mut rgb, preview.orientation);
+            check_rgb_buffer(&rgb, format)?;
+        }
+        Ok(DecodedImage {
+            image: to_rgba8(&rgb),
+            gamut: probed.gamut,
+            orientation_applied: preview.orientation,
+            format,
+        })
+    })
+}
+
 /// Map Capsule's format onto the crate's standard-image formats.
 ///
 /// Only the decodable set reaches here through [`gate`], which refuses the rest first, and the

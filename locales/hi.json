@@ -7211,6 +7211,10 @@
     "message": "Capsule अभी आपके पहचान प्रदाता तक नहीं पहुँच सका। कृपया फिर से प्रयास करें।",
     "origin": "machine"
   },
+  "error.auth.password_disabled": {
+    "message": "यह सर्वर केवल सिंगल साइन-ऑन के ज़रिए साइन इन स्वीकार करता है।",
+    "origin": "machine"
+  },
   "error.auth.password_invalid": {
     "message": "उस पासवर्ड का उपयोग नहीं किया जा सकता।",
     "origin": "machine"
@@ -7225,6 +7229,10 @@
   },
   "error.auth.rate_limited": {
     "message": "बहुत अधिक प्रयास। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
+    "origin": "machine"
+  },
+  "error.auth.registration_at_capacity": {
+    "message": "यह सर्वर अभी बहुत अधिक साइन-अप संभाल रहा है। कृपया थोड़ी देर बाद फिर से प्रयास करें।",
     "origin": "machine"
   },
   "error.auth.registration_invalid": {
@@ -7463,8 +7471,28 @@
     "message": "बार-बार त्रुटियों के बाद इस स्रोत को अस्थायी रूप से रोक दिया गया है।",
     "origin": "machine"
   },
+  "error.federation.hint_at_capacity": {
+    "message": "यह सर्वर अभी बहुत अधिक अपडेट सूचनाएँ संभाल रहा है। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
+    "origin": "machine"
+  },
+  "error.federation.hint_malformed": {
+    "message": "वह अपडेट सूचना मान्य नहीं है।",
+    "origin": "machine"
+  },
+  "error.federation.hint_rate_limited": {
+    "message": "इस सर्वर से बहुत अधिक अपडेट सूचनाएँ। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
+    "origin": "machine"
+  },
+  "error.federation.hint_unsigned": {
+    "message": "अपडेट सूचना सत्यापित नहीं की जा सकी।",
+    "origin": "machine"
+  },
   "error.federation.member_not_on_roster": {
     "message": "वह व्यक्ति इस एल्बम की सदस्य सूची में नहीं है।",
+    "origin": "machine"
+  },
+  "error.federation.mint_at_capacity": {
+    "message": "यह सर्वर अभी बहुत अधिक पहुँच अनुमतियाँ संभाल रहा है। कृपया थोड़ी देर बाद फिर से प्रयास करें।",
     "origin": "machine"
   },
   "error.federation.not_configured": {
@@ -7487,12 +7515,20 @@
     "message": "यह पहुँच अनुमति अनुरोधित सामग्री को कवर नहीं करती।",
     "origin": "machine"
   },
+  "error.federation.subscription_limit": {
+    "message": "आप अन्य सर्वरों के जितने साझा एल्बम फ़ॉलो कर सकते हैं, उस सीमा तक पहुँच गए हैं। दूसरा जोड़ने के लिए एक हटाएँ।",
+    "origin": "machine"
+  },
   "error.federation.unavailable": {
     "message": "Capsule फ़ेडरेशन रिकॉर्ड तक नहीं पहुँच सका। कृपया फिर से प्रयास करें।",
     "origin": "machine"
   },
   "error.moderation.account_suspended": {
     "message": "आपका खाता निलंबित है। बहाल होने तक आप अपलोड या साझा नहीं कर सकते।",
+    "origin": "machine"
+  },
+  "error.moderation.report_at_capacity": {
+    "message": "यह सर्वर अभी बहुत अधिक रिपोर्ट संभाल रहा है। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
     "origin": "machine"
   },
   "error.moderation.report_malformed": {
@@ -7569,6 +7605,10 @@
   },
   "error.request.range_not_satisfiable": {
     "message": "Capsule फ़ाइल का वह हिस्सा नहीं भेज सका।",
+    "origin": "machine"
+  },
+  "error.request.too_early": {
+    "message": "वह अनुरोध बहुत जल्दी भेजा गया था। कृपया फिर से प्रयास करें।",
     "origin": "machine"
   },
   "error.request.too_large": {
@@ -7763,6 +7803,10 @@
     "message": "आप इस उपयोगकर्ता की ओर से अपलोड नहीं कर सकते।",
     "origin": "machine"
   },
+  "error.upload.range_conflict": {
+    "message": "इस अपलोड का एक हिस्सा पहले से भेजा जा रहा है। फिर से शुरू हो रहा है…",
+    "origin": "machine"
+  },
   "error.upload.rate_limited": {
     "message": "अपलोड कुछ देर के लिए रुका है। यह अपने आप फिर शुरू हो जाएगा।",
     "origin": "machine"
@@ -7791,6 +7835,10 @@
     "message": "अपलोड ने अपने घोषित आकार से अधिक डेटा भेजा।",
     "origin": "machine"
   },
+  "error.upload.source_changed": {
+    "message": "अपलोड के दौरान यह फ़ाइल बदल गई, इसलिए इसका अपलोड रोक दिया गया।",
+    "origin": "machine"
+  },
   "error.upload.stale_revival": {
     "message": "यह परिवर्तन आइटम के पुराने संस्करण पर आधारित है।",
     "origin": "machine"
@@ -7805,6 +7853,14 @@
   },
   "error.upload.timestamp_out_of_range": {
     "message": "आपके डिवाइस की घड़ी ग़लत लगती है। इसकी तारीख़ और समय जाँचें।",
+    "origin": "machine"
+  },
+  "error.upload.too_fragmented": {
+    "message": "इस अपलोड में बहुत अधिक अंतराल हैं। उन्हें भरा जा रहा है…",
+    "origin": "machine"
+  },
+  "error.upload.too_many_in_flight": {
+    "message": "इस अपलोड के बहुत सारे हिस्से एक साथ भेजे जा रहे हैं। गति धीमी की जा रही है…",
     "origin": "machine"
   },
   "error.upload.unavailable": {

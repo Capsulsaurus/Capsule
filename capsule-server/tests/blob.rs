@@ -9,12 +9,16 @@
 
 mod support;
 
+use capsule_core::crypto::hash::Hash32;
 use capsule_server::blob::{BlobStore, ContentAddress};
 use capsule_server::gc::CollectionStore;
-use capsule_server::index::{AssetIndex, BlobRecord, HoldOutcome, PendingAsset, ServingHold};
+use capsule_server::index::{
+    AssetIndex, BlobRecord, HoldOutcome, LifecycleOp, OpAction, OpBlob, OpOutcome, PendingAsset,
+    PurgeOutcome, ServingHold,
+};
 use capsule_server::membership::{MemberRole, MembershipStore as _, RosterRecord};
 use capsule_server::store::{AlbumId, AssetId, BlobRole, OwnerId, UserId};
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 use kynos::http::StatusCode;
 use support::{Fixture, PROTOCOL_VERSION, album, owner, payload};
 
@@ -115,6 +119,65 @@ async fn published_original(fixture: &Fixture, asset: &str, bytes: &[u8]) -> Con
     )
     .await;
     address
+}
+
+/// The retention window every trashing case signs: a day from the fixture clock's start.
+const WINDOW: SignedDuration = SignedDuration::from_hours(24);
+
+/// Move `asset` to trash with a signed `delete` whose retention floor is `retention_until`,
+/// as `POST /albums/{id}/ops` would, returning the record it moved past.
+async fn trash(
+    fixture: &Fixture,
+    asset: &AssetId,
+    retention_until: Option<Timestamp>,
+) -> ContentAddress {
+    let row = fixture
+        .index
+        .read(asset)
+        .await
+        .expect("the index reads")
+        .expect("the row exists");
+    let earlier = row
+        .address_for(BlobRole::Provenance)
+        .cloned()
+        .expect("publication landed a record");
+    let record = format!("signed-delete-of-{asset}");
+    let provenance = store(fixture, record.as_bytes()).await;
+    let outcome = fixture
+        .index
+        .apply_op(LifecycleOp {
+            asset_id: asset.clone(),
+            owner_id: row.owner_id.clone(),
+            album_id: row.album_id.clone(),
+            action: OpAction::Delete,
+            manifest_hash: capsule_core::crypto::hash::hash_bytes(record.as_bytes()),
+            prior_provenance_hash: row.chain_head,
+            amk_version: 1,
+            provenance: OpBlob {
+                address: provenance,
+                size: record.len() as u64,
+            },
+            metadata: None,
+            original: None,
+            retention_until,
+            at: Timestamp::UNIX_EPOCH,
+        })
+        .await
+        .expect("the index applies");
+    assert!(
+        matches!(outcome, OpOutcome::Applied { .. }),
+        "the delete applies: {outcome:?}"
+    );
+    earlier
+}
+
+/// Move the fixture's clock past [`WINDOW`], closing every window a [`trash`] case signed.
+fn close_the_window(fixture: &Fixture) {
+    fixture.clock.advance(
+        WINDOW
+            .checked_add(SignedDuration::from_secs(1))
+            .expect("in range"),
+    );
 }
 
 // ===========================================================================================
@@ -272,7 +335,7 @@ async fn an_unknown_address_is_indistinguishable_from_a_malformed_one() {
         response.assert_status(StatusCode::NOT_FOUND);
         let problem: serde_json::Value = response.json();
         assert_eq!(problem["code"], "error.blob.not_found");
-        bodies.push(problem);
+        bodies.push(support::without_request_id(problem));
     }
 
     assert_eq!(
@@ -319,18 +382,21 @@ async fn an_unpublished_assets_blob_is_unknown() {
         .assert_status(StatusCode::NOT_FOUND);
 }
 
-/// A deleted asset's blob is gone — permanently, so the client stops asking.
+/// A deleted asset's blob is gone once its retention window has closed — permanently, so the
+/// client stops asking.
 #[tokio::test]
-async fn a_deleted_assets_blob_is_gone() {
+async fn a_deleted_assets_blob_is_gone_once_its_window_closes() {
     let fixture = Fixture::working();
-    let bearer = bearer(&fixture).await;
     let bytes = ciphertext();
     let address = published_original(&fixture, "deleted", &bytes).await;
-    fixture
-        .index
-        .tombstone(&AssetId::new("deleted"), Timestamp::UNIX_EPOCH)
-        .await
-        .expect("the index tombstones");
+    trash(
+        &fixture,
+        &AssetId::new("deleted"),
+        Some(Timestamp::UNIX_EPOCH + WINDOW),
+    )
+    .await;
+    close_the_window(&fixture);
+    let bearer = bearer(&fixture).await;
 
     let response = fixture
         .client
@@ -851,7 +917,7 @@ async fn a_strangers_refusal_is_indistinguishable_from_an_unknown_address() {
         .send()
         .await;
     refused.assert_status(StatusCode::NOT_FOUND);
-    let refused: serde_json::Value = refused.json();
+    let refused = support::without_request_id(refused.json());
 
     let unknown = fixture
         .client
@@ -861,7 +927,7 @@ async fn a_strangers_refusal_is_indistinguishable_from_an_unknown_address() {
         .send()
         .await;
     unknown.assert_status(StatusCode::NOT_FOUND);
-    let unknown: serde_json::Value = unknown.json();
+    let unknown = support::without_request_id(unknown.json());
 
     assert_eq!(
         refused, unknown,
@@ -1068,7 +1134,10 @@ async fn a_never_member_is_indistinguishable_from_an_unknown_address_body_and_he
     let unknown = fetch(&fixture, &carol, &support::checksum(b"never existed")).await;
     unknown.assert_status(StatusCode::NOT_FOUND);
 
-    assert_eq!(refused.bytes(), unknown.bytes());
+    assert_eq!(
+        support::masked_request_id(refused.bytes()),
+        support::masked_request_id(unknown.bytes())
+    );
     // Presence first, so the equalities below cannot pass on two absent headers. (The in-process
     // client does not materialise `content-length`, so the media type is the one header a problem
     // body is guaranteed to carry here.)
@@ -1146,8 +1215,8 @@ async fn only_the_owner_fetches_a_backup() {
         let refused = fetch(&fixture, &bob, address.as_str()).await;
         refused.assert_status(StatusCode::NOT_FOUND);
         assert_eq!(
-            refused.bytes(),
-            unknown.bytes(),
+            support::masked_request_id(refused.bytes()),
+            support::masked_request_id(unknown.bytes()),
             "a {role:?}'s backup refusal is byte-identical to an unknown address"
         );
     }
@@ -1316,16 +1385,18 @@ async fn shared_bytes_are_decided_through_the_holder_the_caller_is_entitled_thro
 async fn an_owners_deleted_copy_is_gone_while_a_strangers_copy_lives() {
     // Before #462 the serving path saw only the live holder — Mallory's — and told the owner
     // `404`, the "never heard of it" answer, about an asset they had deleted. The owner's own
-    // holder is what decides their answer, and a deleted asset's blob is `410`.
+    // holder is what decides their answer: in trash it serves them, and a deleted asset whose
+    // window has closed is `410`.
     let fixture = Fixture::working();
-    let (address, ours) = shared_with_mallory(&fixture, &ciphertext()).await;
-    fixture
-        .index
-        .tombstone(&ours, Timestamp::UNIX_EPOCH)
-        .await
-        .expect("the index tombstones")
-        .expect("the asset exists");
+    let bytes = ciphertext();
+    let (address, ours) = shared_with_mallory(&fixture, &bytes).await;
+    trash(&fixture, &ours, Some(Timestamp::UNIX_EPOCH + WINDOW)).await;
 
+    let response = fetch(&fixture, &bearer(&fixture).await, address.as_str()).await;
+    response.assert_status(StatusCode::OK);
+    assert_eq!(response.bytes().as_ref(), bytes.as_slice());
+
+    close_the_window(&fixture);
     fetch(&fixture, &bearer(&fixture).await, address.as_str())
         .await
         .assert_status(StatusCode::GONE);
@@ -1461,4 +1532,275 @@ async fn a_writer_members_upload_is_pending_to_the_member_and_not_to_the_owner()
     fetch(&fixture, &bearer(&fixture).await, &address)
         .await
         .assert_status(StatusCode::NOT_FOUND);
+}
+
+// ===========================================================================================
+// Superseded provenance records
+// ===========================================================================================
+
+/// A lifecycle op leaves the record it moved past readable by its address (#1188), byte for
+/// byte, to exactly the readers of the live record: the owner and the album's members, and not
+/// a stranger, who is told what an unknown address is told.
+///
+/// A device that first sees an asset past its `create` holds only the feed's latest record, and
+/// walks the chain back through the `prior_provenance_hash` each record names. Before this the
+/// first step of that walk was a `404` for everyone.
+#[tokio::test]
+async fn a_superseded_record_is_served_to_whoever_reads_the_live_one() {
+    let fixture = Fixture::working();
+    let asset = publish(&fixture, "edited").await;
+    let row = fixture
+        .index
+        .read(&asset)
+        .await
+        .expect("the index reads")
+        .expect("the row exists");
+    let first = row
+        .address_for(BlobRole::Provenance)
+        .cloned()
+        .expect("publication landed a record");
+
+    let edit = b"signed-metadata-update-for-edited";
+    let provenance = store(&fixture, edit).await;
+    let metadata = store(&fixture, b"edited-metadata-2").await;
+    let outcome = fixture
+        .index
+        .apply_op(LifecycleOp {
+            asset_id: asset.clone(),
+            owner_id: owner(),
+            album_id: album(),
+            action: OpAction::MetadataUpdate,
+            manifest_hash: Hash32::from_bytes([0xed; 32]),
+            prior_provenance_hash: row.chain_head,
+            amk_version: 1,
+            provenance: OpBlob {
+                address: provenance.clone(),
+                size: edit.len() as u64,
+            },
+            metadata: Some(OpBlob {
+                address: metadata,
+                size: 17,
+            }),
+            original: None,
+            retention_until: None,
+            at: Timestamp::UNIX_EPOCH,
+        })
+        .await
+        .expect("the index applies");
+    assert!(
+        matches!(outcome, OpOutcome::Applied { .. }),
+        "the edit applies: {outcome:?}"
+    );
+
+    // The owner reads the record the edit moved past, exactly as it was stored, and the live one.
+    let owner_bearer = bearer(&fixture).await;
+    let earlier = fetch(&fixture, &owner_bearer, first.as_str()).await;
+    earlier.assert_status(StatusCode::OK);
+    assert_eq!(earlier.bytes().as_ref(), b"edited-provenance");
+    fetch(&fixture, &owner_bearer, provenance.as_str())
+        .await
+        .assert_status(StatusCode::OK);
+
+    // A member of either role reads it too.
+    let bob = fixture.other_bearer(BOB).await;
+    for (version, role) in [(1, MemberRole::Reader), (2, MemberRole::Writer)] {
+        roster(&fixture, version, &[(BOB, role)]).await;
+        let response = fetch(&fixture, &bob, first.as_str()).await;
+        response.assert_status(StatusCode::OK);
+        assert_eq!(response.bytes().as_ref(), b"edited-provenance", "{role:?}");
+    }
+
+    // A stranger is told what an address nothing references is told.
+    let carol = fixture
+        .other_bearer("01937b7c-0000-7000-8000-0000000000c0")
+        .await;
+    let refused = fetch(&fixture, &carol, first.as_str()).await;
+    refused.assert_status(StatusCode::NOT_FOUND);
+    let unknown = fetch(&fixture, &carol, &support::checksum(b"never existed")).await;
+    assert_eq!(
+        support::masked_request_id(refused.bytes()),
+        support::masked_request_id(unknown.bytes())
+    );
+
+    // And a former member is told access was revoked, as for the live record.
+    roster(&fixture, 3, &[]).await;
+    fetch(&fixture, &bob, first.as_str())
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+}
+
+// ===========================================================================================
+// Trash inside its retention window
+// ===========================================================================================
+
+/// A trashed asset: published with an original, then deleted with a window of [`WINDOW`].
+///
+/// Returns every address a device first seeing the asset at its `delete` fetches to adopt and
+/// restore it, each with the bytes stored there: the record the delete moved past, the delete
+/// record itself, the live metadata blob and the original.
+async fn trashed(fixture: &Fixture, asset: &str) -> Vec<(ContentAddress, Vec<u8>)> {
+    let bytes = ciphertext();
+    let original = published_original(fixture, asset, &bytes).await;
+    let id = AssetId::new(asset);
+    let earlier = trash(fixture, &id, Some(Timestamp::UNIX_EPOCH + WINDOW)).await;
+    let row = fixture
+        .index
+        .read(&id)
+        .await
+        .expect("the index reads")
+        .expect("the row exists");
+    let delete = row
+        .address_for(BlobRole::Provenance)
+        .cloned()
+        .expect("the delete is the head");
+    let metadata = row
+        .address_for(BlobRole::Metadata)
+        .cloned()
+        .expect("the delete keeps the live metadata blob");
+    vec![
+        (earlier, format!("{asset}-provenance").into_bytes()),
+        (delete, format!("signed-delete-of-{asset}").into_bytes()),
+        (metadata, format!("{asset}-metadata").into_bytes()),
+        (original, bytes),
+    ]
+}
+
+/// Neither a stranger nor a former member reads any of `blobs`: the stranger is told what an
+/// unknown address is told, byte for byte, and the former member is told access was revoked.
+async fn assert_refused_to_non_readers(fixture: &Fixture, blobs: &[(ContentAddress, Vec<u8>)]) {
+    let stranger = fixture
+        .other_bearer("01937b7c-0000-7000-8000-0000000000ff")
+        .await;
+    let dave = fixture.other_bearer(DAVE).await;
+    let unknown = fetch(fixture, &stranger, &support::checksum(b"never existed")).await;
+    unknown.assert_status(StatusCode::NOT_FOUND);
+    for (address, _) in blobs {
+        let refused = fetch(fixture, &stranger, address.as_str()).await;
+        refused.assert_status(StatusCode::NOT_FOUND);
+        assert_eq!(
+            support::masked_request_id(refused.bytes()),
+            support::masked_request_id(unknown.bytes()),
+            "a stranger cannot tell {address} from an address nothing references"
+        );
+        fetch(fixture, &dave, address.as_str())
+            .await
+            .assert_status(StatusCode::FORBIDDEN);
+    }
+}
+
+/// An entitled reader fetches everything a trashed asset needs to be adopted and restored, for
+/// exactly as long as the restore is admitted (#1192): the owner and a member are served every
+/// record, the live metadata blob and the original inside the window, and told `410` once it
+/// closes. The authority is asked first throughout — a stranger is told what an unknown address
+/// is told, and a former member is told access was revoked, inside the window and past it alike.
+#[tokio::test]
+async fn a_trashed_asset_is_read_by_its_readers_until_its_window_closes() {
+    let fixture = Fixture::working();
+    let blobs = trashed(&fixture, "trashed").await;
+    roster(
+        &fixture,
+        1,
+        &[(BOB, MemberRole::Reader), (DAVE, MemberRole::Reader)],
+    )
+    .await;
+    roster(&fixture, 2, &[(BOB, MemberRole::Writer)]).await;
+
+    let owner = bearer(&fixture).await;
+    let bob = fixture.other_bearer(BOB).await;
+    for (who, caller) in [("the owner", &owner), ("a member", &bob)] {
+        for (address, bytes) in &blobs {
+            let response = fetch(&fixture, caller, address.as_str()).await;
+            response.assert_status(StatusCode::OK);
+            assert_eq!(
+                response.bytes().as_ref(),
+                bytes.as_slice(),
+                "{who} reads {address} inside the window"
+            );
+        }
+    }
+    assert_refused_to_non_readers(&fixture, &blobs).await;
+
+    close_the_window(&fixture);
+    let owner = bearer(&fixture).await;
+    let bob = fixture.other_bearer(BOB).await;
+    for (who, caller) in [("the owner", &owner), ("a member", &bob)] {
+        for (address, _) in &blobs {
+            let response = fetch(&fixture, caller, address.as_str()).await;
+            response.assert_status(StatusCode::GONE);
+            assert_eq!(
+                response.json::<serde_json::Value>()["code"],
+                "error.blob.gone",
+                "{who} is told {address} is gone once the window closes"
+            );
+        }
+    }
+    assert_refused_to_non_readers(&fixture, &blobs).await;
+}
+
+/// A purge ends the asset: every blob a restore needed is unknown to everyone afterwards, the
+/// owner and its members included, exactly as an address nothing ever referenced.
+#[tokio::test]
+async fn a_purged_asset_is_unknown_to_every_reader() {
+    let fixture = Fixture::working();
+    let blobs = trashed(&fixture, "purged").await;
+    roster(&fixture, 1, &[(BOB, MemberRole::Reader)]).await;
+    close_the_window(&fixture);
+    let now = capsule_server::store::Clock::now(&*fixture.clock);
+    let outcome = fixture
+        .index
+        .purge(&AssetId::new("purged"), now)
+        .await
+        .expect("the index purges");
+    assert!(
+        matches!(outcome, PurgeOutcome::Purged(_)),
+        "the window has closed, so the purge runs: {outcome:?}"
+    );
+
+    let owner = bearer(&fixture).await;
+    let bob = fixture.other_bearer(BOB).await;
+    for caller in [&owner, &bob] {
+        for (address, _) in &blobs {
+            fetch(&fixture, caller, address.as_str())
+                .await
+                .assert_status(StatusCode::NOT_FOUND);
+        }
+    }
+}
+
+/// A delete that signed no retention floor never closes its window, as it never makes the asset
+/// purgeable or refuses its restore, so its blobs stay readable to the owner however late.
+#[tokio::test]
+async fn a_delete_with_no_signed_window_stays_readable_as_it_stays_restorable() {
+    let fixture = Fixture::working();
+    let bytes = ciphertext();
+    let original = published_original(&fixture, "floorless", &bytes).await;
+    trash(&fixture, &AssetId::new("floorless"), None).await;
+    fixture.clock.advance(SignedDuration::from_hours(24 * 365));
+
+    let response = fetch(&fixture, &bearer(&fixture).await, original.as_str()).await;
+    response.assert_status(StatusCode::OK);
+    assert_eq!(response.bytes().as_ref(), bytes.as_slice());
+}
+
+/// A takedown still wins inside the window: a held asset in trash is `410` to its owner, and the
+/// window does not reopen what moderation closed.
+#[tokio::test]
+async fn a_held_asset_in_trash_is_gone_inside_its_window() {
+    let fixture = Fixture::working();
+    let blobs = trashed(&fixture, "held-in-trash").await;
+    assert_eq!(
+        fixture
+            .index
+            .set_hold(&AssetId::new("held-in-trash"), Some(ServingHold::Takedown))
+            .await
+            .expect("the index holds"),
+        HoldOutcome::Applied
+    );
+
+    let owner = bearer(&fixture).await;
+    for (address, _) in &blobs {
+        fetch(&fixture, &owner, address.as_str())
+            .await
+            .assert_status(StatusCode::GONE);
+    }
 }

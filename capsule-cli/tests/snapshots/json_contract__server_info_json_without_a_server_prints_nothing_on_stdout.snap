@@ -1,0 +1,10 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run(&scratch, &[\"server-info\", \"--json\"])"
+---
+status: 1
+--- stdout ---
+
+--- stderr ---
+Error: 
+   0: Could not read the server's info: could not reach server-info: request construction failed

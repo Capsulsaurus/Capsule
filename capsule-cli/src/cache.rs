@@ -8,15 +8,17 @@
 //!   `settings.json`, defaulting to [`DEFAULT_BASE_CACHE_BUDGET`] while unset.
 //! - [`sweep`] — one eviction sweep through [`CacheBudget::sweep`], rendered as the
 //!   [`SweepReport`] `capsule cache sweep --json` prints.
-//! - [`transfer_plan`] and [`push_options`] — the bulk-transfer half: a push samples the class
-//!   through the same port, and a plan that defers bulk work stages the push so its preview and
-//!   original tiers wait for an unmetered link ([`CachePlan::upload_policy`]).
+//! - [`transfer_plan`], [`path_plan`] and [`push_options`] — the bulk-transfer half: a push
+//!   samples the class through the same port, lays the CLI's path flags over it, and plans from
+//!   the resulting path snapshot; a plan that holds bulk work back stages the push so its
+//!   preview and original tiers wait ([`TransferPlan::upload_policy`]).
 //!
 //! The class source is a parameter everywhere, so tests drive every class through
 //! [`InMemoryConnectionClass`](capsule_sdk::cache_budget::InMemoryConnectionClass) while the
 //! binary passes [`DesktopConnectionClass`](capsule_sdk::cache_budget::DesktopConnectionClass).
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use capsule_library::import::UploadPolicy;
 use capsule_library::library::EvictionReport;
@@ -24,6 +26,11 @@ use capsule_sdk::cache_budget::{
     CacheBudget, CachePlan, ConnectionClassSource, DEFAULT_BASE_CACHE_BUDGET, plan_for,
 };
 use capsule_sdk::net::ConnectionClass;
+use capsule_sdk::net::path::{
+    Execution, HeldAdvice, LinkBehaviour, PathCost, PathGeneration, PathInterface, PathSample,
+    PathSnapshot, PowerState, ThermalState, TransferPlan, plan_transfer,
+};
+use capsule_sdk::upload::queue::LaneWindows;
 use serde::Serialize;
 use serde_json::{Map, Value};
 use thiserror::Error;
@@ -302,14 +309,69 @@ pub fn transfer_plan<S: ConnectionClassSource>(source: &S) -> CachePlan {
     plan
 }
 
+/// What the CLI's path flags say about the path, each overriding what the class source
+/// reports. `None` keeps the source's (or the desktop default's) value.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PathFlags {
+    /// `--path-cost`.
+    pub cost: Option<PathCost>,
+    /// `--path-interface`.
+    pub interface: Option<PathInterface>,
+    /// `--power`.
+    pub power: Option<PowerState>,
+    /// `--thermal`.
+    pub thermal: Option<ThermalState>,
+    /// `--background-deadline`: the run is a background task the OS ends this long from now.
+    pub background_deadline: Option<Duration>,
+}
+
+/// The path snapshot a CLI transfer plans from: the class `source` reports now, as a desktop
+/// sample, with `flags` laid over it. A class source that reports `adverse` reports link
+/// behaviour, not a path, so it reads as an adverse link over an unmetered path.
+pub fn path_plan<S: ConnectionClassSource>(source: &S, flags: PathFlags) -> TransferPlan {
+    let class = source.current();
+    let mut sample = PathSample::from_class(class);
+    if let Some(cost) = flags.cost {
+        sample.cost = cost;
+    }
+    if let Some(interface) = flags.interface {
+        sample.interface = interface;
+    }
+    if let Some(power) = flags.power {
+        sample.power = power;
+    }
+    if let Some(thermal) = flags.thermal {
+        sample.thermal = thermal;
+    }
+    if let Some(deadline) = flags.background_deadline {
+        sample.execution = Execution::Background { deadline };
+    }
+    let snapshot = PathSnapshot {
+        sample,
+        generation: PathGeneration(1),
+    };
+    let link = LinkBehaviour {
+        adverse: class == ConnectionClass::Adverse,
+    };
+    let plan = plan_transfer(&snapshot, link, HeldAdvice::none(), LaneWindows::default());
+    debug!(
+        ?sample,
+        class = class_name(plan.class),
+        admission = ?plan.admission,
+        hold = ?plan.hold,
+        "planned the transfer from the path"
+    );
+    plan
+}
+
 /// The push configuration for the CLI's push flags under `plan`.
 ///
-/// The push runs on the plan's class, and a plan that defers bulk work stages the push whatever
-/// `staged` says: the index tier still publishes each asset, while the preview and original
-/// tiers wait for an unmetered link through the staged scheduler's tier gate.
+/// The push runs on the plan's class, and a plan that holds bulk work back stages the push
+/// whatever `staged` says: the index tier still publishes each asset, while the preview and
+/// original tiers wait until the path allows them, through the staged scheduler's tier gate.
 #[must_use]
 pub fn push_options(
-    plan: &CachePlan,
+    plan: &TransferPlan,
     dry_run: bool,
     force: bool,
     staged: bool,
@@ -323,7 +385,8 @@ pub fn push_options(
     if policy != requested {
         info!(
             class = class_name(plan.class),
-            "bulk transfers are deferred on this connection: staging the push"
+            hold = ?plan.hold,
+            "bulk transfers are held back on this path: staging the push"
         );
     }
     remote::PushOptions {
@@ -331,6 +394,7 @@ pub fn push_options(
         force,
         policy,
         connection: plan.class,
+        path: Some(*plan),
     }
 }
 

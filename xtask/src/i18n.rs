@@ -891,11 +891,11 @@ fn flat_json(map: &BTreeMap<String, String>) -> Result<String> {
 }
 
 /// Where the Android per-app language list (`android:localeConfig`) is generated.
-const ANDROID_LOCALE_CONFIG: &str = "capsule-android/src/androidMain/res/xml/locales_config.xml";
+const ANDROID_LOCALE_CONFIG: &str = "capsule-android/src/main/res/xml/locales_config.xml";
 
 /// The Android `strings.xml` path for `locale` (the source locale has no qualifier).
 fn android_path(source: &str, locale: &str) -> PathBuf {
-    let base = "capsule-android/src/androidMain/res";
+    let base = "capsule-android/src/main/res";
     if locale == source {
         PathBuf::from(format!("{base}/values/strings.xml"))
     } else {

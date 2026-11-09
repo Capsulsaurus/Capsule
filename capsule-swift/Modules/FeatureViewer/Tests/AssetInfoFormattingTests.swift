@@ -234,3 +234,95 @@ struct PlaceNameResolverTests {
         defaults?.removePersistentDomain(forName: suite)
     }
 }
+
+// MARK: - Caption editor
+
+@Suite("Caption field editor")
+@MainActor
+struct AssetCaptionEditorTests {
+    private static let id = AssetID.managed(uuid: "import")
+
+    @Test("an edited caption is saved trimmed, and an unchanged one is not written again")
+    func savesOnlyChanges() async {
+        let store = ScriptedCaptions(stored: "harbour")
+        let editor = AssetCaptionEditor(store: store)
+        await editor.load(Self.id)
+        #expect(editor.text == "harbour")
+
+        await editor.commit()
+        editor.text = "  beach \n"
+        await editor.commit()
+
+        #expect(await store.writes == ["beach"])
+        #expect(editor.saveFailed == false)
+    }
+
+    @Test("clearing the field clears the caption with nil")
+    func clearsWithNil() async {
+        let store = ScriptedCaptions(stored: "harbour")
+        let editor = AssetCaptionEditor(store: store)
+        await editor.load(Self.id)
+
+        editor.text = "   "
+        await editor.commit()
+
+        #expect(await store.writes == [nil])
+    }
+
+    @Test("a refused save is shown, keeps the typed text, and is retried by the next commit")
+    func refusalIsVisibleAndRetried() async {
+        let store = ScriptedCaptions(stored: nil, refuses: true)
+        let editor = AssetCaptionEditor(store: store)
+        await editor.load(Self.id)
+
+        editor.text = "beach"
+        await editor.commit()
+        #expect(editor.saveFailed)
+        #expect(editor.text == "beach")
+
+        await store.accept()
+        await editor.commit()
+        #expect(editor.saveFailed == false)
+        #expect(await store.writes == ["beach", "beach"])
+    }
+
+    @Test("opening another asset forgets the previous asset's refusal")
+    func loadClearsRefusal() async {
+        let store = ScriptedCaptions(stored: nil, refuses: true)
+        let editor = AssetCaptionEditor(store: store)
+        await editor.load(Self.id)
+        editor.text = "beach"
+        await editor.commit()
+
+        await editor.load(.managed(uuid: "another"))
+
+        #expect(editor.saveFailed == false)
+        #expect(editor.text.isEmpty)
+    }
+}
+
+/// A caption store that answers one stored value, records every write, and can
+/// be told to refuse.
+private actor ScriptedCaptions: CaptionStore {
+    private let stored: String?
+    private var refuses: Bool
+    private(set) var writes: [String?] = []
+
+    init(stored: String?, refuses: Bool = false) {
+        self.stored = stored
+        self.refuses = refuses
+    }
+
+    func accept() {
+        refuses = false
+    }
+
+    func caption(for _: AssetID) -> String? {
+        stored
+    }
+
+    func setCaption(_ caption: String?, for _: AssetID) throws {
+        writes.append(caption)
+        if refuses { throw CaptionStoreError.unsupported }
+    }
+}
