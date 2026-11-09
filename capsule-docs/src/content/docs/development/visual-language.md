@@ -16,9 +16,9 @@ no third house style. The brand reaches a native client only through its accent 
   accent marks what to act on and small identity cues (an icon well, a selected tab), never a large
   surface.
 - **Native material, shared identity.** Apple clients follow HIG and Android clients follow Material.
-  The accent is the only brand token a native client adopts as such; type and controls are the
-  platform's own, and the radius and spacing scales below are mirrored from the Apple client's
-  theme rather than imposed on it.
+  The accent is the only brand token a native client adopts; type, controls, radius and spacing are
+  the platform's own. The radius and spacing scales below are the Apple client's, mirrored by the
+  web surfaces; Android keeps Material's shape and spacing scales.
 - **Nothing leaks.** A Capsule-served page (the docs site, the web client) MUST NOT request a
   third-party asset: fonts, images, scripts and analytics come from the same origin or are not used.
 - **Accessible by default.** Text and interactive accents meet WCAG AA (4.5:1) in both themes, motion
@@ -94,17 +94,19 @@ one is designed.
 - **Front page.** In order: a hero with the differentiators and a theme-matched product screenshot,
   a one-line status, the differentiators with a link into the design doc behind each, the
   table-stakes tier, why Capsule is built this way, and where to start.
-- **Footer.** On every page: links to the documentation, the blog, the roadmap, discussions and the
-  source, then the copyright holder and the licence line.
-- **The blog goes live with its first post.** Until a post is published the blog has no route,
-  header link, RSS feed, sitemap entry or footer link, so no reader lands on an empty index.
+- **Footer.** On every page: links to the documentation, the blog (once it is live), the roadmap,
+  discussions and the source, then the copyright holder and the licence line.
+- **The blog goes live with its first post.** Until a post is published the production site has no
+  blog route, header link, RSS feed, sitemap entry or footer link, so no reader lands on an empty
+  index.
 - **Blog.** Announcements, release notes and design write-ups. A post links to the design doc it
-  discusses rather than restating its contract. `draft: true` keeps a post unpublished; its review
-  `status` is set to `stable` when it is published, so a published post never shows a Draft badge.
+  discusses rather than restating its contract. `draft: true` keeps a post unpublished; a published
+  post carries `status: stable`, so it never shows a Draft badge.
 
 ## Validation
 
-- `scripts/page-status.test.mjs` fails on any docs page without a `status`.
+- `scripts/page-status.test.mjs` fails on any docs page without a `status`, and on a published blog
+  post whose status is not `stable`.
 - `src/lib/sidebar-status.test.mjs` proves which sidebar entries carry a badge.
 - `mise run build-docs` runs the link validator over every page, front-page feature links included.
   The site footer's links are not validated.
