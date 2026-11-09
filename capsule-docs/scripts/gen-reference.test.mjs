@@ -15,9 +15,13 @@ import {
     BINDINGS_SURFACE,
     bucketOperations,
     CLI_SURFACE,
+    curlExample,
     demoteHeadings,
+    exampleFor,
     generate,
     OPENAPI_DOCUMENT,
+    OPENAPI_DOWNLOAD,
+    operationAnchor,
     parseWasmSurface,
     readBindingsSurface,
     readCliSurface,
@@ -727,6 +731,19 @@ describe('generate', () => {
         );
     });
 
+    it('publishes the exact OpenAPI document beside the pages', () => {
+        writeCli(MINIMAL_CLI);
+        writeOpenApi(MINIMAL_OPENAPI);
+        writeSdk();
+        generate(root);
+        expect(
+            readFileSync(
+                join(root, 'capsule-docs/public', OPENAPI_DOWNLOAD.slice(1)),
+                'utf8',
+            ),
+        ).toBe(readFileSync(join(root, OPENAPI_DOCUMENT), 'utf8'));
+    });
+
     it('fails, naming the artifact, when an SDK dump is missing', () => {
         writeCli(MINIMAL_CLI);
         writeOpenApi(MINIMAL_OPENAPI);
@@ -804,6 +821,19 @@ describe('the SDK pages', () => {
         expect(swiftPage.indexOf('## Functions')).toBeLessThan(
             swiftPage.indexOf('## Classes'),
         );
+    });
+
+    it('opens every SDK page with a status the docs require', () => {
+        // The content schema leaves `status` optional (plugin routes have no
+        // frontmatter); the generator is what guarantees generated pages set it.
+        for (const page of [
+            renderWasmPage(wasm, parseWasmSurface(MINIMAL_WASM)),
+            renderBindingsPage(swift, MINIMAL_BINDINGS),
+            renderBindingsPage(kotlin, MINIMAL_BINDINGS),
+        ]) {
+            const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec(page);
+            expect(frontmatter?.[1]).toMatch(/^status: stable$/m);
+        }
     });
 
     it('demotes a heading inside a member doc comment below the member', () => {
@@ -1152,8 +1182,107 @@ describe('renderApiPage', () => {
         );
     }
 
-    it('renders the method and path as the operation heading', () => {
-        expect(page()).toContain('## POST /v1/auth/login');
+    it('renders the method pill and path as the operation heading', () => {
+        expect(page()).toContain(
+            '## <span class="api-method" data-method="post">POST</span> /v1/auth/login',
+        );
+    });
+
+    it('lays each operation out as reference beside an examples panel', () => {
+        const rendered = page();
+        const main = rendered.indexOf('<div class="api-op-main">');
+        const panel = rendered.indexOf('<div class="api-op-panel">');
+        expect(main).toBeGreaterThan(-1);
+        expect(panel).toBeGreaterThan(main);
+        expect(rendered).toContain('```sh title="Request"');
+        expect(rendered).toMatch(/```json title="200 · application\/json"/);
+    });
+
+    it('lists parameters and responses as fields, with an unescaped nullable type', () => {
+        const document = structuredClone(MINIMAL_OPENAPI);
+        document.paths['/v1/auth/login'].post.parameters = [
+            {
+                in: 'query',
+                name: 'cursor',
+                schema: { type: ['string', 'null'] },
+                description: 'Where to resume.',
+            },
+        ];
+        const rendered = renderApiPage(
+            group,
+            bucketOperations(document).get('auth'),
+            document,
+        );
+        expect(rendered).toContain(
+            '<div class="api-fields" data-label="Parameters">',
+        );
+        expect(rendered).toContain(
+            '- `cursor` <span class="api-meta">query</span> <span class="api-meta">`string | null`</span>',
+        );
+        expect(rendered).toContain(
+            '<div class="api-fields" data-label="Responses">',
+        );
+        expect(rendered).toMatch(
+            /- <span class="api-status" data-class="2xx">200<\/span>/,
+        );
+    });
+
+    it('escapes a bare tag and a leading block marker in a field description', () => {
+        const document = structuredClone(MINIMAL_OPENAPI);
+        document.paths['/v1/auth/login'].post.parameters = [
+            {
+                in: 'header',
+                name: 'X-Nonce',
+                schema: { type: 'string' },
+                description: '# Carries <nonce>, not `Option<String>`.',
+            },
+        ];
+        const rendered = renderApiPage(
+            group,
+            bucketOperations(document).get('auth'),
+            document,
+        );
+        expect(rendered).toContain(
+            '  \\# Carries &lt;nonce>, not `Option<String>`.',
+        );
+    });
+
+    it('keeps every field list loose, so each entry is a paragraph', () => {
+        const fields = page()
+            .split('<div class="api-fields"')
+            .slice(1)
+            .map((block) => block.split('</div>')[0]);
+        expect(fields.length).toBeGreaterThan(0);
+        for (const block of fields) {
+            expect(block).not.toMatch(/\n- [^\n]*\n- /);
+        }
+    });
+
+    it('lists the schema appendix in the index, since the page has no table of contents', () => {
+        const rendered = page();
+        const index = rendered.slice(
+            rendered.indexOf('<nav class="api-index"'),
+            rendered.indexOf('</nav>'),
+        );
+        expect(index).toContain('[`LoginRequest`](#loginrequest)');
+    });
+
+    it('opens with an operation index linking to each operation', () => {
+        const rendered = page();
+        const index = rendered.indexOf('<nav class="api-index"');
+        expect(index).toBeGreaterThan(-1);
+        expect(index).toBeLessThan(rendered.indexOf('<div class="api-op"'));
+        const anchor = operationAnchor('POST', '/v1/auth/login');
+        expect(anchor).toBe('post-v1authlogin');
+        expect(rendered).toContain(`](#${anchor})`);
+        expect(headingAnchors(rendered).has(anchor)).toBe(true);
+    });
+
+    it('marks the page generated, with a download link and no table of contents', () => {
+        const rendered = page();
+        expect(rendered).toMatch(/^tableOfContents: false$/m);
+        expect(rendered).toMatch(/^generated:\n {2}surface: "REST API"$/m);
+        expect(rendered).toContain(`  download: "${OPENAPI_DOWNLOAD}"`);
     });
 
     // `openapi.json` really does carry `# Two statuses, because there are two outcomes`.
@@ -1241,8 +1370,8 @@ describe('renderApiPage', () => {
 
     it('lists responses in ascending status order', () => {
         const rendered = page();
-        expect(rendered.indexOf('| `200`')).toBeLessThan(
-            rendered.indexOf('| `401`'),
+        expect(rendered.indexOf('data-class="2xx">200<')).toBeLessThan(
+            rendered.indexOf('data-class="4xx">401<'),
         );
     });
 
@@ -1351,14 +1480,7 @@ describe('the schema appendix', () => {
             document,
         );
         expect(rendered).toContain('### WireBlobRole');
-        const headings = new Set(
-            [...rendered.matchAll(/^#{2,6} (.+)$/gm)].map((match) =>
-                match[1]
-                    .toLowerCase()
-                    .replace(/[^a-z0-9 -]/g, '')
-                    .replace(/ /g, '-'),
-            ),
-        );
+        const headings = headingAnchors(rendered);
         for (const [, anchor] of rendered.matchAll(/\]\(#([^)]+)\)/g)) {
             expect(headings.has(anchor)).toBe(true);
         }
@@ -1461,5 +1583,188 @@ describe('tidyBlankLines, through the pages that use it', () => {
         expect(renderCliPage(surface)).toContain(
             'capsule import a\n\n\ncapsule import b',
         );
+    });
+});
+
+describe('exampleFor', () => {
+    const document = {
+        components: {
+            schemas: {
+                Leaf: {
+                    type: 'object',
+                    properties: { id: { type: 'string', format: 'uuid' } },
+                },
+                Loop: {
+                    type: 'object',
+                    properties: {
+                        next: { $ref: '#/components/schemas/Loop' },
+                    },
+                },
+            },
+        },
+    };
+
+    it('prefers the document: example, then default, then the first enum member', () => {
+        expect(exampleFor({ type: 'string', example: 'x' }, document)).toBe(
+            'x',
+        );
+        expect(exampleFor({ type: 'integer', default: 7 }, document)).toBe(7);
+        expect(exampleFor({ type: 'string', enum: ['a', 'b'] }, document)).toBe(
+            'a',
+        );
+    });
+
+    it('fills every type with a placeholder of the right shape', () => {
+        expect(exampleFor({ type: 'string' }, document)).toBe('string');
+        expect(exampleFor({ type: 'integer' }, document)).toBe(0);
+        expect(exampleFor({ type: 'integer', minimum: 1 }, document)).toBe(1);
+        expect(exampleFor({ type: 'boolean' }, document)).toBe(true);
+        expect(
+            exampleFor({ type: 'string', format: 'date-time' }, document),
+        ).toBe('2026-01-01T00:00:00Z');
+        expect(
+            exampleFor(
+                { type: 'string', pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' },
+                document,
+            ),
+        ).toBe('2026-01-01');
+        expect(
+            exampleFor({ type: 'array', items: { type: 'integer' } }, document),
+        ).toEqual([0]);
+    });
+
+    it('follows a reference and takes the non-null arm of a nullable', () => {
+        expect(
+            exampleFor({ $ref: '#/components/schemas/Leaf' }, document),
+        ).toEqual({ id: '01890a5d-ac96-774b-bcce-b302099a8057' });
+        expect(exampleFor({ type: ['string', 'null'] }, document)).toBe(
+            'string',
+        );
+        expect(
+            exampleFor(
+                {
+                    anyOf: [
+                        { $ref: '#/components/schemas/Leaf' },
+                        { type: 'null' },
+                    ],
+                },
+                document,
+            ),
+        ).toEqual({ id: '01890a5d-ac96-774b-bcce-b302099a8057' });
+    });
+
+    it('stops a self-reference at the schema depth bound', () => {
+        let value = exampleFor({ $ref: '#/components/schemas/Loop' }, document);
+        let depth = 0;
+        while (value && typeof value === 'object' && 'next' in value) {
+            value = value.next;
+            depth += 1;
+        }
+        // The same depth the schema appendix expands to: a model reached at depth 4 is
+        // documented, so its example is filled in, and nothing past it is.
+        expect(value).toEqual({});
+        expect(depth).toBe(5);
+    });
+});
+
+describe('curlExample', () => {
+    it('carries the bearer, required headers and query, and a JSON body', () => {
+        const command = curlExample(
+            {
+                method: 'POST',
+                path: '/v1/things',
+                operation: {
+                    security: [{ bearer: [] }],
+                    parameters: [
+                        {
+                            in: 'header',
+                            name: 'X-Capsule-Protocol',
+                            required: true,
+                            schema: {
+                                type: 'string',
+                                pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$',
+                            },
+                        },
+                        {
+                            in: 'query',
+                            name: 'direction',
+                            required: true,
+                            schema: { type: 'string' },
+                        },
+                        {
+                            in: 'query',
+                            name: 'cursor',
+                            schema: { type: 'string' },
+                        },
+                    ],
+                    requestBody: {
+                        content: {
+                            'application/json': {
+                                schema: {
+                                    type: 'object',
+                                    properties: {
+                                        note: {
+                                            type: 'string',
+                                            example: "it's",
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+            { components: { schemas: {} } },
+        );
+        expect(command).toContain(
+            "curl -X POST 'https://capsule.example/v1/things?direction=DIRECTION'",
+        );
+        // Double quotes, so the shell expands the token.
+        expect(command).toContain('-H "Authorization: Bearer $TOKEN"');
+        expect(command).toContain("-H 'X-Capsule-Protocol: 2026-01-01'");
+        expect(command).toContain("-H 'Content-Type: application/json'");
+        expect(command).toContain(`"note": "it'\\''s"`);
+        expect(command).not.toContain('cursor');
+    });
+
+    it('fills path parameters and sends HEAD with -I', () => {
+        const command = curlExample(
+            {
+                method: 'HEAD',
+                path: '/v1/upload/{id}',
+                operation: {
+                    parameters: [
+                        {
+                            in: 'path',
+                            name: 'id',
+                            required: true,
+                            schema: { type: 'string' },
+                        },
+                    ],
+                },
+            },
+            { components: { schemas: {} } },
+        );
+        expect(command).toBe("curl -I 'https://capsule.example/v1/upload/ID'");
+    });
+
+    it('sends a non-JSON body from a file', () => {
+        const command = curlExample(
+            {
+                method: 'PATCH',
+                path: '/v1/upload/{id}',
+                operation: {
+                    requestBody: {
+                        content: {
+                            'application/octet-stream': {
+                                schema: { type: 'string' },
+                            },
+                        },
+                    },
+                },
+            },
+            { components: { schemas: {} } },
+        );
+        expect(command).toContain('--data-binary @body.bin');
     });
 });

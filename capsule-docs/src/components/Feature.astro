@@ -1,0 +1,83 @@
+---
+// One differentiator on the front page: an icon, a heading, a short body
+// (the slot) and a link, named for its destination, into the doc that
+// specifies it. Lay several out with FeatureGrid.astro.
+import { Icon } from '@astrojs/starlight/components';
+import type { StarlightIcon } from '@astrojs/starlight/types';
+
+interface Props {
+    icon: StarlightIcon;
+    title: string;
+    /** The doc that specifies this claim. */
+    href: string;
+    /** Names the destination, e.g. "Federation design", so the link says where it goes. */
+    linkLabel: string;
+}
+
+const { icon, title, href, linkLabel } = Astro.props;
+// Astro does not type-check props in the build, so enforce the one that keeps
+// the link accessible: without a label its only text is a hidden arrow.
+if (!linkLabel?.trim()) {
+    throw new Error(`Feature "${title}" needs a linkLabel naming ${href}`);
+}
+---
+
+<article class="feature">
+  <span class="feature-icon" aria-hidden="true"><Icon name={icon} size="1.25rem" /></span>
+  <h3>{title}</h3>
+  <div class="feature-body"><slot /></div>
+  <a class="feature-link" href={href}>{linkLabel}<span aria-hidden="true"> →</span></a>
+</article>
+
+<style>
+  .feature {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 1.25rem;
+    border: 1px solid var(--sl-color-hairline);
+    border-radius: var(--capsule-radius-md);
+    background: var(--sl-color-bg-nav);
+  }
+
+  .feature-icon {
+    display: inline-grid;
+    place-items: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: var(--capsule-radius-sm);
+    background: var(--sl-color-accent-low);
+    color: var(--sl-color-text-accent);
+  }
+
+  .feature h3 {
+    margin: 0.25rem 0 0;
+    font-size: var(--sl-text-lg);
+    font-weight: 600;
+    color: var(--sl-color-white);
+    letter-spacing: -0.01em;
+  }
+
+  .feature-body {
+    flex: 1;
+    color: var(--sl-color-gray-2);
+    font-size: var(--sl-text-sm);
+    line-height: 1.55;
+  }
+
+  .feature-body :global(p) {
+    margin: 0;
+  }
+
+  .feature-link {
+    margin-top: 0.25rem;
+    font-size: var(--sl-text-sm);
+    font-weight: 500;
+    color: var(--sl-color-text-accent);
+    text-decoration: none;
+  }
+
+  .feature-link:hover {
+    text-decoration: underline;
+  }
+</style>

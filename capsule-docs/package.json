@@ -4,13 +4,13 @@
     "version": "0.1.0",
     "license": "AGPL-3.0-only",
     "scripts": {
-        "dev": "bun scripts/gen-reference.mjs && astro dev",
-        "start": "bun scripts/gen-reference.mjs && astro dev",
-        "build": "bun scripts/gen-reference.mjs && astro build",
+        "dev": "bun scripts/gen-reference.mjs && bunx --bun astro dev",
+        "start": "bun scripts/gen-reference.mjs && bunx --bun astro dev",
+        "build": "bun scripts/gen-reference.mjs && bunx --bun astro build",
         "preview": "bun run build && wrangler pages dev ./dist",
-        "astro": "astro",
+        "astro": "bunx --bun astro",
         "deploy": "bun run build && wrangler pages deploy ./dist",
-        "test": "vitest run"
+        "test": "bunx --bun vitest run"
     },
     "dependencies": {
         "@astrojs/markdown-remark": "^7.3.0",
@@ -19,6 +19,7 @@
         "@tailwindcss/vite": "^4.3.0",
         "astro": "^7.4.0",
         "sharp": "^0.35.5",
+        "starlight-blog": "^0.30.2",
         "starlight-links-validator": "^0.27.0",
         "starlight-versions": "^0.10.1",
         "tailwindcss": "^4.3.0"

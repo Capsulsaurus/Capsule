@@ -1,11 +1,39 @@
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { unified } from '@astrojs/markdown-remark';
 import starlight from '@astrojs/starlight';
 import tailwindcss from '@tailwindcss/vite';
 // @ts-check
 import { defineConfig } from 'astro/config';
+import starlightBlog from 'starlight-blog';
 import starlightLinksValidator from 'starlight-links-validator';
 import { referenceSidebar } from './scripts/reference-groups.mjs';
+import { BLOG_AUTHORS, hasPublishedPost } from './src/lib/blog-posts.mjs';
+import { resolveBuildCommit } from './src/lib/build-commit.mjs';
 import rehypeNoTranslate from './src/lib/rehype-notranslate.mjs';
+
+// A production build includes the blog (routes, header link, RSS, sitemap,
+// footer link) only once a post is published, so no reader lands on an empty
+// index. `astro dev` always includes it, so a draft previews in the blog
+// layout. Read once at startup: restart the dev server after publishing.
+const blogIsLive =
+    !process.argv.includes('build') ||
+    hasPublishedPost(
+        fileURLToPath(new URL('./src/content/docs/blog/', import.meta.url)),
+    );
+
+// The commit this build was made from, shown in the footer. `null` (and no
+// footer segment) when neither the host nor git names one.
+const buildCommit = resolveBuildCommit(process.env, () => {
+    try {
+        return execFileSync('git', ['rev-parse', 'HEAD'], {
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+        });
+    } catch {
+        return null;
+    }
+});
 
 // https://astro.build/config
 export default defineConfig({
@@ -19,7 +47,9 @@ export default defineConfig({
     integrations: [
         starlight({
             title: 'Capsule',
-            description: 'Photo sharing for all!',
+            description:
+                'An open-source, end-to-end encrypted photo library: organization that runs on your devices, a server that holds no keys, and sharing designed to span servers.',
+            favicon: '/favicon.svg',
             social: [
                 {
                     icon: 'github',
@@ -34,7 +64,19 @@ export default defineConfig({
             components: {
                 // Renders the `status` frontmatter (draft/stable) as a title badge.
                 PageTitle: './src/components/PageTitle.astro',
+                // Appends the site footer (links, licence) to every page.
+                Footer: './src/components/Footer.astro',
+                // The header: wordmark, section links, GitHub button and the
+                // three-way theme toggle. See development/visual-language.md.
+                Header: './src/components/Header.astro',
+                SiteTitle: './src/components/SiteTitle.astro',
+                SocialIcons: './src/components/SocialIcons.astro',
+                ThemeSelect: './src/components/ThemeToggle.astro',
+                // Carries the section links on narrow screens.
+                MobileMenuFooter: './src/components/MobileMenuFooter.astro',
             },
+            // Badges every non-stable page in the sidebar. See src/route-data.ts.
+            routeMiddleware: './src/route-data.ts',
             sidebar: [
                 {
                     label: 'Guides',
@@ -169,7 +211,22 @@ export default defineConfig({
             customCss: ['./src/styles/global.css'],
             // TODO: Add internationalization down the line: https://starlight.astro.build/guides/i18n/
             plugins: [
-                starlightLinksValidator(),
+                ...(blogIsLive
+                    ? [
+                          starlightBlog({
+                              title: 'Blog',
+                              // The header's own section links carry Blog
+                              // (src/lib/site-nav.mjs), so the plugin adds none.
+                              navigation: 'none',
+                              metrics: { readingTime: true },
+                              postCount: 10,
+                              recentPostCount: 5,
+                              authors: BLOG_AUTHORS,
+                          }),
+                      ]
+                    : []),
+                // Feature cards on the front page link into the design docs.
+                starlightLinksValidator({ components: [['Feature', 'href']] }),
                 // starlightVersions({
                 // 	// current: {
                 // 	// 	label: 'master',
@@ -183,5 +240,11 @@ export default defineConfig({
     ],
     vite: {
         plugins: [tailwindcss()],
+        // Read by SiteFooter.astro and HeaderNav.astro, so their Blog links
+        // follow the same rule, and the footer names the built commit.
+        define: {
+            __BLOG_IS_LIVE__: JSON.stringify(blogIsLive),
+            __BUILD_COMMIT__: JSON.stringify(buildCommit),
+        },
     },
 });

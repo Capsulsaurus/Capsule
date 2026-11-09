@@ -79,6 +79,14 @@ export function stripFrontmatter(source) {
     return match ? blank(match[0]) + source.slice(match[0].length) : source;
 }
 
+/** The review `status` in a page's YAML frontmatter, or undefined. */
+export function frontmatterStatus(source) {
+    const block = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/.exec(source);
+    if (!block) return undefined;
+    const field = /^status:\s*['"]?([^'"\s#]+)['"]?\s*(#.*)?$/m.exec(block[1]);
+    return field?.[1];
+}
+
 /** Blank HTML comments — a link inside one is commented out, not published. */
 export function stripComments(source) {
     return source.replace(/<!--[\s\S]*?-->/g, blank);
@@ -90,7 +98,24 @@ function prose(source) {
 }
 
 /**
- * GitHub's heading-anchor slug: strip inline markup, lowercase, drop every
+ * `text` with every HTML tag removed, repeated until none is left, so removing
+ * one tag can never splice the halves around it into another.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+function withoutTags(text) {
+    let previous;
+    let current = text;
+    do {
+        previous = current;
+        current = current.replace(/<[^<>]*>/g, '');
+    } while (current !== previous);
+    return current;
+}
+
+/**
+ * GitHub's heading-anchor slug: strip inline markup and HTML tags, lowercase, drop every
  * character outside letters, numbers, marks, `_`, `-`, and space, then map each
  * remaining space to a hyphen. Runs are preserved, never collapsed.
  *
@@ -98,15 +123,21 @@ function prose(source) {
  * @returns {string} The anchor slug, without a leading `#`.
  */
 export function slugify(heading) {
-    return heading
-        .replace(/`/g, '')
-        .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-        .replace(/\*/g, '')
-        .replace(/\s*#+\s*$/, '')
-        .trim()
-        .toLowerCase()
-        .replace(/[^\p{L}\p{N}\p{M}_\- ]/gu, '')
-        .replace(/ /g, '-');
+    return (
+        heading
+            // Tags go, but not inside a code span: `` `Vec<T>` `` keeps its `<T>`.
+            .split(/(`[^`]*`)/)
+            .map((part, index) => (index % 2 ? part : withoutTags(part)))
+            .join('')
+            .replace(/`/g, '')
+            .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+            .replace(/\*/g, '')
+            .replace(/\s*#+\s*$/, '')
+            .trim()
+            .toLowerCase()
+            .replace(/[^\p{L}\p{N}\p{M}_\- ]/gu, '')
+            .replace(/ /g, '-')
+    );
 }
 
 /**

@@ -56,6 +56,7 @@ import {
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { slugify } from './lib/markdown.mjs';
 import {
     API_GROUPS,
     CLI_PAGES,
@@ -102,6 +103,27 @@ const API_OUT = 'capsule-docs/src/content/docs/reference/api';
  * by file rather than as a whole.
  */
 const SDK_OUT = 'capsule-docs/src/content/docs/reference/sdk';
+
+/**
+ * The `generated` frontmatter block (src/content.config.ts) the page banner renders: which
+ * surface the page documents, what it was generated from, and where to download that.
+ *
+ * @param {string} surface
+ * @param {string} source
+ * @param {string} [download]
+ * @returns {string[]} Frontmatter lines.
+ */
+function generatedFrontmatter(surface, source, download) {
+    return [
+        'generated:',
+        `  surface: ${yamlString(surface)}`,
+        `  source: ${yamlString(source)}`,
+        ...(download ? [`  download: ${yamlString(download)}`] : []),
+    ];
+}
+
+/** Repo-relative directory Astro serves verbatim at the site root. */
+const PUBLIC_OUT = 'capsule-docs/public';
 
 /** HTTP methods a path item may carry. Anything else in a path item is not an operation. */
 const METHODS = [
@@ -681,6 +703,7 @@ export function renderCliPage(surface) {
         `title: ${yamlString(page.label)}`,
         `description: ${yamlString(page.description)}`,
         'status: stable',
+        ...generatedFrontmatter('CLI', CLI_SURFACE),
         '---',
         '',
         `<!-- Generated from ${CLI_SURFACE} by ${GENERATED_BY}. Do not edit. -->`,
@@ -1006,27 +1029,360 @@ function bodyOf(carrier) {
  * @param {Record<string, any>} schema
  * @returns {string}
  */
-function schemaLink(documented, schema) {
+function schemaLink(documented, schema, { inTable = true } = {}) {
     const rendered = typeOf(schema);
     const bare = rendered.replace(/\[\]$/, '');
-    // A nullable type renders as `string | null`, and every use of this is a table cell, so
-    // the separator has to be escaped or it opens a fourth column and shifts the row.
-    // GFM requires the escape inside a code span too, and renders it as a bare pipe.
-    const shown = escapePipes(rendered);
+    // A nullable type renders as `string | null`; in a table cell the separator has to be
+    // escaped or it opens a fourth column and shifts the row. GFM requires the escape inside
+    // a code span too, and renders it as a bare pipe. Outside a table the escape would show.
+    const shown = inTable ? escapePipes(rendered) : rendered;
     return documented.includes(bare)
         ? `[\`${shown}\`](#${bare.toLowerCase()})`
         : `\`${shown}\``;
 }
 
+/** The placeholder origin request examples are written against. */
+const EXAMPLE_ORIGIN = 'https://capsule.example';
+
+/** Where `generate` publishes the OpenAPI document beside the site, and the banner links to. */
+export const OPENAPI_DOWNLOAD = '/openapi.json';
+
 /**
- * Render one operation.
+ * A method rendered as the pill every operation heading and index entry opens with. The
+ * colour comes from `data-method` (src/styles/api-reference.css); the text stays the
+ * method, so the heading's slug and its plain-text reading are unchanged.
+ *
+ * @param {string} method Upper-case HTTP method.
+ * @returns {string}
+ */
+function methodPill(method) {
+    return `<span class="api-method" data-method="${method.toLowerCase()}">${method}</span>`;
+}
+
+/**
+ * The anchor an operation heading gets: its text with the pill markup stripped, slugged the
+ * way the site slugs every heading.
+ *
+ * @param {string} method
+ * @param {string} path
+ * @returns {string}
+ */
+export function operationAnchor(method, path) {
+    return slugify(`${method} ${path}`);
+}
+
+/**
+ * A deterministic example value for a schema, for the request and response panels.
+ *
+ * Taken from the document where it says: `example`, then `default`, then the first `enum`
+ * member. Otherwise a placeholder of the right shape — a UUIDv7 for `format: uuid`, RFC 3339
+ * for date-times, `0`, `true`, `"string"`. References are followed to the same depth the
+ * schema appendix expands, so an example never claims more structure than the page
+ * documents; past it the value is `{}`.
+ *
+ * @param {Record<string, any> | undefined} schema
+ * @param {Record<string, any>} document
+ * @param {number} [depth]
+ * @returns {unknown}
+ */
+export function exampleFor(schema, document, depth = 0) {
+    if (!schema || typeof schema !== 'object') return null;
+    if (schema.$ref) {
+        // The appendix expands a model reached at depth MAX_SCHEMA_DEPTH and no deeper.
+        if (depth > MAX_SCHEMA_DEPTH) return {};
+        return exampleFor(
+            document.components?.schemas?.[refName(schema.$ref)],
+            document,
+            depth + 1,
+        );
+    }
+    if (schema.example !== undefined) return schema.example;
+    if (Array.isArray(schema.examples) && schema.examples.length > 0)
+        return schema.examples[0];
+    if (schema.default !== undefined) return schema.default;
+    if (Array.isArray(schema.enum) && schema.enum.length > 0)
+        return schema.enum[0];
+    const nullable = nullableBranch(schema);
+    if (nullable) return exampleFor(nullable, document, depth);
+
+    const types = Array.isArray(schema.type) ? schema.type : [schema.type];
+    const type =
+        types.find((entry) => entry && entry !== 'null') ??
+        (schema.properties ? 'object' : undefined);
+    switch (type) {
+        case 'object': {
+            const value = {};
+            for (const [name, property] of Object.entries(
+                schema.properties ?? {},
+            )) {
+                value[name] = exampleFor(property, document, depth);
+            }
+            if (
+                Object.keys(value).length === 0 &&
+                typeof schema.additionalProperties === 'object'
+            ) {
+                value.key = exampleFor(
+                    schema.additionalProperties,
+                    document,
+                    depth,
+                );
+            }
+            return value;
+        }
+        case 'array':
+            return [exampleFor(schema.items ?? {}, document, depth)];
+        case 'integer':
+        case 'number':
+            return typeof schema.minimum === 'number' && schema.minimum > 0
+                ? schema.minimum
+                : 0;
+        case 'boolean':
+            return true;
+        case 'string':
+            return stringExample(schema);
+        default:
+            return null;
+    }
+}
+
+/**
+ * @param {Record<string, any>} schema A `type: string` schema.
+ * @returns {string}
+ */
+function stringExample(schema) {
+    switch (schema.format) {
+        case 'uuid':
+            return '01890a5d-ac96-774b-bcce-b302099a8057';
+        case 'date-time':
+            return '2026-01-01T00:00:00Z';
+        case 'date':
+            return '2026-01-01';
+        case 'uri':
+            return `${EXAMPLE_ORIGIN}/`;
+        case 'byte':
+            return 'AAECAw==';
+        case 'binary':
+            return '<bytes>';
+        default:
+            // The protocol header's grammar is a date; a placeholder that fails the pattern
+            // would teach a request the server refuses.
+            return schema.pattern === '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+                ? '2026-01-01'
+                : 'string';
+    }
+}
+
+/**
+ * The text an example request sends for a parameter: the document's example when it has
+ * one, then the schema's; a string with no more to go on becomes the parameter's name in
+ * capitals (`UPLOAD_ID`), which reads as "put yours here" where `string` would read as a
+ * literal.
+ *
+ * @param {{ name: string, schema?: Record<string, any>, example?: unknown }} parameter
+ * @param {Record<string, any>} document
+ * @returns {string}
+ */
+function parameterValue(parameter, document) {
+    const value = parameter.example ?? exampleFor(parameter.schema, document);
+    if (value === 'string' || value === null || value === undefined) {
+        return parameter.name.toUpperCase().replace(/-/g, '_');
+    }
+    return typeof value === 'object' ? JSON.stringify(value) : String(value);
+}
+
+/**
+ * A value as one shell word, single-quoted.
+ *
+ * @param {string} value
+ * @returns {string}
+ */
+function shellQuote(value) {
+    return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * The `curl` request the panel shows: the method, the URL with every required query
+ * parameter, the bearer header when the operation needs one, every required header, and a
+ * body of the documented shape.
+ *
+ * @param {{ path: string, method: string, operation: Record<string, any> }} entry
+ * @param {Record<string, any>} document
+ * @returns {string}
+ */
+export function curlExample({ path, method, operation }, document) {
+    const parameters = operation.parameters ?? [];
+    const pathValue = (name) =>
+        parameterValue(
+            parameters.find((parameter) => parameter.name === name) ?? {
+                name,
+            },
+            document,
+        );
+    // Every `{name}` filled in, so curl neither globs the braces nor sends them.
+    const filled = path.replace(/\{([^}]+)\}/g, (_, name) =>
+        encodeURIComponent(pathValue(name)),
+    );
+    const query = parameters
+        .filter((parameter) => parameter.in === 'query' && parameter.required)
+        .map(
+            (parameter) =>
+                `${parameter.name}=${encodeURIComponent(parameterValue(parameter, document))}`,
+        );
+    const url = `${EXAMPLE_ORIGIN}${filled}${query.length > 0 ? `?${query.join('&')}` : ''}`;
+    // `-X HEAD` would wait for the body Content-Length announces; `-I` does not.
+    const verb = method === 'HEAD' ? '-I' : `-X ${method}`;
+    const lines = [`curl ${verb} ${shellQuote(url)}`];
+
+    if (Array.isArray(operation.security) && operation.security.length > 0) {
+        // Double-quoted so the shell expands the caller's $TOKEN.
+        lines.push('-H "Authorization: Bearer $TOKEN"');
+    }
+    for (const parameter of [...parameters]
+        .filter((entry) => entry.in === 'header' && entry.required)
+        .sort((a, b) => a.name.localeCompare(b.name))) {
+        lines.push(
+            `-H ${shellQuote(`${parameter.name}: ${parameterValue(parameter, document)}`)}`,
+        );
+    }
+
+    const body = bodyOf(operation.requestBody);
+    if (body) {
+        lines.push(`-H ${shellQuote(`Content-Type: ${body.mediaType}`)}`);
+        if (body.mediaType.endsWith('json')) {
+            lines.push(
+                `-d ${shellQuote(JSON.stringify(exampleFor(body.schema, document), null, 2))}`,
+            );
+        } else {
+            lines.push('--data-binary @body.bin');
+        }
+    }
+    return lines.join(' \\\n  ');
+}
+
+/**
+ * A code block for the panel: a fence long enough that nothing inside can close it.
+ *
+ * @param {string} language
+ * @param {string} title
+ * @param {string} code
+ * @returns {string}
+ */
+function panelBlock(language, title, code) {
+    const longest = Math.max(
+        2,
+        ...[...code.matchAll(/`+/g)].map((match) => match[0].length),
+    );
+    const fence = '`'.repeat(longest + 1);
+    return `${fence}${language} title=${JSON.stringify(title)}\n${code}\n${fence}`;
+}
+
+/**
+ * The right-hand panel: the request, then an example body for each documented success.
+ *
+ * @param {{ path: string, method: string, operation: Record<string, any> }} entry
+ * @param {Record<string, any>} document
+ * @returns {string}
+ */
+function renderPanel(entry, document) {
+    const blocks = [panelBlock('sh', 'Request', curlExample(entry, document))];
+    const successes = Object.entries(entry.operation.responses ?? {})
+        .filter(([status]) => /^2/.test(status))
+        .sort(([a], [b]) => a.localeCompare(b));
+    for (const [status, response] of successes) {
+        const body = bodyOf(response);
+        if (!body) {
+            blocks.push(
+                `<p class="api-panel-note"><code>${status}</code> · no body</p>`,
+            );
+        } else if (body.mediaType.endsWith('json')) {
+            blocks.push(
+                panelBlock(
+                    'json',
+                    `${status} · ${body.mediaType}`,
+                    JSON.stringify(exampleFor(body.schema, document), null, 2),
+                ),
+            );
+        } else {
+            blocks.push(
+                `<p class="api-panel-note"><code>${status}</code> · <code>${body.mediaType}</code> bytes</p>`,
+            );
+        }
+    }
+    return blocks.join('\n\n');
+}
+
+/**
+ * A response status as a pill coloured by class (`2xx`, `4xx`, …).
+ *
+ * @param {string} status
+ * @returns {string}
+ */
+function statusPill(status) {
+    return `<span class="api-status" data-class="${status.charAt(0)}xx">${status}</span>`;
+}
+
+/**
+ * A labelled list of fields, the way the operation column shows parameters and responses:
+ * each entry a name, its muted facts (where it goes, its type), a required marker, and its
+ * description beneath. A list rather than a table, because the column is narrow and a
+ * four-column table there wraps every header name across three lines.
+ *
+ * @param {string} label
+ * @param {Array<{ name: string, meta: string[], required: boolean, description: string }>} fields
+ * @returns {string}
+ */
+function fieldList(label, fields) {
+    const items = fields.map(({ name, meta, required, description }) => {
+        const head = [
+            name,
+            ...meta.map((fact) => `<span class="api-meta">${fact}</span>`),
+            required ? '<span class="api-required">required</span>' : '',
+        ]
+            .filter(Boolean)
+            .join(' ');
+        return description
+            ? `- ${head}\n\n  ${inlineProse(description)}`
+            : `- ${head}`;
+    });
+    return [
+        `<div class="api-fields" data-label="${label}">`,
+        `**${label}**`,
+        // Items separated by blank lines make a loose list, so every name and description
+        // is a paragraph the stylesheet can reach, whether or not any entry has a description.
+        items.join('\n\n'),
+        '</div>',
+    ].join('\n\n');
+}
+
+/**
+ * Prose for a list-item paragraph: a `<` outside a code span is escaped, since Markdown would
+ * read `<nonce>` as a tag and drop it, and a leading `#`, `>` or `1.` is escaped so it stays
+ * text rather than opening a heading, quote or list inside the item.
+ *
+ * @param {string} text Single-line prose.
+ * @returns {string}
+ */
+function inlineProse(text) {
+    return text
+        .split(/(`+[^`]*`+)/)
+        .map((part, index) => (index % 2 ? part : part.replace(/</g, '&lt;')))
+        .join('')
+        .replace(/^(#|>|\d+\.)/, '\\$1');
+}
+
+/**
+ * Render one operation: the reference on the left, the request and response examples on the
+ * right. The wrapper is raw HTML around ordinary Markdown, so the heading, the tables and the
+ * links stay Markdown that search, the table of contents and the link validator read.
  *
  * @param {{ path: string, method: string, operation: Record<string, any> }} entry
  * @param {string[]} documented Schema names the page's appendix carries.
+ * @param {Record<string, any>} document
  * @returns {string}
  */
-function renderOperation({ path, method, operation }, documented) {
-    const sections = [`## ${method} ${path}`];
+function renderOperation(entry, documented, document) {
+    const { path, method, operation } = entry;
+    const sections = [`## ${methodPill(method)} ${path}`];
 
     if (operation.summary) {
         sections.push(demoteHeadings(rewriteLinks(operation.summary), 2));
@@ -1052,32 +1408,34 @@ function renderOperation({ path, method, operation }, documented) {
     const parameters = operation.parameters ?? [];
     if (parameters.length > 0) {
         sections.push(
-            table(
-                ['Parameter', 'In', 'Type', 'Description'],
+            fieldList(
+                'Parameters',
                 [...parameters]
                     .sort(
                         (a, b) =>
                             a.in.localeCompare(b.in) ||
                             a.name.localeCompare(b.name),
                     )
-                    .map((parameter) => [
-                        `\`${parameter.name}\``,
-                        `\`${parameter.in}\``,
-                        schemaLink(documented, parameter.schema ?? {}),
-                        escapeCell(
-                            [
-                                parameter.required ? '**Required.**' : '',
-                                parameter.description
-                                    ? sentence(prose(parameter.description))
-                                    : '',
-                                parameter.example === undefined
-                                    ? ''
-                                    : `Example: \`${parameter.example}\`.`,
-                            ]
-                                .filter(Boolean)
-                                .join(' '),
-                        ) || '—',
-                    ]),
+                    .map((parameter) => ({
+                        name: `\`${parameter.name}\``,
+                        meta: [
+                            parameter.in,
+                            schemaLink(documented, parameter.schema ?? {}, {
+                                inTable: false,
+                            }),
+                        ],
+                        required: Boolean(parameter.required),
+                        description: [
+                            parameter.description
+                                ? sentence(prose(parameter.description))
+                                : '',
+                            parameter.example === undefined
+                                ? ''
+                                : `Example: \`${parameter.example}\`.`,
+                        ]
+                            .filter(Boolean)
+                            .join(' '),
+                    })),
             ),
         );
     }
@@ -1095,35 +1453,80 @@ function renderOperation({ path, method, operation }, documented) {
     );
     if (responses.length > 0) {
         sections.push(
-            table(
-                ['Status', 'Body', 'Description'],
+            fieldList(
+                'Responses',
                 responses.map(([status, response]) => {
                     const body = bodyOf(response);
                     const headers = Object.keys(response.headers ?? {}).sort();
-                    return [
-                        `\`${status}\``,
-                        body
-                            ? `${schemaLink(documented, body.schema)} <br /> \`${body.mediaType}\``
-                            : '—',
-                        escapeCell(
-                            [
-                                response.description
-                                    ? sentence(prose(response.description))
-                                    : '',
-                                headers.length > 0
-                                    ? `Headers: ${headers.map((header) => `\`${header}\``).join(', ')}.`
-                                    : '',
-                            ]
-                                .filter(Boolean)
-                                .join(' '),
-                        ) || '—',
-                    ];
+                    return {
+                        name: statusPill(status),
+                        meta: body
+                            ? [
+                                  schemaLink(documented, body.schema, {
+                                      inTable: false,
+                                  }),
+                                  `\`${body.mediaType}\``,
+                              ]
+                            : ['no body'],
+                        required: false,
+                        description: [
+                            response.description
+                                ? sentence(prose(response.description))
+                                : '',
+                            headers.length > 0
+                                ? `Headers: ${headers.map((header) => `\`${header}\``).join(', ')}.`
+                                : '',
+                        ]
+                            .filter(Boolean)
+                            .join(' '),
+                    };
                 }),
             ),
         );
     }
 
-    return sections.filter(Boolean).join('\n\n');
+    return [
+        `<div class="api-op" data-method="${method.toLowerCase()}">`,
+        '<div class="api-op-main">',
+        '',
+        sections.filter(Boolean).join('\n\n'),
+        '',
+        '</div>',
+        '<div class="api-op-panel">',
+        '',
+        renderPanel(entry, document),
+        '',
+        '</div>',
+        '</div>',
+    ].join('\n');
+}
+
+/**
+ * The page's index: one entry per operation, the method pill and the path, linking to the
+ * operation, then the models the appendix documents. REST pages carry no table of contents,
+ * so this is the page's navigation.
+ *
+ * @param {Array<{ path: string, method: string }>} operations
+ * @param {string[]} documented Schema names the page's appendix carries.
+ * @returns {string}
+ */
+function renderOperationIndex(operations, documented) {
+    return [
+        '<nav class="api-index" aria-label="On this page">',
+        '',
+        ...operations.map(
+            ({ path, method }) =>
+                `- [${methodPill(method)} \`${path}\`](#${operationAnchor(method, path)})`,
+        ),
+        ...(documented.length === 0
+            ? []
+            : [
+                  '',
+                  `**Schemas:** ${documented.map((name) => `[\`${name}\`](#${name.toLowerCase()})`).join(', ')}`,
+              ]),
+        '',
+        '</nav>',
+    ].join('\n');
 }
 
 /**
@@ -1197,19 +1600,24 @@ export function renderApiPage(group, operations, document) {
         `title: ${yamlString(group.label)}`,
         `description: ${yamlString(group.description)}`,
         'status: stable',
+        'tableOfContents: false',
+        ...generatedFrontmatter(
+            'REST API',
+            `OpenAPI ${document.openapi}`,
+            OPENAPI_DOWNLOAD,
+        ),
         '---',
         '',
         `<!-- Generated from ${OPENAPI_DOCUMENT} by ${GENERATED_BY}. Do not edit. -->`,
         '',
-        `Generated from \`${OPENAPI_DOCUMENT}\`, the OpenAPI ${OPENAPI_VERSION} document`,
-        '`capsule-server` emits and `mise run openapi-check-kynos` keeps current. To change a',
-        'description on this page, change the annotation on the handler or model it comes from',
-        'and regenerate — this file is build output. The auth model, error contract, and',
-        'conventions common to every endpoint are on the [REST API overview](/reference/api/).',
+        'Generated from the OpenAPI document `capsule-server` emits; change a description at its',
+        'handler or model. What every endpoint shares is on the [REST API overview](/reference/api/).',
+        '',
+        renderOperationIndex(operations, documented),
     ].join('\n');
 
     const body = operations
-        .map((entry) => renderOperation(entry, documented))
+        .map((entry) => renderOperation(entry, documented, document))
         .join('\n\n');
 
     const appendix =
@@ -1574,6 +1982,7 @@ function sdkHead(page, artifact, intro) {
         `title: ${yamlString(page.label)}`,
         `description: ${yamlString(page.description)}`,
         'status: stable',
+        ...generatedFrontmatter(`${page.label} SDK`, artifact),
         '---',
         '',
         `<!-- Generated from ${artifact} by ${GENERATED_BY}. Do not edit. -->`,
@@ -1691,6 +2100,13 @@ export function generate(root) {
         mkdirSync(dirname(join(root, path)), { recursive: true });
         writeFileSync(join(root, path), body);
     }
+    // Served beside the pages, so the REST banner's download link is the exact document the
+    // pages were generated from. Gitignored like the pages: it is a copy, never a source.
+    mkdirSync(join(root, PUBLIC_OUT), { recursive: true });
+    writeFileSync(
+        join(root, PUBLIC_OUT, OPENAPI_DOWNLOAD.slice(1)),
+        readFileSync(join(root, OPENAPI_DOCUMENT)),
+    );
     return pages.map(({ path }) => path);
 }
 

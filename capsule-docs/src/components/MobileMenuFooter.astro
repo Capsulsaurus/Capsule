@@ -1,0 +1,38 @@
+---
+// Starlight MobileMenuFooter override: on narrow screens the header has no
+// room for the section links, so the menu carries them above Starlight's
+// usual row of social links and preferences.
+import LanguageSelect from 'virtual:starlight/components/LanguageSelect';
+import SocialIcons from 'virtual:starlight/components/SocialIcons';
+import ThemeSelect from 'virtual:starlight/components/ThemeSelect';
+import HeaderNav from './HeaderNav.astro';
+---
+
+<div class="mobile-footer">
+  <HeaderNav variant="menu" />
+  <div class="mobile-preferences">
+    <SocialIcons />
+    <span class="spacer"></span>
+    <ThemeSelect />
+    <LanguageSelect />
+  </div>
+</div>
+
+<style>
+  .mobile-footer {
+    border-top: 1px solid var(--sl-color-hairline);
+  }
+
+  .mobile-preferences {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+    padding-block: 1rem;
+    border-top: 1px solid var(--sl-color-hairline);
+  }
+
+  .spacer {
+    flex: 1;
+  }
+</style>
