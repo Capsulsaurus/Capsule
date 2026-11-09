@@ -41,7 +41,7 @@ const current = __DOCS_VERSION__;
       const current = this.dataset.current ?? '';
       // This build always names itself, even before its release is listed.
       if (current !== '' && !versions.includes(current)) {
-        versions = [current, ...versions];
+        versions = releasedVersions({ versions: [...versions, current] });
       }
       if (versions.length === 0) return;
       select.replaceChildren(
@@ -88,8 +88,15 @@ const current = __DOCS_VERSION__;
     cursor: default;
   }
 
-  select:not(:has(option:only-child)):hover,
+  /* Two rules, not one list: a browser without :has() drops a whole list
+     it cannot parse, and would lose the focus style with it. */
   select:focus-visible {
+    color: var(--sl-color-white);
+    border-color: var(--capsule-control-border-hover);
+    background-color: var(--sl-color-gray-6);
+  }
+
+  select:not(:has(option:only-child)):hover {
     color: var(--sl-color-white);
     border-color: var(--capsule-control-border-hover);
     background-color: var(--sl-color-gray-6);
