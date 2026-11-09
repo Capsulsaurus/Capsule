@@ -10,11 +10,15 @@ import { referenceSidebar } from './scripts/reference-groups.mjs';
 import { hasPublishedPost } from './src/lib/blog-posts.mjs';
 import rehypeNoTranslate from './src/lib/rehype-notranslate.mjs';
 
-// The blog goes live (routes, header link, RSS, sitemap, footer link) only
-// once a post is published, so no reader lands on an empty index.
-const blogIsLive = hasPublishedPost(
-    fileURLToPath(new URL('./src/content/docs/blog/', import.meta.url)),
-);
+// A production build includes the blog (routes, header link, RSS, sitemap,
+// footer link) only once a post is published, so no reader lands on an empty
+// index. `astro dev` always includes it, so a draft previews in the blog
+// layout. Read once at startup: restart the dev server after publishing.
+const blogIsLive =
+    !process.argv.includes('build') ||
+    hasPublishedPost(
+        fileURLToPath(new URL('./src/content/docs/blog/', import.meta.url)),
+    );
 
 // https://astro.build/config
 export default defineConfig({
