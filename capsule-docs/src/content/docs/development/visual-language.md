@@ -157,6 +157,8 @@ one is designed.
 - **Libraries are badged once per page.** The first mention of a library or tool is followed by a
   small "repo" badge linking its source repository from `src/lib/library-links.mjs`; the name
   itself stays plain text, so an automatic substitution never looks like a link an author chose.
+  A mention inside a larger word (`` `rustls`-only ``, a possessive, a path) is never badged, so a
+  badge never splits a word; the next standalone mention is. Search does not index the badge.
   Add a library there, not a URL to a page. A name that is also an ordinary word, or names two
   things (`gamut`), is linked by hand.
 - **Diagrams are Mermaid.** A graph, flow or state machine is a ```` ```mermaid title="…" ````
