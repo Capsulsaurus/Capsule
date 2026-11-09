@@ -11,6 +11,7 @@ import { referenceSidebar } from './scripts/reference-groups.mjs';
 import { BLOG_AUTHORS, hasPublishedPost } from './src/lib/blog-posts.mjs';
 import { resolveBuildCommit } from './src/lib/build-commit.mjs';
 import rehypeNoTranslate from './src/lib/rehype-notranslate.mjs';
+import remarkLinkTitles from './src/lib/remark-link-titles.mjs';
 
 // A production build includes the blog (routes, header link, RSS, sitemap,
 // footer link) only once a post is published, so no reader lands on an empty
@@ -38,11 +39,24 @@ const buildCommit = resolveBuildCommit(process.env, () => {
 // https://astro.build/config
 export default defineConfig({
     site: 'https://capsule.justinchung.net', // TODO: Get domain later
-    // Opt technical terms out of browser/machine auto-translation. See the plugin.
-    // Astro 7 deprecates the top-level `markdown.rehypePlugins` key; plugins are
-    // passed to the unified processor directly.
+    // Astro 7 deprecates the top-level `markdown.*Plugins` keys; plugins are
+    // passed to the unified processor directly. See each plugin's header.
     markdown: {
-        processor: unified({ rehypePlugins: [rehypeNoTranslate] }),
+        processor: unified({
+            // An empty-text site link renders its target's title or heading.
+            remarkPlugins: [
+                [
+                    remarkLinkTitles,
+                    {
+                        contentDir: fileURLToPath(
+                            new URL('./src/content/docs/', import.meta.url),
+                        ),
+                    },
+                ],
+            ],
+            // Opts technical terms out of browser/machine auto-translation.
+            rehypePlugins: [rehypeNoTranslate],
+        }),
     },
     integrations: [
         starlight({

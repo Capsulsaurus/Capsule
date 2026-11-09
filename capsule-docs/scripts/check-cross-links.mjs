@@ -21,6 +21,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, normalize, resolve, sep } from 'node:path';
 import { headingAnchors, linkTargets } from './lib/markdown.mjs';
+import { contentFileForRoute as routeFile } from './lib/routes.mjs';
 import { walkFiles } from './lib/walk.mjs';
 
 /** Where the Starlight content collection lives, relative to the repo root. */
@@ -54,23 +55,16 @@ function siteOrigin(root) {
 }
 
 /**
- * Resolve a site route (`/design/thumbnails/`) to the content file that serves
- * it, trying the page and then the section index, `.md` before `.mdx`.
+ * The repo-relative content file serving a site route (`/design/thumbnails/`),
+ * or null when nothing serves it.
  *
  * @param {string} root
  * @param {string} route Pathname, with or without surrounding slashes.
- * @returns {string | null} Repo-relative content path, or null when unserved.
+ * @returns {string | null}
  */
 function contentFileForRoute(root, route) {
-    const clean = route.replace(/^\/+|\/+$/g, '');
-    const bases = clean === '' ? ['index'] : [clean, `${clean}/index`];
-    for (const base of bases) {
-        for (const ext of ['.md', '.mdx']) {
-            const rel = `${SITE_CONTENT}/${base}${ext}`;
-            if (existsSync(join(root, rel))) return rel;
-        }
-    }
-    return null;
+    const rel = routeFile(join(root, SITE_CONTENT), route);
+    return rel === null ? null : `${SITE_CONTENT}/${rel}`;
 }
 
 /**

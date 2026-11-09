@@ -30,49 +30,49 @@ Every primitive, construction, format, or component identity is **declared in ex
 
 | Domain | Owner doc |
 | --- | --- |
-| Cryptographic primitives, constructions, version identifiers | [Cryptography — Primitives](/design/cryptography/primitives/) |
-| Key hierarchy, device coordination | [Cryptography — Keys](/design/cryptography/keys/) |
-| MLS membership, ciphersuite binding | [Cryptography — MLS](/design/cryptography/mls/) |
-| Asset + metadata encryption | [Cryptography — Encryption](/design/cryptography/encryption/) |
-| Provenance chains, signed manifests | [Cryptography — Provenance](/design/cryptography/provenance/) |
-| Recovery paths, failure modes, transport security | [Cryptography — Failure Modes](/design/cryptography/failure-modes/) |
-| MLS resilience | [MLS Resilience](/design/mls-resilience/) |
-| Device enrollment | [Device Enrollment](/design/device-enrollment/) |
-| ML model identities, embedding provenance | [AI/ML Integrations](/design/ai/) |
-| LQIP, thumbnail/preview formats | [Thumbnails and Previews](/design/thumbnails/) |
-| Server filesystem, required services | [Filesystem — Server](/design/filesystem/server/) |
-| Client filesystem, local index | [Filesystem — Client](/design/filesystem/client/) |
-| Library self-maintenance, atomic-write granularity | [Filesystem — Maintenance](/design/filesystem/maintenance/) |
-| Tokens, identity binding, auth flow | [Authentication](/design/authentication/) |
-| Backup container, escrow, recovery | [Backup and Recovery](/design/backup-recovery/) |
-| CRDTs, identifiers, geolocation, sidecar schema | [Metadata](/design/metadata/) |
-| Import pipeline | [Import — Pipeline](/design/import/pipeline/) |
-| Upload protocol | [Transfer — Upload](/design/transfer/upload/) |
-| Download, sync feed, auto-sync | [Transfer — Download](/design/transfer/download/) |
-| Storage durability, verify-before-destroy | [Transfer — Durability](/design/transfer/durability/) |
-| Tethered camera import | [Import — Camera Import](/design/import/camera-import/) |
-| Connection and retry classes | [Network Resilience](/design/networking/) |
-| Offline-first requirements | [Local Gallery](/design/local-gallery/) |
-| Federation trust, capability tokens | [Federation](/design/federation/) |
-| LAN discovery, peer channel | [Peering](/design/peering/) |
-| Album protocol version pinning | [Versioning](/design/versioning/) |
-| Stacking, trash retention | [Asset Organization](/design/organization/) |
-| Lifecycle action set | [Authorization](/design/authorization/) |
-| Damage scenarios, client classes | [Threat Model](/design/threat-model/) |
-| Refuse-by-default validation invariants | [Threat Model — Validation](/design/threat-model/validation/) |
-| Schema evolution, deprecation | [Threat Model — Schema Rules](/design/threat-model/schema-rules/) |
-| Outbound licence, dependency-licence policy | [Licensing](/design/licensing/) |
-| Dependency and tooling pins | [Dependencies](/design/dependencies/) |
-| Share links | [Share Links](/design/share-links/) |
-| Upload links, guest drops | [Web Upload](/design/web-upload/) |
-| Moderation, reporting, blocklists | [Moderation](/design/moderation/) |
-| Quota accounting + enforcement | [Quota](/design/quota/) |
-| Client validation duties, sandboxed decoder | [Clients](/design/clients/) |
-| Alerts, delivery, wake tier | [Notifications](/design/notifications/) |
-| Catalogs, locale resolution, error codes | [Internationalization](/design/i18n/) |
-| Crate graph, bounded E2E surface | [Module Map](/design/module-map/) |
-| API surface ↔ transport map | [API Surfaces](/design/api-surfaces/) |
-| Developer-reference generation | [Developer Documentation](/design/developer-docs/) |
+| Cryptographic primitives, constructions, version identifiers | [](/design/cryptography/primitives/) |
+| Key hierarchy, device coordination | [](/design/cryptography/keys/) |
+| MLS membership, ciphersuite binding | [](/design/cryptography/mls/) |
+| Asset + metadata encryption | [](/design/cryptography/encryption/) |
+| Provenance chains, signed manifests | [](/design/cryptography/provenance/) |
+| Recovery paths, failure modes, transport security | [](/design/cryptography/failure-modes/) |
+| MLS resilience | [](/design/mls-resilience/) |
+| Device enrollment | [](/design/device-enrollment/) |
+| ML model identities, embedding provenance | [](/design/ai/) |
+| LQIP, thumbnail/preview formats | [](/design/thumbnails/) |
+| Server filesystem, required services | [](/design/filesystem/server/) |
+| Client filesystem, local index | [](/design/filesystem/client/) |
+| Library self-maintenance, atomic-write granularity | [](/design/filesystem/maintenance/) |
+| Tokens, identity binding, auth flow | [](/design/authentication/) |
+| Backup container, escrow, recovery | [](/design/backup-recovery/) |
+| CRDTs, identifiers, geolocation, sidecar schema | [](/design/metadata/) |
+| Import pipeline | [](/design/import/pipeline/) |
+| Upload protocol | [](/design/transfer/upload/) |
+| Download, sync feed, auto-sync | [](/design/transfer/download/) |
+| Storage durability, verify-before-destroy | [](/design/transfer/durability/) |
+| Tethered camera import | [](/design/import/camera-import/) |
+| Connection and retry classes | [](/design/networking/) |
+| Offline-first requirements | [](/design/local-gallery/) |
+| Federation trust, capability tokens | [](/design/federation/) |
+| LAN discovery, peer channel | [](/design/peering/) |
+| Album protocol version pinning | [](/design/versioning/) |
+| Stacking, trash retention | [](/design/organization/) |
+| Lifecycle action set | [](/design/authorization/) |
+| Damage scenarios, client classes | [](/design/threat-model/) |
+| Refuse-by-default validation invariants | [](/design/threat-model/validation/) |
+| Schema evolution, deprecation | [](/design/threat-model/schema-rules/) |
+| Outbound licence, dependency-licence policy | [](/design/licensing/) |
+| Dependency and tooling pins | [](/design/dependencies/) |
+| Share links | [](/design/share-links/) |
+| Upload links, guest drops | [](/design/web-upload/) |
+| Moderation, reporting, blocklists | [](/design/moderation/) |
+| Quota accounting + enforcement | [](/design/quota/) |
+| Client validation duties, sandboxed decoder | [](/design/clients/) |
+| Alerts, delivery, wake tier | [](/design/notifications/) |
+| Catalogs, locale resolution, error codes | [](/design/i18n/) |
+| Crate graph, bounded E2E surface | [](/design/module-map/) |
+| API surface ↔ transport map | [](/design/api-surfaces/) |
+| Developer-reference generation | [](/design/developer-docs/) |
 
 ## Doc Structure
 
