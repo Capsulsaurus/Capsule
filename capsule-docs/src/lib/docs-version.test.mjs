@@ -5,6 +5,7 @@ import {
     proxiedLocation,
     proxyTarget,
     releasedVersions,
+    slashRedirect,
     stripBase,
     switchTarget,
     versionFromBranch,
@@ -105,6 +106,15 @@ describe('proxyTarget', () => {
         expect(proxyTarget('/design/')).toBeNull();
         expect(proxyTarget('/v/latest/')).toBeNull();
         expect(proxyTarget('/rustdocs/')).toBeNull();
+    });
+});
+
+describe('slashRedirect', () => {
+    it('adds the slash a proxied root needs, and only there', () => {
+        expect(slashRedirect('/rustdoc')).toBe('/rustdoc/');
+        expect(slashRedirect('/v/0.1')).toBe('/v/0.1/');
+        expect(slashRedirect('/rustdoc/')).toBeNull();
+        expect(slashRedirect('/design')).toBeNull();
     });
 });
 

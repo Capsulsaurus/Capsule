@@ -15,6 +15,14 @@ describe('rebaseHtml', () => {
         expect(html).toContain('<a href="/rustdoc/">r</a>');
     });
 
+    it('keeps a redirect page inside the version', () => {
+        const html = rebaseHtml(
+            '<meta http-equiv="refresh" content="0;url=/design/principles/">',
+            '/v/0.1/',
+        );
+        expect(html).toContain('content="0;url=/v/0.1/design/principles/"');
+    });
+
     it('returns the latest build untouched', () => {
         const html = '<a href="/design/">d</a>';
         expect(rebaseHtml(html, '/')).toBe(html);

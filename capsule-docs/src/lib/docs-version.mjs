@@ -141,6 +141,18 @@ export function proxyTarget(pathname, project = PAGES_PROJECT) {
 }
 
 /**
+ * The slashed path for a proxied root requested without its slash (`/rustdoc`,
+ * `/v/X.Y`), or `null`. Served without the slash, the page's relative links
+ * would resolve against `/`.
+ *
+ * @param {string} pathname
+ * @returns {string | null}
+ */
+export function slashRedirect(pathname) {
+    return /^\/(rustdoc|v\/\d+\.\d+)$/.test(pathname) ? `${pathname}/` : null;
+}
+
+/**
  * A redirect from the proxied origin, rewritten back onto the docs domain, so
  * a reader is never sent off it. `null` when it points elsewhere.
  *

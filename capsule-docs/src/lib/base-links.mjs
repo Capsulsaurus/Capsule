@@ -6,7 +6,8 @@
  * written anywhere else (Markdown, MDX, the hero's raw HTML, a component's
  * hard-coded path) is left as written, and on a release build it would leave
  * the version for the latest docs. So once the build is done, every `href`,
- * `src` and `srcset` in every HTML page goes through `withBase`, which leaves
+ * `src`, `srcset` and redirect-page refresh target in every HTML page goes
+ * through `withBase`, which leaves
  * external, relative, shared-root and already-based links alone. On the
  * latest build, whose base is `/`, it does nothing.
  */
@@ -34,6 +35,17 @@ export function rebaseHtml(html, base) {
                 if (typeof props[name] === 'string') {
                     props[name] = withBase(props[name], base);
                 }
+            }
+            // A redirect page (a retired route) refreshes to its target.
+            if (
+                node.tagName === 'meta' &&
+                String(props.httpEquiv).toLowerCase() === 'refresh' &&
+                typeof props.content === 'string'
+            ) {
+                props.content = props.content.replace(
+                    /(url=)(\S+)/i,
+                    (_, key, url) => `${key}${withBase(url, base)}`,
+                );
             }
             // A srcset is comma-separated candidates, each a URL and a size.
             if (typeof props.srcSet === 'string') {
