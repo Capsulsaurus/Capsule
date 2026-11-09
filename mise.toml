@@ -159,6 +159,18 @@ description = "Rustdoc gate for the whole workspace (intra-doc links, over all i
 env = { RUSTDOCFLAGS = "-D warnings" }
 run = "cargo doc --workspace --no-deps --document-private-items"
 
+# The rustdoc published to GitHub Pages from master (the `rustdoc-pages` CI job). Public items
+# only, which is what a reader building on the crates can call, and without the sea-orm
+# migration and entity crates, whose generated docs are a third of the gate's 730 MB render and
+# nothing a reader browses. The gate above still lints every item of every crate. The site root
+# redirects to `capsule-sdk`, the crate a client starts from.
+[tasks.doc-publish-rust]
+description = "Render the public workspace rustdoc published to GitHub Pages"
+run = [
+  "cargo doc --workspace --no-deps --exclude capsule-server-migration --exclude capsule-cli-migration --exclude capsule-cli-entity",
+  "printf '<!doctype html><meta http-equiv=\"refresh\" content=\"0; url=capsule_sdk/\"><link rel=\"canonical\" href=\"capsule_sdk/\">\\n' > target/doc/index.html",
+]
+
 # nextest: cross-binary parallel scheduling + process-per-test isolation. Two
 # invocations — the workspace (default features), then capsule-sdk's `ffi` surface (the
 # `capsule_sdk` uniffi namespace; capsule-core exports none). The workspace run includes `capsule-e2e`, the bounded E2E cases over the

@@ -10,7 +10,7 @@ WebAssembly module. This section has one page per language a client is written i
 
 | Page | Surface | Who uses it | Generated from | Kept current by |
 | --- | --- | --- | --- | --- |
-| [Rust](/reference/sdk/rust/) | the `capsule-sdk` crate | the CLI and TUI, and every binding below | rustdoc (see [Crates](/reference/crates/)) | `mise run doc-check-rust` |
+| [Rust](/reference/sdk/rust/) | the `capsule-sdk` crate | the CLI and TUI, and every binding below | [rustdoc](https://capsulsaurus.github.io/Capsule/capsule_sdk/) | `mise run doc-check-rust` |
 | [Swift](/reference/sdk/swift/) | the `capsule_sdk` uniffi namespace | the iOS, iPadOS and macOS apps | `capsule-sdk/bindings-surface.json` | `mise run gen-bindings --check` |
 | [Kotlin](/reference/sdk/kotlin/) | the `capsule_sdk` uniffi namespace | the Android app | `capsule-sdk/bindings-surface.json` | `mise run gen-bindings --check` |
 | [Browser (WASM)](/reference/sdk/wasm/) | the `capsule-wasm` module | the web client's share viewer and guest uploader | `capsule-wasm/wasm-surface.d.ts` | `mise run wasm-surface-check` |
