@@ -38,8 +38,8 @@
 //! [`store_escrow`](crate::rest::Client::store_escrow) and hand-writes no request. That is
 //! not a preference: `.claude/rules/capsule-sdk.md` requires that everything which parses or
 //! serializes is generated, *including* the byte-serving endpoints, and the reason is this
-//! module's own history. It used to build `{api_root}/backup/escrow` from a `const` — the Salvo document's
-//! path — and when the contract was re-sourced from Kynos to `/v1/auth/escrow` nothing
+//! module's own history. It used to build `{api_root}/backup/escrow` from a `const` — the
+//! Salvo document's path — and when the contract was re-sourced from Kynos to `/v1/auth/escrow` nothing
 //! noticed, because a route in a string constant is checked by no gate and this module's own
 //! mock answered whichever path it was handed.
 //!
