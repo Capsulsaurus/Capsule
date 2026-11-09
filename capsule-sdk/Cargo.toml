@@ -43,7 +43,7 @@ http3-netem = ["http3"]
 
 [dependencies]
 # capsule-i18n gives the SDK the canonical `error.*` code constants it switches
-# on (clients localize codes, never bare HTTP statuses — see CLAUDE.md).
+# on (clients localize codes, never bare HTTP statuses — see .claude/rules/i18n.md).
 capsule-i18n = { path = "../capsule-i18n" }
 # The verify-before-destroy gate reuses the offline data plane's pure predicate
 # (`library::release_is_safe`), the `StorageVerdict` type, and custody-receipt verification

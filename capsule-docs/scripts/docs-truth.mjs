@@ -17,7 +17,9 @@
  *   - `check-docs`'s expensive step is `astro build`. Adding the crate source
  *     trees to its filter makes a Rust rename rebuild the whole site.
  *
- * They regenerate nothing and need no toolchain — only `node:` builtins — which
+ * They regenerate nothing and need no toolchain — only `node:` builtins, plus
+ * the `git` every checkout already has (`check-agent-rules` lists the tracked
+ * tree) — which
  * is why the CI job that runs them installs no dependencies. That is deliberate,
  * not an omission. It also keeps them clear of the rule in
  * `design/developer-docs.md` that freshness gates belong to the owning
@@ -35,6 +37,7 @@
 
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { agentRulesCheck } from './check-agent-rules.mjs';
 import { crossLinksCheck } from './check-cross-links.mjs';
 import { endpointCensusCheck } from './check-endpoint-census.mjs';
 import { modulePathsCheck } from './check-module-paths.mjs';
@@ -42,6 +45,7 @@ import { sourceLinksCheck } from './check-source-links.mjs';
 
 /** Registered checks, run in order. Adding one is a single entry here. */
 const CHECKS = [
+    agentRulesCheck,
     crossLinksCheck,
     endpointCensusCheck,
     modulePathsCheck,

@@ -328,7 +328,7 @@ description = "Verify active-workspace, retired-component and stateless-core bou
 run = "cargo run -q -p xtask -- architecture-check"
 
 # Unit tests live in a sibling file: `foo.rs` ends with `#[cfg(test)] mod tests;` and the tests sit
-# in `foo/tests.rs` (CLAUDE.md, Rust Architecture Decisions). Rejects any inline module under a
+# in `foo/tests.rs` (.claude/rules/rust.md). Rejects any inline module under a
 # workspace member's `src/` that is named `tests` or gated on `cfg(test)`. See
 # xtask/src/test_layout.rs.
 [tasks.test-layout-check]

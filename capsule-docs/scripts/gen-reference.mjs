@@ -75,7 +75,7 @@ export const OPENAPI_DOCUMENT = 'capsule-server/openapi.json';
 /**
  * OpenAPI major.minor this generator renders.
  *
- * Pinned rather than accepted loosely because `AGENTS.md` requires the served document to be
+ * Pinned rather than accepted loosely because `.claude/rules/capsule-server.md` requires the served document to be
  * 3.2 and forbids emitting a 3.1 or 3.0 one: a document that arrived at 3.1 would mean the
  * emitter regressed, and rendering it anyway would publish the regression as documentation.
  */

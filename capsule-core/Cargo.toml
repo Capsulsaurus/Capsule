@@ -49,9 +49,9 @@ media = ["dep:rawshift-image"]
 # source-resolution still is only worth its bytes in a lossy codec.
 #
 # HEIC decode is **not** here and cannot be by policy rather than toolchain: libheif and its HEVC
-# decoder libde265 are both LGPL-3.0, which CLAUDE.md and `deny.toml` exclude outright (issue
-# #588; the decision is recorded in the Dependencies design doc). AVIF decode is its own feature,
-# `media-avif-decode`, below.
+# decoder libde265 are both LGPL-3.0, which .claude/rules/dependencies.md and `deny.toml` exclude
+# outright (issue #588; the decision is recorded in the Dependencies design doc). AVIF decode is
+# its own feature, `media-avif-decode`, below.
 media-linked-codecs = [
     "media",
     "rawshift-image/jxl-encode-libjxl-vendored",
@@ -118,7 +118,7 @@ globset = "0.4.18"
 # `default-features = false` drops `spec-vectors`, which only compiles the crate's own
 # integration test; `simd` is kept because every backend replays the scalar path op-for-op
 # and is byte-identical — it changes speed, never output. Imported **directly** rather than
-# through Rawshift, which AGENTS.md forbids from wrapping it.
+# through Rawshift, which .claude/rules/capsule-core.md forbids from wrapping it.
 chromahash = { version = "0.7.1", default-features = false, features = ["simd"] }
 indexmap = { workspace = true }
 jiff = { workspace = true }
@@ -165,6 +165,10 @@ kamadak-exif = "0.5"
 # unimplemented upstream). Each is a typed
 # `media::MediaError::UnsupportedFormat` today rather than a silent gap. MPL-2.0, already
 # allow-listed in `deny.toml`; see the Media row in design/dependencies.md.
+#
+# Video is absent too. It waits on `rawshift-video`, which is still an unimplemented
+# placeholder at 0.1.1, and Capsule links no video codec of its own (design/licensing.md, "The
+# video transcoder seam").
 rawshift-image = { version = "0.1.1", default-features = false, features = [
     "jpeg-decode",
     "png-decode",
