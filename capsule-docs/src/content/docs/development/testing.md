@@ -18,7 +18,8 @@ suites drive exactly what a user drives.
   truncation, server error, version refusal and process kill, not only on the happy path.
 - **Invariants over examples.** Where a property can be stated (merge is commutative, a record
   round-trips byte-identically, a released original is always durable elsewhere), it is tested as a
-  property across generated inputs.
+  property across generated inputs. Property runs are seeded and print their seed, and
+  `PROPTEST_RNG_SEED` replays one.
 - **One adapter contract, many adapters.** Every port has a conformance suite that every adapter,
   including the in-memory test double, must pass.
 - **Adjacent, not inline.** A module's unit tests live in its sibling `tests.rs` (`foo.rs` to

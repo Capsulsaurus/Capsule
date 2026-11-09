@@ -74,7 +74,7 @@ stateDiagram-v2
 ```
 
 1. **Propose.** An admin sends `UpgradeIntent { from_version, to_version, intent_id, proposer_device, deadline }`, signed by its device key. `deadline` is a duration; expiry is measured on the server's clock. Only one intent may be live per album.
-2. **Quiesce.** Members queue new writes locally, flagged with the `intent_id`. The server refuses writes that do not name the live `intent_id` (`error.upload.album_quiescing`).
+2. **Quiesce.** Members queue new writes locally, flagged with the `intent_id`. The server refuses writes that do not name the live `intent_id` (`409 error.upload.album_quiescing`).
 3. **Drain.** The ceremony waits until no upload session against the album is in flight. On expiry it aborts by absence of state, and queued writes return to the old album.
 4. **Tombstone.** The admin commits `AlbumTombstone { intent_id, frozen_state_hash }`, a hash over the album's members, accepted manifests and provenance head. Every member recomputes it; a mismatch aborts the upgrade for that member.
 5. **Fork.** A new album at `to_version` references the existing ciphertext by content hash, with no re-encryption. Its manifests carry `upgraded_from { old_album_id, intent_id, frozen_state_hash }` in the signed core, and fresh album keys are minted.

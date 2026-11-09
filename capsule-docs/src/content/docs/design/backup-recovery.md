@@ -90,7 +90,8 @@ An exported artifact stays bound to the secret in force at export, so rotating t
 
 ## Recovery Paths
 
-Independent paths; every failure mode recovers through at least one:
+Independent paths; every failure mode recovers through at least one, and each row of a page's
+Failure Modes table is tested for its detection and its recovery:
 
 | # | Path | Survives |
 | --- | --- | --- |

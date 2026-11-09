@@ -16,6 +16,10 @@ in a client or server artifact.
   licensing design doc).
 - **`beautiful-mermaid`:** compiles Mermaid fences to themed SVG at build time, so no diagram
   runtime ships to the browser.
+- **`github-slugger`, `mdast-util-from-markdown`, `mdast-util-to-string`, `unist-util-visit`:**
+  what Astro's own Markdown pipeline uses, named directly because the remark plugins in `src/lib`
+  import them: the same slugger Astro gives headings, so an empty-label link resolves exactly the
+  anchor the page renders.
 
 ## Development
 
