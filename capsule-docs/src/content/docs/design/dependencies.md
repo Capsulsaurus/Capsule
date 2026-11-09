@@ -82,6 +82,16 @@ Every Rust version is pinned once in the root `[workspace.dependencies]`; member
 | Lint/format | Biome | — |
 | Runtime / package manager | bun | — |
 
+## Docs Site
+
+Astro and Starlight, built with bun. Nothing here ships in a client or server artifact.
+
+| Domain | Canonical choice | Notes |
+| --- | --- | --- |
+| Site generator | Astro + `@astrojs/starlight` | One chrome for every page, generated reference included ([Developer Documentation](/design/developer-docs/)). |
+| Blog | `starlight-blog` | Posts are docs pages under `blog/`; MIT. |
+| Web fonts | `@fontsource-variable/geist`, `@fontsource-variable/geist-mono` | Self-hosted so no page requests a third-party font ([Visual Language](/development/visual-language/#principles)); OFL-1.1, see [Licensing](/design/licensing/). |
+
 ## Swift
 
 Bindings come from the single uniffi version; Tuist, SwiftLint and SwiftFormat are mise-pinned.
