@@ -35,7 +35,6 @@ Every primitive, construction, format, or component identity is **declared in ex
 | MLS membership, ciphersuite binding | [](/design/cryptography/mls/) |
 | Asset + metadata encryption | [](/design/cryptography/encryption/) |
 | Provenance chains, signed manifests | [](/design/cryptography/provenance/) |
-| Recovery paths, failure modes, transport security | [](/design/cryptography/failure-modes/) |
 | MLS resilience | [](/design/mls-resilience/) |
 | Device enrollment | [](/design/device-enrollment/) |
 | ML model identities, embedding provenance | [](/design/ai/) |
@@ -44,14 +43,14 @@ Every primitive, construction, format, or component identity is **declared in ex
 | Client filesystem, local index | [](/design/filesystem/client/) |
 | Library self-maintenance, atomic-write granularity | [](/design/filesystem/maintenance/) |
 | Tokens, identity binding, auth flow | [](/design/authentication/) |
-| Backup container, escrow, recovery | [](/design/backup-recovery/) |
+| Backup container, escrow, recovery paths | [](/design/backup-recovery/) |
 | CRDTs, identifiers, geolocation, sidecar schema | [](/design/metadata/) |
 | Import pipeline | [](/design/import/pipeline/) |
 | Upload protocol | [](/design/transfer/upload/) |
 | Download, sync feed, auto-sync | [](/design/transfer/download/) |
 | Storage durability, verify-before-destroy | [](/design/transfer/durability/) |
 | Tethered camera import | [](/design/import/camera-import/) |
-| Connection and retry classes | [](/design/networking/) |
+| Connection and retry classes, transport security | [](/design/networking/) |
 | Offline-first requirements | [](/design/local-gallery/) |
 | Federation trust, capability tokens | [](/design/federation/) |
 | LAN discovery, peer channel | [](/design/peering/) |
@@ -62,7 +61,6 @@ Every primitive, construction, format, or component identity is **declared in ex
 | Refuse-by-default validation invariants | [](/design/threat-model/validation/) |
 | Schema evolution, deprecation | [](/design/threat-model/schema-rules/) |
 | Outbound licence, dependency-licence policy | [](/design/licensing/) |
-| Dependency and tooling pins | [](/design/dependencies/) |
 | Share links | [](/design/share-links/) |
 | Upload links, guest drops | [](/design/web-upload/) |
 | Moderation, reporting, blocklists | [](/design/moderation/) |
@@ -70,7 +68,6 @@ Every primitive, construction, format, or component identity is **declared in ex
 | Client validation duties, sandboxed decoder | [](/design/clients/) |
 | Alerts, delivery, wake tier | [](/design/notifications/) |
 | Catalogs, locale resolution, error codes | [](/design/i18n/) |
-| Crate graph, bounded E2E surface | [](/design/module-map/) |
 | API surface ↔ transport map | [](/design/api-surfaces/) |
 | Developer-reference generation | [](/design/developer-docs/) |
 
@@ -90,7 +87,7 @@ Every page carries a required `status` frontmatter field tracking human review: 
 
 - **Unit** — in-module tests against the contract, peers and externals mocked. Deterministic and fast.
 - **Smoke** — one module's real implementation with real I/O and backing services (e.g. testcontainers Postgres or Valkey), peers mocked.
-- **E2E** — several modules wired against real infrastructure. The list is **bounded** in [Module Map — E2E Test Surface](/design/module-map/#e2e-test-surface); growth past it signals unwanted coupling.
+- **E2E** — several modules wired against real infrastructure. The list is **bounded** in the [E2E case index](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-e2e/src/lib.rs); growth past it signals unwanted coupling.
 
 The tier is decided by **what is mocked**, not where the test lives.
 

@@ -78,7 +78,7 @@ fn embedding_a_detection_task_is_unsupported() {
 
 /// A model swap must change the *output*, not just the declared tag. This is the property
 /// [`crate::ml::regenerate_stale`] leans on to prove regeneration re-ran inference rather than
-/// re-labelling the stale vector (Module Map E2E case 10), and the property a real model swap
+/// re-labelling the stale vector (E2E case 10), and the property a real model swap
 /// has by construction.
 #[test]
 fn a_version_bump_changes_the_vectors_for_unchanged_pixels() {

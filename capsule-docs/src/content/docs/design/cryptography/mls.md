@@ -44,7 +44,7 @@ The wrapper's only custom protocol: `AlbumKeyDistribution { amk_version, amk_byt
 
 ## Forward Secrecy & Post-Compromise Security
 
-At-rest ciphertext persists, so true forward secrecy does not apply to it. What each epoch bump guarantees: compromising the current epoch reveals nothing about past epochs, and removed members cannot read future epochs. Forward secrecy for data in transit comes from TLS 1.3 ([Transport Security](/design/cryptography/failure-modes/#transport-security)). Lost commits, divergence and re-keying are covered in [MLS Resilience](/design/mls-resilience/).
+At-rest ciphertext persists, so true forward secrecy does not apply to it. What each epoch bump guarantees: compromising the current epoch reveals nothing about past epochs, and removed members cannot read future epochs. Forward secrecy for data in transit comes from TLS 1.3 ([Transport Security](/design/networking/#transport-security)). Lost commits, divergence and re-keying are covered in [MLS Resilience](/design/mls-resilience/).
 
 ## Validation
 
@@ -56,4 +56,4 @@ At-rest ciphertext persists, so true forward secrecy does not apply to it. What 
 - **Identity binding:** a LeafNode key without an ML-DSA identity signature is rejected.
 - **Concurrent commits (smoke):** parallel proposers converge without splitting the group.
 
-E2E: [Module Map](/design/module-map/#e2e-test-surface).
+E2E: the [E2E case index](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-e2e/src/lib.rs).

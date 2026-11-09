@@ -105,6 +105,14 @@ Derivatives are signed so no client can silently overwrite another's. `Derivativ
 
 It travels as the `derivative_manifest` blob, served verbatim; only it carries the `nonce_prefix` and `amk_version` that open the derivative. An overwrite is a `derivative-replace` on the role's chain. `verify_derivative` checks both signatures, `source_asset_id`, and the chain link; the receiver walks each role's chain from its start, and a refused or forked link stops it: prefix accepted, rest quarantined and surfaced, never applied.
 
+## Failure Modes
+
+| Failure | Detected / contained by | Recovery |
+| --- | --- | --- |
+| Stale revival (an old, valid manifest re-served) | `prior_provenance_hash` chain, client and [server](/design/threat-model/validation/) | Quarantine; chain advance refused |
+| Suite downgrade | Both signatures cover `crypto_suite_id` and `protocol_version` | Quarantine |
+| Derivative poisoning | [`DerivativeManifest`](#derivative-provenance) chain | Unsigned overwrite rejected; existing derivative kept |
+
 ## Validation
 
 Negative cases map to [damage scenarios](/design/threat-model/scenarios/#damage-scenario--invariant-map).
@@ -118,4 +126,4 @@ Negative cases map to [damage scenarios](/design/threat-model/scenarios/#damage-
 - **Byte-identical serving (smoke).** Every serving surface returns uploaded bytes; a server re-encode fails the signature.
 - **All current keys.** Rewriting a past record is detected.
 
-The cross-module upload→verify path is listed under [Module Map — E2E](/design/module-map/#e2e-test-surface).
+The cross-module upload→verify path is in the [E2E case index](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-e2e/src/lib.rs).

@@ -21,8 +21,8 @@
 //! # Structure
 //!
 //! One application composed from cohesive internal modules — not separate public transports or
-//! microservices (design/module-map.md, "Planned Server Modules"). Authentication state and
-//! upload-session state stay behind separate Capsule-owned ports whose adapters are Valkey and a
+//! microservices; each behaviour module is owned by its namesake design doc. Authentication
+//! state and upload-session state stay behind separate Capsule-owned ports whose adapters are Valkey and a
 //! deterministic in-memory double — **not** Postgres, which design/filesystem/server.md rejects
 //! for a session table — while the durable records go to Postgres. No generic CAS, transfer or
 //! TTL abstraction is planned.
@@ -60,7 +60,7 @@
 //! **The suite still runs without a container.** Every Postgres case is gated on
 //! `CAPSULE_TEST_POSTGRES=1` and prints one line naming itself when it is skipped, so
 //! `cargo nextest run` on a machine with no container runtime is green and says what it did not
-//! prove — which is the acceptance gap design/module-map.md sets for the framework.
+//! prove — which is the framework's acceptance gap.
 
 pub mod activity;
 pub mod album;
@@ -437,8 +437,8 @@ pub type ServerInterceptors = Cons<
 ///
 /// Kynos's `TestClient` drives a built `Service` directly — no socket, no port, no runtime
 /// flavour — which is why the test suite needs no container for anything above the storage
-/// ports. That is the "test harnesses without live infrastructure" acceptance gap
-/// design/module-map.md sets for the framework.
+/// ports. That is the framework's "test harnesses without live infrastructure" acceptance
+/// gap.
 ///
 /// # Errors
 ///

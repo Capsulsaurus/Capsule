@@ -314,7 +314,7 @@ run = [
 # media stack). It rejects implicit workspace packages, retired dependencies, buildable
 # manifests under `legacy-review/`, and stale component references — and it holds the stateless
 # core: `capsule-core` names no `std::fs`, `std::env`, `rusqlite` or `sea_orm`, and depends on no
-# stateful crate (Module Map — Stateless Core).
+# stateful crate (see `capsule-core`'s crate docs).
 #
 # **In `check-rust`.** It was adopted as a report first, deliberately: the Salvo
 # server and the in-repo media stack were live and stayed that way until the Kynos rebuild reached

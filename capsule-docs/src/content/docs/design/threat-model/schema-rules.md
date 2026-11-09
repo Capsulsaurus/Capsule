@@ -43,7 +43,7 @@ Index of negated owner-doc rules; receivers reject the consequence structurally 
 1. **Announce** at `/.well-known/capsule/deprecation` at least the announcement window (default 90 days) before cutoff, naming the date and the minimum surviving `protocol_version`.
 2. **Warn:** until cutoff, responses carry `X-Capsule-Min-Client-Build` and a `Warning:` header.
 3. **Cut off:** the version leaves `[Min, Max]`; its writes get `426`, reads still succeed.
-4. **No stranded data:** every [recovery path](/design/cryptography/failure-modes/) still works; only the old binary is stranded.
+4. **No stranded data:** every [recovery path](/design/backup-recovery/#recovery-paths) still works; only the old binary is stranded.
 
 Never retroactive: albums pinned to a dropped version stay readable forever, just not writable.
 

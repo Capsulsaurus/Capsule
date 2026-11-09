@@ -51,8 +51,8 @@ and Kotlin via uniffi. Per-platform contract: [Clients](/design/clients/).
 
 Kynos owns HTTP and the Tokio runtime; Spargen generates the client; Rawshift owns codecs and metadata
 extraction; Chromahash is called directly. Blob storage, resumable upload, provenance, crypto, CRDTs,
-asset lifecycle, and application-state ports stay in Capsule. Pins live in
-[Dependencies](/design/dependencies/).
+asset lifecycle, and application-state ports stay in Capsule. Each pin carries its rationale as a
+comment beside it in the manifest that declares it.
 
 No reusable infrastructure library is extracted until a stable product-neutral contract has at least
 two real consumers.

@@ -86,4 +86,4 @@ Each gains a full inventory row when it ships: VLM tagging/OCR/captioning (Flore
 - **Algorithms (smoke).** Expected keyframes and Re-ID labels.
 - **Thermal / batching (smoke).** Pause past threshold, resume after cooldown, no OOM on a low-memory testbed.
 
-End-to-end cases are in [Module Map](/design/module-map/#e2e-test-surface).
+End-to-end cases are in the [E2E case index](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-e2e/src/lib.rs).

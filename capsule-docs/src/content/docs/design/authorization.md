@@ -74,4 +74,4 @@ Each operation appends a [provenance record](/design/cryptography/provenance/#pr
 ## Validation
 
 - Per action: correct keys verify; wrong write-tier key, device, or `prior_provenance_hash` is rejected; unknown `action` fails the envelope; a stale chain position is quarantined.
-- Invariants 16–18 against real Postgres; full lifecycle E2E in [Module Map](/design/module-map/#e2e-test-surface).
+- Invariants 16–18 against real Postgres; full lifecycle E2E in the [E2E case index](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-e2e/src/lib.rs).

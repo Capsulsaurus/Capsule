@@ -6,8 +6,8 @@ status: draft
 
 This doc owns Capsule's licensing position: the outbound licence, the licences a dependency may
 carry, and the linkage rules. Admitting a licence not already permitted requires editing this doc
-first; `deny.toml` is the machine check. Which library implements a concern is
-[Dependencies](/design/dependencies/); the shipped attribution text is the repo-root `NOTICE`.
+first; `deny.toml` is the machine check. Which library implements a concern, and why, is
+recorded as a comment beside its pin; the shipped attribution text is the repo-root `NOTICE`.
 
 ## Outbound: what Capsule is published under
 

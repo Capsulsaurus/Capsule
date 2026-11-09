@@ -7,8 +7,8 @@ paths:
 
 ## Rules
 
-- `capsule-library` owns local state — SQLite, files, the `Workspace`, hardware signers — so that `capsule-core` stays stateless ([Module Map — Stateless Core](../../capsule-docs/src/content/docs/design/module-map.md#stateless-core)).
-- Format sniffing, decoding and derivatives go through `capsule-core::media` (Rawshift); `lifecycle/derivatives` is the one place that decodes through it. EXIF goes through `capsule_core::exif` (`kamadak-exif`, transitional per the [Dependencies](../../capsule-docs/src/content/docs/design/dependencies.md) doc until Rawshift covers it). Add no parser or codec here; the rule is in [capsule-core.md](capsule-core.md).
+- `capsule-library` owns local state — SQLite, files, the `Workspace`, hardware signers — so that `capsule-core` stays stateless ([`capsule-core` crate docs](../../capsule-core/src/lib.rs)).
+- Format sniffing, decoding and derivatives go through `capsule-core::media` (Rawshift); `lifecycle/derivatives` is the one place that decodes through it. EXIF goes through `capsule_core::exif` (`kamadak-exif`, transitional per its pin comment in `capsule-core/Cargo.toml` until Rawshift covers it). Add no parser or codec here; the rule is in [capsule-core.md](capsule-core.md).
 
 ## Docs
 

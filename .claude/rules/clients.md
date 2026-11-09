@@ -29,5 +29,5 @@ Follow:
 
 Keep current:
 
-- [Dependencies](../../capsule-docs/src/content/docs/design/dependencies.md) — the Web, Swift and Kotlin sections, for any manifest change (see [dependencies.md](dependencies.md)).
+- The rationale comment beside each pin (`package.json` dependencies: the package's README), for any manifest change (see [dependencies.md](dependencies.md)).
 - The generated catalogs under `capsule-web/src/i18n/messages/`, `capsule-swift/Generated/` and `capsule-android/src/main/res/values*/` are never edited by hand — `mise run i18n`.

@@ -124,11 +124,11 @@ The server never holds plaintext, so decoding — the client's largest attack su
 
 ## Test and Performance Tooling
 
-Per-platform pins (library pins are in [Dependencies](/design/dependencies/)):
+Per-platform pins (library pins carry their rationale beside the pin in each manifest):
 
 - **Apple:** swift-testing is the sole unit/smoke framework; XCTest only in XCUITest bundles. Profiling with Instruments, field metrics with MetricKit; no third-party on-device APM.
 - **Kotlin/Android:** JUnit 5.
-- **Web:** bun's built-in runner ([Dependencies — Web](/design/dependencies/#web)).
+- **Web:** bun's built-in runner.
 
 ## Validation
 

@@ -80,7 +80,7 @@ mise run serve
 
 Both secrets, `JWT_ED25519_DER` and `ATTESTATION_KEY_SEED`, ship commented out, so an unedited copy
 refuses to start. Uncomment each and supply your own. `ATTESTATION_KEY_SEED` MUST be independent of
-the token key ([Failure Modes](/design/cryptography/failure-modes/)). Values are literal (no shell
+the token key ([Custody Receipts](/design/transfer/durability/#custody-receipts)). Values are literal (no shell
 expressions) because podman, compose, and systemd read the file too.
 
 `serve` checks `DATABASE_URL`'s schema against its migrations (behind → refuses, naming

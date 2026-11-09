@@ -28,7 +28,7 @@ A full-group re-key rotates every leaf, the AMK and the write-tier key. It runs 
 ## Recovery Posture
 
 - **The server chain is authoritative.** The server can order commits but cannot forge MLS state.
-- **Re-bootstrap is always available.** Another device can remove and [re-add](/design/cryptography/mls/#add-new-device-for-existing-member) a broken device. Losing MLS state loses the in-flight ratchet, not access to data.
+- **Re-bootstrap is always available.** Another device can remove and [re-add](/design/cryptography/mls/#add-new-device-for-existing-member) a broken device. Losing MLS state loses the in-flight ratchet, not access to data. A corrupted ratchet recovers through [recovery paths](/design/backup-recovery/#recovery-paths) 1, 3 or 4.
 - **Quarantine, not silent acceptance.** Divergence is shown to the user so that bugs stay visible.
 
 ## Contract Skeleton

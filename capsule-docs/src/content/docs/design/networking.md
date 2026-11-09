@@ -4,7 +4,7 @@ description: The HTTP transport contract, connection classes and the path snapsh
 status: draft
 ---
 
-This doc owns the primitives every transfer surface consumes: the HTTP transport contract, connection classes and the path snapshot they are derived from, server advice, retry policy classes and the adverse-network posture. Protocol mechanics stay with the [transfer protocol](/design/transfer/), [sync](/design/sync/), [peering](/design/peering/), and [federation](/design/federation/).
+This doc owns the primitives every transfer surface consumes: the HTTP transport contract, transport security, connection classes and the path snapshot they are derived from, server advice, retry policy classes and the adverse-network posture. Protocol mechanics stay with the [transfer protocol](/design/transfer/), [sync](/design/sync/), [peering](/design/peering/), and [federation](/design/federation/).
 
 ## HTTP Transport
 
@@ -22,6 +22,13 @@ Every Capsule operation is a plain HTTP request and response, and means the same
   - An advertisement is believed only for an `https` origin, and the alternative endpoint must present a certificate valid for the origin.
 - **Parallelism is connections, not streams.** On a lossy or high-latency link a single TCP connection's throughput is bounded by its round trip and loss rate, and HTTP/2 multiplexes every stream onto that one window. Bulk transfers therefore SHOULD spread across several connections, within the [in-flight windows](/design/transfer/upload/#queueing-across-servers), where the platform's HTTP stack allows it; correctness never depends on it.
 - **Windows cover the bandwidth-delay product.** Flow-control and socket buffers (on QUIC, the stream and connection windows and the UDP socket buffers) are sized to the target bandwidth times round trip, within a fixed memory budget. The sender owns congestion control: the client on upload and the server on download. Neither side steers the other's controller.
+
+## Transport Security
+
+- TLS 1.3 is required wherever both ends support it; TLS 1.2 is the absolute floor (legacy ingress only); nothing lower. Clients try 1.3 first.
+- Deployments SHOULD enable hybrid X25519+ML-KEM key exchange on 1.3.
+- Ingress, not the application server, terminates TLS: operator-configured, documented, not enforced.
+- Capsule's own TLS (the SDK, [LAN peering](/design/peering/) mTLS, server egress) is rustls, never native-tls or OpenSSL, under the same policy.
 
 ## Connection Classes
 

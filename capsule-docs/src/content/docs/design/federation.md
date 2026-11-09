@@ -224,4 +224,4 @@ Federation supplies the transport for federated reports and the untrusted-server
 - **Caching budget (conformance):** a page past a subscriber's budget on a peer writes nothing; a blob counts once across a subscriber's albums on a peer, each peer is its own budget, and each subscriber of a shared album is held to its own.
 - **Weighted charge (conformance):** a charge that overruns an open window is refused whole; racing charges admit exactly what fits.
 - **Soft-fail (unit):** the rejected-hash table evicts at its cap.
-- **Cross-server pull (E2E):** one case in [Module Map](/design/module-map/#e2e-test-surface).
+- **Cross-server pull (E2E):** one case in the [E2E case index](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-e2e/src/lib.rs).

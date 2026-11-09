@@ -41,6 +41,12 @@ const buildCommit = resolveBuildCommit(process.env, () => {
 // https://astro.build/config
 export default defineConfig({
     site: 'https://capsule.justinchung.net', // TODO: Get domain later
+    // Retired pages; their content moved to the targets or into code docs.
+    redirects: {
+        '/design/module-map/': '/design/principles/',
+        '/design/dependencies/': '/design/licensing/',
+        '/design/cryptography/failure-modes/': '/design/backup-recovery/#recovery-paths',
+    },
     // Astro 7 deprecates the top-level `markdown.*Plugins` keys; plugins are
     // passed to the unified processor directly. See each plugin's header.
     markdown: {
@@ -123,11 +129,9 @@ export default defineConfig({
                             items: [
                                 { slug: 'design' },
                                 { slug: 'design/principles' },
-                                { slug: 'design/module-map' },
                                 { slug: 'design/api-surfaces' },
                                 { slug: 'design/developer-docs' },
                                 { slug: 'design/networking' },
-                                { slug: 'design/dependencies' },
                                 { slug: 'design/licensing' },
                             ],
                         },
@@ -140,7 +144,6 @@ export default defineConfig({
                                 { slug: 'design/cryptography/encryption' },
                                 { slug: 'design/cryptography/mls' },
                                 { slug: 'design/cryptography/provenance' },
-                                { slug: 'design/cryptography/failure-modes' },
                             ],
                         },
                         {

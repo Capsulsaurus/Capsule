@@ -78,9 +78,27 @@ The escrow, the artifact wrap key, and Shamir shares all derive from the same se
 
 An exported artifact stays bound to the secret in force at export; rotating the secret therefore ends with "re-export or destroy old artifacts" guidance.
 
+## Recovery Paths
+
+Independent paths; every failure mode recovers through at least one:
+
+| # | Path | Survives |
+| --- | --- | --- |
+| 1 | [Master-key escrow](#master-key-escrow): passphrase/seed → master key → AMK escrow | Total device loss |
+| 2 | Cross-device recovery ([Device Enrollment](/design/device-enrollment/)) | Partial device loss; lost master-key backup if one device survives |
+| 3 | [OGK](/design/cryptography/keys/#owner-group-keys-ogks): any owner recovers every album's AMKs | Lost membership, AMK distribution gaps |
+| 4 | Offline [backup artifact](#backup-artifact) | Server loss, account compromise, escrow corruption |
+| 5 | Filesystem rebuild: CBOR sidecars are canonical, the DB is a cache (idempotent `rebuild_index()`) | DB corruption, index bugs |
+| 6 | Content-addressed copies on devices or [federated](/design/federation/) peers (ciphertext, not keys) | Single-server data loss |
+| 7 | [Trash](/design/organization/#recycling): signed soft `delete` with a retention window before purge | Erroneous deletes |
+
+**Account types.** Registered accounts have all seven. [Delegated/sponsored](/design/authentication/#account-types) accounts recover only through the sponsor's master key ([consequence](/design/cryptography/keys/#delegatedsponsored-accounts)). Non-registered [share-link](/design/share-links/) accounts have no collection to recover.
+
+Per-topic failure modes, each naming the path it recovers by: [Keys](/design/cryptography/keys/#failure-modes), [Encryption](/design/cryptography/encryption/#failure-modes), [Provenance](/design/cryptography/provenance/#failure-modes), [MLS Resilience](/design/mls-resilience/#failure-modes), [Metadata](/design/metadata/#failure-modes) and [below](#failure-modes).
+
 ## Recovery Mechanisms
 
-These are the user-invoked mechanisms among the [redundant recovery paths](/design/cryptography/failure-modes/#redundant-recovery-paths).
+These are the user-invoked mechanisms among the [recovery paths](#recovery-paths).
 
 ### Default Mechanisms
 
@@ -142,6 +160,13 @@ Commit reconciles each manifest against the live `latest_provenance_hash` and **
 
 `MANIFEST.cbor` records exporter device, export time, source library version, `crypto_suite_id`, and every per-asset chain head; it is itself a library-level [provenance record](/design/cryptography/provenance/#provenance-of-library-modifications). Restore re-injects per-asset chains, so a restored library knows it was restored, when, and by whom.
 
+## Failure Modes
+
+| Failure | Detected / contained by | Recovery |
+| --- | --- | --- |
+| Master key loss | — | [Path](#recovery-paths) 1 or 2 |
+| Backup missing an `amk_version` | [AMK-completeness check](#backup-verification) | Re-export before relying on the backup |
+
 ## Validation
 
 - Local verify is offline and side-effect free; stale-cache refresh after rotation; cadence and re-arm under a mocked clock.
@@ -149,6 +174,7 @@ Commit reconciles each manifest against the live `latest_provenance_hash` and **
 - Single-root tripwire: no second secret class in the schema.
 - Artifact round-trip; byte-identical re-export; deterministic dry-run report.
 - Tampering is caught by HMAC, then signature, then directory membership; a missing AMK version is caught at dry-run.
-- Each recovery path and each reconciliation case; an old backup never overwrites later deletes or edits.
+- Each recovery path has one scenario: reach the lost state, recover, assert every asset returns. Each reconciliation case is tested; an old backup never overwrites later deletes or edits.
+- An exported artifact contains no MLS ratchet state.
 
-Full backup → fresh-client restore is an E2E case in [Module Map](/design/module-map/#e2e-test-surface). So is push → `auth recover` onto a fresh library → `restore`: every album's originals come back byte for byte, every epoch included.
+Full backup → fresh-client restore is an E2E case in the [E2E case index](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-e2e/src/lib.rs). So is push → `auth recover` onto a fresh library → `restore`: every album's originals come back byte for byte, every epoch included.

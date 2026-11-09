@@ -10,7 +10,7 @@ One hierarchy, one backed-up root; implemented in `capsule-core/src/crypto/keys/
 - **Device keys** are hardware-bound and disposable: a lost device is removed and a new one bootstrapped from the master key.
 - **AMKs** are random per-epoch album keys, ledgered in MLS. They are escrowed server-side under the master key ([Album Key Escrow](/design/backup-recovery/#album-key-escrow)), in the backup artifact, and in the [OGK](#owner-group-keys-ogks).
 
-**Invariant:** the backup path is independent of the MLS ratchet — losing every device but holding the recovery passphrase restores every photo ([Failure Modes](/design/cryptography/failure-modes/)).
+**Invariant:** the backup path is independent of the MLS ratchet — losing every device but holding the recovery passphrase restores every photo ([Recovery Paths](/design/backup-recovery/#recovery-paths)).
 
 ## Key Chain
 
@@ -90,7 +90,7 @@ A DSK signature proves *which device* produced an asset, not that it was *author
 - **Three outcomes:**
   - *accept*;
   - *terminal-reject* (reader-signed, removed-writer, wrong-epoch, forged chain, suite-downgrade, tampered field) → quarantined and surfaced in the [audit trail](/design/cryptography/provenance/#provenance-of-library-modifications), never silently dropped;
-  - *pending* — `amk_version` within the attested range but the AMK has not yet arrived over [AlbumKeyDistribution](/design/cryptography/mls/#history-delivery-for-new-joiners). Held and retried; escalates to quarantine after a timeout ([Failure Modes](/design/cryptography/failure-modes/#failure-mode-catalog)).
+  - *pending* — `amk_version` within the attested range but the AMK has not yet arrived over [AlbumKeyDistribution](/design/cryptography/mls/#history-delivery-for-new-joiners). Held and retried; escalates to quarantine after a timeout.
 - **Key delivery is authorization-neutral.** A `key_mode = wrapped` asset is authorized identically (adopter's `device_sig` + `write_sig`; the guest never signs). `key_mode` and `wrapped_file_key` are signed fields; tampering is terminal-reject.
 - **Timestamp is audit-only.** The manifest `timestamp` is never used for authorization or ordering; time-based policy uses the server's `received_at` ([server envelope](/design/filesystem/server/#postgresql-what-the-server-knows)). The server's drift bound on `timestamp` is a sanity check, not a control. Grammar: [Schema Rules](/design/threat-model/schema-rules/).
 - **Validity ≠ durability.** Local destructive cleanup requires `verify_asset` **and** the key-free [Transfer — Durability endpoint](/design/transfer/durability/).
@@ -174,8 +174,24 @@ The hierarchy wraps downward and is never inverted (wrapping AMKs under disposab
 
 Already-exfiltrated ciphertext under old AMKs stays readable to the attacker; forward writes are clean.
 
+## Failure Modes
+
+Paths are the numbered [Recovery Paths](/design/backup-recovery/#recovery-paths). Rejected manifests and distribution lag are the [`verify_asset`](#write-authorization) outcomes above; master-key loss is in [Backup and Recovery](/design/backup-recovery/#failure-modes).
+
+| Failure | Detected / contained by | Recovery |
+| --- | --- | --- |
+| Device key loss | Device keys are disposable | Re-bootstrap (path 1 or 2); never recovered |
+| AMK loss | — | Path 3 or 4 |
+| Write-tier key loss | — | Re-minted next epoch |
+| Master key compromise | — | [Rotate and re-key](#master-key-compromise) |
+| Device compromise | — | [Revocation certificate](#device-keys) + MLS `Remove`; survivors rotate |
+| AMK / write-tier compromise | — | Epoch bump; an old epoch cannot read or sign future ones |
+| Server compromise | Server never trusted | Authorization from MLS history; data is end-to-end encrypted |
+| One half of a hybrid primitive broken | Hybrid construction | The other half holds |
+
 ## Validation
 
+- Every failure-mode row tests its detection and recovery.
 - **Derivation determinism** — HKDF output byte-identical across platforms; RFC 5869 vectors.
 - **Hardware round-trip** — per platform: generate DSK in hardware, sign, verify; reading private bytes MUST fail. Desktop leg is Windows TBS.
 - **Directory field wire-absence** — unset optional fields leave the signed core byte-identical to a pre-field fixture; set fields are signature-covered and tamper fails.

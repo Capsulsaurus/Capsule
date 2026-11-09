@@ -21,7 +21,7 @@ An asset is content-addressed by the hash of its ciphertext and encrypted under 
 - **Derived mode** (default): `file_key = HKDF-SHA512(ikm = AMK_v{amk_version}, salt = file_id || nonce_prefix, info = "asset-file/v1", L = 32)`. Never stored.
 - `nonce_prefix` is a fresh CSPRNG draw on **every** encryption, so the file key is unique per encryption even for the same `file_id` and epoch. This is what lets the STREAM counter start at zero without nonce reuse.
 - **Wrapped mode** (external-origin assets only, e.g. an adopted [web-upload drop](/design/web-upload/)): the guest's random key `K` cannot be re-derived, so it is carried as `wrapped_file_key = wrap_nonce || AES-256-GCM(wrap_key, K)` with `wrap_key = HKDF-SHA512(AMK_v{n}, salt = file_id || wrap_nonce, info = "asset-keywrap/v1")`, recorded in the signed [manifest](/design/cryptography/provenance/#asset-manifest) as `key_mode = wrapped`. Only the adopting `create` sets it; any later `replace` re-encrypts under a derived key. This is the only stored per-file key (see [Key Chain](/design/cryptography/keys/#key-chain)).
-- **Distribution lag is not failure.** A manifest whose `amk_version` is within the [MLS-attested epoch range](/design/cryptography/keys/#write-authorization) but whose AMK has not arrived is *pending* and retried. Only a version beyond the attested epoch, or still missing after the retry timeout, is escalated ([Failure Modes](/design/cryptography/failure-modes/#failure-mode-catalog)).
+- **Distribution lag is not failure.** A manifest whose `amk_version` is within the [MLS-attested epoch range](/design/cryptography/keys/#write-authorization) but whose AMK has not arrived is *pending* and retried. Only a version beyond the attested epoch, or still missing after the retry timeout, is escalated.
 
 ### Encryption Workflow
 
@@ -72,6 +72,13 @@ crypto_suite_id (u16 BE) || nonce (12, fresh CSPRNG) || AES-256-GCM ciphertext |
 - Key: `HKDF-SHA512(AMK_v{n}, salt = blob_id || nonce, info = "metadata-blob/v1", L = 32)`.
 - The content hash covers the whole byte string and is committed as `metadata_blob_hash` on every `create`, `replace` and `metadata-update`, under both manifest signatures.
 - **Local–server equivalence:** on decode the plaintext MUST equal the locally stored signed sidecar byte-for-byte and the hash MUST equal `metadata_blob_hash`; otherwise [quarantine](/design/threat-model/validation/#client-side-validation-invariants). See [Metadata](/design/metadata/#local-and-server-metadata-equivalence).
+
+## Failure Modes
+
+| Failure | Detected / contained by | Recovery |
+| --- | --- | --- |
+| Ciphertext corruption, truncation or reorder | STREAM tags + manifest `ciphertext_hash` | Re-fetch a content-addressed copy ([path 6](/design/backup-recovery/#recovery-paths)) |
+| Nonce reuse | Structural ([Re-keying on Rewrite](#re-keying-on-rewrite)) | — |
 
 ## Validation
 

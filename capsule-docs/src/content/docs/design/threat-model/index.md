@@ -6,7 +6,7 @@ status: draft
 
 The server holds no keys and clients write canonical state, so the design must bound what a client can break.
 
-**Invariant:** a faulty, malicious, or version-mismatched client MUST NOT cause **irreparable** damage (lost original bytes, lost audit trail, undetected overwrite of user intent). It may cause only **transient** damage: a quarantined asset, a rejected write with a clear error, a detected-and-reconciled divergence. Key loss is covered by [Cryptography — Failure Modes](/design/cryptography/failure-modes/); this doc covers write-path harm. Primitives and per-structure rules are declared once in their owner docs and only linked here.
+**Invariant:** a faulty, malicious, or version-mismatched client MUST NOT cause **irreparable** damage (lost original bytes, lost audit trail, undetected overwrite of user intent). It may cause only **transient** damage: a quarantined asset, a rejected write with a clear error, a detected-and-reconciled divergence. Key loss is covered by [Backup and Recovery — Recovery Paths](/design/backup-recovery/#recovery-paths); this doc covers write-path harm. Primitives and per-structure rules are declared once in their owner docs and only linked here.
 
 | Sub-doc                                            | Concern                                                                 |
 | -------------------------------------------------- | ----------------------------------------------------------------------- |

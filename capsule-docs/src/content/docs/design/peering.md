@@ -220,4 +220,4 @@ Deadlines use monotonic time, so clock skew between devices changes nothing.
   receipt check; plus each edge case in the table above, including delegate death, double
   upload, delete-after-hand-off and tampering.
 - **LAN sync then server reconcile (E2E):** one case in
-  [Module Map](/design/module-map/#e2e-test-surface).
+  the [E2E case index](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-e2e/src/lib.rs).

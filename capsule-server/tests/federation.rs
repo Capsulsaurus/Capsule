@@ -7,7 +7,8 @@
 //! behind it. What is asserted against the *stores* is asserted against the stores the server
 //! actually read, never against a second reading of the response body.
 //!
-//! The cases named `E2E case 4` are the server half of module-map.md's fourth case; the client
+//! The cases named `E2E case 4` are the server half of the fourth E2E case (the index is in
+//! `capsule-e2e/src/lib.rs`); the client
 //! half (Bob's client renders) is `capsule-e2e`'s.
 
 mod support;

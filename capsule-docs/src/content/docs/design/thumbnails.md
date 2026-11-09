@@ -54,7 +54,7 @@ The table is the contract, not an inventory. Native encoders sit behind the opt-
 | `media` only (FFI, cross) | JXL **lossless** (q=50 is advisory) | none | AVIF, lossy JXL (native code), WebP |
 | Either | — | — | All video derivatives (`rawshift-video` 0.1.1 is an unimplemented placeholder) |
 
-Decode covers JPEG, PNG, JXL, TIFF, GIF, ARW and DNG in every build, plus AVIF under `media-avif-decode` (system libdav1d; not on Windows). Capsule pre-walks RAW IFD chains to bound value sizes and nesting depth (≤16) before handing them to the RAW reader. **HEIC is refused by decision** (libheif/libde265 are LGPL-3.0; see [Dependencies](/design/dependencies/)); WebP, other RAW families, and AVIF without the feature are recognised and refused.
+Decode covers JPEG, PNG, JXL, TIFF, GIF, ARW and DNG in every build, plus AVIF under `media-avif-decode` (system libdav1d; not on Windows). Capsule pre-walks RAW IFD chains to bound value sizes and nesting depth (≤16) before handing them to the RAW reader. **HEIC is refused by decision** (libheif/libde265 are LGPL-3.0; see [Licensing](/design/licensing/)); WebP, other RAW families, and AVIF without the feature are recognised and refused.
 
 Nothing is silent: an absent codec is `media::MediaError::UnsupportedFormat`, and an unencodable `(tier, format)` pair is recorded as deferred and counted in the import summary while the asset's other derivatives still ship.
 :::
@@ -79,7 +79,7 @@ Camera RAW files usually carry a camera-rendered JPEG inside them, anywhere from
 
 ## LQIP
 
-Capsule imports [Chromahash](https://github.com/visualcommons/chromahash) **0.7.1** directly, never through Rawshift; the pin lives in [Dependencies](/design/dependencies/#rust). ThumbHash is retired; see ADR-0003.
+Capsule imports [Chromahash](https://github.com/visualcommons/chromahash) **0.7.1** directly, never through Rawshift; the pin lives in the root `Cargo.toml`. ThumbHash is retired; see ADR-0003.
 
 The chromahash, its format version and a `dominant_color` fallback form the [`lqip` sidecar field](/design/metadata/#sidecar-schema-v1), inside the [encrypted metadata blob](/design/cryptography/encryption/#metadata-encryption): the placeholder arrives with metadata sync, before any thumbnail, and never reaches the server. A decoder that does not recognise the format version, or bytes `from_bytes` rejects, MUST fall back to the solid `dominant_color` fill. Changing the encoding requires a new format version — `lqip` is signed, and byte length alone cannot discriminate encodings.
 
@@ -106,4 +106,4 @@ Derivatives are regenerable but not unowned: adding or replacing one is a signed
 - **Manifest verification (smoke).** Corrupted derivative is discarded, regenerated, and a `derivative-replace` record appended.
 - **Original fallback (unit).** A small original yields `format = "original"`, not a redundant derivative.
 
-The end-to-end case is in [Module Map](/design/module-map/#e2e-test-surface).
+The end-to-end case is in the [E2E case index](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-e2e/src/lib.rs).

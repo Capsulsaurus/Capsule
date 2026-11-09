@@ -1,4 +1,4 @@
-# The bounded E2E surface (design/module-map.md, "E2E Test Surface"): the real `capsule-sdk`
+# The bounded E2E surface (the case index is in `src/lib.rs`): the real `capsule-sdk`
 # and the real `capsule-core` library driven over TCP against the real `capsule-server`
 # composition root. A test crate rather than a `tests/` directory of one of those crates because
 # the cases need all of them at once — case 1 alone needs the CLI's sync orchestration, its

@@ -24,7 +24,7 @@ The server can prove "this request is from a session it issued"; it cannot prove
 
 ### Passkeys Are Not in v1
 
-No passkey surface ships. Building one is new work, and it reopens the [Dependencies](/design/dependencies/) `rustls`-only rule: `webauthn-rs` links `openssl` for attestation parsing.
+No passkey surface ships. Building one is new work, and it reopens the `rustls`-only rule ([Transport Security](/design/networking/#transport-security)): `webauthn-rs` links `openssl` for attestation parsing.
 
 ### The Second Factor
 
@@ -252,7 +252,7 @@ cohort_hash = SHA-256( canonical-CBOR([ "capsule-device-cohort/v1", user_id, pla
 - **Account portability (smoke, post-v1):** moved certificate from A; B registers the same IK; peers follow the move.
 - **Cohort:** cross-language known-answer vectors; same `primary_id` under two `user_id`s → distinct hashes; absent/malformed/colliding values behave identically; a tripwire asserts no signed schema has a cohort field; durable map outlives sessions.
 
-The auth → library-query E2E case is in [Module Map](/design/module-map/#e2e-test-surface).
+The auth → library-query E2E case is in the [E2E case index](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-e2e/src/lib.rs).
 
 ## Related
 

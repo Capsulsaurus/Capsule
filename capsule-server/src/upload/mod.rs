@@ -1,7 +1,7 @@
 //! The upload module: the envelope gate, the session lifecycle, and the collaborators both
 //! need.
 //!
-//! One cohesive module, per design/module-map.md's "Planned Server Modules" — the operations
+//! One cohesive module (see the crate docs' Structure) — the operations
 //! themselves live in [`crate::routes::upload`], because a route is a description of a surface
 //! and this is the machinery behind it. The same split [`crate::auth`] uses.
 //!

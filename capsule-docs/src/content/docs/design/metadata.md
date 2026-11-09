@@ -236,9 +236,16 @@ Any future ML field overlaying a user-editable one (face labels, location guesse
 
 GPS is stored in the datum the source supplied ([`gps.datum`](#closed-enum-value-sets)): WGS-84 by default, or GCJ-02 for coordinates from Chinese maps. Datum conversion for display or search is deterministic and client-side, with GCJ-02 → WGS-84 marked approximate; display-side conversion is unscheduled. BD-09 exists only at the input edge. Map-provider choice is a client concern. A user's location edit lands in `gps_user` beside the imported fix ([As-Imported and User Values](#as-imported-and-user-values)), stored verbatim in the datum the user entered it in.
 
+## Failure Modes
+
+| Failure | Detected / contained by | Recovery |
+| --- | --- | --- |
+| CBOR non-determinism | [Canonical encoding](#canonical-cbor-encoding) | Byte-identical re-encode |
+| Old client strips unknown sidecar fields | Signature covers all bytes; writes above the client's max `sidecar_schema` refused | Quarantine |
+
 ## Validation
 
-Each MUST above is a unit test; the canonical-CBOR known-answer vectors are a **blocking cross-language gate**. Notable cases: add-id reseed never reuses a counter; OR-set and library-settings merges converge byte-identically in every permutation; a remove of an unobserved `add_id` is rejected; a near-simultaneous caption loser lands in `superseded_captions`; a capture-time or location edit keeps the as-imported value through a re-import, a reopen and an index rebuild; each privacy-table row strips by default and leaves the local sidecar unchanged; a WGS-84 sidecar encodes byte-identically to the pre-`datum` vector; a one-byte local mutation fails the local–server equivalence check.
+Each MUST above is a unit test; the canonical-CBOR known-answer vectors are a **blocking cross-language gate**. Notable cases: add-id reseed never reuses a counter; OR-set and library-settings merges converge byte-identically in every permutation; a remove of an unobserved `add_id` is rejected; a near-simultaneous caption loser lands in `superseded_captions`; a capture-time or location edit keeps the as-imported value through a re-import, a reopen and an index rebuild; each privacy-table row strips by default and leaves the local sidecar unchanged; a WGS-84 sidecar encodes byte-identically to the pre-`datum` vector; a one-byte local mutation fails the local–server equivalence check; a sidecar round-trips between schema v1 and v2 readers.
 
 ## Related
 

@@ -19,7 +19,7 @@ Single source of truth for primitives; other docs link here, never restate. Cons
 | [KEM](#kem) | X-Wing (X25519 + ML-KEM-768) | MLS HPKE |
 | [MLS ciphersuite](#mls-ciphersuite) | `MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519` (`0x004D`) | Group key management |
 | [Randomness](#randomness) | OS CSPRNG (`getrandom`) | All keys, salts, nonces |
-| [Transport](/design/cryptography/failure-modes/#transport-security) | TLS 1.3, hybrid X25519+ML-KEM | Client–server, server–server |
+| [Transport](/design/networking/#transport-security) | TLS 1.3, hybrid X25519+ML-KEM | Client–server, server–server |
 
 ## Versioning Identifiers
 

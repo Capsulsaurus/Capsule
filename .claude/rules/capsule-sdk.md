@@ -8,7 +8,7 @@ paths:
 ## Rules
 
 - Clients are generated with Spargen from the committed contract, never Progenitor. Everything that parses or serializes is generated; only orchestration over generated calls is hand-written, and the transfer protocol's resumable upload state machine is the whole of it.
-- The SDK owns network state; local state belongs to `capsule-library` and pure logic to `capsule-core` ([Module Map — Stateless Core](../../capsule-docs/src/content/docs/design/module-map.md#stateless-core)).
+- The SDK owns network state; local state belongs to `capsule-library` and pure logic to `capsule-core` ([`capsule-core` crate docs](../../capsule-core/src/lib.rs)).
 - Clients switch on the `capsule_i18n::error_codes` constants, never bare HTTP statuses; the error-code contract is in [i18n.md](i18n.md).
 - `capsule-sdk/bindings-surface.json` is the committed UniFFI surface: regenerate with `mise run gen-bindings`, checked by `gen-bindings --check`.
 
