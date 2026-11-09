@@ -6,7 +6,7 @@
 //! stage an upload's bytes, place them at their content address atomically, look one up, read a
 //! window of one, walk all of them, drop one, and hold a bad one for an operator. That list is
 //! this trait. It is **not** a generic object store: `object_store` and generic CAS/transfer
-//! crates are refused by AGENTS.md's Rust Architecture Decisions and by `xtask
+//! crates are refused by `.claude/rules/capsule-server.md` and by `xtask
 //! architecture-check`'s retired list, because the security contract here — content addressing,
 //! immutability, atomic finalization, and enumeration cost — is the thing that would be
 //! abstracted away.

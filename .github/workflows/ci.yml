@@ -135,6 +135,23 @@ jobs:
               - 'NOTICE'
               - 'mise.toml'
               - '.github/workflows/ci.yml'
+              # The agent-rules check matches every `.claude/rules/` glob against the tracked
+              # tree, so renaming or deleting anything a glob names can strand a rule. Every
+              # top-level component and the root build files are in that set.
+              - '.claude/**'
+              - 'capsule-*/**'
+              - 'xtask/**'
+              - 'ptpip-rs/**'
+              - 'locales/**'
+              - 'legacy-review/**'
+              - 'mise-tasks/**'
+              - 'gradle/**'
+              - '.config/**'
+              - '.github/workflows/**'
+              - '*.toml'
+              - '*.kts'
+              - 'Cargo.lock'
+              - 'hk.pkl'
             markdown:
               - '**/*.md'
               - '.markdownlint-cli2.jsonc'
