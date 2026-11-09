@@ -441,7 +441,6 @@ header.header {
     display: inline-flex;
     align-items: center;
     gap: 0.2em;
-    margin-inline-start: 0.3em;
     padding: 0 0.4em;
     border: 1px solid var(--sl-color-hairline);
     border-radius: var(--capsule-radius-pill);

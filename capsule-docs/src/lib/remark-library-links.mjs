@@ -65,15 +65,22 @@ export function linkLibraries(tree, libraries = LIBRARIES) {
     /** The mention as written, then its badge. */
     const badged = (library, mention, name) => [
         mention,
+        // A real space, so the name and the badge stay two words in search
+        // and copied text; the badge's own margin is zero.
+        { type: 'text', value: ' ' },
         {
             type: 'link',
             url: library.url,
             // Shown on hover: where the badge goes, without the scheme.
-            title: library.url.replace(/^https:\/\//, ''),
+            title: `Source repository: ${library.url.replace(/^https:\/\//, '')}`,
             data: {
                 hProperties: {
                     className: [BADGE_CLASS],
-                    ariaLabel: `${name} source repository`,
+                    // Contains the visible label, so speech control can
+                    // name it (WCAG 2.5.3).
+                    ariaLabel: `${name} source ${BADGE_TEXT}`,
+                    // Chrome, not content: search never indexes it.
+                    dataPagefindIgnore: '',
                 },
             },
             children: [{ type: 'text', value: BADGE_TEXT }],
