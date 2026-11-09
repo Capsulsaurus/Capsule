@@ -16,7 +16,9 @@ export const collections = {
                     // and author pages) render through <StarlightPage> with no
                     // frontmatter of their own. Every authored page must still set
                     // it: scripts/page-status.test.mjs, part of `test-docs`, fails
-                    // on any page that does not.
+                    // on any page that does not. A generated page carries
+                    // none: it tracks its artifact, not a review, and
+                    // PageTitle.astro refuses one that sets both.
                     status: z.enum(['draft', 'stable']).optional(),
                     // Set only by scripts/gen-reference.mjs: which surface a
                     // generated page documents, the artifact it came from and,

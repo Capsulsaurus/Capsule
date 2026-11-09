@@ -1,6 +1,6 @@
 ---
 // Starlight PageTitle override: renders the `status` frontmatter field
-// (see src/content.config.ts) as a badge beside the page title, and on a page
+// (see src/content.config.ts) as a badge beside an authored page's title, and on a page
 // scripts/gen-reference.mjs generated, the banner that says so: which surface
 // it documents, what it was generated from, and where to download that. The
 // status mapping is shared with the sidebar (src/lib/status-badge.mjs).
@@ -9,6 +9,13 @@ import Default from '@astrojs/starlight/components/PageTitle.astro';
 import { titleBadge } from '../lib/status-badge.mjs';
 
 const { status, generated } = Astro.locals.starlightRoute.entry.data;
+// A generated page has no review state; a status on one would claim a review
+// its artifact never had.
+if (generated && status) {
+  throw new Error(
+    `${Astro.locals.starlightRoute.entry.id} is generated and sets status: ${status}`,
+  );
+}
 const badge = titleBadge(status);
 ---
 

@@ -10,7 +10,7 @@
  * The pages it writes are ordinary content-collection entries under
  * `src/content/docs/reference/`, which is what buys the rest for free — Pagefind indexes
  * them, `starlight-links-validator` checks their links, the `PageTitle` override renders
- * their status badge, and the notranslate rehype pass marks up their technical terms. A
+ * their generated-page banner, and the notranslate rehype pass marks up their technical terms. A
  * mounted OpenAPI application would have had none of that.
  *
  * They are also **gitignored**, and that is the point of rule 2: a generated page is never
@@ -703,7 +703,6 @@ export function renderCliPage(surface) {
         '---',
         `title: ${yamlString(page.label)}`,
         `description: ${yamlString(page.description)}`,
-        'status: stable',
         ...generatedFrontmatter('CLI', CLI_SURFACE),
         '---',
         '',
@@ -1608,8 +1607,7 @@ export function renderConventionsPage(document) {
             '---',
             `title: ${yamlString(API_CONVENTIONS.label)}`,
             `description: ${yamlString(API_CONVENTIONS.description)}`,
-            'status: stable',
-            ...generatedFrontmatter(
+                ...generatedFrontmatter(
                 'REST API',
                 `OpenAPI ${document.openapi}`,
                 OPENAPI_DOWNLOAD,
@@ -1638,7 +1636,6 @@ export function renderApiPage(group, operations, document) {
         '---',
         `title: ${yamlString(group.label)}`,
         `description: ${yamlString(group.description)}`,
-        'status: stable',
         'tableOfContents: false',
         ...generatedFrontmatter(
             'REST API',
@@ -2020,7 +2017,6 @@ function sdkHead(page, artifact, intro) {
         '---',
         `title: ${yamlString(page.label)}`,
         `description: ${yamlString(page.description)}`,
-        'status: stable',
         ...generatedFrontmatter(`${page.label} SDK`, artifact),
         '---',
         '',

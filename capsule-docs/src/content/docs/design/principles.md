@@ -81,7 +81,7 @@ A doc naming an implementing module states per surface whether it is **Implement
 
 ### Review Status
 
-Every page carries a required `status` frontmatter field tracking human review: `draft` (not re-reviewed since the last substantive change) or `stable` (signed off; a substantive edit flips it back). Drafts still publish, and the docs site badges every non-stable page in its navigation ([](/development/visual-language/#docs-site)).
+Every authored page carries a required `status` frontmatter field tracking human review: `draft` (not re-reviewed since the last substantive change) or `stable` (signed off; a substantive edit flips it back). Drafts still publish, and the docs site badges every non-stable page in its navigation ([](/development/visual-language/#docs-site)). Generated reference pages carry no status: they track their artifact, not a review.
 
 ## Validation Tiers
 

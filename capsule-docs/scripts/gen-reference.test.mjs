@@ -457,7 +457,7 @@ describe('readCliSurface', () => {
     });
 
     // A well-formed but empty document used to render an empty h2, an empty usage fence, and
-    // a `status: stable` badge — a page that builds green and documents nothing.
+    // a generated banner — a page that builds green and documents nothing.
     it('refuses a document that parses but describes nothing', () => {
         writeCli({ schema: 1 });
         expect(() => readCliSurface(root)).toThrow(/no command name/);
@@ -479,10 +479,11 @@ describe('renderCliPage', () => {
         expect(page).toContain('Import files into a local Capsule library');
     });
 
-    it('opens with frontmatter carrying a status the schema accepts', () => {
+    it('opens with generated frontmatter and no review status', () => {
         const page = renderCliPage(MINIMAL_CLI);
         expect(page.startsWith('---\n')).toBe(true);
-        expect(page).toMatch(/^status: stable$/m);
+        expect(page).toMatch(/^generated:$/m);
+        expect(page).not.toMatch(/^status:/m);
         expect(page).toMatch(/^title: "Commands"$/m);
     });
 
@@ -829,16 +830,17 @@ describe('the SDK pages', () => {
         );
     });
 
-    it('opens every SDK page with a status the docs require', () => {
-        // The content schema leaves `status` optional (plugin routes have no
-        // frontmatter); the generator is what guarantees generated pages set it.
+    it('opens every SDK page as generated, with no review status', () => {
+        // A generated page tracks its artifact; it has no review state, and
+        // PageTitle.astro refuses a page that claims both.
         for (const page of [
             renderWasmPage(wasm, parseWasmSurface(MINIMAL_WASM)),
             renderBindingsPage(swift, MINIMAL_BINDINGS),
             renderBindingsPage(kotlin, MINIMAL_BINDINGS),
         ]) {
             const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec(page);
-            expect(frontmatter?.[1]).toMatch(/^status: stable$/m);
+            expect(frontmatter?.[1]).toMatch(/^generated:$/m);
+            expect(frontmatter?.[1]).not.toMatch(/^status:/m);
         }
     });
 
@@ -1422,7 +1424,8 @@ describe('renderApiPage', () => {
     it('opens with frontmatter the content schema accepts', () => {
         const rendered = page();
         expect(rendered.startsWith('---\n')).toBe(true);
-        expect(rendered).toMatch(/^status: stable$/m);
+        expect(rendered).toMatch(/^generated:$/m);
+        expect(rendered).not.toMatch(/^status:/m);
         expect(rendered).toMatch(/^title: "[^"]+"$/m);
     });
 

@@ -1,5 +1,6 @@
 // Every authored docs page must carry a review `status` (see
-// src/content.config.ts and Core Principles — Review Status).
+// src/content.config.ts and Core Principles — Review Status), and no generated
+// page may: a generated page tracks its artifact and has no review state.
 //
 // The content schema cannot require the field itself: plugin routes such as
 // the blog index render through <StarlightPage> with no frontmatter of their
@@ -14,7 +15,7 @@ import {
     isDraftPost,
     postContractViolations,
 } from '../src/lib/blog-posts.mjs';
-import { frontmatterStatus } from './lib/markdown.mjs';
+import { frontmatterGenerated, frontmatterStatus } from './lib/markdown.mjs';
 
 const DOCS = join(
     dirname(fileURLToPath(import.meta.url)),
@@ -35,10 +36,21 @@ describe('frontmatterStatus', () => {
     });
 });
 
+describe('frontmatterGenerated', () => {
+    it.each([
+        ['---\ntitle: A\ngenerated:\n  surface: CLI\n---\n', true],
+        ['---\ntitle: A\nstatus: draft\n---\n', false],
+        ['---\ntitle: A\n---\ngenerated:\n', false],
+        ['no frontmatter', false],
+    ])('%j -> %s', (source, expected) => {
+        expect(frontmatterGenerated(source)).toBe(expected);
+    });
+});
+
 describe('docs pages', () => {
     // Every page on disk. Generated reference pages exist only after
-    // `gen-reference` has run, so they are checked here when present; their
-    // status is guaranteed by the renderers' own tests in gen-reference.test.mjs.
+    // `gen-reference` has run, so they are checked here when present; that
+    // they carry no status is also asserted by gen-reference.test.mjs.
     const pages = readdirSync(DOCS, { recursive: true, encoding: 'utf8' })
         .map((rel) => rel.split('\\').join('/'))
         .filter((rel) => /\.mdx?$/.test(rel));
@@ -47,14 +59,25 @@ describe('docs pages', () => {
         expect(pages.length).toBeGreaterThan(10);
     });
 
-    it('each declares status: draft or stable', () => {
+    it('each authored page declares status: draft or stable', () => {
         const unmarked = pages.filter((rel) => {
-            const status = frontmatterStatus(
-                readFileSync(join(DOCS, rel), 'utf8'),
-            );
+            const source = readFileSync(join(DOCS, rel), 'utf8');
+            if (frontmatterGenerated(source)) return false;
+            const status = frontmatterStatus(source);
             return status !== 'draft' && status !== 'stable';
         });
         expect(unmarked).toEqual([]);
+    });
+
+    it('no generated page declares a status', () => {
+        const claimed = pages.filter((rel) => {
+            const source = readFileSync(join(DOCS, rel), 'utf8');
+            return (
+                frontmatterGenerated(source) &&
+                frontmatterStatus(source) !== undefined
+            );
+        });
+        expect(claimed).toEqual([]);
     });
 
     it('marks every published blog post stable', () => {

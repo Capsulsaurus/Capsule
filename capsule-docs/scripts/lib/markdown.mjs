@@ -87,6 +87,12 @@ export function frontmatterStatus(source) {
     return field?.[1];
 }
 
+/** Whether a page's YAML frontmatter has a top-level `generated:` block. */
+export function frontmatterGenerated(source) {
+    const block = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/.exec(source);
+    return block !== null && /^generated:/m.test(block[1]);
+}
+
 /** Blank HTML comments — a link inside one is commented out, not published. */
 export function stripComments(source) {
     return source.replace(/<!--[\s\S]*?-->/g, blank);
