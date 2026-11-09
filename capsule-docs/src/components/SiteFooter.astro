@@ -58,13 +58,14 @@ const year = new Date().getFullYear();
 
 <style>
   /* One spacing step (2rem) above, between and below the two rows, so the
-     footer sits evenly inside its rule. */
+     footer sits evenly inside its rule. Its distance from the content above
+     and its place at the window's bottom are set in global.css (Sticky
+     footer). */
   .site-footer {
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 1.25rem;
-    margin-top: 3rem;
     padding-block: 2rem;
     border-top: 1px solid var(--sl-color-hairline);
     text-align: center;

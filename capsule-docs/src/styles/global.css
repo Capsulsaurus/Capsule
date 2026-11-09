@@ -167,6 +167,51 @@
     border-radius: var(--capsule-radius-sm);
 }
 
+/*
+ * Sticky footer. The site footer (src/components/SiteFooter.astro) closes the
+ * last content panel, so on a page shorter than the window it would stop
+ * mid-screen. Every box from Starlight's page frame down to that panel grows
+ * to fill the window instead, and the footer takes the panel's spare height
+ * above it, so it rests on the window's bottom edge; on a long page there is
+ * no spare height and it follows the content. The boxes are Starlight's own
+ * (Page.astro, PageFrame.astro, TwoColumnContent.astro, ContentPanel.astro):
+ *
+ *   .page > .main-frame > div.lg:sl-flex > .main-pane > main
+ *     > .content-panel:last-child > .sl-container > … .site-footer
+ */
+.main-frame,
+.main-frame > .lg\:sl-flex,
+.main-pane,
+.main-pane > main,
+.main-pane > main > .content-panel:last-child,
+.main-pane > main > .content-panel:last-child > .sl-container {
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+}
+
+/* Wide screens lay the table of contents beside the content; that row
+   stretches the content to its full height without growing its width. */
+@media (min-width: 72rem) {
+    .main-frame > .lg\:sl-flex {
+        flex-direction: row;
+    }
+
+    .main-frame > .lg\:sl-flex > .main-pane {
+        flex-grow: 0;
+    }
+}
+
+/* The footer's spare-height margin; what precedes it keeps the footer's
+   minimum distance, which a flex column would otherwise not collapse into. */
+.sl-container > .site-footer {
+    margin-block-start: auto;
+}
+
+.sl-container > :has(+ .site-footer) {
+    margin-block-end: 3rem;
+}
+
 /* Front-page hero: the theme-matched app screenshot. */
 .hero-shot {
     width: min(100%, 18rem);
