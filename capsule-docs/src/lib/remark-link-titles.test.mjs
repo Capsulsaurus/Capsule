@@ -208,7 +208,7 @@ describe('remarkLinkTitles', () => {
     it('keeps a link title and any class an earlier plugin set', () => {
         const tree = fromMarkdown('[](/design/metadata/ "Hover")');
         visit(tree, 'link', (node) => {
-            node.data = { hProperties: { className: ['earlier'] } };
+            node.data = { hProperties: { className: 'earlier' } };
         });
         remarkLinkTitles({ contentDir })(tree, {
             path: 'page.md',

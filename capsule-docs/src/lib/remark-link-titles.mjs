@@ -241,7 +241,7 @@ export default function remarkLinkTitles({ contentDir }) {
                 hProperties: {
                     ...node.data?.hProperties,
                     className: [
-                        ...(node.data?.hProperties?.className ?? []),
+                        ...[node.data?.hProperties?.className ?? []].flat(),
                         'xref',
                     ],
                 },
