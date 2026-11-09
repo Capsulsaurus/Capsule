@@ -26,3 +26,9 @@ capsule-swift/Modules/ImagePipeline/Sources/ViewerMediaLoader.swift	fileSize
 # members; the alternative would be a `locales/` key whose thirteen translations are all
 # the identical trademark.
 capsule-swift/Modules/FeatureViewer/Sources/Info/AssetInfoFormatting.swift	Dolby Vision
+
+# Layout: `left-1/2` paired with `-translate-x-1/2` centers the element on both axes, so it
+# is symmetric under either direction; `start-1/2` would move it, because `translate-x`
+# does not flip under `dir="rtl"`.
+capsule-web/src/components/asset-grid.tsx	left-1/2
+capsule-web/src/components/ui/dialog.tsx	left-[50%]
