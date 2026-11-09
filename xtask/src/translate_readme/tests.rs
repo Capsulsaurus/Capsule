@@ -181,6 +181,29 @@ fn glossary_flags_dropped_terms() {
     assert!(err.contains("GraphQL"), "unexpected: {err}");
 }
 
+/// A glossary term matches only as a whole word, so `mise` inside "promise" is not a
+/// term the translation must carry, while a term abutting CJK text still counts.
+#[test]
+fn glossary_matches_whole_words_only() {
+    Glossary::verify(
+        "Private by construction, not by promise.",
+        "Privé par conception.",
+    )
+    .expect("`mise` inside `promise` is not a glossary term");
+
+    let err = Glossary::verify("Install mise first.", "Installez d'abord l'outil.")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("mise"), "unexpected: {err}");
+
+    Glossary::verify("Capsule is open source.", "Capsuleはオープンソースです。")
+        .expect("a term followed by CJK text still matches");
+    let err = Glossary::verify("Capsule is open source.", "Capsules sont libres.")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("Capsule"), "unexpected: {err}");
+}
+
 /// Link targets, badge URLs, and code spans must survive translation verbatim.
 #[test]
 fn verify_protected_catches_dropped_link_target() {

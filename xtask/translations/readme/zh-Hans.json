@@ -1,79 +1,155 @@
 [
   {
-    "source": "# Capsule",
-    "target": "# Capsule"
+    "source": "**A photo library that organizes millions of photos on its own, that no server can see into, and that shares across servers the way email does.** Capsule is open source and end-to-end encrypted, built for people who shoot thousands of pictures a year, photographers whose RAW files are their livelihood, travellers bringing the world home on a memory card, and families keeping decades of memories. Run it on your own server or a friend's, and share with anyone, on any server.",
+    "target": "**一个能自行整理数百万张照片、任何服务器都无法窥视其内容，并且像电子邮件一样跨服务器共享的照片库。** Capsule 开源且端到端加密，专为这些人打造：每年拍摄数千张照片的人、以 RAW 文件为生计的摄影师、用一张存储卡把世界带回家的旅行者，以及珍藏数十年回忆的家庭。你可以在自己或朋友的服务器上运行它，并与任何服务器上的任何人共享。"
   },
   {
-    "source": "Open-source, federated, end-to-end encrypted photo library for photographers and prosumers.",
-    "target": "面向摄影师和进阶用户的开源、联邦式、端到端加密照片库。"
+    "source": "> [!NOTE]\n> **Alpha.** Mobile clients are being stabilized and refined prior to distribution to beta testers. Follow along on the [roadmap](ROADMAP.md).",
+    "target": "> [!NOTE]\n> **Alpha 阶段。** 移动客户端正在稳定和完善中，随后将分发给 Beta 测试者。可在[路线图](ROADMAP.md)上关注进展。"
   },
   {
-    "source": "## Goals",
-    "target": "## 目标"
+    "source": "## Why Capsule",
+    "target": "## 为什么选择 Capsule"
   },
   {
-    "source": "- **Your library outlives any service.** Originals are stored permanently, at full quality, with their metadata, and can always be restored byte for byte.",
-    "target": "- **你的照片库比任何服务都长久。** 原始文件连同元数据以完整质量永久保存，并且始终可以逐字节还原。"
+    "source": "- **Organize millions of photos, systematically and automatically.** Every import lands on one timeline, RAW+JPEG pairs and bursts\\* are stacked, duplicates are caught by their content, and smart albums keep themselves up to date. A library of millions stays as easy to navigate as one of hundreds.",
+    "target": "- **系统化、自动化地整理数百万张照片。** 每次导入都汇入同一条时间线，RAW+JPEG 配对和连拍\\*会自动堆叠，重复照片按内容识别，智能相册始终自动保持最新。即使有数百万张照片，照片库浏览起来也和只有几百张时一样轻松。"
   },
   {
-    "source": "- **End-to-end cryptography.** The server stores only ciphertext. Every asset carries a signed provenance chain, so who captured, imported and edited it can be verified rather than trusted.",
-    "target": "- **端到端加密。** 服务器只存储密文。每个资产都带有签名的溯源链，因此谁拍摄、导入和编辑了它，可以被验证，而不是只能被相信。"
+    "source": "- **Private by construction, not by promise.** Photos are encrypted on your devices before they leave. The server stores only ciphertext and never holds a key, so not even whoever runs it can look.",
+    "target": "- **隐私源于设计，而非承诺。** 照片在离开你的设备之前就已加密。服务器只存储密文，从不持有密钥，因此即便是服务器的运营者也无法查看。"
   },
   {
-    "source": "- **Federated sharing.** Because trust lives in the cryptography rather than in a server, people on different servers can share albums with each other: think [Matrix](https://en.wikipedia.org/wiki/Matrix_(protocol)), but for images.",
-    "target": "- **联邦式共享。** 由于信任来自密码学而非服务器，不同服务器上的人可以互相共享相册：可以把它想象成面向图像的 [Matrix](https://en.wikipedia.org/wiki/Matrix_(protocol))。"
+    "source": "- **Proof of where every photo came from.** Each photo carries a signed history of who captured, imported and edited it, so its origin can be verified rather than trusted.",
+    "target": "- **每张照片的来源都有据可查。** 每张照片都带有签名的历史记录，记载谁拍摄、导入和编辑了它，因此其来源可以被验证，而不是只能被相信。"
   },
   {
-    "source": "- **Open source for the network effect.** An open protocol and self-hostable server let anyone join the network; the aim is to be the first open, federated standard for personal photo libraries.",
-    "target": "- **以开源获得网络效应。** 开放的协议和可自托管的服务器让任何人都能加入网络；目标是成为个人照片库领域第一个开放的联邦式标准。"
+    "source": "- **Share across servers.** People on different servers share albums with each other, the way email works between providers. Nobody has to join your server, and no company sits in the middle.",
+    "target": "- **跨服务器共享。** 不同服务器上的人可以互相共享相册，就像电子邮件在不同服务商之间往来一样。没有人需要加入你的服务器，也没有任何公司夹在中间。"
   },
   {
-    "source": "- **Native everywhere.** Each platform gets a real native client; the CLI/TUI is the reference client and stays the most robust one.",
-    "target": "- **处处原生。** 每个平台都有真正的原生客户端；CLI/TUI 是参考客户端，并将始终是最稳健的一个。"
+    "source": "- **Your whole library, even offline.** Every app keeps an index of everything you have ever kept, so you can browse, search and organize all of it on a plane, at the border, or far from any signal.",
+    "target": "- **完整照片库，离线也能用。** 每个应用都保存着你保留过的所有照片的索引，因此无论在飞机上、在边境，还是远离任何信号，你都可以浏览、搜索和整理全部内容。"
   },
   {
-    "source": "## Status",
-    "target": "## 状态"
+    "source": "- **Straight from the camera.** Pull photos over Wi-Fi or cable directly from your camera, with every file checksummed on arrival.",
+    "target": "- **直接从相机导入。** 通过 Wi-Fi 或数据线直接从相机拉取照片，每个文件在到达时都会进行校验和验证。"
   },
   {
-    "source": "Alpha, and not yet ready for data you cannot afford to lose. The current focus is the first dogfoodable release: the Rust CLI/TUI imports, the server stores permanently, and every step of that path is covered by automated tests. Native apps follow once that path is solid. The [roadmap](ROADMAP.md) gives the ordered path.",
-    "target": "Alpha 阶段，尚不适合存放你无法承受丢失的数据。当前的重点是第一个可内部试用（dogfooding）的版本：Rust CLI/TUI 负责导入，服务器负责永久存储，这条路径上的每一步都有自动化测试覆盖。待这条路径稳固后，再推出原生应用。[路线图](ROADMAP.md)给出了有序的路径。"
+    "source": "- **A library that outlives Capsule.** Every photo sits beside a signed sidecar in an open format, so your library stays readable without the app, without the database, and without us.",
+    "target": "- **比 Capsule 更长久的照片库。** 每张照片旁边都有一个采用开放格式的签名附属文件（sidecar），因此即使没有应用、没有数据库、没有我们，你的照片库依然可读。"
   },
   {
-    "source": "## Getting started",
+    "source": "- **Native on every device\\*.** Real native apps that follow each platform's own design, a web viewer for anyone you share with, and a scriptable command line and terminal UI.",
+    "target": "- **每台设备上都是原生应用\\*。** 遵循各平台自身设计规范的真正原生应用、供你的分享对象使用的 Web 查看器，以及可编写脚本的命令行和终端界面。"
+  },
+  {
+    "source": "\\* Coming later, prioritized by demand.",
+    "target": "\\* 后续推出，按需求决定优先级。"
+  },
+  {
+    "source": "## Everything you'd expect",
+    "target": "## 你期待的功能，一应俱全"
+  },
+  {
+    "source": "- Albums, plus your originals kept byte for byte with their metadata and restorable exactly as they went in",
+    "target": "- 相册；原始文件连同元数据逐字节保存，并能按导入时的原样还原"
+  },
+  {
+    "source": "- Search by date, place, camera, lens, rating and label, run on your device",
+    "target": "- 按日期、地点、相机、镜头、评分和标签搜索，全部在你的设备上运行"
+  },
+  {
+    "source": "- Ratings, picks and rejects for culling a shoot; labels and captions",
+    "target": "- 用于筛选拍摄成果的评分、选用和弃用标记；标签和说明文字"
+  },
+  {
+    "source": "- A map of where every photo was taken, with location fixes that keep the original",
+    "target": "- 显示每张照片拍摄地点的地图，修正位置时保留原始信息"
+  },
+  {
+    "source": "- Share links anyone can open in a browser, and upload links that let guests add their photos to yours",
+    "target": "- 任何人都能在浏览器中打开的分享链接，以及让访客把自己的照片添加到你的照片中的上传链接"
+  },
+  {
+    "source": "- Backups that resume where they stopped, and device-to-device sync over your local network",
+    "target": "- 可从中断处继续的备份，以及通过本地网络进行的设备间同步"
+  },
+  {
+    "source": "- Trash with a recovery window, hidden photos, and account recovery if you lose a device",
+    "target": "- 带恢复期的回收站、隐藏照片，以及丢失设备时的账户恢复"
+  },
+  {
+    "source": "- Apps in 13 languages",
+    "target": "- 支持 13 种语言的应用"
+  },
+  {
+    "source": "## On the roadmap",
+    "target": "## 路线图"
+  },
+  {
+    "source": "- **On-device AI.** Search in plain words (\"sunset over the harbour\"), find people, pets and places, and surface your best shots, all computed on your devices. AI suggestions are kept apart from your own labels and never overwrite them.",
+    "target": "- **设备端 AI。** 用日常语言搜索（“港口上空的日落”），查找人物、宠物和地点，并挑出你的最佳照片，全部在你的设备上计算完成。AI 建议与你自己的标签分开存放，绝不会覆盖它们。"
+  },
+  {
+    "source": "- **Built-in, format-aware image compression.** Choose lossless or lossy compression for each format, so a library takes less space on exactly your terms.",
+    "target": "- **内置、按格式适配的图像压缩。** 为每种格式选择无损或有损压缩，让照片库完全按你的意愿节省空间。"
+  },
+  {
+    "source": "- **More importers.** One-step moves from iCloud Photos and Immich, alongside Google Photos.",
+    "target": "- **更多导入工具。** 除 Google 相册外，还支持从 iCloud 照片和 Immich 一步迁移。"
+  },
+  {
+    "source": "- **Windows and Linux apps**, after the phone, tablet and Mac apps.",
+    "target": "- **Windows 和 Linux 应用**，将在手机、平板和 Mac 应用之后推出。"
+  },
+  {
+    "source": "## Get started",
     "target": "## 快速开始"
   },
   {
-    "source": "- [Getting started](https://capsule.justinchung.net/guides/getting-started/) and the [user guide](https://capsule.justinchung.net/guides/user-guide/).",
-    "target": "- [快速开始](https://capsule.justinchung.net/guides/getting-started/)和[用户指南](https://capsule.justinchung.net/guides/user-guide/)。"
+    "source": "- **Try it.** The [getting-started guide](https://capsule.justinchung.net/guides/getting-started/) sets up a local library on your computer; no server is needed.",
+    "target": "- **试用。** [快速开始指南](https://capsule.justinchung.net/guides/getting-started/)会在你的电脑上建立一个本地照片库；无需服务器。"
   },
   {
-    "source": "- [Self-hosting](https://capsule.justinchung.net/guides/self-hosting/) a server.",
-    "target": "- 服务器的[自托管](https://capsule.justinchung.net/guides/self-hosting/)。"
+    "source": "- **Bring your library.** Import folders, drives and memory cards, pull from a camera, or [move from Google Photos](https://capsule.justinchung.net/guides/google-photos-migration/).",
+    "target": "- **带上你的照片库。** 导入文件夹、硬盘和存储卡，从相机拉取，或[从 Google 相册迁移](https://capsule.justinchung.net/guides/google-photos-migration/)。"
   },
   {
-    "source": "- [Design docs](https://capsule.justinchung.net/design/) for how it works.",
-    "target": "- 了解其工作原理的[设计文档](https://capsule.justinchung.net/design/)。"
+    "source": "- **Run a server** for yourself, your family or your friends: [self-hosting](https://capsule.justinchung.net/guides/self-hosting/).",
+    "target": "- **运行服务器**，为你自己、家人或朋友服务：[自托管](https://capsule.justinchung.net/guides/self-hosting/)。"
   },
   {
-    "source": "## Repository",
-    "target": "## 仓库"
+    "source": "- **See how it works** in the [design docs](https://capsule.justinchung.net/design/).",
+    "target": "- **了解工作原理**，请参阅[设计文档](https://capsule.justinchung.net/design/)。"
+  },
+  {
+    "source": "## Translations",
+    "target": "## 翻译"
+  },
+  {
+    "source": "| Language | README | App strings translated | Reviewed by a fluent reader |\n| --- | --- | --- | --- |\n| 简体中文 | [README.zh-Hans.md](README.zh-Hans.md) | ![zh-Hans translated](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27zh-Hans%27%5D.translated&suffix=%25&label=&color=blue) | ![zh-Hans reviewed](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27zh-Hans%27%5D.reviewed&suffix=%25&label=&color=blue) |\n| 繁體中文 | [README.zh-Hant.md](README.zh-Hant.md) | ![zh-Hant translated](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27zh-Hant%27%5D.translated&suffix=%25&label=&color=blue) | ![zh-Hant reviewed](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27zh-Hant%27%5D.reviewed&suffix=%25&label=&color=blue) |\n| 日本語 | [README.ja.md](README.ja.md) | ![ja translated](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27ja%27%5D.translated&suffix=%25&label=&color=blue) | ![ja reviewed](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27ja%27%5D.reviewed&suffix=%25&label=&color=blue) |\n| 한국어 | [README.ko.md](README.ko.md) | ![ko translated](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27ko%27%5D.translated&suffix=%25&label=&color=blue) | ![ko reviewed](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27ko%27%5D.reviewed&suffix=%25&label=&color=blue) |\n| Français | [README.fr.md](README.fr.md) | ![fr translated](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27fr%27%5D.translated&suffix=%25&label=&color=blue) | ![fr reviewed](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27fr%27%5D.reviewed&suffix=%25&label=&color=blue) |\n| Deutsch | [README.de.md](README.de.md) | ![de translated](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27de%27%5D.translated&suffix=%25&label=&color=blue) | ![de reviewed](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27de%27%5D.reviewed&suffix=%25&label=&color=blue) |\n| Español | [README.es.md](README.es.md) | ![es translated](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27es%27%5D.translated&suffix=%25&label=&color=blue) | ![es reviewed](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27es%27%5D.reviewed&suffix=%25&label=&color=blue) |\n| Português (Brasil) | [README.pt-BR.md](README.pt-BR.md) | ![pt-BR translated](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27pt-BR%27%5D.translated&suffix=%25&label=&color=blue) | ![pt-BR reviewed](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27pt-BR%27%5D.reviewed&suffix=%25&label=&color=blue) |\n| Italiano | [README.it.md](README.it.md) | ![it translated](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27it%27%5D.translated&suffix=%25&label=&color=blue) | ![it reviewed](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27it%27%5D.reviewed&suffix=%25&label=&color=blue) |\n| Русский | [README.ru.md](README.ru.md) | ![ru translated](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27ru%27%5D.translated&suffix=%25&label=&color=blue) | ![ru reviewed](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27ru%27%5D.reviewed&suffix=%25&label=&color=blue) |\n| हिन्दी | [README.hi.md](README.hi.md) | ![hi translated](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27hi%27%5D.translated&suffix=%25&label=&color=blue) | ![hi reviewed](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27hi%27%5D.reviewed&suffix=%25&label=&color=blue) |\n| العربية | [README.ar.md](README.ar.md) | ![ar translated](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27ar%27%5D.translated&suffix=%25&label=&color=blue) | ![ar reviewed](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27ar%27%5D.reviewed&suffix=%25&label=&color=blue) |",
+    "target": "| 语言 | README | 应用文本已翻译 | 已经流利读者审阅 |\n| --- | --- | --- | --- |\n| 简体中文 | [README.zh-Hans.md](README.zh-Hans.md) | ![zh-Hans translated](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27zh-Hans%27%5D.translated&suffix=%25&label=&color=blue) | ![zh-Hans reviewed](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27zh-Hans%27%5D.reviewed&suffix=%25&label=&color=blue) |\n| 繁體中文 | [README.zh-Hant.md](README.zh-Hant.md) | ![zh-Hant translated](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27zh-Hant%27%5D.translated&suffix=%25&label=&color=blue) | ![zh-Hant reviewed](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27zh-Hant%27%5D.reviewed&suffix=%25&label=&color=blue) |\n| 日本語 | [README.ja.md](README.ja.md) | ![ja translated](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27ja%27%5D.translated&suffix=%25&label=&color=blue) | ![ja reviewed](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27ja%27%5D.reviewed&suffix=%25&label=&color=blue) |\n| 한국어 | [README.ko.md](README.ko.md) | ![ko translated](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27ko%27%5D.translated&suffix=%25&label=&color=blue) | ![ko reviewed](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27ko%27%5D.reviewed&suffix=%25&label=&color=blue) |\n| Français | [README.fr.md](README.fr.md) | ![fr translated](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27fr%27%5D.translated&suffix=%25&label=&color=blue) | ![fr reviewed](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27fr%27%5D.reviewed&suffix=%25&label=&color=blue) |\n| Deutsch | [README.de.md](README.de.md) | ![de translated](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27de%27%5D.translated&suffix=%25&label=&color=blue) | ![de reviewed](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27de%27%5D.reviewed&suffix=%25&label=&color=blue) |\n| Español | [README.es.md](README.es.md) | ![es translated](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27es%27%5D.translated&suffix=%25&label=&color=blue) | ![es reviewed](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27es%27%5D.reviewed&suffix=%25&label=&color=blue) |\n| Português (Brasil) | [README.pt-BR.md](README.pt-BR.md) | ![pt-BR translated](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27pt-BR%27%5D.translated&suffix=%25&label=&color=blue) | ![pt-BR reviewed](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27pt-BR%27%5D.reviewed&suffix=%25&label=&color=blue) |\n| Italiano | [README.it.md](README.it.md) | ![it translated](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27it%27%5D.translated&suffix=%25&label=&color=blue) | ![it reviewed](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27it%27%5D.reviewed&suffix=%25&label=&color=blue) |\n| Русский | [README.ru.md](README.ru.md) | ![ru translated](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27ru%27%5D.translated&suffix=%25&label=&color=blue) | ![ru reviewed](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27ru%27%5D.reviewed&suffix=%25&label=&color=blue) |\n| हिन्दी | [README.hi.md](README.hi.md) | ![hi translated](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27hi%27%5D.translated&suffix=%25&label=&color=blue) | ![hi reviewed](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27hi%27%5D.reviewed&suffix=%25&label=&color=blue) |\n| العربية | [README.ar.md](README.ar.md) | ![ar translated](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27ar%27%5D.translated&suffix=%25&label=&color=blue) | ![ar reviewed](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FCapsulsaurus%2FCapsule%2Fmaster%2Flocales%2Fstats.json&query=%24%5B%27ar%27%5D.reviewed&suffix=%25&label=&color=blue) |"
+  },
+  {
+    "source": "Translations start as machine drafts and are marked reviewed once a fluent reader accepts them. To help, see [locales/README.md](locales/README.md), [request a language](https://github.com/Capsulsaurus/Capsule/issues/new?template=language-request.md) or [report a translation error](https://github.com/Capsulsaurus/Capsule/issues/new?template=translation-error.md).",
+    "target": "翻译最初是机器生成的草稿，经流利读者认可后标记为已审阅。如想参与，请参阅 [locales/README.md](locales/README.md)、[申请新增语言](https://github.com/Capsulsaurus/Capsule/issues/new?template=language-request.md)或[报告翻译错误](https://github.com/Capsulsaurus/Capsule/issues/new?template=translation-error.md)。"
+  },
+  {
+    "source": "## Contributing",
+    "target": "## 参与贡献"
+  },
+  {
+    "source": "Install [mise](https://mise.jdx.dev), run `mise install` and `mise run hooks-install`, then see [CONTRIBUTING.md](CONTRIBUTING.md). Report bugs in GitHub Issues; ask setup questions in GitHub Discussions. Contributions need a signed [CLA](CLA.md): a single copyright holder is what keeps app-store distribution possible, and every public release stays under an OSI-approved licence.",
+    "target": "安装 [mise](https://mise.jdx.dev)，运行 `mise install` 和 `mise run hooks-install`，然后参阅 [CONTRIBUTING.md](CONTRIBUTING.md)。请在 GitHub Issues 中报告缺陷；在 GitHub Discussions 中提出设置方面的问题。贡献需要签署 [CLA](CLA.md)：由单一版权持有者持有版权，才能保证应用商店分发成为可能，并且每个公开版本都保持在 OSI 批准的许可证之下。"
   },
   {
     "source": "| Path | What it is |\n| --- | --- |\n| `capsule-core` | Rust core: cryptography, media, metadata, local library |\n| `capsule-sdk` | Rust client SDK over the generated API client |\n| `capsule-cli` | The `capsule` CLI and TUI |\n| `capsule-server` | The server (Kynos REST/OpenAPI) |\n| `capsule-e2e` | End-to-end tests across the real binaries |\n| `capsule-swift`, `capsule-android` | Native Apple and Android clients |\n| `capsule-web` | Read-only web client |\n| `capsule-docs` | Documentation site |",
     "target": "| 路径 | 说明 |\n| --- | --- |\n| `capsule-core` | Rust 核心：加密、媒体、元数据、本地库 |\n| `capsule-sdk` | 基于生成的 API 客户端的 Rust 客户端 SDK |\n| `capsule-cli` | `capsule` CLI 和 TUI |\n| `capsule-server` | 服务器（Kynos REST/OpenAPI） |\n| `capsule-e2e` | 针对真实二进制文件的端到端测试 |\n| `capsule-swift`, `capsule-android` | Apple 和 Android 原生客户端 |\n| `capsule-web` | 只读 Web 客户端 |\n| `capsule-docs` | 文档站点 |"
   },
   {
-    "source": "Install [mise](https://mise.jdx.dev), run `mise install` and `mise run hooks-install`, then see [CONTRIBUTING.md](CONTRIBUTING.md). Report bugs in GitHub Issues; ask setup questions in GitHub Discussions.",
-    "target": "安装 [mise](https://mise.jdx.dev)，运行 `mise install` 和 `mise run hooks-install`，然后参阅 [CONTRIBUTING.md](CONTRIBUTING.md)。请在 GitHub Issues 中报告缺陷；在 GitHub Discussions 中提出设置方面的问题。"
-  },
-  {
-    "source": "## Contributing and licence",
-    "target": "## 贡献与许可证"
-  },
-  {
-    "source": "Contributions need a signed [CLA](CLA.md): a single copyright holder is what keeps app-store distribution possible, and every public release stays under an OSI-approved licence.",
-    "target": "贡献需要签署 [CLA](CLA.md)：由单一版权持有者持有版权，才能保证应用商店分发成为可能，并且每个公开版本都保持在 OSI 批准的许可证之下。"
+    "source": "## Licence",
+    "target": "## 许可证"
   },
   {
     "source": "Capsule is published under [AGPL-3.0-only](LICENSE); third-party notices are in [NOTICE](NOTICE). The copyright holder, Justin Chung, may also offer it under separate terms, such as those app stores require; any version you receive under the AGPL stays yours under the AGPL. See the [licensing design doc](https://capsule.justinchung.net/design/licensing/).",
