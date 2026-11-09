@@ -1,5 +1,5 @@
 import { fromMarkdown } from 'mdast-util-from-markdown';
-import { toString } from 'mdast-util-to-string';
+import { toString as textOf } from 'mdast-util-to-string';
 import { visit } from 'unist-util-visit';
 import { describe, expect, it } from 'vitest';
 import { EXPLICIT_ONLY, LIBRARIES } from './library-links.mjs';
@@ -21,7 +21,7 @@ function links(markdown, libraries) {
     const tree = linkLibraries(fromMarkdown(markdown), libraries);
     const out = [];
     visit(tree, 'link', (node) => {
-        out.push([toString(node), node.url]);
+        out.push([textOf(node), node.url]);
     });
     return out;
 }
@@ -37,7 +37,7 @@ describe('linkLibraries', () => {
         const tree = linkLibraries(fromMarkdown('Built on Kynos today.'), [
             KYNOS,
         ]);
-        expect(toString(tree)).toBe('Built on Kynos today.');
+        expect(textOf(tree)).toBe('Built on Kynos today.');
     });
 
     it('skips headings, existing links and code blocks', () => {

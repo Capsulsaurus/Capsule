@@ -15,7 +15,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import GithubSlugger from 'github-slugger';
 import { fromMarkdown } from 'mdast-util-from-markdown';
-import { toString } from 'mdast-util-to-string';
+import { toString as textOf } from 'mdast-util-to-string';
 import { visit } from 'unist-util-visit';
 import { stripFrontmatter } from '../../scripts/lib/markdown.mjs';
 import { contentFileForRoute } from '../../scripts/lib/routes.mjs';
@@ -58,7 +58,7 @@ export function headingsOf(tree) {
     const slugger = new GithubSlugger();
     const headings = new Map();
     visit(tree, 'heading', (node) => {
-        const text = toString(node).trim();
+        const text = textOf(node).trim();
         headings.set(slugger.slug(text), text);
     });
     return headings;
@@ -110,7 +110,7 @@ function isEmptySiteLink(node) {
     const url = node.url ?? '';
     const onSite =
         url.startsWith('#') || (url.startsWith('/') && !url.startsWith('//'));
-    return onSite && toString(node).trim() === '';
+    return onSite && textOf(node).trim() === '';
 }
 
 /**

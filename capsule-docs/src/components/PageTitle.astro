@@ -12,9 +12,9 @@ const { status, generated } = Astro.locals.starlightRoute.entry.data;
 // A generated page has no review state; a status on one would claim a review
 // its artifact never had.
 if (generated && status) {
-  throw new Error(
-    `${Astro.locals.starlightRoute.entry.id} is generated and sets status: ${status}`,
-  );
+    throw new Error(
+        `${Astro.locals.starlightRoute.entry.id} is generated and sets status: ${status}`,
+    );
 }
 const badge = titleBadge(status);
 ---

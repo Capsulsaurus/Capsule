@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fromMarkdown } from 'mdast-util-from-markdown';
-import { toString } from 'mdast-util-to-string';
+import { toString as textOf } from 'mdast-util-to-string';
 import { visit } from 'unist-util-visit';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import remarkLinkTitles, {
@@ -105,7 +105,7 @@ describe('remarkLinkTitles', () => {
         });
         const out = [];
         visit(tree, 'link', (node) => {
-            out.push([node.url, toString(node)]);
+            out.push([node.url, textOf(node)]);
         });
         return out;
     }
