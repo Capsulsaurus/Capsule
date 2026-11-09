@@ -35,6 +35,8 @@ export default defineConfig({
                 // Renders the `status` frontmatter (draft/stable) as a title badge.
                 PageTitle: './src/components/PageTitle.astro',
             },
+            // Badges every non-stable page in the sidebar. See src/route-data.ts.
+            routeMiddleware: './src/route-data.ts',
             sidebar: [
                 {
                     label: 'Guides',

@@ -1,17 +1,12 @@
 ---
 // Starlight PageTitle override: renders the `status` frontmatter field
-// (see src/content.config.ts) as a badge beside the page title.
+// (see src/content.config.ts) as a badge beside the page title. The mapping
+// is shared with the sidebar (src/lib/status-badge.mjs).
 import { Badge } from '@astrojs/starlight/components';
 import Default from '@astrojs/starlight/components/PageTitle.astro';
+import { titleBadge } from '../lib/status-badge.mjs';
 
-const { status } = Astro.locals.starlightRoute.entry.data;
-
-const badge =
-    status === 'stable'
-        ? { text: 'Stable', variant: 'success' as const }
-        : status === 'draft'
-          ? { text: 'Draft', variant: 'caution' as const }
-          : undefined;
+const badge = titleBadge(Astro.locals.starlightRoute.entry.data.status);
 ---
 
 {
