@@ -1,41 +1,178 @@
-@import url("https://fonts.googleapis.com/css2?family=Geist+Mono:wght@100..900&family=Geist:wght@100..900&display=swap");
+/*
+ * Capsule docs theme. Token values and the rules they implement are owned by
+ * the Visual Language doc (src/content/docs/development/visual-language.md):
+ * change a value there first, then here.
+ *
+ * Fonts are self-hosted. No Capsule-served page requests a third-party asset.
+ */
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
 @import "tailwindcss";
 
-/* Dark mode colors. */
 :root {
-    --sl-color-accent-low: #0f2927;
-    --sl-color-accent: #007a75;
-    --sl-color-accent-high: #b2d0cd;
-    --sl-color-white: #ffffff;
-    --sl-color-gray-1: #eceeef;
-    --sl-color-gray-2: #c6c9c9;
-    --sl-color-gray-3: #9fa5a6;
-    --sl-color-gray-4: #54595a;
-    --sl-color-gray-5: #34393a;
-    --sl-color-gray-6: #232828;
-    --sl-color-black: #161919;
+    /* Brand accent: Slate Blue, OKLCH hue 255, chroma 0.09. */
+    --capsule-accent-light-low: #dce9fa;
+    --capsule-accent-light: #3e6596;
+    --capsule-accent-light-high: #173357;
+    --capsule-accent-dark-low: #19273a;
+    --capsule-accent-dark: #7ea7dc;
+    --capsule-accent-dark-high: #a1c7f8;
+
+    /* Neutral ramp: near-grey with the accent hue at chroma 0.006. */
+    --capsule-neutral-50: #f7fafe;
+    --capsule-neutral-100: #eff2f6;
+    --capsule-neutral-200: #e2e5e9;
+    --capsule-neutral-300: #c8cbce;
+    --capsule-neutral-400: #a2a5a8;
+    --capsule-neutral-500: #787a7e;
+    --capsule-neutral-600: #535559;
+    --capsule-neutral-700: #333638;
+    --capsule-neutral-800: #222427;
+    --capsule-neutral-900: #141619;
+    --capsule-neutral-950: #0c0d10;
+
+    /* Radius scale, shared with CapsuleTheme.swift. */
+    --capsule-radius-sm: 8px;
+    --capsule-radius-card: 12px;
+    --capsule-radius-md: 16px;
+    --capsule-radius-lg: 22px;
 
     --sl-font:
-        "Geist", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji",
-        "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+        "Geist Variable", ui-sans-serif, system-ui, sans-serif,
+        "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol",
+        "Noto Color Emoji";
     --sl-font-mono:
-        "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-        "Liberation Mono", "Courier New", monospace;
+        "Geist Mono Variable", ui-monospace, SFMono-Regular, Menlo, Monaco,
+        Consolas, "Liberation Mono", "Courier New", monospace;
 }
-/* Light mode colors. */
+
+/* Dark mode (Starlight's default). */
+:root {
+    --sl-color-accent-low: var(--capsule-accent-dark-low);
+    --sl-color-accent: var(--capsule-accent-dark);
+    --sl-color-accent-high: var(--capsule-accent-dark-high);
+    --sl-color-white: #ffffff;
+    --sl-color-gray-1: var(--capsule-neutral-100);
+    --sl-color-gray-2: var(--capsule-neutral-300);
+    --sl-color-gray-3: var(--capsule-neutral-400);
+    --sl-color-gray-4: var(--capsule-neutral-600);
+    --sl-color-gray-5: var(--capsule-neutral-700);
+    --sl-color-gray-6: var(--capsule-neutral-800);
+    --sl-color-black: var(--capsule-neutral-900);
+}
+
+/* Light mode. */
 :root[data-theme="light"] {
-    --sl-color-accent-low: #c6dcda;
-    --sl-color-accent: #005854;
-    --sl-color-accent-high: #0d3a38;
-    --sl-color-white: #161919;
-    --sl-color-gray-1: #232828;
-    --sl-color-gray-2: #34393a;
-    --sl-color-gray-3: #54595a;
-    --sl-color-gray-4: #878d8e;
-    --sl-color-gray-5: #bfc3c3;
-    --sl-color-gray-6: #eceeef;
-    --sl-color-gray-7: #f5f6f7;
+    --sl-color-accent-low: var(--capsule-accent-light-low);
+    --sl-color-accent: var(--capsule-accent-light);
+    --sl-color-accent-high: var(--capsule-accent-light-high);
+    --sl-color-white: var(--capsule-neutral-900);
+    --sl-color-gray-1: var(--capsule-neutral-800);
+    --sl-color-gray-2: var(--capsule-neutral-700);
+    --sl-color-gray-3: var(--capsule-neutral-600);
+    --sl-color-gray-4: var(--capsule-neutral-500);
+    --sl-color-gray-5: var(--capsule-neutral-300);
+    --sl-color-gray-6: var(--capsule-neutral-100);
+    --sl-color-gray-7: var(--capsule-neutral-50);
     --sl-color-black: #ffffff;
+}
+
+/* Header: a translucent bar, the web's analogue of the apps' glass chrome. */
+.header {
+    background-color: color-mix(
+        in srgb,
+        var(--sl-color-black) 78%,
+        transparent
+    );
+    backdrop-filter: saturate(160%) blur(14px);
+    -webkit-backdrop-filter: saturate(160%) blur(14px);
+    border-bottom-color: color-mix(
+        in srgb,
+        var(--sl-color-gray-5) 60%,
+        transparent
+    );
+}
+
+.site-title {
+    font-weight: 650;
+    letter-spacing: -0.01em;
+}
+
+/* Front-page hero: the theme-matched app screenshot. */
+.hero-shot {
+    width: min(100%, 18rem);
+    height: auto;
+    filter: drop-shadow(0 18px 40px rgb(0 0 0 / 0.18));
+}
+
+:root[data-theme="light"] .hero-shot-dark,
+:root:not([data-theme="light"]) .hero-shot-light {
+    display: none;
+}
+
+/* Cards take the brand accent rather than Starlight's rotating palette. */
+.card {
+    --sl-card-border: var(--sl-color-accent);
+    --sl-card-bg: var(--sl-color-accent-low);
+}
+
+.card .icon {
+    color: var(--sl-color-text-accent);
+}
+
+/* Status badges: tinted pills in the body font, readable without shouting.
+   `-high` is the readable-text end of each Starlight hue in both themes. */
+:root {
+    --sl-badge-caution-text: var(--sl-color-orange-high);
+    --sl-badge-caution-bg: color-mix(
+        in srgb,
+        var(--sl-color-orange) 14%,
+        transparent
+    );
+    --sl-badge-caution-border: color-mix(
+        in srgb,
+        var(--sl-color-orange) 45%,
+        transparent
+    );
+    --sl-badge-success-text: var(--sl-color-green-high);
+    --sl-badge-success-bg: color-mix(
+        in srgb,
+        var(--sl-color-green) 14%,
+        transparent
+    );
+    --sl-badge-success-border: color-mix(
+        in srgb,
+        var(--sl-color-green) 45%,
+        transparent
+    );
+}
+
+.sl-badge {
+    font-family: var(--sl-font);
+    font-weight: 500;
+    border-radius: 999px;
+}
+
+.sidebar-content .sl-badge {
+    font-size: 0.6875rem;
+    padding: 0.0625rem 0.4rem;
+    white-space: nowrap;
+}
+
+/* Quieter, rounder content surfaces. */
+.sl-markdown-content :is(.expressive-code .frame, table),
+.card,
+.sl-link-card {
+    border-radius: var(--capsule-radius-card);
+}
+
+.sl-markdown-content .starlight-aside {
+    border-radius: var(--capsule-radius-sm);
+    border-inline-start-width: 3px;
+}
+
+.sl-markdown-content :is(h1, h2, h3) {
+    letter-spacing: -0.015em;
 }
 
 .sl-markdown-content > ul > li {

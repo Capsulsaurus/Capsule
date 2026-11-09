@@ -19,7 +19,9 @@ export default defineConfig({
     integrations: [
         starlight({
             title: 'Capsule',
-            description: 'Photo sharing for all!',
+            description:
+                'An open-source, end-to-end encrypted photo library: organization that runs on your devices, a server that holds no keys, and sharing designed to span servers.',
+            favicon: '/favicon.svg',
             social: [
                 {
                     icon: 'github',
@@ -34,6 +36,8 @@ export default defineConfig({
             components: {
                 // Renders the `status` frontmatter (draft/stable) as a title badge.
                 PageTitle: './src/components/PageTitle.astro',
+                // Appends the site footer (links, licence) to every page.
+                Footer: './src/components/Footer.astro',
             },
             // Badges every non-stable page in the sidebar. See src/route-data.ts.
             routeMiddleware: './src/route-data.ts',
@@ -171,7 +175,8 @@ export default defineConfig({
             customCss: ['./src/styles/global.css'],
             // TODO: Add internationalization down the line: https://starlight.astro.build/guides/i18n/
             plugins: [
-                starlightLinksValidator(),
+                // Feature cards on the front page link into the design docs.
+                starlightLinksValidator({ components: [['Feature', 'href']] }),
                 // starlightVersions({
                 // 	// current: {
                 // 	// 	label: 'master',

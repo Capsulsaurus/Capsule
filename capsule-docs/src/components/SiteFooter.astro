@@ -1,0 +1,110 @@
+---
+// Site-wide footer, mounted on every page by Footer.astro. Its contents are a
+// contract of the Visual Language doc (development/visual-language.md).
+
+const REPO = 'https://github.com/Capsulsaurus/Capsule';
+
+const links = [
+    { label: 'Documentation', href: '/guides/getting-started/' },
+    {
+        label: 'Roadmap',
+        href: `${REPO}/blob/master/ROADMAP.md`,
+        external: true,
+    },
+    { label: 'Discussions', href: `${REPO}/discussions`, external: true },
+    { label: 'GitHub', href: REPO, external: true },
+];
+
+const year = new Date().getFullYear();
+---
+
+<footer class="site-footer not-content">
+  <div class="footer-content">
+    <a href="/" class="footer-logo">Capsule</a>
+    <nav class="footer-nav" aria-label="Site">
+      {
+        links.map(({ label, href, external }) => (
+          <a
+            href={href}
+            class="footer-link"
+            {...(external
+              ? { target: '_blank', rel: 'noopener noreferrer' }
+              : {})}
+          >
+            {label}
+          </a>
+        ))
+      }
+    </nav>
+  </div>
+
+  <p class="footer-bottom">
+    <span>© {year} Justin Chung</span>
+    <span aria-hidden="true">·</span>
+    <span>Open source and openly developed, licensed AGPL-3.0</span>
+  </p>
+</footer>
+
+<style>
+  .site-footer {
+    margin-top: 4rem;
+    padding-block: 2rem 1rem;
+    border-top: 1px solid var(--sl-color-hairline);
+  }
+
+  .footer-content {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 1.25rem 2rem;
+  }
+
+  .footer-logo {
+    font-size: 1.125rem;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    color: var(--sl-color-white);
+    text-decoration: none;
+  }
+
+  .footer-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.5rem;
+  }
+
+  .footer-link {
+    color: var(--sl-color-gray-3);
+    font-size: var(--sl-text-sm);
+    text-decoration: none;
+  }
+
+  .footer-link:hover,
+  .footer-link:focus-visible {
+    color: var(--sl-color-text-accent);
+  }
+
+  /* Each piece is its own span and the gap supplies the spacing, so the
+     separators never depend on whitespace in the markup. */
+  .footer-bottom {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.25rem 0.5rem;
+    margin-top: 1.5rem;
+    color: var(--sl-color-gray-3);
+    font-size: var(--sl-text-xs);
+  }
+
+  @media (max-width: 50rem) {
+    .footer-content {
+      flex-direction: column;
+      text-align: center;
+    }
+
+    .footer-nav {
+      justify-content: center;
+    }
+  }
+</style>
