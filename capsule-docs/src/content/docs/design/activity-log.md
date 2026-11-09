@@ -58,7 +58,7 @@ Not recorded, each for a stated reason:
 | `event_id` | A UUIDv7 the server mints for the event |
 | `kind` | One of the kinds above |
 | `at` | The server's clock when the event was recorded |
-| `request_id` | The `X-Request-Id` of the request that caused it ([request ids](/design/api-surfaces/#negotiation-across-transports)); absent for an event no request caused |
+| `request_id` | The `X-Request-Id` of the request that caused it ([request ids](/reference/api/conventions/#protocol-negotiation)); absent for an event no request caused |
 | `session_id` | The session that acted, when one did; absent for an unauthenticated act such as a sign-in or a revoke-all |
 | `subject` | The identifier the event is about, per the table above |
 

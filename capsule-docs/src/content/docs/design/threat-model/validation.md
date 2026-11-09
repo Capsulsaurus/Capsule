@@ -8,7 +8,7 @@ Refuse-by-default checks every receiver runs before persisting a write, against 
 
 ## Server-Side Validation Invariants
 
-Key-free **structural** checks. Canonical list; numbers are stable and cited elsewhere. Every rejection carries an [`error.*` code](/design/i18n/#server-error-codes) ([mapping](/design/api-surfaces/#rejection-mapping)) and is logged.
+Key-free **structural** checks. Canonical list; numbers are stable and cited elsewhere. Every rejection carries an [`error.*` code](/design/i18n/#server-error-codes) ([mapping](/reference/api/conventions/#errors)) and is logged.
 
 ### On `POST /v1/upload` (session creation)
 

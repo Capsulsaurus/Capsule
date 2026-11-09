@@ -25,7 +25,7 @@ deterministic mocks. Database models never become wire DTOs.
 
 - REST/OpenAPI is the only public server transport; Kynos owns runtime, routing, middleware, OpenAPI
   emission, limits, shutdown, and runtime observability.
-- The checked-in [OpenAPI 3.2 document](/design/api-surfaces/#the-document-is-32-and-its-version-is-pinned)
+- The checked-in [OpenAPI 3.2 document](/design/api-surfaces/#key-design-decisions)
   is generated deterministically without live infrastructure; Spargen generates the client from it.
 - Every error carries a stable `error.*` code; the English detail is diagnostic and clients localize
   the code.

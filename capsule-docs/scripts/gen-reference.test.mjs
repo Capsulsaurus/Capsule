@@ -30,6 +30,7 @@ import {
     renderApiPage,
     renderBindingsPage,
     renderCliPage,
+    renderConventionsPage,
     renderWasmPage,
     WASM_SURFACE,
 } from './gen-reference.mjs';
@@ -227,7 +228,12 @@ function writeOpenApi(document) {
 
 const MINIMAL_OPENAPI = {
     openapi: '3.2.0',
-    info: { title: 'API', version: '0.0.0' },
+    info: {
+        title: 'API',
+        version: '0.0.0',
+        description:
+            'The shared contract.\n\n## Errors\n\nSwitch on `code`; see [i18n](../../capsule-docs/src/content/docs/design/i18n.md).',
+    },
     paths: {
         '/v1/version': {
             get: {
@@ -860,14 +866,40 @@ describe('the SDK pages', () => {
         expect(() => readBindingsSurface(root)).toThrow(/no kotlin/);
     });
 
-    it('lists every SDK page in the sidebar, then crates', () => {
+    it('puts the generated conventions page right after the REST overview', () => {
+        const rest = referenceSidebar().find((item) => item.label === 'REST API');
+        expect(rest.items.slice(0, 2)).toEqual([
+            { slug: 'reference/api' },
+            { slug: 'reference/api/conventions' },
+        ]);
+    });
+
+    it('lists every SDK page in the sidebar, last', () => {
         const sidebar = referenceSidebar();
         const sdk = sidebar.find((item) => item.label === 'SDK');
         expect(sdk.items.map((item) => item.slug)).toEqual([
             'reference/sdk',
             ...SDK_PAGES.map((page) => `reference/sdk/${page.slug}`),
         ]);
-        expect(sidebar.at(-1)).toEqual({ slug: 'reference/crates' });
+        expect(sidebar.at(-1)).toBe(sdk);
+    });
+});
+
+describe('renderConventionsPage', () => {
+    it('renders the document description as a generated REST page', () => {
+        const page = renderConventionsPage(MINIMAL_OPENAPI);
+        expect(page).toMatch(/^title: "Conventions"$/m);
+        expect(page).toMatch(/^generated:\n {2}surface: "REST API"$/m);
+        expect(page).toContain('## Errors');
+        expect(page).toContain('[i18n](/design/i18n/)');
+    });
+
+    it('refuses a document with no description', () => {
+        const document = structuredClone(MINIMAL_OPENAPI);
+        delete document.info.description;
+        expect(() => renderConventionsPage(document)).toThrow(
+            /no info\.description/,
+        );
     });
 });
 
@@ -1542,8 +1574,12 @@ describe('the committed artifacts', () => {
             expect(existsSync(join(root, path))).toBe(true);
         }
         const generatedSdk = SDK_PAGES.filter((page) => page.artifact !== null);
+        expect(written).toContain(
+            'capsule-docs/src/content/docs/reference/api/conventions.md',
+        );
+        // The CLI page, the conventions page, one page per group, and the SDK pages.
         expect(written).toHaveLength(
-            API_GROUPS.length + 1 + generatedSdk.length,
+            API_GROUPS.length + 2 + generatedSdk.length,
         );
     });
 

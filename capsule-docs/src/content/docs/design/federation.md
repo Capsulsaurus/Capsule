@@ -20,7 +20,7 @@ Shipped: minting, refresh, revocation, the capability arm of the pull path, requ
 
 ## Federation Reuses Existing Primitives
 
-Federation introduces **no new data protocol**. A peer reads the same content-addressed primitives a client uses ([Sync](/design/sync/#discovering-what-changed), [API surfaces](/design/api-surfaces/#surface--transport-map)):
+Federation introduces **no new data protocol**. A peer reads the same content-addressed primitives a client uses ([Sync](/design/sync/#discovering-what-changed), [](/design/api-surfaces/#surfaces)):
 
 | Operation | Purpose |
 | --- | --- |
@@ -29,7 +29,7 @@ Federation introduces **no new data protocol**. A peer reads the same content-ad
 | `Authorization: Bearer <capability>` | Presents a [federation capability](#federation-capabilities). |
 | `X-Capsule-Request-Signature` | Binds that presentation to the peer named in `sub` ([request signatures](#request-signatures)). |
 
-Rejections follow [API Surfaces — Rejection Mapping](/design/api-surfaces/#rejection-mapping). [Hints](/design/notifications/#vocabulary) and presence ride a separate low-trust channel and never feed validation. Capsule recomputes every blob's content hash on arrival, so a peer cannot lie about what a hash contains.
+Rejections follow [](/reference/api/conventions/#errors). [Hints](/design/notifications/#vocabulary) and presence ride a separate low-trust channel and never feed validation. Capsule recomputes every blob's content hash on arrival, so a peer cannot lie about what a hash contains.
 
 ## Pull-Only Federation
 

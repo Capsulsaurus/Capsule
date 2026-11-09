@@ -58,6 +58,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { slugify } from './lib/markdown.mjs';
 import {
+    API_CONVENTIONS,
     API_GROUPS,
     CLI_PAGES,
     groupForPath,
@@ -1585,6 +1586,44 @@ function renderSchema(name, document, documented) {
 }
 
 /**
+ * The generated `/reference/api/conventions/` page: the document's `info.description`, the
+ * contract every operation shares, which `capsule-server/src/openapi/contract.md` defines.
+ *
+ * @param {Record<string, any>} document
+ * @returns {string} Markdown, frontmatter included.
+ * @throws {Error} When the document has no description: the page would be empty, and every
+ *   endpoint page sends its reader there.
+ */
+export function renderConventionsPage(document) {
+    const description = document.info?.description;
+    if (typeof description !== 'string' || description.trim() === '') {
+        throw new Error(
+            `${OPENAPI_DOCUMENT} has no info.description, which is the contract every ` +
+                'operation shares (capsule-server/src/openapi/contract.md). Regenerate it with ' +
+                '`mise run openapi-kynos`.',
+        );
+    }
+    return `${tidyBlankLines(
+        [
+            '---',
+            `title: ${yamlString(API_CONVENTIONS.label)}`,
+            `description: ${yamlString(API_CONVENTIONS.description)}`,
+            'status: stable',
+            ...generatedFrontmatter(
+                'REST API',
+                `OpenAPI ${document.openapi}`,
+                OPENAPI_DOWNLOAD,
+            ),
+            '---',
+            '',
+            `<!-- Generated from ${OPENAPI_DOCUMENT} by ${GENERATED_BY}. Do not edit. -->`,
+            '',
+            demoteHeadings(rewriteLinks(description.trim()), 0),
+        ].join('\n'),
+    )}\n`;
+}
+
+/**
  * The generated `/reference/api/<group>/` page.
  *
  * @param {import('./reference-groups.mjs').ApiGroup} group
@@ -2056,6 +2095,10 @@ export function generate(root) {
         {
             path: `${CLI_OUT}/${CLI_PAGES[0].slug}.md`,
             body: renderCliPage(surface),
+        },
+        {
+            path: `${API_OUT}/${API_CONVENTIONS.slug}.md`,
+            body: renderConventionsPage(document),
         },
         ...API_GROUPS.map((group) => ({
             path: `${API_OUT}/${group.slug}.md`,
