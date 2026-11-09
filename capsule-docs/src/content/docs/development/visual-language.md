@@ -7,7 +7,7 @@ status: draft
 This doc owns Capsule's **brand tokens**: the accent, neutral ramp, type, radius and spacing scales
 defined in one place. It also owns the **voice** of public copy and the **docs-site
 rules** (header, status badges, sidebar, front page, footer, blog). It defers everything else about a client's look to
-[Clients — Design Language](/design/clients/#design-language): native material on each platform,
+[](/design/clients/#design-language): native material on each platform,
 no third house style. The brand reaches a native client only through its accent and its app icon.
 
 ## Principles
@@ -100,7 +100,7 @@ one is designed.
   splash pages such as the front page have no menu, so there they are reached through the page's
   own links.
 - **Status badges.** Every authored page carries a review `status`
-  ([Core Principles — Review Status](/design/principles/#review-status)). The page title always shows
+  ([](/design/principles/#review-status)). The page title always shows
   it. The sidebar shows it only for a page that is not `stable`, so the navigation lists exactly what
   still awaits review.
 - **Sidebar.** The same surface as the page, divided from it by a hairline; the current page is an

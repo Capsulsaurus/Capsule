@@ -7,7 +7,7 @@ status: draft
 This guide covers the `capsule` CLI, the reference client. Commands marked *(planned)* are on
 the [roadmap](https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md) and not yet
 available. `capsule <command> --help` is authoritative for flags; the
-[CLI reference](/reference/cli/) lists them all.
+CLI reference ([](/reference/cli/)) lists them all.
 
 :::caution
 Capsule is alpha. Until the first dogfood release, keep an independent backup of any original
@@ -28,7 +28,7 @@ you import.
 
 - `capsule import <path>` copies files into the library, signs each asset's provenance and
   metadata, and generates thumbnails. `--provider takeout` imports a Google Takeout archive
-  with its sidecar metadata ([migration guide](/guides/google-photos-migration/)).
+  with its sidecar metadata ([](/guides/google-photos-migration/)).
 - `capsule push` uploads the library. Uploads resume where they stopped, so re-running `push` is
   always safe. After each asset, `push` asks the server to confirm it durably holds every blob and
   keeps the server's signed custody receipts in the library. A failed asset is reported and the run

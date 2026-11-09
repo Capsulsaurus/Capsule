@@ -8,11 +8,11 @@ Every primitive and key-handling routine lives in `capsule-core::crypto`. All cl
 
 | Sub-doc | Owns |
 | --- | --- |
-| [Primitives](/design/cryptography/primitives/) | Inventory of every hash, KDF, AEAD, signature, KEM, ciphersuite and version id |
-| [Keys](/design/cryptography/keys/) | Key hierarchy, account types, device directory, write authorization, rotation |
-| [MLS](/design/cryptography/mls/) | Group membership, history delivery, FS/PCS |
-| [Encryption](/design/cryptography/encryption/) | Asset and metadata AEAD, wire formats |
-| [Provenance](/design/cryptography/provenance/) | Signed manifests, append-only chains, derivative provenance |
+| [](/design/cryptography/primitives/) | Inventory of every hash, KDF, AEAD, signature, KEM, ciphersuite and version id |
+| [](/design/cryptography/keys/) | Key hierarchy, account types, device directory, write authorization, rotation |
+| [](/design/cryptography/mls/) | Group membership, history delivery, FS/PCS |
+| [](/design/cryptography/encryption/) | Asset and metadata AEAD, wire formats |
+| [](/design/cryptography/provenance/) | Signed manifests, append-only chains, derivative provenance |
 
 ## Invariants
 

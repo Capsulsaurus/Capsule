@@ -4,7 +4,7 @@ description: AI feature architecture, the canonical model inventory, embedding p
 status: draft
 ---
 
-All ML runs **client-side**; the server never holds plaintext. The stable contract is [AI Output Containment](#ai-output-containment), the [model inventory](#models-and-algorithms) and [Embedding Provenance](#embedding-provenance); feature lists and model picks are defaults that will move with field testing.
+All ML runs **client-side**; the server never holds plaintext. The stable contract is [](#ai-output-containment), the model inventory ([](#models-and-algorithms)) and [](#embedding-provenance); feature lists and model picks are defaults that will move with field testing.
 
 There are three categories: [](#semantic-indexing) (one global embedding per asset), [](#dense-tagging) (local embeddings for objects, faces, scenes) and [](#quality-assessment) (per-asset scores). Orchestration is `capsule-core::ml`, platform runners (CoreML, NNAPI, [ONNX Runtime](https://github.com/microsoft/onnxruntime)) are in `capsule-sdk`, and the vector index is the `capsule-core::ml::VectorIndex` port, whose SQLite adapter is `capsule-library::db`.
 
@@ -12,13 +12,13 @@ There are three categories: [](#semantic-indexing) (one global embedding per ass
 
 **AI outputs live in a separate namespace from user metadata, structurally, not by policy.** [](/design/metadata/#tag-provenance-and-namespacing) owns the shape (`tags_ai` vs `tags_user`, plus AI-only sidecar fields). Consequences:
 
-- An AI output can never overwrite a user field. Each AI facet ships in its own AI-namespaced [sidecar](/design/metadata/#sidecar-schema-v1) field, user corrections write user fields, and AI re-runs leave them alone.
+- An AI output can never overwrite a user field. Each AI facet ships in its own AI-namespaced sidecar field ([](/design/metadata/#sidecar-schema-v1)), user corrections write user fields, and AI re-runs leave them alone.
 - Every AI output carries `(model_id, model_version)`. Outputs of a superseded model are stale and excluded from queries until regenerated.
-- Promoting an AI tag to a user tag is an explicit, signed [lifecycle operation](/design/authorization/#the-closed-action-set), never automatic.
+- Promoting an AI tag to a user tag is an explicit, signed lifecycle operation ([](/design/authorization/#the-closed-action-set)), never automatic.
 
 This blocks the "AI silently overwrites user data" damage class ([](/design/threat-model/schema-rules/#forbidden-client-behaviors)).
 
-**AI grouping is a pure function** of `(input asset set, model_id, model_version)`. Inputs are processed in sorted asset-id order and stochastic steps use fixed seeds, so re-running yields byte-identical output, satisfying the [grouping-convergence requirement](/design/metadata/#grouping-convergence-requirement).
+**AI grouping is a pure function** of `(input asset set, model_id, model_version)`. Inputs are processed in sorted asset-id order and stochastic steps use fixed seeds, so re-running yields byte-identical output, satisfying [](/design/metadata/#grouping-convergence-requirement).
 
 ## Semantic Indexing
 
@@ -30,16 +30,16 @@ Semantic embeddings are reused for zero-shot tagging; there is no separate class
 
 ## Dense Tagging
 
-Face detection and clustering use the **Face Detection** and **Face Recognition** [inventory](#models-and-algorithms) rows.
+Face detection and clustering use the **Face Detection** and **Face Recognition** inventory rows ([](#models-and-algorithms)).
 
 ## Quality Assessment
 
-Post-v1, with its sidecar fields reserved under [containment](#ai-output-containment). Fixed now:
+Post-v1, with its sidecar fields reserved under [](#ai-output-containment). Fixed now:
 
 - Group-scoped evaluations (best shot within a stack, burst or similarity group) run strictly **after** grouping.
 - They are keyed by `(group_id, membership_hash, model_id, model_version)`, where `membership_hash` is the hash of sorted member ids, so a membership change invalidates them by construction.
 - Ties break by asset id.
-- The only durable outcome is the [`role = primary` pointer](/design/organization/#asset-stacking).
+- The only durable outcome is the `role = primary` pointer ([](/design/organization/#asset-stacking)).
 
 ## Model Batching
 
@@ -51,12 +51,12 @@ Embeddings live in local **SQLite + `sqlite-vec`** and are **derived state**. A 
 
 ## Embedding Provenance
 
-Every stored embedding (local index, backup, or embedding-class [`DerivativeManifest`](/design/cryptography/provenance/#derivative-provenance)) carries `(model_id, model_version)` naming its inventory row. Embeddings are never compared across tuples. Each `model_id` is declared in exactly one inventory row.
+Every stored embedding (local index, backup, or embedding-class `DerivativeManifest`, [](/design/cryptography/provenance/#derivative-provenance)) carries `(model_id, model_version)` naming its inventory row. Embeddings are never compared across tuples. Each `model_id` is declared in exactly one inventory row.
 
 - The index MUST **refuse inserts** from a `(model_id, model_version)` unknown to the inventory. Known-but-superseded versions are admitted stale-flagged (the regeneration queue) and excluded from queries.
 - A model swap bumps `model_version`. Regeneration replaces entries per asset, deleting old ones only after new ones persist, never truncate-and-rebuild ([](/design/threat-model/validation/#client-side-validation-invariants)).
 
-**E2EE constraint.** Comparable embeddings need byte-identical inference across devices, so each device pins a deterministic execution path (fixed operators, deterministic kernels, quantized weights) and passes a known-answer check. Model size is bounded by the lowest-end supported device. A device that cannot reach bit-exactness tags its embeddings with a `platform` discriminator, and they are **never merged** into another platform's index: the worst case is duplicated regeneration, never wrong results ([Scenario Map](/design/threat-model/scenarios/#damage-scenario--invariant-map) row #14).
+**E2EE constraint.** Comparable embeddings need byte-identical inference across devices, so each device pins a deterministic execution path (fixed operators, deterministic kernels, quantized weights) and passes a known-answer check. Model size is bounded by the lowest-end supported device. A device that cannot reach bit-exactness tags its embeddings with a `platform` discriminator, and they are **never merged** into another platform's index: the worst case is duplicated regeneration, never wrong results (row #14 of [](/design/threat-model/scenarios/#damage-scenario--invariant-map)).
 
 ## Models and Algorithms
 

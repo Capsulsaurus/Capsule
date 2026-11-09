@@ -4,13 +4,13 @@ description: The durable record of an account's security events, what it may hol
 status: draft
 ---
 
-The activity log is the account owner's record of what was done **to and with the account** on this server: sign-ins, sign-outs, revocations, credential changes, device enrollment and the links that open the account to someone else. It answers "was that me?" next to the [session list](/design/authentication/#explicit-revocation), and an operator and a user reconstruct an incident from it. Code: `capsule-server::activity`.
+The activity log is the account owner's record of what was done **to and with the account** on this server: sign-ins, sign-outs, revocations, credential changes, device enrollment and the links that open the account to someone else. It answers "was that me?" next to the session list ([](/design/authentication/#explicit-revocation)), and an operator and a user reconstruct an incident from it. Code: `capsule-server::activity`.
 
-It is neither the [provenance](/design/cryptography/provenance/) chain, which signs changes to *library data*, nor the [moderation record](/design/moderation/), which records what an operator did to the account. The three are separate records with separate writers.
+It is neither the provenance chain ([](/design/cryptography/provenance/)), which signs changes to *library data*, nor the moderation record ([](/design/moderation/)), which records what an operator did to the account. The three are separate records with separate writers.
 
 ## Invariants
 
-- **Owner-only.** An account reads its own log and nobody else's, over a route with no account parameter. There is no admin read over HTTP for the same reason [moderation](/design/moderation/) has no admin surface: no admin authentication model exists. The operator holding the database credentials can read the table, as they can every table.
+- **Owner-only.** An account reads its own log and nobody else's, over a route with no account parameter. There is no admin read over HTTP for the same reason [](/design/moderation/) has no admin surface: no admin authentication model exists. The operator holding the database credentials can read the table, as they can every table.
 - **Append-only.** An event is never updated. Rows leave the log only by the retention bound below, never by a user or a request.
 - **Identifiers, never content.** The server is end-to-end encrypted, so no field may carry what only clients can read: no asset content, album names, captions, labels, file names or key material. An event names *which* session, share link or drop link by the identifier the server already holds.
 - **Recording never refuses the act.** An event is written after the action it describes. A store that cannot record it is logged at `error` with the event's fields and the action stands, because refusing a sign-out, a revocation or a password change while the log is down would turn an audit outage into a security outage.
@@ -23,8 +23,8 @@ It is neither the [provenance](/design/cryptography/provenance/) chain, which si
 | --- | --- | --- |
 | `account.registered` | an account is created, by registration or by the first identity-provider sign-in of an identity | its first session, when registration opened one; absent for an account an identity-provider sign-in created, whose `sign_in.oidc` names the session |
 | `sign_in.password` | a password sign-in opens a session | the new session |
-| `sign_in.password_refused` | a password sign-in is refused because the password is wrong for this account; at most one an hour per account, see [Retention](#retention) | — |
-| `sign_in.locked` | a password sign-in is refused because this account is locked; at most one an hour per account, see [Retention](#retention) | — |
+| `sign_in.password_refused` | a password sign-in is refused because the password is wrong for this account; at most one an hour per account, see [](#retention) | — |
+| `sign_in.locked` | a password sign-in is refused because this account is locked; at most one an hour per account, see [](#retention) | — |
 | `sign_in.second_factor` | a sign-in completes its second factor and opens a session | the new session |
 | `sign_in.second_factor_refused` | a second-factor code is refused for a sign-in whose first factor verified | — |
 | `sign_in.oidc` | an identity-provider sign-in (browser or device flow) opens a session | the new session |
@@ -34,14 +34,14 @@ It is neither the [provenance](/design/cryptography/provenance/) chain, which si
 | `password.changed` | the account password changes | — |
 | `totp.enabled` | a second factor is confirmed | — |
 | `totp.disabled` | a second factor is removed | — |
-| `escrow.replaced` | the master-key [escrow](/design/backup-recovery/#master-key-escrow) is stored over an earlier one, so the old recovery secret stops working | — |
+| `escrow.replaced` | the master-key escrow ([](/design/backup-recovery/#master-key-escrow)) is stored over an earlier one, so the old recovery secret stops working | — |
 | `device.enrolled` | a cross-device enrollment code is redeemed | — |
 | `share_link.created` | a share link is created | the link's id |
 | `share_link.revoked` | a share link is revoked | the link's id |
 | `drop_link.created` | a guest-upload link is provisioned | the link's id |
 | `drop_link.revoked` | a guest-upload link is revoked | the link's id |
-| `share_link.served` | a share link serves the first blob of a window; aggregated, see [Serving](#serving) | the link's id; absent for the links past the account's hourly bound |
-| `peer.served` | a federated peer, under a capability over one of the account's albums, is served the first blob of a window; aggregated, see [Serving](#serving) | the peer's id; absent for the peers past the account's hourly bound |
+| `share_link.served` | a share link serves the first blob of a window; aggregated, see [](#serving) | the link's id; absent for the links past the account's hourly bound |
+| `peer.served` | a federated peer, under a capability over one of the account's albums, is served the first blob of a window; aggregated, see [](#serving) | the peer's id; absent for the peers past the account's hourly bound |
 
 Not recorded, each for a stated reason:
 
@@ -58,7 +58,7 @@ Not recorded, each for a stated reason:
 | `event_id` | A UUIDv7 the server mints for the event |
 | `kind` | One of the kinds above |
 | `at` | The server's clock when the event was recorded |
-| `request_id` | The `X-Request-Id` of the request that caused it ([request ids](/reference/api/conventions/#protocol-negotiation)); absent for an event no request caused |
+| `request_id` | The `X-Request-Id` of the request that caused it (request ids: [](/reference/api/conventions/#protocol-negotiation)); absent for an event no request caused |
 | `session_id` | The session that acted, when one did; absent for an unauthenticated act such as a sign-in or a revoke-all |
 | `subject` | The identifier the event is about, per the table above |
 
@@ -104,4 +104,4 @@ The log is a durable port in the PostgreSQL family, beside the asset index, acco
 
 ## Rate Limits
 
-No event feeds a [counter budget](/design/authentication/#the-second-factor). Budgets are charged at the request edge, before the action, against a counter store built for that, while the log is written to PostgreSQL after the action; a budget fed from the log would make a log outage disable a limiter. Second-factor attempts and link creation are budgeted at the routes that cause them. A password sign-in is bounded by the account lockout, not a budget, so its refusal events are coalesced instead ([](#retention)).
+No event feeds a counter budget ([](/design/authentication/#the-second-factor)). Budgets are charged at the request edge, before the action, against a counter store built for that, while the log is written to PostgreSQL after the action; a budget fed from the log would make a log outage disable a limiter. Second-factor attempts and link creation are budgeted at the routes that cause them. A password sign-in is bounded by the account lockout, not a budget, so its refusal events are coalesced instead ([](#retention)).

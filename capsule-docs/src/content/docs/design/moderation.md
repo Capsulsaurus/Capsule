@@ -4,13 +4,13 @@ description: Server moderation policy — reports, suspensions, takedowns, block
 status: draft
 ---
 
-Capsule is end-to-end encrypted, so the server **cannot** scan content, and no server-side content or CSAM scanner will be built; opt-in [AI/ML](/design/ai/) runs on the client, over the user's own library. Moderation works on user reports, account signals and peer reputation. Endpoint shapes are in [](/reference/api/moderation/). Code: `capsule-server::moderation`.
+Capsule is end-to-end encrypted, so the server **cannot** scan content, and no server-side content or CSAM scanner will be built; opt-in AI/ML ([](/design/ai/)) runs on the client, over the user's own library. Moderation works on user reports, account signals and peer reputation. Endpoint shapes are in [](/reference/api/moderation/). Code: `capsule-server::moderation`.
 
 ## What Moderation Cannot Do (Structural)
 
 - **No content inspection.** The server holds only ciphertext.
 - **No retroactive takedown.** Ciphertext a peer already fetched cannot be recalled; takedown governs future serving.
-- **No silent operations.** Every action affecting user data MUST produce a [provenance record](/design/cryptography/provenance/#provenance-of-library-modifications) and an entry in the user's moderation record, which the user reads at `GET /v1/moderation/record`. The account's [activity log](/design/activity-log/) is a separate record of the user's own security events, not of operator actions.
+- **No silent operations.** Every action affecting user data MUST produce a provenance record ([](/design/cryptography/provenance/#provenance-of-library-modifications)) and an entry in the user's moderation record, which the user reads at `GET /v1/moderation/record`. The [](/design/activity-log/) is a separate record of the user's own security events, not of operator actions.
 
 Moderation *actions* have **no wire surface**. There is no admin authentication model over HTTP, so the admin is the **operator on the host**, authenticated by holding the deployment's database credentials, and actions run through operator commands. The admin reads the federated report queue with `capsule-server moderation reports`.
 
@@ -18,9 +18,9 @@ Moderation *actions* have **no wire surface**. There is no admin authentication 
 
 ### Federated Reporting
 
-A report against `alice@other.tld` goes to her home server, the only party that can act on her account. Intake is `POST /v1/federation/reports`, gated with the rest of [federation](/design/federation/#status).
+A report against `alice@other.tld` goes to her home server, the only party that can act on her account. Intake is `POST /v1/federation/reports`, gated with the rest of federation ([](/design/federation/#status)).
 
-- **Authentication.** A report MUST be signed by the reporting server's [operational key](/design/federation/#server-identity-and-key-rotation) and verified **before** any budget is charged; unsigned or invalid reports are dropped. Peer keys are operator-pinned with `capsule-server peer pin`, and a peer with none answers `403 error.federation.peer_unknown`. The server never fetches a key on first report (TOFU at intake is rejected).
+- **Authentication.** A report MUST be signed by the reporting server's operational key ([](/design/federation/#server-identity-and-key-rotation)) and verified **before** any budget is charged; unsigned or invalid reports are dropped. Peer keys are operator-pinned with `capsule-server peer pin`, and a peer with none answers `403 error.federation.peer_unknown`. The server never fetches a key on first report (TOFU at intake is rejected).
 - **Rate limits.** Per `(reporting_server, reported_user)`, per peer across all accounts (the peer chooses `reported_user`), and per peer on total intake. Every one is charged to the verified peer, so nobody can spend a peer's allowance in its name.
 - **Replay.** A report is bound to its recipient, its moment and one use. `recipient_server` must name this server, `reported_at` must be within **5 minutes** of the receiver's clock either way, and the receiver accepts each `nonce` (16 to 64 bytes) once per peer for as long as the report could still be fresh. A replayed nonce is refused before any budget is charged. All three refusals are `401 error.moderation.report_unsigned`, and a retrying peer signs again with a fresh nonce.
 - **Unknown accounts** get the same answer as accepted reports and are filed nowhere, so intake is not an account-enumeration oracle; the operator log records them.
@@ -31,30 +31,30 @@ A report against `alice@other.tld` goes to her home server, the only party that 
 
 ### Blocklists
 
-- **Server-level blocklist.** Peers this server refuses, enforced at the [capability](/design/federation/#federation-capabilities) layer. Mint, presentation, refresh and report intake all consult it, and blocking cuts and publishes every live grant the peer holds. The operator writes it with `capsule-server peer block|unblock`.
-- **Per-user block.** Enforced by the blocker's home server. The blocked user is removed from albums shared with the blocker (one MLS `Remove` of all their devices, one epoch bump) and cannot share new albums with them. Epochs already held are not clawed back ([removal semantics](/design/cryptography/mls/#remove-user-charlie)). A per-user block MUST NOT propagate as a server-level block, so users cannot weaponize blocks against a whole peer.
+- **Server-level blocklist.** Peers this server refuses, enforced at the capability layer ([](/design/federation/#federation-capabilities)). Mint, presentation, refresh and report intake all consult it, and blocking cuts and publishes every live grant the peer holds. The operator writes it with `capsule-server peer block|unblock`.
+- **Per-user block.** Enforced by the blocker's home server. The blocked user is removed from albums shared with the blocker (one MLS `Remove` of all their devices, one epoch bump) and cannot share new albums with them. Epochs already held are not clawed back (removal semantics in [](/design/cryptography/mls/#remove-user-charlie)). A per-user block MUST NOT propagate as a server-level block, so users cannot weaponize blocks against a whole peer.
 - **Blocklist exchange (v2).** Signed, versioned server-level lists an admin **opts into** from trusted peers, never auto-applied and never including per-user blocks.
 
 ### Untrusted-Server Whitelist
 
-The [untrusted-server gate](/design/federation/#security-against-malicious-files) is the front-line control for content from unknown servers. Moderation policy defines how trust is granted and revoked.
+The untrusted-server gate ([](/design/federation/#security-against-malicious-files)) is the front-line control for content from unknown servers. Moderation policy defines how trust is granted and revoked.
 
 ### Account Suspension
 
 A suspended account:
 
 - cannot create upload sessions (`403 error.moderation.account_suspended`, distinct from quota and permission refusals);
-- cannot share albums or create share or upload links (existing [share links](/design/share-links/) keep serving until expiry or revocation);
-- **can still revoke all sessions**, which is gated by [master-key proof](/design/authentication/#explicit-revocation), not standing.
+- cannot share albums or create share or upload links (existing share links keep serving until expiry or revocation; see [](/design/share-links/));
+- **can still revoke all sessions**, which is gated by master-key proof ([](/design/authentication/#explicit-revocation)), not standing.
 
 Data is untouched. Suspension is reversible; termination is a separate policy.
 
 ### Takedown
 
 - A takedown is a **serving hold on the asset**, never on a content address, because two assets may share a blob and holding an address would take down someone else's photo.
-- Peers fetching a held asset get `410 Gone`, which signals removal of content the peer already knows. Capability URLs ([share links](/design/share-links/#security-contract), drops) answer `404` because they must not confirm existence.
+- Peers fetching a held asset get `410 Gone`, which signals removal of content the peer already knows. Capability URLs (share links per [](/design/share-links/#security-contract), drops) answer `404` because they must not confirm existence.
 - Bytes are **never deleted**. An admin can reverse a takedown; a **legal hold** lifts only when the legal obligation ends.
-- [Storage verification](/design/transfer/durability/) reports a held blob as `stored` but **not** `retrievable`, so a client never releases its only local copy on the strength of bytes the server will not serve.
+- Storage verification ([](/design/transfer/durability/)) reports a held blob as `stored` but **not** `retrievable`, so a client never releases its only local copy on the strength of bytes the server will not serve.
 - Every takedown emits a moderation provenance record (what, when, and why where policy permits).
 
 ## Federation Boundary

@@ -4,7 +4,7 @@ description: The metadata sync feed — cursors, anti-rewind, stale-revival dete
 status: draft
 ---
 
-The sync feed tells a client **what changed**; the [transfer protocol](/design/transfer/) moves the bytes. A client never polls assets individually: it holds one opaque cursor and reads everything after it. Server: `capsule-server::sync`; client: `capsule-sdk::sync`, applied by `capsule-library::lifecycle::sync_apply`.
+The sync feed tells a client **what changed**; the [](/design/transfer/) moves the bytes. A client never polls assets individually: it holds one opaque cursor and reads everything after it. Server: `capsule-server::sync`; client: `capsule-sdk::sync`, applied by `capsule-library::lifecycle::sync_apply`.
 
 ## Discovering What Changed
 
@@ -16,11 +16,11 @@ Each entry carries:
 - the small encrypted metadata blob;
 - the blob manifest (content hashes of the original and derivatives);
 - each derivative tier's signed `DerivativeManifest`, verbatim;
-- `original_held`, the derived [awaiting-original](/design/transfer/download/#awaiting-original) fact.
+- `original_held`, the derived awaiting-original fact ([](/design/transfer/download/#awaiting-original)).
 
-It never carries original or derivative bytes. The client decrypts metadata, then decides what to [fetch](/design/transfer/download/).
+It never carries original or derivative bytes. The client decrypts metadata, then decides what to fetch ([](/design/transfer/download/)).
 
-A delete carries its signed manifest, the `delete` record whose `retention_until` closes the asset's [retention window](/design/organization/#retention-window). Applying a deletion needs nothing more; restoring one does:
+A delete carries its signed manifest, the `delete` record whose `retention_until` closes the asset's retention window ([](/design/organization/#retention-window)). Applying a deletion needs nothing more; restoring one does:
 
 - **Owner's feed.** The entry also names what a **restore** needs: the asset's live metadata blob and its original, with `original_held` as for a live asset. It names no derivative and no derivative manifest, because the restore's own entry names them again.
 - **First seen at its delete.** A device that first sees the asset at its delete fetches the asset's earlier records, that metadata blob and that original, adopts the asset from its create, and can sign the `trash-restore`. The server serves them to the asset's readers until the window closes, then answers `410` ([](/design/transfer/download/#trash)).
@@ -34,21 +34,21 @@ A delete carries its signed manifest, the `delete` record whose `retention_until
 ### Cursor Authenticity and Anti-Rewind
 
 - The cursor is **MAC'd by the server** under a server-only key, bound to the caller and, for an album page, the album (`capsule-server::sync::cursor`). A forged, mutated or foreign cursor is refused, and the client re-syncs from zero.
-- The cursor carries the owner's **sync epoch**. After an [index rebuild](/design/filesystem/server/#sync-epoch-and-client-re-announce) moves the epoch, an older cursor is refused with `409 error.sync.cursor_stale`. The client drops its cursor and its high-water marks, resyncs from zero, and keeps everything it holds. What it holds that the resynced feed no longer lists it then [re-announces](/design/filesystem/server/#sync-epoch-and-client-re-announce): manifests only, which restore the rows whose blobs the server still holds.
+- The cursor carries the owner's **sync epoch**. After an index rebuild moves the epoch, an older cursor is refused with `409 error.sync.cursor_stale`. The client drops its cursor and its high-water marks, resyncs from zero, and keeps everything it holds. What it holds that the resynced feed no longer lists it then re-announces: manifests only, which restore the rows whose blobs the server still holds ([](/design/filesystem/server/#sync-epoch-and-client-re-announce)).
 - Every entry carries the album's `protocol_version` and a per-album, strictly increasing `sync_seq`. The client MUST refuse an entry above its maximum known version, and MUST surface, never apply, a page whose `sync_seq` regresses against its high-water mark.
-- The two layers are independent: the MAC stops forgery, but only the client's high-water mark stops a server replaying its own older, valid cursor ([sync-cursor rewind class](/design/threat-model/scenarios/#damage-scenario--invariant-map)).
-- A feed manifest is verified with [`verify_asset`](/design/cryptography/keys/#write-authorization) over the bytes as received. Bytes that do not decode as a provenance record are quarantined as malformed.
+- The two layers are independent: the MAC stops forgery, but only the client's high-water mark stops a server replaying its own older, valid cursor (the sync-cursor rewind class in [](/design/threat-model/scenarios/#damage-scenario--invariant-map)).
+- A feed manifest is verified with `verify_asset` ([](/design/cryptography/keys/#write-authorization)) over the bytes as received. Bytes that do not decode as a provenance record are quarantined as malformed.
 
 ## Stale-Revival Detection
 
 An old but validly signed manifest could resurrect an asset tombstoned later. The per-asset `prior_provenance_hash` chain ([](/design/cryptography/provenance/#provenance-of-library-modifications)) prevents it at two layers:
 
-- **Client.** Each device stores `latest_provenance_hash` per asset. A manifest from sync, federation, peering or backup restore whose chain is behind it is [quarantined](/design/threat-model/scenarios/#quarantine-surfaces) as stale state.
-- **Server.** The server stores the same value and rejects any non-`create` manifest whose `prior_provenance_hash` does not match ([validation invariants](/design/threat-model/validation/#server-side-validation-invariants)).
+- **Client.** Each device stores `latest_provenance_hash` per asset. A manifest from sync, federation, peering or backup restore whose chain is behind it is quarantined as stale state ([](/design/threat-model/scenarios/#quarantine-surfaces)).
+- **Server.** The server stores the same value and rejects any non-`create` manifest whose `prior_provenance_hash` does not match ([](/design/threat-model/validation/#server-side-validation-invariants)).
 
 ## Synchronization Scope
 
-- **New local content** is uploaded with its metadata and derivatives, in the order the [upload policy](/design/transfer/upload/#upload-tiering-staged-uploads) sets.
+- **New local content** is uploaded with its metadata and derivatives, in the order the upload policy sets ([](/design/transfer/upload/#upload-tiering-staged-uploads)).
 - **Modified or deleted content** updates metadata or tombstones.
 - **New remote content** is fetched per the library setting: metadata only, + thumbnails, or + thumbnails + original. The original is otherwise on demand.
 
@@ -58,7 +58,7 @@ On mobile, auto sync uploads new assets and pulls others' assets. When a check f
 
 ### Synchronization Criteria
 
-- **Small reconciliation** (a few assets, metadata-only deltas): any non-metered [connection class](/design/networking/#connection-classes).
+- **Small reconciliation** (a few assets, metadata-only deltas): any non-metered connection class ([](/design/networking/#connection-classes)).
 - **Large reconciliation** (bulk uploads, original-tier downloads, streaming import): unmetered Wi-Fi only.
 
 ### Platform Limitations
@@ -76,9 +76,9 @@ Per platform:
 
 - **iOS.** Small work rides `BGAppRefreshTask`, and large work requests `BGProcessingTask` with network (and power for very large batches).
 - **Android.** `WorkManager` with explicit constraints (`UNMETERED` for large, `CONNECTED` for small, battery-not-low). A user-initiated large force-sync may run as a foreground service.
-- **Desktop.** Self-throttled with the [maintenance gating rules](/design/filesystem/maintenance/#content-validation-expensive-scheduled).
-- **All platforms.** Every window is preemptible: an OS kill loses at most the chunks in flight, uploads resume from the server's committed set and downloads via `Range`, and there is no "must finish" state. Retries follow the [bulk-transfer policy class](/design/networking/#retry-policy-classes).
+- **Desktop.** Self-throttled with the maintenance gating rules ([](/design/filesystem/maintenance/#content-validation-expensive-scheduled)).
+- **All platforms.** Every window is preemptible: an OS kill loses at most the chunks in flight, uploads resume from the server's committed set and downloads via `Range`, and there is no "must finish" state. Retries follow the bulk-transfer policy class ([](/design/networking/#retry-policy-classes)).
 
 ### Notifications
 
-After **two weeks** without a completed sync while changes remain un-synced (including originals pending under a staged policy), the client offers a one-tap **force sync now** that ignores the connection criteria with consent, routing through re-authentication if the session has [lapsed](/design/authentication/#sliding-inactivity-expiry). This is the `sync_stale` [alert class](/design/notifications/#alert-classes), [pre-armed](/design/notifications/#the-pre-arm-rule) so it fires on a device the OS never schedules. [](/design/notifications/) owns delivery and snoozing.
+After **two weeks** without a completed sync while changes remain un-synced (including originals pending under a staged policy), the client offers a one-tap **force sync now** that ignores the connection criteria with consent, routing through re-authentication if the session has lapsed ([](/design/authentication/#sliding-inactivity-expiry)). This is the `sync_stale` alert class ([](/design/notifications/#alert-classes)), pre-armed so it fires on a device the OS never schedules ([](/design/notifications/#the-pre-arm-rule)). [](/design/notifications/) owns delivery and snoozing.

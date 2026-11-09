@@ -4,7 +4,7 @@ description: Tiered, ranged, on-demand blob fetch — access scoping, the fallba
 status: draft
 ---
 
-The server-to-client half of the [transfer protocol](/design/transfer/), bound by its [invariants](/design/transfer/#invariants). Upload optimises for correctness under interruption; download optimises for **bandwidth and storage frugality**, fetching the smallest representation that serves the user's current intent. A client learns *what* to fetch from the [sync feed](/design/sync/). Server: `capsule-server::serve` behind `GET /v1/blob/{hash}` ([](/reference/api/sync/)); client: `capsule-sdk::fetch`.
+The server-to-client half of the [](/design/transfer/), bound by its invariants ([](/design/transfer/#invariants)). Upload optimises for correctness under interruption; download optimises for **bandwidth and storage frugality**, fetching the smallest representation that serves the user's current intent. A client learns *what* to fetch from the sync feed ([](/design/sync/)). Server: `capsule-server::serve` behind `GET /v1/blob/{hash}` ([](/reference/api/sync/)); client: `capsule-sdk::fetch`.
 
 ## Tiered, On-Demand Fetch
 
@@ -15,14 +15,14 @@ Each asset has a ladder of representations, cheapest first:
 3. **Preview** — fetched when the asset is opened.
 4. **Original** — fetched only on explicit demand (full-fidelity view, export, share).
 
-The per-library [synchronization scope](/design/sync/#synchronization-scope) sets which tiers are fetched eagerly; anything above it is fetched lazily, and the original never speculatively. The client looks up its cache by content hash before any request, so a representation shared between assets is fetched once.
+The per-library synchronization scope ([](/design/sync/#synchronization-scope)) sets which tiers are fetched eagerly; anything above it is fetched lazily, and the original never speculatively. The client looks up its cache by content hash before any request, so a representation shared between assets is fetched once.
 
 ### Render Ladder
 
 What a client *shows* follows the same ladder, extended with what is already on the device. The order is computed once, in Rust, and reaches every native app through the FFI; apps render the representation it names and keep no ladder of their own. The keyless web client shows what the sync feed and its share paths serve. From least to most faithful:
 
-1. **LQIP** from the metadata blob, or its dominant colour when the LQIP cannot be decoded ([LQIP](/design/thumbnails/#lqip)).
-2. **Thumbnail**: the encoded tier, or, until it exists, an [embedded preview](/design/thumbnails/#embedded-previews) whose long edge reaches the Thumbnail tier's.
+1. **LQIP** from the metadata blob, or its dominant colour when the LQIP cannot be decoded ([](/design/thumbnails/#lqip)).
+2. **Thumbnail**: the encoded tier, or, until it exists, an embedded preview ([](/design/thumbnails/#embedded-previews)) whose long edge reaches the Thumbnail tier's.
 3. **Preview**: the encoded tier, or, on the device holding the original until it holds an encoded Preview, an embedded preview that covers the surface showing it when the view opens. A view that later grows keeps the embedded preview rather than dropping a rung.
 4. **Original**, decoded.
 
@@ -32,7 +32,7 @@ A surface asks for the rung its intent needs (Thumbnail for the grid, Preview fo
 
 `GET /v1/blob/{hash}` is **membership-scoped** (`capsule-server::serve::authority`):
 
-- An account may fetch blobs of assets filed under it and of every album whose current [signed roster](/design/authorization/) names it.
+- An account may fetch blobs of assets filed under it and of every album whose current signed roster names it ([](/design/authorization/)).
 - A **former** member gets `403`; every other caller gets `404`, byte-identical to an unknown address. `403` is reserved for a caller the server knows once had access, because it confirms the address is referenced.
 - **Backup** blobs are owner-only; everyone else gets `404`, decided on the role before the roster is consulted.
 - The roster is a transport control over who is handed bytes, never a confidentiality control; removal is paired with an AMK epoch bump.
@@ -48,7 +48,7 @@ A `delete` moves an asset to trash, restorable by a `trash-restore` until the `r
 
 ## Awaiting-Original
 
-An asset whose T0 tier has finalized but whose original has not ([staged uploads](/design/transfer/upload/#upload-tiering-staged-uploads)) carries `original_held = false` on its feed entry. The state is **derived** from held blob roles, never stored.
+An asset whose T0 tier has finalized but whose original has not ([](/design/transfer/upload/#upload-tiering-staged-uploads)) carries `original_held = false` on its feed entry. The state is **derived** from held blob roles, never stored.
 
 - Other devices list it immediately (LQIP, then T1 as it lands) with an "original still on device" badge.
 - Fetching its original returns the transient `409 error.blob.pending_upload`, distinct from `410`, **only** when the fetching account itself has an active upload session declaring those bytes. The open session is the promise, so it expires with the session. A sharee or federated peer gets `404` and waits for `original_held` to flip.
@@ -58,7 +58,7 @@ An asset whose T0 tier has finalized but whose original has not ([staged uploads
 
 - **Transient** failure (network drop, `5xx`, content-hash mismatch): retry with backoff, resuming via `Range`.
 - **`403`**: an authorization change, not data loss. Re-sync membership for the album, then degrade.
-- **Permanent** failure (`410`, purged origin, unreachable [federated home server](/design/federation/#robustness-against-connectivity-loss)): degrade to the best representation already held — preview → thumbnail → LQIP — and show a non-destructive "full resolution unavailable" state.
+- **Permanent** failure (`410`, purged origin, unreachable federated home server, [](/design/federation/#robustness-against-connectivity-loss)): degrade to the best representation already held — preview → thumbnail → LQIP — and show a non-destructive "full resolution unavailable" state.
 - **`409 error.blob.pending_upload`**: show the awaiting-original badge, never a failure; re-fetch when the feed flips.
 
 A missing representation MUST NOT remove the asset's metadata or index entry, and MUST NOT thrash the fetch. The asset re-fetches automatically once the representation is reachable.
@@ -69,10 +69,10 @@ A missing representation MUST NOT remove the asset's metadata or index entry, an
 - A download is written to a temporary file and appears under its final name only by an atomic rename after its content address verifies, so a partial or unverified file is never read as the blob. A blob's address is its content and its `ETag`, so two ranges of one address can never splice two different objects.
 - The client recomputes the ciphertext content hash against the requested address. A mismatch discards the bytes and is retried as transient.
 - The client then decrypts, relying on STREAM's authentication tags to detect truncation, reordering or deletion. A derivative whose bytes match their address but fail authentication is discarded and **not** re-fetched, since the manifest commits to that address; the client regenerates it from the original ([](/design/thumbnails/)).
-- Discarding the only local copy of a *local-origin* asset is gated by [Verify Before Destroy](/design/transfer/durability/#verify-before-destroy). Re-fetchable server-origin blobs are always safe to drop.
+- Discarding the only local copy of a *local-origin* asset is gated by [](/design/transfer/durability/#verify-before-destroy). Re-fetchable server-origin blobs are always safe to drop.
 
 ## Prefetch and Frugality
 
 - Prefetch is bounded and predictive (thumbnails just beyond the viewport, the likely-next preview) and is cancelled when focus moves.
-- Prefetch and above-tier fetches obey the [synchronization criteria](/design/sync/#synchronization-criteria): on a metered connection the client fetches only what the user explicitly opens.
-- Fetched-but-unpinned blobs are cache, evicted per [Filesystem — Client](/design/filesystem/client/#automatic-cache-management) and re-fetched on demand.
+- Prefetch and above-tier fetches obey the synchronization criteria ([](/design/sync/#synchronization-criteria)): on a metered connection the client fetches only what the user explicitly opens.
+- Fetched-but-unpinned blobs are cache, evicted per [](/design/filesystem/client/#automatic-cache-management) and re-fetched on demand.

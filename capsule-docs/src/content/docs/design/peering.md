@@ -11,18 +11,18 @@ Peering connects **one user's own devices** directly; server-to-server sharing i
 | **Sync** | A delta of what one device has and the other lacks | Both devices |
 | **Delegation** | Sealed upload bundles a device has not yet uploaded | The delegate, until the server issues custody |
 
-Peering is an **accelerator, never a replacement** for the server. It moves bytes at LAN speed and lets devices converge while the server is unreachable, but a copy on another device is **never custody**: only a server custody receipt releases a local original ([invariant 7](/design/versioning/#system-invariants)). Implementation: `capsule-sdk::peering`.
+Peering is an **accelerator, never a replacement** for the server. It moves bytes at LAN speed and lets devices converge while the server is unreachable, but a copy on another device is **never custody**: only a server custody receipt releases a local original (invariant 7 of [](/design/versioning/#system-invariants)). Implementation: `capsule-sdk::peering`.
 
 ## Payloads
 
 Peering adds no payload format and no sync engine. It owns only discovery, the channel and the hand-off rules below.
 
-- **Sync** moves a delta-scoped [backup artifact](/design/backup-recovery/#backup-artifact), ingested through the backup restore path.
-- **Delegation** moves upload bundles exactly as the [transfer protocol](/design/transfer/upload/#what-gets-uploaded) defines them: ciphertext blobs plus the signed manifest, sealed and signed by the originating device before they leave it.
+- **Sync** moves a delta-scoped backup artifact ([](/design/backup-recovery/#backup-artifact)), ingested through the backup restore path.
+- **Delegation** moves upload bundles exactly as the transfer protocol defines them ([](/design/transfer/upload/#what-gets-uploaded)): ciphertext blobs plus the signed manifest, sealed and signed by the originating device before they leave it.
 
 ## Trust Model
 
-Both ends hold device keys cross-signed into the same [device directory](/design/cryptography/keys/#device-directory). Identity-trusted is **not** content-trusted: everything received is re-verified (content hash, [STREAM tags](/design/cryptography/encryption/#stream-construction), [`verify_asset`](/design/cryptography/keys/#write-authorization)), so a peer can at worst withhold or delay what it carries, never alter it.
+Both ends hold device keys cross-signed into the same device directory ([](/design/cryptography/keys/#device-directory)). Identity-trusted is **not** content-trusted: everything received is re-verified (content hash, STREAM tags per [](/design/cryptography/encryption/#stream-construction), `verify_asset` per [](/design/cryptography/keys/#write-authorization)), so a peer can at worst withhold or delay what it carries, never alter it.
 
 - **Directory anti-rollback.** Each device persists the highest `directory_version` it has verified and refuses a peer presenting a lower one, so a stale directory cannot readmit a revoked device.
 - **Revocation is checked on every request**, not only at the handshake. A device removed from the directory mid-session is cut off at its next request, and everything it delivered after its revocation took effect is quarantined.
@@ -40,7 +40,7 @@ The live mDNS responder ships behind the `Discovery` seam, tested in process.
 
 The channel is a framed request/response exchange over **mutually authenticated TLS 1.3** with no CA. Both devices must already be enrolled ([](/design/device-enrollment/)).
 
-- **Identity.** TLS authenticates the device key's **classical half**. The **hybrid** proof that the key chains to the shared User IK (per the [signature scheme](/design/cryptography/primitives/#signature-scheme)) is bound to the TLS exporter and verified before any payload byte.
+- **Identity.** TLS authenticates the device key's **classical half**. The **hybrid** proof that the key chains to the shared User IK (per [](/design/cryptography/primitives/#signature-scheme)) is bound to the TLS exporter and verified before any payload byte.
 - **No reflection.** The proof also covers the sender's role, dialer or listener, so the two hellos of one session sign different messages and a hello reflected back at its sender never verifies. A hello naming the receiving device's own id is refused outright: a device never peers with itself.
 - **No plaintext path.** Every payload byte travels inside the verified TLS session.
 - **Bounded.** Each frame's length is checked against a fixed ceiling before it is read, every read and write is bounded in time, and a ranged pull must sustain a minimum transfer rate.
@@ -51,20 +51,20 @@ The secret that seals a sync artifact is a 256-bit value from the channel's TLS 
 
 ## Versioning
 
-Peering negotiates like the server. Each device advertises its supported [`[Min, Max]` window](/design/versioning/#update-policy) and the pair speaks the highest common version. Only disjoint windows end the connection, with a typed error telling the user which device to update. Artifact formats are versioned by [Backup and Recovery](/design/backup-recovery/#backup-artifact), and upload bundles by the [transfer protocol](/design/transfer/upload/#protocol-versioning).
+Peering negotiates like the server. Each device advertises its supported `[Min, Max]` window ([](/design/versioning/#update-policy)) and the pair speaks the highest common version. Only disjoint windows end the connection, with a typed error telling the user which device to update. Artifact formats are versioned by [](/design/backup-recovery/#backup-artifact), and upload bundles by the transfer protocol ([](/design/transfer/upload/#protocol-versioning)).
 
 ## Sync
 
-1. **Delta.** The receiver opens the session with its offer: the head record hash of every asset it holds, and its [sync cursor](/design/sync/#discovering-what-changed). The sender cuts its artifact to the complement, honouring the receiver's [synchronization scope](/design/sync/#synchronization-scope), so an asset the receiver holds at the same head is never sent. Offers are padded to a size bucket, capped per page and capped in pages. The offer is an additive protocol version: a pair on an older version exchanges none, and the sender sends everything it would have offered, which ingest makes a no-op for each asset the receiver already holds.
-2. **Pull.** The device that is behind pulls the artifact with ranged requests over the channel and verifies it against its content address, so a severed transfer resumes on the next channel without re-fetching. A peer may send an advisory [hint](/design/notifications/#vocabulary) that carries no authority.
+1. **Delta.** The receiver opens the session with its offer: the head record hash of every asset it holds, and its sync cursor ([](/design/sync/#discovering-what-changed)). The sender cuts its artifact to the complement, honouring the receiver's synchronization scope ([](/design/sync/#synchronization-scope)), so an asset the receiver holds at the same head is never sent. Offers are padded to a size bucket, capped per page and capped in pages. The offer is an additive protocol version: a pair on an older version exchanges none, and the sender sends everything it would have offered, which ingest makes a no-op for each asset the receiver already holds.
+2. **Pull.** The device that is behind pulls the artifact with ranged requests over the channel and verifies it against its content address, so a severed transfer resumes on the next channel without re-fetching. A peer may send an advisory hint ([](/design/notifications/#vocabulary)) that carries no authority.
 3. **Ingest** through the backup restore path, **all-or-nothing per asset**: an asset applies only with its manifest, metadata and every blob its scope requires. A manifest behind the local chain head is quarantined as "peer sent stale state".
-4. **Reconcile.** Assets a device learned by peering are not uploaded again if the server holds them; [dedup and merge](/design/transfer/upload/#deduplication-and-merge) resolve them. An asset no device has uploaded is uploaded by whichever device holds it first, under the delegation rules below, unless it is in the trash: a device that learns of a delete over peering uploads no create for it, and holds the delete until another upload of the create is indexed.
+4. **Reconcile.** Assets a device learned by peering are not uploaded again if the server holds them; dedup and merge ([](/design/transfer/upload/#deduplication-and-merge)) resolve them. An asset no device has uploaded is uploaded by whichever device holds it first, under the delegation rules below, unless it is in the trash: a device that learns of a delete over peering uploads no create for it, and holds the delete until another upload of the create is indexed.
 
-**A purged asset is never resurrected.** The device keeps a tombstone for every asset it has purged, its [kept provenance chain](/design/filesystem/client/#desktop-library-layout), and ingest refuses any asset it has a tombstone for.
+**A purged asset is never resurrected.** The device keeps a tombstone for every asset it has purged, its kept provenance chain ([](/design/filesystem/client/#desktop-library-layout)), and ingest refuses any asset it has a tombstone for.
 
 - A device that cannot read its tombstones refuses the ingest before it opens a session, never running it against an empty set.
-- A deleted asset in [trash](/design/organization/#recycling) is not a tombstone, since a `trash-restore` still recovers it. Its delete manifest is the local chain head, so a peer's older copy is quarantined as stale.
-- A device learns of a purge from the [sync feed](/design/sync/#discovering-what-changed), which carries no purge entry. A delete entry carries its signed delete record, and an asset whose `retention_until` has passed can no longer be [restored](/design/organization/#retention-window), so it is purged.
+- A deleted asset in trash ([](/design/organization/#recycling)) is not a tombstone, since a `trash-restore` still recovers it. Its delete manifest is the local chain head, so a peer's older copy is quarantined as stale.
+- A device learns of a purge from the sync feed ([](/design/sync/#discovering-what-changed)), which carries no purge entry. A delete entry carries its signed delete record, and an asset whose `retention_until` has passed can no longer be restored ([](/design/organization/#retention-window)), so it is purged.
 - The device judges the deadline only once a sync has drained the feed to its head, so a restore on a later page is applied first and takes the asset out of the reckoning.
 - It judges by the server's clock as the drain saw it, the latest `changed_at`, never its own. A clock running ahead would tombstone the asset early and then refuse a restore the server accepted in time.
 - An asset whose delete is still held (the server has not indexed it) has no window running on the server and is never purged on expiry ([](/design/organization/#deletion-state-machine)).
@@ -83,8 +83,8 @@ flowchart TB
 
 1. **Seal.** The origin builds the full upload bundle (encrypted original, derivatives, metadata blob, signed manifest) exactly as it would upload it, and records its own content hashes.
 2. **Hand-off.** The delegate pulls the bundle over the channel, verifies every hash against the manifest, fsyncs it, and only then acknowledges over the same channel. The acknowledgement is not custody, so the origin keeps the original pinned. Over the channel a peer serves only bundles it sealed itself, and the origin takes an acknowledgement only from the device it sealed the bundle for. The bundle is self-verifying, so the hand-off may also travel by any other courier (the CLI writes it to a file); its integrity never rests on the channel.
-3. **Upload.** The delegate uploads the bundle through the normal [transfer protocol](/design/transfer/upload/) under its own session. The server accepts a manifest signed by one device of the account and uploaded by another, and charges quota to the account as usual. The delegate never re-signs, re-encrypts or re-derives anything.
-4. **Release.** The origin releases an original only when the server returns a [custody receipt](/design/transfer/durability/#custody-receipts) for the content hash **the origin computed itself** and a read-back verify agrees. A receipt fetched through the delegate is not accepted.
+3. **Upload.** The delegate uploads the bundle through the normal transfer protocol ([](/design/transfer/upload/)) under its own session. The server accepts a manifest signed by one device of the account and uploaded by another, and charges quota to the account as usual. The delegate never re-signs, re-encrypts or re-derives anything.
+4. **Release.** The origin releases an original only when the server returns a custody receipt ([](/design/transfer/durability/#custody-receipts)) for the content hash **the origin computed itself** and a read-back verify agrees. A receipt fetched through the delegate is not accepted.
 5. **Cleanup.** The delegate deletes its copy after it holds the receipt. A delegate copy is never visible as a library asset on the delegate.
 
 Edge cases:
@@ -103,11 +103,11 @@ Edge cases:
   - `envelope_rejected` covers a manifest under a stale album epoch; a signer that is revoked, of another account or not verifying; a role conflict; a timestamp out of range; the album closed or the uploader's write access withdrawn since creation; and a signing device no longer authorized.
   - *Retried next run:* any other failure (network, outage, quota, rate limit, this device's own directory state, a newer format) keeps the copy.
 
-The delegate follows the same battery, metering and scheduling policy as its own uploads ([Sync — scheduling](/design/sync/)). The origin shows each delegated asset as "handed to {device}, awaiting server" until the receipt arrives.
+The delegate follows the same battery, metering and scheduling policy as its own uploads ([](/design/sync/#auto-syncing)). The origin shows each delegated asset as "handed to {device}, awaiting server" until the receipt arrives.
 
 ## Robustness
 
-Ranged transfers resume, a vanished peer equals no peer, and reordering a transfer cannot change state ([no order trust](/design/federation/#reconstructing-state-without-trusting-peers)). Deadlines use monotonic time, so clock skew between devices changes nothing.
+Ranged transfers resume, a vanished peer equals no peer, and reordering a transfer cannot change state ([](/design/federation/#reconstructing-state-without-trusting-peers)). Deadlines use monotonic time, so clock skew between devices changes nothing.
 
 ## Validation
 
