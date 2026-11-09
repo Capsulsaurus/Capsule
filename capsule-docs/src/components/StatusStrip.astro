@@ -1,0 +1,60 @@
+---
+// A single line stating where Capsule is today, shown under the front-page
+// hero. The wording is owned by the Visual Language doc's voice rules.
+import { Icon } from '@astrojs/starlight/components';
+
+interface Props {
+    text: string;
+    href: string;
+    linkLabel: string;
+}
+
+const { text, href, linkLabel } = Astro.props;
+---
+
+<p class="status-strip not-content">
+  <span class="dot" aria-hidden="true"></span>
+  <span>{text}</span>
+  <a href={href} target="_blank" rel="noopener noreferrer">{linkLabel}<Icon name="external" size="0.875em" /></a>
+</p>
+
+<style>
+  .status-strip {
+    width: fit-content;
+    max-width: 100%;
+    margin: 0 auto;
+    padding: 0.5rem 1rem;
+    border: 1px solid var(--sl-color-hairline);
+    border-radius: var(--capsule-radius-lg);
+    background: var(--sl-color-bg-nav);
+    color: var(--sl-color-gray-2);
+    font-size: var(--sl-text-sm);
+    text-align: center;
+    text-wrap: balance;
+  }
+
+  .dot {
+    display: inline-block;
+    width: 0.5rem;
+    height: 0.5rem;
+    margin-inline-end: 0.5rem;
+    border-radius: 50%;
+    background: var(--sl-color-text-accent);
+    vertical-align: 0.05em;
+  }
+
+  .status-strip a {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    margin-inline-start: 0.5rem;
+    white-space: nowrap;
+    color: var(--sl-color-text-accent);
+    font-weight: 500;
+    text-decoration: none;
+  }
+
+  .status-strip a:hover {
+    text-decoration: underline;
+  }
+</style>

@@ -1,7 +1,7 @@
 //! The authentication module: the ports login needs, the tokens a session is worked through,
 //! and the bearer scheme every authenticated operation is guarded by.
 //!
-//! One cohesive module, per design/module-map.md's "Planned Server Modules" — the operations
+//! One cohesive module (see the crate docs' Structure) — the operations
 //! themselves live in [`crate::routes::auth`], because a route is a description of a surface and
 //! this is the machinery behind it.
 //!

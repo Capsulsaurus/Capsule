@@ -4484,8 +4484,9 @@ fn the_bearer_scheme_is_one_component_and_every_secured_operation_names_it() {
             "type": "http",
             "scheme": "bearer",
             "bearerFormat": "JWT",
-            "description": "A short-lived Capsule access token, issued by `POST /v1/auth/login` \
-                            and rotated by `POST /v1/auth/refresh`.",
+            "description": "A Capsule bearer credential: a short-lived access token, issued by \
+                            `POST /v1/auth/login` and rotated by `POST /v1/auth/refresh`, or, on \
+                            the federation pull reads, a federation capability.",
         })
     );
     let mut secured = 0;

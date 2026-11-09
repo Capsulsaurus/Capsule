@@ -28,7 +28,7 @@
 //! because only the licence check is wired. The hard part, verifying a signature against a JWKS,
 //! is already in the workspace's JWT crate; what is left is discovery, a form `POST` and the
 //! claim checks, each of which is a security decision this repository wants written where a
-//! reader can see it. See the OIDC row in design/dependencies.md.
+//! reader can see it. The `jsonwebtoken` pin in the root `Cargo.toml` records the same choice.
 
 pub mod accounts;
 pub mod claims;

@@ -30,6 +30,18 @@ describe('slugify', () => {
         );
     });
 
+    it('keeps angle brackets inside a code span', () => {
+        expect(slugify('`Vec<T>` rules')).toBe('vect-rules');
+    });
+
+    it('strips HTML tags and keeps their text', () => {
+        expect(
+            slugify(
+                '<span class="api-method" data-method="get">GET</span> /v1/version',
+            ),
+        ).toBe('get-v1version');
+    });
+
     it('keeps underscores, which headings use as identifiers not emphasis', () => {
         // `SLICES.md:1909` and six siblings. Stripping `_` as an emphasis
         // marker silently renames every one of their anchors.

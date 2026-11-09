@@ -46,6 +46,19 @@ export const CLI_PAGES = [
 ];
 
 /**
+ * The generated REST page that carries the contract every operation shares — the OpenAPI
+ * document's own `info.description` — read before the endpoint families.
+ *
+ * @type {ReferencePage}
+ */
+export const API_CONVENTIONS = {
+    slug: 'conventions',
+    label: 'Conventions',
+    description:
+        'Protocol negotiation, credentials and the error contract every Capsule endpoint shares.',
+};
+
+/**
  * A generated REST page: one endpoint family, with the path prefixes that belong to it.
  *
  * @typedef {ReferencePage & { pathPrefixes: string[] }} ApiGroup
@@ -253,6 +266,7 @@ export function referenceSidebar() {
             label: 'REST API',
             items: [
                 { slug: 'reference/api' },
+                { slug: `reference/api/${API_CONVENTIONS.slug}` },
                 ...API_GROUPS.map((group) => ({
                     slug: `reference/api/${group.slug}`,
                 })),
@@ -267,6 +281,5 @@ export function referenceSidebar() {
                 })),
             ],
         },
-        { slug: 'reference/crates' },
     ];
 }

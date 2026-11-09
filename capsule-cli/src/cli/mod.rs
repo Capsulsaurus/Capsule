@@ -86,6 +86,22 @@ where
     Cli::from_arg_matches(&matches)
 }
 
+/// [`command_tree`] exactly as `capsule-cli/cli-surface.json` holds it: pretty-printed with a
+/// trailing newline, because the artifact is reviewed as a diff and a one-line blob would hide
+/// the change a reviewer is there to see. The `gen_cli_surface` binary writes this, and a unit
+/// test compares it with the committed file.
+///
+/// # Panics
+///
+/// Never in practice: the tree is a `serde_json::Value`, which always serializes.
+#[must_use]
+pub fn command_tree_json() -> String {
+    let mut json =
+        serde_json::to_string_pretty(&command_tree()).expect("a JSON value always serializes");
+    json.push('\n');
+    json
+}
+
 /// The `capsule` command tree as JSON — the committed description artifact
 /// `capsule-cli/cli-surface.json`, emitted by the `gen_cli_surface` binary and rendered
 /// into `/reference/cli/` by the documentation build.

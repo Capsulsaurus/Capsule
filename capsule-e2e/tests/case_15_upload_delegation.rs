@@ -1,4 +1,5 @@
-//! **E2E case 15** — upload delegation (design/module-map.md; Peering § Delegation, issue #701).
+//! **E2E case 15** — upload delegation (the case index is in `src/lib.rs`; Peering § Delegation,
+//! issue #701).
 //!
 //! A (the origin) hands a sealed bundle to B, another device of the same account; B uploads it
 //! under its own session; A releases the original only after verifying custody of the hashes it

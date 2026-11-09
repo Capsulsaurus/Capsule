@@ -71,7 +71,9 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
 
     implementation(libs.androidx.activity.compose)
-    // The in-app language picker below Android 13 (AppCompatDelegate.setApplicationLocales).
+    // The in-app language picker below Android 13 (AppCompatDelegate.setApplicationLocales,
+    // autoStoreLocales), where the system has no per-app setting; Android 13+ uses the system's.
+    // Only that: the choice stays on the device, is never synced, and region stays the system's.
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.viewmodel.compose)
     implementation(libs.androidx.navigation.compose)
@@ -88,7 +90,8 @@ dependencies {
     testImplementation(kotlin("test"))
 
     // Instrumented Compose UI tests with the accessibility checks (Accessibility Test
-    // Framework) on every interaction, as the culling surface's audit requires.
+    // Framework) on every interaction, as the culling surface's audit requires. Test-only, API
+    // 34+ (Robolectric skips the checks); a surface the audit covers suppresses no check.
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.compose.ui.test.junit4.accessibility)

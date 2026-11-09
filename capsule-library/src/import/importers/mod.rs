@@ -91,7 +91,7 @@ pub struct GeoPoint {
 /// what [`sidecar_enrichment`](crate::import::sidecar_enrichment) maps onto the
 /// signed sidecar's fields at import.
 ///
-/// [Takeout mapping table]: https://docs/design/import/pipeline/#validation
+/// [Takeout mapping table]: https://docs/design/import/pipeline/#third-party-importers
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExtractedMetadata {
     /// Capture time: embedded EXIF `DateTimeOriginal` if present, else the exporter's taken-time.

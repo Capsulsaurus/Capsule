@@ -114,7 +114,7 @@ pub trait ModelRunner {
 /// fixture models the one property a real model swap has: **a version bump changes the output for
 /// unchanged pixels**. Without the fold a "v2" fixture would reproduce v1's vectors byte-for-byte
 /// and a regeneration could not be distinguished from copying the stale vector forward — which is
-/// exactly what [E2E case 10](https://docs/design/module-map/#e2e-test-surface) has to tell apart.
+/// exactly what E2E case 10 (the index is in `capsule-e2e`) has to tell apart.
 /// Within one version the fixture keeps its contract: identical bytes produce an identical vector,
 /// distinct bytes produce near-orthogonal ones, and image bytes embed identically to the same text
 /// (both fold the same semantic-search pair).

@@ -1,6 +1,6 @@
 //! **E2E case 10 — model regen after a model-version bump**.
 //!
-//! Contract: [Module Map — E2E Test Surface] case 10, whose normative wording is "bump the
+//! Contract: [E2E Test Surface] case 10, whose normative wording is "bump the
 //! canonical model version; assert stale embeddings are excluded from queries; background regen
 //! produces fresh embeddings; queries return correct results afterwards". Its invariants are owned
 //! by [AI/ML — Embedding Provenance]: every stored embedding carries the `(model_id,
@@ -30,7 +30,7 @@
 //! bump invalidates the right rows; regeneration repopulates them), not any model's output
 //! quality. **No model weights are committed to this repository.**
 //!
-//! [Module Map — E2E Test Surface]: https://docs/design/module-map/#e2e-test-surface
+//! [E2E Test Surface]: https://github.com/Capsulsaurus/Capsule/blob/master/capsule-e2e/src/lib.rs
 //! [AI/ML — Embedding Provenance]: https://docs/design/ai/#embedding-provenance
 
 use capsule_core::crypto::primitives::Argon2Params;
