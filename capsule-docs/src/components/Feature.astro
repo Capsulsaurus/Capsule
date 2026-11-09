@@ -20,7 +20,7 @@ const { icon, title, href, linkLabel = 'How it works' } = Astro.props;
   <span class="feature-icon" aria-hidden="true"><Icon name={icon} size="1.25rem" /></span>
   <h3>{title}</h3>
   <div class="feature-body"><slot /></div>
-  <a class="feature-link" href={href}>{linkLabel}<span aria-hidden="true"> →</span></a>
+  <a class="feature-link" href={href}>{linkLabel}<span class="sr-only">: {title}</span><span aria-hidden="true"> →</span></a>
 </article>
 
 <style>

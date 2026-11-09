@@ -1,21 +1,15 @@
 ---
 // Site-wide footer, mounted on every page by Footer.astro. Its contents are a
 // contract of the Visual Language doc (development/visual-language.md).
-import { getCollection } from 'astro:content';
+// Set in astro.config.mjs from src/lib/blog-posts.mjs: the Blog link appears
+// once a post is published, exactly when the blog itself goes live.
+declare const __BLOG_IS_LIVE__: boolean;
 
 const REPO = 'https://github.com/Capsulsaurus/Capsule';
 
-// The Blog link appears once a post is published (the same rule
-// astro.config.mjs applies to the header link and RSS).
-const publishedPosts = await getCollection(
-    'docs',
-    ({ id, data }) =>
-        id.startsWith('blog/') && !(import.meta.env.PROD && data.draft),
-);
-
 const links = [
     { label: 'Documentation', href: '/guides/getting-started/' },
-    ...(publishedPosts.length > 0 ? [{ label: 'Blog', href: '/blog/' }] : []),
+    ...(__BLOG_IS_LIVE__ ? [{ label: 'Blog', href: '/blog/' }] : []),
     {
         label: 'Roadmap',
         href: `${REPO}/blob/master/ROADMAP.md`,

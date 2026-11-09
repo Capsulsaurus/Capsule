@@ -4,11 +4,12 @@
 // The content schema cannot require the field itself: plugin routes such as
 // the blog index render through <StarlightPage> with no frontmatter of their
 // own, and a required field would reject them. So the schema leaves it
-// optional and this test is what keeps a page from landing unmarked.
+// optional and this test is what keeps an authored page from landing unmarked.
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { isDraftPost } from '../src/lib/blog-posts.mjs';
 import { frontmatterStatus } from './lib/markdown.mjs';
 
 const DOCS = join(
@@ -31,8 +32,9 @@ describe('frontmatterStatus', () => {
 });
 
 describe('docs pages', () => {
-    // Every page on disk, generated reference pages included: they are
-    // emitted with a status too, and nothing else would notice if one lost it.
+    // Every page on disk. Generated reference pages exist only after
+    // `gen-reference` has run, so they are checked here when present; their
+    // status is guaranteed by the renderers' own tests in gen-reference.test.mjs.
     const pages = readdirSync(DOCS, { recursive: true, encoding: 'utf8' })
         .map((rel) => rel.split('\\').join('/'))
         .filter((rel) => /\.mdx?$/.test(rel));
@@ -49,5 +51,17 @@ describe('docs pages', () => {
             return status !== 'draft' && status !== 'stable';
         });
         expect(unmarked).toEqual([]);
+    });
+
+    it('marks every published blog post stable', () => {
+        // A published post is reviewed: it must never show a Draft badge.
+        const unreviewed = pages.filter((rel) => {
+            if (!rel.startsWith('blog/')) return false;
+            const source = readFileSync(join(DOCS, rel), 'utf8');
+            return (
+                !isDraftPost(source) && frontmatterStatus(source) !== 'stable'
+            );
+        });
+        expect(unreviewed).toEqual([]);
     });
 });
