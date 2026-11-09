@@ -1088,7 +1088,8 @@ export function operationAnchor(method, path) {
 export function exampleFor(schema, document, depth = 0) {
     if (!schema || typeof schema !== 'object') return null;
     if (schema.$ref) {
-        if (depth >= MAX_SCHEMA_DEPTH) return {};
+        // The appendix expands a model reached at depth MAX_SCHEMA_DEPTH and no deeper.
+        if (depth > MAX_SCHEMA_DEPTH) return {};
         return exampleFor(
             document.components?.schemas?.[refName(schema.$ref)],
             document,
@@ -1172,6 +1173,24 @@ function stringExample(schema) {
 }
 
 /**
+ * The text an example request sends for a parameter: the document's example when it has
+ * one, then the schema's; a string with no more to go on becomes the parameter's name in
+ * capitals (`UPLOAD_ID`), which reads as "put yours here" where `string` would read as a
+ * literal.
+ *
+ * @param {{ name: string, schema?: Record<string, any>, example?: unknown }} parameter
+ * @param {Record<string, any>} document
+ * @returns {string}
+ */
+function parameterValue(parameter, document) {
+    const value = parameter.example ?? exampleFor(parameter.schema, document);
+    if (value === 'string' || value === null || value === undefined) {
+        return parameter.name.toUpperCase().replace(/-/g, '_');
+    }
+    return typeof value === 'object' ? JSON.stringify(value) : String(value);
+}
+
+/**
  * A value as one shell word, single-quoted.
  *
  * @param {string} value
@@ -1192,24 +1211,38 @@ function shellQuote(value) {
  */
 export function curlExample({ path, method, operation }, document) {
     const parameters = operation.parameters ?? [];
+    const valueOf = (name) =>
+        parameterValue(
+            parameters.find((parameter) => parameter.name === name) ?? {
+                name,
+            },
+            document,
+        );
+    // Every `{name}` filled in, so curl neither globs the braces nor sends them.
+    const filled = path.replace(/\{([^}]+)\}/g, (_, name) =>
+        encodeURIComponent(valueOf(name)),
+    );
     const query = parameters
         .filter((parameter) => parameter.in === 'query' && parameter.required)
         .map(
             (parameter) =>
-                `${parameter.name}=${encodeURIComponent(String(parameter.example ?? exampleFor(parameter.schema, document)))}`,
+                `${parameter.name}=${encodeURIComponent(parameterValue(parameter, document))}`,
         );
-    const url = `${EXAMPLE_ORIGIN}${path}${query.length > 0 ? `?${query.join('&')}` : ''}`;
-    const lines = [`curl -X ${method} ${shellQuote(url)}`];
+    const url = `${EXAMPLE_ORIGIN}${filled}${query.length > 0 ? `?${query.join('&')}` : ''}`;
+    // `-X HEAD` would wait for the body Content-Length announces; `-I` does not.
+    const verb = method === 'HEAD' ? '-I' : `-X ${method}`;
+    const lines = [`curl ${verb} ${shellQuote(url)}`];
 
     if (Array.isArray(operation.security) && operation.security.length > 0) {
-        lines.push(`-H ${shellQuote('Authorization: Bearer $TOKEN')}`);
+        // Double-quoted so the shell expands the caller's $TOKEN.
+        lines.push('-H "Authorization: Bearer $TOKEN"');
     }
     for (const parameter of [...parameters]
         .filter((entry) => entry.in === 'header' && entry.required)
         .sort((a, b) => a.name.localeCompare(b.name))) {
-        const value =
-            parameter.example ?? exampleFor(parameter.schema, document);
-        lines.push(`-H ${shellQuote(`${parameter.name}: ${value}`)}`);
+        lines.push(
+            `-H ${shellQuote(`${parameter.name}: ${parameterValue(parameter, document)}`)}`,
+        );
     }
 
     const body = bodyOf(operation.requestBody);
@@ -1299,26 +1332,42 @@ function statusPill(status) {
  * @returns {string}
  */
 function fieldList(label, fields) {
+    const items = fields.map(({ name, meta, required, description }) => {
+        const head = [
+            name,
+            ...meta.map((fact) => `<span class="api-meta">${fact}</span>`),
+            required ? '<span class="api-required">required</span>' : '',
+        ]
+            .filter(Boolean)
+            .join(' ');
+        return description
+            ? `- ${head}\n\n  ${inlineProse(description)}`
+            : `- ${head}`;
+    });
     return [
         `<div class="api-fields" data-label="${label}">`,
-        '',
         `**${label}**`,
-        '',
-        ...fields.map(({ name, meta, required, description }) => {
-            const head = [
-                name,
-                ...meta.map((fact) => `<span class="api-meta">${fact}</span>`),
-                required ? '<span class="api-required">required</span>' : '',
-            ]
-                .filter(Boolean)
-                .join(' ');
-            return description
-                ? `- ${head}\n\n  ${description.replace(/\n/g, '\n  ')}`
-                : `- ${head}`;
-        }),
-        '',
+        // Items separated by blank lines make a loose list, so every name and description
+        // is a paragraph the stylesheet can reach, whether or not any entry has a description.
+        items.join('\n\n'),
         '</div>',
-    ].join('\n');
+    ].join('\n\n');
+}
+
+/**
+ * Prose for a list-item paragraph: a `<` outside a code span is escaped, since Markdown would
+ * read `<nonce>` as a tag and drop it, and a leading `#`, `>` or `1.` is escaped so it stays
+ * text rather than opening a heading, quote or list inside the item.
+ *
+ * @param {string} text Single-line prose.
+ * @returns {string}
+ */
+function inlineProse(text) {
+    return text
+        .split(/(`+[^`]*`+)/)
+        .map((part, index) => (index % 2 ? part : part.replace(/</g, '&lt;')))
+        .join('')
+        .replace(/^(#|>|\d+\.)/, '\\$1');
 }
 
 /**
@@ -1453,20 +1502,28 @@ function renderOperation(entry, documented, document) {
 }
 
 /**
- * The page's operation index: one entry per operation, the method pill and the path,
- * linking to the operation.
+ * The page's index: one entry per operation, the method pill and the path, linking to the
+ * operation, then the models the appendix documents. REST pages carry no table of contents,
+ * so this is the page's navigation.
  *
  * @param {Array<{ path: string, method: string }>} operations
+ * @param {string[]} documented Schema names the page's appendix carries.
  * @returns {string}
  */
-function renderOperationIndex(operations) {
+function renderOperationIndex(operations, documented) {
     return [
-        '<nav class="api-index" aria-label="Endpoints on this page">',
+        '<nav class="api-index" aria-label="On this page">',
         '',
         ...operations.map(
             ({ path, method }) =>
                 `- [${methodPill(method)} \`${path}\`](#${operationAnchor(method, path)})`,
         ),
+        ...(documented.length === 0
+            ? []
+            : [
+                  '',
+                  `**Schemas:** ${documented.map((name) => `[\`${name}\`](#${name.toLowerCase()})`).join(', ')}`,
+              ]),
         '',
         '</nav>',
     ].join('\n');
@@ -1556,7 +1613,7 @@ export function renderApiPage(group, operations, document) {
         'Generated from the OpenAPI document `capsule-server` emits; change a description at its',
         'handler or model. What every endpoint shares is on the [REST API overview](/reference/api/).',
         '',
-        renderOperationIndex(operations),
+        renderOperationIndex(operations, documented),
     ].join('\n');
 
     const body = operations

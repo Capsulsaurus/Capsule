@@ -93,7 +93,7 @@ The documentation site serves the Geist and Geist Mono 1.9.2 variable fonts,
 copied unmodified from the upstream `geist` npm package into
 `capsule-docs/src/assets/fonts/`. No client or server artifact contains them.
 
-  Copyright 2024 The Geist Project Authors
+  Copyright (c) 2023 Vercel, in collaboration with basement.studio
   <https://github.com/vercel/geist-font>
 
   This Font Software is licensed under the SIL Open Font License, Version 1.1.

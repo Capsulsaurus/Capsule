@@ -106,16 +106,21 @@ function prose(source) {
  * @returns {string} The anchor slug, without a leading `#`.
  */
 export function slugify(heading) {
-    return heading
-        .replace(/<[^>]*>/g, '')
-        .replace(/`/g, '')
-        .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-        .replace(/\*/g, '')
-        .replace(/\s*#+\s*$/, '')
-        .trim()
-        .toLowerCase()
-        .replace(/[^\p{L}\p{N}\p{M}_\- ]/gu, '')
-        .replace(/ /g, '-');
+    return (
+        heading
+            // Tags go, but not inside a code span: `` `Vec<T>` `` keeps its `<T>`.
+            .replace(/`[^`]*`|<[^>]*>/g, (match) =>
+                match.startsWith('`') ? match : '',
+            )
+            .replace(/`/g, '')
+            .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+            .replace(/\*/g, '')
+            .replace(/\s*#+\s*$/, '')
+            .trim()
+            .toLowerCase()
+            .replace(/[^\p{L}\p{N}\p{M}_\- ]/gu, '')
+            .replace(/ /g, '-')
+    );
 }
 
 /**

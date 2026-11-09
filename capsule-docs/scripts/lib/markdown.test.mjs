@@ -30,6 +30,10 @@ describe('slugify', () => {
         );
     });
 
+    it('keeps angle brackets inside a code span', () => {
+        expect(slugify('`Vec<T>` rules')).toBe('vect-rules');
+    });
+
     it('strips HTML tags and keeps their text', () => {
         expect(
             slugify(

@@ -1227,6 +1227,46 @@ describe('renderApiPage', () => {
         );
     });
 
+    it('escapes a bare tag and a leading block marker in a field description', () => {
+        const document = structuredClone(MINIMAL_OPENAPI);
+        document.paths['/v1/auth/login'].post.parameters = [
+            {
+                in: 'header',
+                name: 'X-Nonce',
+                schema: { type: 'string' },
+                description: '# Carries <nonce>, not `Option<String>`.',
+            },
+        ];
+        const rendered = renderApiPage(
+            group,
+            bucketOperations(document).get('auth'),
+            document,
+        );
+        expect(rendered).toContain(
+            '  \\# Carries &lt;nonce>, not `Option<String>`.',
+        );
+    });
+
+    it('keeps every field list loose, so each entry is a paragraph', () => {
+        const fields = page()
+            .split('<div class="api-fields"')
+            .slice(1)
+            .map((block) => block.split('</div>')[0]);
+        expect(fields.length).toBeGreaterThan(0);
+        for (const block of fields) {
+            expect(block).not.toMatch(/\n- [^\n]*\n- /);
+        }
+    });
+
+    it('lists the schema appendix in the index, since the page has no table of contents', () => {
+        const rendered = page();
+        const index = rendered.slice(
+            rendered.indexOf('<nav class="api-index"'),
+            rendered.indexOf('</nav>'),
+        );
+        expect(index).toContain('[`LoginRequest`](#loginrequest)');
+    });
+
     it('opens with an operation index linking to each operation', () => {
         const rendered = page();
         const index = rendered.indexOf('<nav class="api-index"');
@@ -1628,8 +1668,10 @@ describe('exampleFor', () => {
             value = value.next;
             depth += 1;
         }
+        // The same depth the schema appendix expands to: a model reached at depth 4 is
+        // documented, so its example is filled in, and nothing past it is.
         expect(value).toEqual({});
-        expect(depth).toBeLessThanOrEqual(4);
+        expect(depth).toBe(5);
     });
 });
 
@@ -1683,13 +1725,35 @@ describe('curlExample', () => {
             { components: { schemas: {} } },
         );
         expect(command).toContain(
-            "curl -X POST 'https://capsule.example/v1/things?direction=string'",
+            "curl -X POST 'https://capsule.example/v1/things?direction=DIRECTION'",
         );
-        expect(command).toContain("-H 'Authorization: Bearer $TOKEN'");
+        // Double quotes, so the shell expands the token.
+        expect(command).toContain('-H "Authorization: Bearer $TOKEN"');
         expect(command).toContain("-H 'X-Capsule-Protocol: 2026-01-01'");
         expect(command).toContain("-H 'Content-Type: application/json'");
         expect(command).toContain(`"note": "it'\\''s"`);
         expect(command).not.toContain('cursor');
+    });
+
+    it('fills path parameters and sends HEAD with -I', () => {
+        const command = curlExample(
+            {
+                method: 'HEAD',
+                path: '/v1/upload/{id}',
+                operation: {
+                    parameters: [
+                        {
+                            in: 'path',
+                            name: 'id',
+                            required: true,
+                            schema: { type: 'string' },
+                        },
+                    ],
+                },
+            },
+            { components: { schemas: {} } },
+        );
+        expect(command).toBe("curl -I 'https://capsule.example/v1/upload/ID'");
     });
 
     it('sends a non-JSON body from a file', () => {

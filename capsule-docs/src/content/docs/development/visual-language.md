@@ -112,7 +112,7 @@ one is designed.
   the site was built from, linked to that commit.
 - **Generated reference.** A generated page says so under its title: the surface (REST API, CLI,
   an SDK), a dashed "Generated" tag and its source, and for REST a download of the OpenAPI
-  document. A REST page opens with an index of its endpoints, each a method pill and path, and lays
+  document. A REST page opens with an index of its endpoints, each a method pill and path, and its schemas, and lays
   every operation out as the reference (parameters and responses as field lists) beside a sticky
   panel with an example `curl` request and example success bodies. Method pills are coloured by
   method and status dots by class, from Starlight's semantic colours.

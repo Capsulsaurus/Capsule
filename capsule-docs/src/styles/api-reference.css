@@ -144,6 +144,13 @@ html:has(.api-op) {
     margin: 0;
 }
 
+.sl-markdown-content .api-index > p {
+    margin-top: 0.75rem;
+    color: var(--sl-color-gray-2);
+    font-size: var(--sl-text-sm);
+    line-height: 1.9;
+}
+
 .sl-markdown-content .api-index a {
     color: var(--sl-color-white);
     text-decoration: none;
@@ -182,6 +189,12 @@ html:has(.api-op) {
     min-width: 0;
 }
 
+/* Starlight spaces every block from the one before it; the two columns sit
+   side by side, so the panel takes none. Element selectors outrank that rule. */
+.sl-markdown-content div.api-op > div.api-op-panel {
+    margin-top: 0;
+}
+
 .sl-markdown-content .api-op-main > :first-child,
 .sl-markdown-content .api-op-panel > :first-child {
     margin-top: 0;
@@ -202,10 +215,13 @@ html:has(.api-op) {
         align-items: start;
     }
 
-    /* The examples stay in view while the reference beside them scrolls. */
+    /* The examples stay in view while the reference beside them scrolls, and
+       scroll themselves when taller than the viewport. */
     .sl-markdown-content .api-op-panel {
         position: sticky;
         top: calc(var(--sl-nav-height) + 1.5rem);
+        max-height: calc(100vh - var(--sl-nav-height) - 3rem);
+        overflow: auto;
     }
 
     .sl-markdown-content .api-op-panel > * {
