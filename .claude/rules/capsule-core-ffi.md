@@ -15,7 +15,7 @@ paths:
 Follow:
 
 - [Local gallery](../../capsule-docs/src/content/docs/design/local-gallery.md) — the on-device gallery this surface exposes.
-- [Module Map](../../capsule-docs/src/content/docs/design/module-map.md) — its place in the crate graph.
+- The crate docs in [`src/lib.rs`](../../capsule-core-ffi/src/lib.rs) and [ADR-0005](../../adr/0005-one-uniffi-namespace-pair-reaches-the-apps.md) — the client boundary and the namespace pair.
 - [Architecture](../../capsule-docs/src/content/docs/development/architecture.md) — data flow into the native clients.
 
 Keep current:

@@ -13,4 +13,4 @@ paths:
 
 Follow:
 
-- [Module Map](../../capsule-docs/src/content/docs/design/module-map.md) — where restored code belongs.
+- [Principles — Single Source of Truth](../../capsule-docs/src/content/docs/design/principles.md#single-source-of-truth) and the destination crate's `//!` docs — where restored code belongs.

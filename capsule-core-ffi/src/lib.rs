@@ -11,7 +11,11 @@
 //! `capsule-sdk`'s uniffi surface (the `capsule_sdk` namespace — the user-flow
 //! primitives and the workspace verbs) so the iOS app consumes ONE Rust library
 //! carrying both namespaces. Two separate Rust staticlibs cannot share a binary (each
-//! bundles its own std), so any namespace the app needs must ride in this one.
+//! bundles its own std), so any namespace the app needs must ride in this one. Hardware seams
+//! reach Swift/Kotlin as `capsule_sdk` foreign traits.
+//!
+//! The workspace verbs over FFI are orchestration only: each verb is one call into the
+//! `capsule-library` `Workspace`, which leaves every cryptographic step to `capsule-core`.
 //!
 //! Everything platform-specific (filesystem layout, file I/O, PhotoKit,
 //! hashing) lives in the Swift client. The types defined here form the explicit

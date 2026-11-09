@@ -20,6 +20,20 @@ fn arg<'a>(command: &'a Value, id: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("argument `{id}` is described"))
 }
 
+/// **The committed `cli-surface.json` is this tree, byte for byte.** The same comparison
+/// `mise run cli-surface-check` makes, run by `cargo test` too, so a changed `clap` attribute
+/// fails locally before CI. The fix is `mise run cli-surface`.
+#[test]
+fn the_committed_surface_matches_the_tree() {
+    let committed = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("cli-surface.json");
+    let committed = std::fs::read_to_string(&committed).expect("the committed surface is readable");
+    assert!(
+        committed == command_tree_json(),
+        "capsule-cli/cli-surface.json is stale against the command tree; run \
+         `mise run cli-surface` and commit the result"
+    );
+}
+
 /// The property the committed artifact and its `--check` gate rest on. A tree that
 /// varied between calls would fail `cli-surface-check` on a tree nobody changed.
 #[test]

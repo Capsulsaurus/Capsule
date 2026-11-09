@@ -1,7 +1,6 @@
 //! The ambient inputs a caller injects: wall-clock time and identifier randomness.
 //!
-//! The stateless core reads no clock and draws no identifier itself ([Module Map — Stateless
-//! Core]). Where a core operation mints a UUIDv7 — an account's user and device ids, an MLS
+//! The stateless core reads no clock and draws no identifier itself ([crate docs](crate)). Where a core operation mints a UUIDv7 — an account's user and device ids, an MLS
 //! intent id, a federation `group_id` — it takes an [`IdSource`], built from a [`Clock`] and an
 //! [`Rng`] the caller implements. `capsule-library` supplies the system implementations; tests
 //! supply a fixed clock and a seeded source, so every minted identifier is reproducible.
@@ -10,7 +9,6 @@
 //! injectable source: they are drawn from the OS CSPRNG behind [`crate::crypto::rng`], the one
 //! sanctioned exception.
 //!
-//! [Module Map — Stateless Core]: https://docs/design/module-map/#stateless-core
 //! [`IdSource`]: crate::ambient::IdSource
 //! [`Clock`]: crate::ambient::Clock
 //! [`Rng`]: crate::ambient::Rng

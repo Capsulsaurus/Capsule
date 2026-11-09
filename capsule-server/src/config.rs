@@ -3,7 +3,7 @@
 //! # Environment only, and why there is no file
 //!
 //! `--config PATH` is accepted on the command line and **refused**: a configuration-file crate
-//! would be a new dependency in a domain `design/dependencies.md` has no row for, and the
+//! would be a new dependency in a domain the workspace has no pin for, and the
 //! server this replaces was environment-only plus `dotenvy`
 //! (`legacy-review/server-salvo/environment/`), so an operator loses nothing familiar. The flag
 //! exists rather than being absent so the refusal is a sentence rather than clap's "unexpected

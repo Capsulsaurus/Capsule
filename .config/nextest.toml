@@ -41,7 +41,7 @@ path = "junit.xml"
 #
 # **These tests skip themselves without `CAPSULE_TEST_POSTGRES=1`**, printing one line each that
 # says so — see `capsule_server::postgres::testing`. The default `cargo nextest run` is green on
-# a machine with no container runtime, which is the acceptance gap design/module-map.md sets.
+# a machine with no container runtime, which is the framework's acceptance gap.
 #
 # `capsule-server/tests/valkey.rs` (#403) is the second, and joins by binary rather than by test
 # name because the whole binary is container-backed. It runs the store and counter conformance

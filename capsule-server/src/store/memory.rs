@@ -2,8 +2,8 @@
 //!
 //! Valkey is required; the server refuses to boot without `VALKEY_URL`
 //! (design/filesystem/server.md, "Required Services"). What these types are for is letting the
-//! rest of the rebuild be tested without a container, which is the acceptance gap
-//! design/module-map.md sets for Kynos — and they earn that only by passing the same
+//! rest of the rebuild be tested without a container, which is the acceptance gap set for
+//! Kynos — and they earn that only by passing the same
 //! [`super::conformance`] suite a live backend does.
 //!
 //! Two properties make them *deterministic* rather than merely fast:

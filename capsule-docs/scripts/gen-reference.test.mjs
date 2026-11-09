@@ -12,11 +12,13 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+    abstractOf,
     BINDINGS_SURFACE,
     bucketOperations,
     CLI_SURFACE,
     curlExample,
     demoteHeadings,
+    docProse,
     exampleFor,
     generate,
     OPENAPI_DOCUMENT,
@@ -30,7 +32,9 @@ import {
     renderApiPage,
     renderBindingsPage,
     renderCliPage,
+    renderConventionsPage,
     renderWasmPage,
+    tsSignature,
     WASM_SURFACE,
 } from './gen-reference.mjs';
 import { headingAnchors } from './lib/markdown.mjs';
@@ -227,7 +231,12 @@ function writeOpenApi(document) {
 
 const MINIMAL_OPENAPI = {
     openapi: '3.2.0',
-    info: { title: 'API', version: '0.0.0' },
+    info: {
+        title: 'API',
+        version: '0.0.0',
+        description:
+            'The shared contract.\n\n## Errors\n\nSwitch on `code`; see [i18n](../../capsule-docs/src/content/docs/design/i18n.md).',
+    },
     paths: {
         '/v1/version': {
             get: {
@@ -451,7 +460,7 @@ describe('readCliSurface', () => {
     });
 
     // A well-formed but empty document used to render an empty h2, an empty usage fence, and
-    // a `status: stable` badge — a page that builds green and documents nothing.
+    // a generated banner — a page that builds green and documents nothing.
     it('refuses a document that parses but describes nothing', () => {
         writeCli({ schema: 1 });
         expect(() => readCliSurface(root)).toThrow(/no command name/);
@@ -473,10 +482,11 @@ describe('renderCliPage', () => {
         expect(page).toContain('Import files into a local Capsule library');
     });
 
-    it('opens with frontmatter carrying a status the schema accepts', () => {
+    it('opens with generated frontmatter and no review status', () => {
         const page = renderCliPage(MINIMAL_CLI);
         expect(page.startsWith('---\n')).toBe(true);
-        expect(page).toMatch(/^status: stable$/m);
+        expect(page).toMatch(/^generated:$/m);
+        expect(page).not.toMatch(/^status:/m);
         expect(page).toMatch(/^title: "Commands"$/m);
     });
 
@@ -545,27 +555,25 @@ describe('renderCliPage', () => {
         expect(page).not.toContain('pass a <token> here');
     });
 
-    // The defect a per-fragment escape reintroduces: the help text is escaped, the fragments
-    // appended after it are not, and a `|` in a default opens a column of its own.
-    it('escapes a pipe in a default value and in an enumerated value', () => {
+    // Options are a man-page list, not a table, so a `|` in a default or an enumerated value
+    // is shown as written rather than escaped for a column it is not in.
+    it('shows a pipe in a default value and in an enumerated value as written', () => {
         const surface = structuredClone(MINIMAL_CLI);
         surface.subcommands[0].args[1].possible_values = [{ name: 'x|y' }];
         surface.subcommands[0].args[1].default_values = ['a|b'];
         const page = renderCliPage(surface);
-        expect(page).toContain('Values: `x\\|y`.');
-        expect(page).toContain('Default: `a\\|b`.');
-        expect(page).not.toContain('`x|y`');
-        expect(page).not.toContain('`a|b`');
+        expect(page).toContain('Values: `x|y`.');
+        expect(page).toContain('Default: `a|b`.');
     });
 
-    it('keeps every table row at the width of its header', () => {
-        const surface = structuredClone(MINIMAL_CLI);
-        surface.subcommands[0].args[1].default_values = ['a|b'];
-        surface.subcommands[0].args[2].help = 'takes a | and a <tag>';
-        for (const line of renderCliPage(surface).split('\n')) {
-            if (!line.startsWith('|')) continue;
-            expect(columnsOf(line)).toBe(4);
+    it('lays each command out as a man page', () => {
+        const page = renderCliPage(MINIMAL_CLI);
+        expect(page).toContain('<section class="man-cmd">');
+        for (const label of ['Synopsis', 'Options', 'Commands']) {
+            expect(page).toContain(`<p class="man-label">${label}</p>`);
         }
+        expect(page).toContain('<div class="man-options">');
+        expect(page).toMatch(/^- \[`capsule import`\]\(#capsule-import\)$/m);
     });
 
     // A pipe the help text already escapes must not gain a second backslash: `a\\|b` is an
@@ -576,10 +584,6 @@ describe('renderCliPage', () => {
         const page = renderCliPage(surface);
         expect(page).toContain('matches a\\|b, or c \\ d');
         expect(page).not.toContain('a\\\\|b');
-        for (const line of page.split('\n')) {
-            if (!line.startsWith('|')) continue;
-            expect(columnsOf(line)).toBe(4);
-        }
     });
 
     it('does not append "Repeatable." when the help already says it', () => {
@@ -621,30 +625,6 @@ describe('renderCliPage', () => {
             '**Required.** Source file or directory to import. Repeatable.',
         );
     });
-
-    it('escapes a pipe so it cannot break out of a table cell', () => {
-        const page = renderCliPage({
-            schema: 1,
-            name: 'capsule',
-            subcommands: [
-                {
-                    name: 'x',
-                    args: [
-                        {
-                            id: 'p',
-                            long: 'p',
-                            positional: false,
-                            required: false,
-                            repeatable: false,
-                            takes_value: false,
-                            help: 'reads a | b',
-                        },
-                    ],
-                },
-            ],
-        });
-        expect(page).toContain('reads a \\| b');
-    });
 });
 
 describe('generate', () => {
@@ -660,6 +640,19 @@ describe('generate', () => {
         );
         expect(second).toEqual(first);
         expect(first.length).toBeGreaterThan(0);
+    });
+
+    it('marks only the pages of a stale artifact', () => {
+        writeCli(MINIMAL_CLI);
+        writeOpenApi(MINIMAL_OPENAPI);
+        writeSdk();
+        const written = generate(root, { stale: [CLI_SURFACE] });
+        for (const path of written) {
+            const body = readFileSync(join(root, path), 'utf8');
+            expect(/^ {2}stale: true$/m.test(body)).toBe(
+                path.includes('/cli/'),
+            );
+        }
     });
 
     it('fails, writing nothing, when an artifact is missing', () => {
@@ -798,7 +791,7 @@ describe('the SDK pages', () => {
         expect(page).toContain('## Functions');
         expect(page).toContain('### `shareIsPassphraseProtected`');
         expect(page).toContain(
-            '```ts\nexport function shareIsPassphraseProtected(wrapped_scope_b64: string): boolean;\n```',
+            '```ts wrap\nexport function shareIsPassphraseProtected(wrapped_scope_b64: string): boolean;\n```',
         );
         expect(page).toContain('## Classes');
         expect(page).toContain('#### `scopeKind`');
@@ -812,10 +805,10 @@ describe('the SDK pages', () => {
     it('renders each binding language from its own half of the dump', () => {
         const swiftPage = renderBindingsPage(swift, MINIMAL_BINDINGS);
         const kotlinPage = renderBindingsPage(kotlin, MINIMAL_BINDINGS);
-        expect(swiftPage).toContain('```swift\nopen class FfiWorkspace');
+        expect(swiftPage).toContain('```swift wrap\nopen class FfiWorkspace');
         expect(swiftPage).toContain('#### `sealAsset`');
         expect(swiftPage).not.toContain('```kotlin');
-        expect(kotlinPage).toContain('```kotlin\nfun `evaluateAlerts`');
+        expect(kotlinPage).toContain('```kotlin wrap\nfun `evaluateAlerts`');
         expect(kotlinPage).not.toContain('FfiWorkspace');
         // Functions are listed before classes, whatever order the dump holds them in.
         expect(swiftPage.indexOf('## Functions')).toBeLessThan(
@@ -823,16 +816,17 @@ describe('the SDK pages', () => {
         );
     });
 
-    it('opens every SDK page with a status the docs require', () => {
-        // The content schema leaves `status` optional (plugin routes have no
-        // frontmatter); the generator is what guarantees generated pages set it.
+    it('opens every SDK page as generated, with no review status', () => {
+        // A generated page tracks its artifact; it has no review state, and
+        // PageTitle.astro refuses a page that claims both.
         for (const page of [
             renderWasmPage(wasm, parseWasmSurface(MINIMAL_WASM)),
             renderBindingsPage(swift, MINIMAL_BINDINGS),
             renderBindingsPage(kotlin, MINIMAL_BINDINGS),
         ]) {
             const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec(page);
-            expect(frontmatter?.[1]).toMatch(/^status: stable$/m);
+            expect(frontmatter?.[1]).toMatch(/^generated:$/m);
+            expect(frontmatter?.[1]).not.toMatch(/^status:/m);
         }
     });
 
@@ -860,14 +854,152 @@ describe('the SDK pages', () => {
         expect(() => readBindingsSurface(root)).toThrow(/no kotlin/);
     });
 
-    it('lists every SDK page in the sidebar, then crates', () => {
+    it('puts the generated conventions page right after the REST overview', () => {
+        const rest = referenceSidebar().find(
+            (item) => item.label === 'REST API',
+        );
+        expect(rest.items.slice(0, 2)).toEqual([
+            { slug: 'reference/api' },
+            { slug: 'reference/api/conventions' },
+        ]);
+    });
+
+    it('lists every SDK page in the sidebar, last', () => {
         const sidebar = referenceSidebar();
         const sdk = sidebar.find((item) => item.label === 'SDK');
         expect(sdk.items.map((item) => item.slug)).toEqual([
             'reference/sdk',
             ...SDK_PAGES.map((page) => `reference/sdk/${page.slug}`),
         ]);
-        expect(sidebar.at(-1)).toEqual({ slug: 'reference/crates' });
+        expect(sidebar.at(-1)).toBe(sdk);
+    });
+});
+
+describe('the native SDK layouts', () => {
+    const swift = SDK_PAGES.find((page) => page.slug === 'swift');
+    const kotlin = SDK_PAGES.find((page) => page.slug === 'kotlin');
+    const wasm = SDK_PAGES.find((page) => page.slug === 'wasm');
+
+    it('lays Swift out as DocC: eyebrow, abstract, Declaration, Topics', () => {
+        const page = renderBindingsPage(swift, MINIMAL_BINDINGS);
+        expect(page).toContain('<nav class="sdk-index" data-tool="docc"');
+        expect(page).toContain('<section class="sdk-symbol" data-tool="docc">');
+        expect(page).toContain(
+            '<p class="sdk-kind" data-kind="class">Class</p>',
+        );
+        expect(page).toContain('<p class="sdk-label">Declaration</p>');
+        expect(page).toContain('<p class="sdk-label sdk-topics">Topics</p>');
+        expect(page).toContain('<p class="sdk-label">Instance Methods</p>');
+        expect(page).toMatch(/^#### `sealAsset`$/m);
+        // The abstract is the first sentence; the rest is the Overview.
+        expect(page).toMatch(
+            /<div class="sdk-abstract">\n\nA local workspace\.\n\n<\/div>/,
+        );
+        expect(page).toContain('<p class="sdk-label">Overview</p>');
+    });
+
+    it('lays Kotlin out as Dokka: kind chip, summary table', () => {
+        const page = renderBindingsPage(kotlin, MINIMAL_BINDINGS);
+        expect(page).toContain('<nav class="sdk-index" data-tool="dokka"');
+        expect(page).toContain('<p class="sdk-kind" data-kind="fun">fun</p>');
+        expect(page).toContain('| Name | Summary |');
+        expect(page).toContain(
+            '| [`evaluateAlerts`](#evaluatealerts) | Evaluate alerts. |',
+        );
+    });
+
+    it('lays the browser module out as TypeDoc: chips, Parameters, Returns, source', () => {
+        const page = renderWasmPage(wasm, parseWasmSurface(MINIMAL_WASM));
+        expect(page).toContain('<nav class="sdk-index" data-tool="typedoc"');
+        expect(page).toContain(
+            '<p class="sdk-kind" data-kind="function">Function</p>',
+        );
+        expect(page).toContain('<p class="sdk-label">Parameters</p>');
+        expect(page).toContain('- `wrapped_scope_b64`: `string`');
+        expect(page).toContain('<p class="sdk-label">Returns</p>');
+        expect(page).toContain('<p class="sdk-label">Methods</p>');
+        expect(page).toContain('<p class="sdk-label">Properties</p>');
+        expect(page).toContain(
+            '<p class="sdk-source">Defined in <code>wasm-surface.d.ts</code></p>',
+        );
+    });
+
+    it('refuses a member kind no topic lists', () => {
+        const bindings = structuredClone(MINIMAL_BINDINGS);
+        bindings.languages.swift.declarations[0].members[0].kind = 'subscript';
+        expect(() => renderBindingsPage(swift, bindings)).toThrow(
+            /subscript, which no topic/,
+        );
+    });
+
+    it('links a rustdoc shorthand to a symbol on the page, and unwraps one that is not', () => {
+        const anchors = new Map([['ShareScope', 'sharescope']]);
+        expect(docProse('See [`ShareScope`].', 0, anchors)).toBe(
+            'See [`ShareScope`](#sharescope).',
+        );
+        expect(docProse('See [`FfiSession`].', 0, anchors)).toBe(
+            'See `FfiSession`.',
+        );
+    });
+
+    it('takes the first sentence as the abstract, ignoring a full stop inside code', () => {
+        expect(abstractOf('Reads `a.b` first. Then more.')).toBe(
+            'Reads `a.b` first.',
+        );
+        expect(abstractOf('No full stop')).toBe('No full stop');
+        expect(abstractOf('One.\n\nTwo.')).toBe('One.');
+    });
+
+    it('splits a TypeScript signature into parameters and a return type', () => {
+        expect(
+            tsSignature(
+                'export function f(a: string, b?: Map<string, number> | null): Out;',
+            ),
+        ).toEqual({
+            parameters: [
+                { name: 'a', optional: false, type: 'string' },
+                {
+                    name: 'b',
+                    optional: true,
+                    type: 'Map<string, number> | null',
+                },
+            ],
+            returns: 'Out',
+        });
+        expect(tsSignature('free(): void;')).toEqual({
+            parameters: [],
+            returns: 'void',
+        });
+        expect(tsSignature('readonly size: number;')).toBeNull();
+        expect(
+            tsSignature(
+                'export function on(cb: (x: T) => void, ...rest: U[]): R;',
+            ),
+        ).toEqual({
+            parameters: [
+                { name: 'cb', optional: false, type: '(x: T) => void' },
+                { name: '...rest', optional: false, type: 'U[]' },
+            ],
+            returns: 'R',
+        });
+    });
+});
+
+describe('renderConventionsPage', () => {
+    it('renders the document description as a generated REST page', () => {
+        const page = renderConventionsPage(MINIMAL_OPENAPI);
+        expect(page).toMatch(/^title: "Conventions"$/m);
+        expect(page).toMatch(/^generated:\n {2}surface: "REST API"$/m);
+        expect(page).toContain('## Errors');
+        expect(page).toContain('[i18n](/design/i18n/)');
+    });
+
+    it('refuses a document with no description', () => {
+        const document = structuredClone(MINIMAL_OPENAPI);
+        delete document.info.description;
+        expect(() => renderConventionsPage(document)).toThrow(
+            /no info\.description/,
+        );
     });
 });
 
@@ -1388,7 +1520,8 @@ describe('renderApiPage', () => {
     it('opens with frontmatter the content schema accepts', () => {
         const rendered = page();
         expect(rendered.startsWith('---\n')).toBe(true);
-        expect(rendered).toMatch(/^status: stable$/m);
+        expect(rendered).toMatch(/^generated:$/m);
+        expect(rendered).not.toMatch(/^status:/m);
         expect(rendered).toMatch(/^title: "[^"]+"$/m);
     });
 
@@ -1542,8 +1675,12 @@ describe('the committed artifacts', () => {
             expect(existsSync(join(root, path))).toBe(true);
         }
         const generatedSdk = SDK_PAGES.filter((page) => page.artifact !== null);
+        expect(written).toContain(
+            'capsule-docs/src/content/docs/reference/api/conventions.md',
+        );
+        // The CLI page, the conventions page, one page per group, and the SDK pages.
         expect(written).toHaveLength(
-            API_GROUPS.length + 1 + generatedSdk.length,
+            API_GROUPS.length + 2 + generatedSdk.length,
         );
     });
 

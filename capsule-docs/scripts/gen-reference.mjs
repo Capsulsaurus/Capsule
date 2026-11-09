@@ -3,6 +3,16 @@
 /**
  * gen-reference — emit `/reference/` from the committed description artifacts.
  *
+ * How a generated page stays true to the code:
+ *
+ *   1. Each surface's own toolchain emits a committed artifact (`openapi.json`,
+ *      `cli-surface.json`, `bindings-surface.json`, `wasm-surface.d.ts`).
+ *   2. A required CI gate regenerates it from the code and fails on any byte difference, so
+ *      `master` never holds a stale one; `cargo test` does the same for the REST and CLI
+ *      artifacts, and a dev run warns when a branch changed an artifact's source but not it.
+ *   3. This script reads only those artifacts, before every `astro dev` and `astro build`.
+ *   4. Each page names its artifact in the banner under its title.
+ *
  * `design/developer-docs.md` fixes the boundary at *artifacts, not toolchains*: the CI
  * `docs` job installs bun and nothing else, so this script may never shell out to cargo. It
  * reads committed JSON and writes Markdown, which is the whole of its contract.
@@ -10,7 +20,7 @@
  * The pages it writes are ordinary content-collection entries under
  * `src/content/docs/reference/`, which is what buys the rest for free — Pagefind indexes
  * them, `starlight-links-validator` checks their links, the `PageTitle` override renders
- * their status badge, and the notranslate rehype pass marks up their technical terms. A
+ * their generated-page banner, and the notranslate rehype pass marks up their technical terms. A
  * mounted OpenAPI application would have had none of that.
  *
  * They are also **gitignored**, and that is the point of rule 2: a generated page is never
@@ -58,6 +68,14 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { slugify } from './lib/markdown.mjs';
 import {
+    ARTIFACT_SOURCES,
+    mtimes,
+    readChanges,
+    skipReason,
+    staleArtifacts,
+} from './lib/staleness.mjs';
+import {
+    API_CONVENTIONS,
     API_GROUPS,
     CLI_PAGES,
     groupForPath,
@@ -384,16 +402,6 @@ function escapePipes(text) {
 }
 
 /**
- * Artifact prose, flattened and escaped, for a cell that carries nothing else.
- *
- * @param {string} text
- * @returns {string}
- */
-function cell(text) {
-    return escapeCell(prose(text));
-}
-
-/**
  * Escape a YAML double-quoted scalar, for frontmatter values that carry arbitrary prose.
  *
  * @param {string} text
@@ -519,7 +527,7 @@ function sentence(text) {
 }
 
 /**
- * One argument's description cell: whether it is required and repeatable, what it does,
+ * One argument's man-page entry: whether it is required and repeatable, what it does,
  * what it accepts, and what it defaults to.
  *
  * @param {Record<string, any>} arg
@@ -545,9 +553,9 @@ function describeArg(arg) {
             `Default: ${arg.default_values.map((value) => `\`${value}\``).join(', ')}.`,
         );
     }
-    // One pass, over the assembled cell: a `|` in a default or an enumerated value is as
-    // capable of opening a column as one in the help text.
-    return escapeCell(parts.join(' ')) || '—';
+    // One pass, over the assembled entry: a `<` in a default or an enumerated value is as
+    // capable of being read as a tag as one in the help text.
+    return inlineProse(parts.join(' ')) || '—';
 }
 
 /**
@@ -640,46 +648,55 @@ function renderCommand(command, path, level) {
     if (options.some((option) => !option.required)) usage.push('[OPTIONS]');
     if (subcommands.length > 0) usage.push('<COMMAND>');
 
+    // Laid out as a man page, the form a command-line user already reads: the command's own
+    // heading (so search and the table of contents still reach it), then SYNOPSIS,
+    // DESCRIPTION, ARGUMENTS, OPTIONS and COMMANDS, each option a hanging-indent entry.
     const sections = [
         `${'#'.repeat(level)} ${invocation}`,
-        '',
+        '<p class="man-label">Synopsis</p>',
         `\`\`\`text\n${usage.join(' ')}\n\`\`\``,
-        '',
     ];
 
     // Demoted relative to this command's own heading, so a doc comment that opens at `#`
     // nests under the command it describes instead of outranking it.
     const about = command.long_about ?? command.about;
     if (about) {
-        sections.push(demoteHeadings(rewriteLinks(about), level), '');
+        sections.push(
+            '<p class="man-label">Description</p>',
+            demoteHeadings(rewriteLinks(about), level),
+        );
     }
 
-    const positionalTable = table(
-        ['Argument', 'Description'],
-        positionals.map((arg) => [`\`${spell(arg)}\``, describeArg(arg)]),
-    );
-    if (positionalTable) sections.push(positionalTable);
-
-    const optionTable = table(
-        ['Option', 'Description'],
-        options.map((arg) => [`\`${spell(arg)}\``, describeArg(arg)]),
-    );
-    if (optionTable) sections.push(optionTable);
+    for (const [label, entries] of [
+        ['Arguments', positionals],
+        ['Options', options],
+    ]) {
+        if (entries.length === 0) continue;
+        sections.push(
+            `<p class="man-label">${label}</p>`,
+            `<div class="man-options">\n\n${entries
+                .map((arg) => `- \`${spell(arg)}\`\n\n  ${describeArg(arg)}`)
+                .join('\n\n')}\n\n</div>`,
+        );
+    }
 
     if (subcommands.length > 0) {
         sections.push(
-            table(
-                ['Command', 'Description'],
-                subcommands.map((subcommand) => [
-                    `[\`${[...path, subcommand.name].join(' ')}\`](#${[...path, subcommand.name].join('-')})`,
-                    subcommand.about ? cell(subcommand.about) : '—',
-                ]),
-            ),
+            '<p class="man-label">Commands</p>',
+            `<div class="man-options">\n\n${subcommands
+                .map((subcommand) => {
+                    const words = [...path, subcommand.name];
+                    const link = `[\`${words.join(' ')}\`](#${words.join('-')})`;
+                    return subcommand.about
+                        ? `- ${link}\n\n  ${inlineProse(prose(subcommand.about))}`
+                        : `- ${link}`;
+                })
+                .join('\n\n')}\n\n</div>`,
         );
     }
 
     return [
-        sections.filter((section) => section !== '').join('\n\n'),
+        `<section class="man-cmd">\n\n${sections.join('\n\n')}\n\n</section>`,
         ...subcommands.map((subcommand) =>
             renderCommand(
                 subcommand,
@@ -702,15 +719,10 @@ export function renderCliPage(surface) {
         '---',
         `title: ${yamlString(page.label)}`,
         `description: ${yamlString(page.description)}`,
-        'status: stable',
         ...generatedFrontmatter('CLI', CLI_SURFACE),
         '---',
         '',
         `<!-- Generated from ${CLI_SURFACE} by ${GENERATED_BY}. Do not edit. -->`,
-        '',
-        `Generated from \`${CLI_SURFACE}\`, the committed command tree \`capsule-cli\` emits and`,
-        '`mise run cli-surface-check` keeps current. To change a description on this page, change',
-        'the `clap` annotation it comes from and regenerate — this file is build output.',
         '',
         tidyBlankLines(renderCommand(surface, [surface.name], 2)),
     ].join('\n')}\n`;
@@ -1367,7 +1379,8 @@ function inlineProse(text) {
         .split(/(`+[^`]*`+)/)
         .map((part, index) => (index % 2 ? part : part.replace(/</g, '&lt;')))
         .join('')
-        .replace(/^(#|>|\d+\.)/, '\\$1');
+        .replace(/^(#|>|[-*+](?=\s|$))/, '\\$1')
+        .replace(/^(\d+)([.)])/, '$1\\$2');
 }
 
 /**
@@ -1585,6 +1598,43 @@ function renderSchema(name, document, documented) {
 }
 
 /**
+ * The generated `/reference/api/conventions/` page: the document's `info.description`, the
+ * contract every operation shares, which `capsule-server/src/openapi/contract.md` defines.
+ *
+ * @param {Record<string, any>} document
+ * @returns {string} Markdown, frontmatter included.
+ * @throws {Error} When the document has no description: the page would be empty, and every
+ *   endpoint page sends its reader there.
+ */
+export function renderConventionsPage(document) {
+    const description = document.info?.description;
+    if (typeof description !== 'string' || description.trim() === '') {
+        throw new Error(
+            `${OPENAPI_DOCUMENT} has no info.description, which is the contract every ` +
+                'operation shares (capsule-server/src/openapi/contract.md). Regenerate it with ' +
+                '`mise run openapi-kynos`.',
+        );
+    }
+    return `${tidyBlankLines(
+        [
+            '---',
+            `title: ${yamlString(API_CONVENTIONS.label)}`,
+            `description: ${yamlString(API_CONVENTIONS.description)}`,
+            ...generatedFrontmatter(
+                'REST API',
+                `OpenAPI ${document.openapi}`,
+                OPENAPI_DOWNLOAD,
+            ),
+            '---',
+            '',
+            `<!-- Generated from ${OPENAPI_DOCUMENT} by ${GENERATED_BY}. Do not edit. -->`,
+            '',
+            demoteHeadings(rewriteLinks(description.trim()), 0),
+        ].join('\n'),
+    )}\n`;
+}
+
+/**
  * The generated `/reference/api/<group>/` page.
  *
  * @param {import('./reference-groups.mjs').ApiGroup} group
@@ -1599,7 +1649,6 @@ export function renderApiPage(group, operations, document) {
         '---',
         `title: ${yamlString(group.label)}`,
         `description: ${yamlString(group.description)}`,
-        'status: stable',
         'tableOfContents: false',
         ...generatedFrontmatter(
             'REST API',
@@ -1610,8 +1659,7 @@ export function renderApiPage(group, operations, document) {
         '',
         `<!-- Generated from ${OPENAPI_DOCUMENT} by ${GENERATED_BY}. Do not edit. -->`,
         '',
-        'Generated from the OpenAPI document `capsule-server` emits; change a description at its',
-        'handler or model. What every endpoint shares is on the [REST API overview](/reference/api/).',
+        'What every endpoint shares is on [](/reference/api/conventions/).',
         '',
         renderOperationIndex(operations, documented),
     ].join('\n');
@@ -1626,10 +1674,7 @@ export function renderApiPage(group, operations, document) {
             : [
                   '## Schemas',
                   '',
-                  'The models these endpoints carry. A field whose type names another model links',
-                  'to it when this page documents that model, which it does when some path from',
-                  `an operation reaches it within ${MAX_SCHEMA_DEPTH} references. A model only`,
-                  'ever reached deeper than that is named without being expanded.',
+                  `The models these endpoints carry, to ${MAX_SCHEMA_DEPTH} references deep.`,
                   '',
                   documented
                       .map((name) => renderSchema(name, document, documented))
@@ -1833,58 +1878,47 @@ export function readBindingsSurface(root) {
  * Prose from a generated binding's doc comment, ready for a page body.
  *
  * The comments are Rust doc comments carried through a binding generator, so they keep
- * rustdoc's link forms. The `[text](path)` form is handled by [`rewriteLinks`]; the shorthand
- * ``[`item`]``, which rustdoc resolves by name, is unwrapped to its code span here, because
- * Markdown would otherwise print its brackets.
+ * rustdoc's link forms. The `[text](path)` form is handled by [`rewriteLinks`]. The shorthand
+ * ``[`item`]``, which rustdoc resolves by name, links to the item's entry when this page
+ * documents it, and is unwrapped to its code span otherwise, because Markdown would print its
+ * brackets.
  *
  * @param {string} doc
  * @param {number} offset Heading levels to demote by.
+ * @param {ReadonlyMap<string, string>} [anchors] Symbol name to in-page anchor.
  * @returns {string}
  */
-function docProse(doc, offset) {
-    return demoteHeadings(
-        rewriteLinks(doc).replace(/\[(`[^`\]]+`)\](?![([])/g, '$1'),
-        offset,
+export function docProse(doc, offset, anchors = new Map()) {
+    return demoteHeadings(docLinks(rewriteLinks(doc), anchors), offset);
+}
+
+/**
+ * rustdoc's ``[`item`]`` shorthand, resolved: a link to the item's entry when the page
+ * documents it, its bare code span otherwise.
+ *
+ * @param {string} text
+ * @param {ReadonlyMap<string, string>} anchors
+ * @returns {string}
+ */
+function docLinks(text, anchors) {
+    return text.replace(/\[`([^`\]]+)`\](?![([])/g, (_, name) =>
+        anchors.has(name)
+            ? `[\`${name}\`](#${anchors.get(name)})`
+            : `\`${name}\``,
     );
 }
 
 /**
- * One declaration, with its members under it.
+ * A doc comment flattened for a list item or a table cell, its shorthand links resolved.
  *
- * @param {SurfaceDeclaration} declaration
- * @param {string} fence The code-fence language.
- * @param {number} level Heading level of the declaration.
+ * @param {string} doc
+ * @param {ReadonlyMap<string, string>} anchors
+ * @param {'list' | 'cell'} context
  * @returns {string}
  */
-function renderDeclaration(declaration, fence, level) {
-    const sections = [
-        `${'#'.repeat(level)} \`${declaration.name}\``,
-        `\`\`\`${fence}\n${declaration.signature}\n\`\`\``,
-    ];
-    if (declaration.doc) sections.push(docProse(declaration.doc, level));
-    // Fields, cases, and properties read as one table; something a caller calls gets a
-    // heading of its own, so it has an anchor and a place in the table of contents.
-    const values = declaration.members.filter(
-        (member) => !CALLABLE.has(member.kind),
-    );
-    if (values.length > 0) {
-        sections.push(
-            table(
-                ['Member', 'Declaration', 'Description'],
-                values.map((member) => [
-                    codeSpan(member.name),
-                    escapePipes(codeSpan(member.signature)),
-                    cell(member.doc) || '—',
-                ]),
-            ),
-        );
-    }
-    for (const member of declaration.members) {
-        if (CALLABLE.has(member.kind)) {
-            sections.push(renderDeclaration(member, fence, level + 1));
-        }
-    }
-    return sections.join('\n\n');
+function oneLine(doc, anchors, context) {
+    const flat = docLinks(prose(doc), anchors);
+    return context === 'cell' ? escapeCell(flat) : inlineProse(flat);
 }
 
 /**
@@ -1899,73 +1933,442 @@ function codeSpan(text) {
     return text.includes('`') ? `\`\` ${text} \`\`` : `\`${text}\``;
 }
 
-/** Member kinds a caller calls, across the three languages. */
-const CALLABLE = new Set([
-    'func',
-    'static func',
-    'init',
-    'fun',
-    'constructor',
-    'method',
-]);
-
 /**
- * Headings for each declaration kind, in the order a page lists them. A kind missing from
- * this table is fatal: it would otherwise be rendered under no heading or not at all.
+ * Each SDK language's page layout, after the documentation tool its developers already read:
+ * Apple's DocC for Swift, Dokka for Kotlin, TypeDoc for the browser module.
+ *
+ * - `sections`: the page's declaration groups, in order. A declaration kind missing from
+ *   every group is fatal, because it would otherwise be rendered under no heading or not at
+ *   all.
+ * - `kinds`: the label each declaration kind is shown with, in that tool's words.
+ * - `topics`: how a type's members are grouped, in that tool's order. A member kind no topic
+ *   lists is fatal for the same reason.
+ * - `callable`: member kinds a caller calls. DocC and TypeDoc give each its own heading;
+ *   Dokka lists them in a table, as it does on a class page.
  */
-const KIND_SECTIONS = {
-    swift: [
-        ['Functions', ['func']],
-        ['Classes', ['class']],
-        ['Protocols', ['protocol']],
-        ['Structs', ['struct']],
-        ['Enums', ['enum']],
-    ],
-    kotlin: [
-        ['Functions', ['fun']],
-        ['Classes', ['class']],
-        ['Interfaces', ['interface']],
-        ['Data classes', ['data class']],
-        ['Enums and sealed classes', ['enum class', 'sealed class']],
-    ],
-    ts: [
-        ['Functions', ['function']],
-        ['Classes', ['class']],
-        ['Interfaces', ['interface']],
-        ['Enums', ['enum']],
-    ],
+export const SDK_STYLES = {
+    swift: {
+        tool: 'docc',
+        fence: 'swift',
+        sections: [
+            ['Functions', ['func']],
+            ['Classes', ['class']],
+            ['Protocols', ['protocol']],
+            ['Structures', ['struct']],
+            ['Enumerations', ['enum']],
+        ],
+        kinds: {
+            func: 'Function',
+            class: 'Class',
+            protocol: 'Protocol',
+            struct: 'Structure',
+            enum: 'Enumeration',
+        },
+        topics: [
+            ['Initializers', ['init']],
+            ['Type Methods', ['static func']],
+            ['Instance Methods', ['func']],
+            ['Instance Properties', ['field']],
+            ['Enumeration Cases', ['case']],
+        ],
+        callable: new Set(['init', 'static func', 'func']),
+    },
+    kotlin: {
+        tool: 'dokka',
+        fence: 'kotlin',
+        sections: [
+            ['Functions', ['fun']],
+            ['Classes', ['class']],
+            ['Interfaces', ['interface']],
+            ['Data classes', ['data class']],
+            ['Enums and sealed classes', ['enum class', 'sealed class']],
+        ],
+        kinds: {
+            fun: 'fun',
+            class: 'class',
+            interface: 'interface',
+            'data class': 'data class',
+            'enum class': 'enum',
+            'sealed class': 'sealed',
+        },
+        topics: [
+            ['Constructors', ['constructor']],
+            ['Functions', ['fun']],
+            ['Properties', ['field']],
+            ['Entries', ['entry']],
+            ['Inheritors', ['variant']],
+        ],
+        callable: new Set(),
+    },
+    ts: {
+        tool: 'typedoc',
+        fence: 'ts',
+        sections: [
+            ['Functions', ['function']],
+            ['Classes', ['class']],
+            ['Interfaces', ['interface']],
+            ['Enumerations', ['enum']],
+        ],
+        kinds: {
+            function: 'Function',
+            class: 'Class',
+            interface: 'Interface',
+            enum: 'Enumeration',
+        },
+        topics: [
+            ['Properties', ['property']],
+            ['Methods', ['method']],
+        ],
+        callable: new Set(['method']),
+    },
 };
 
 /**
- * The body of an SDK page: one section per declaration kind, in [`KIND_SECTIONS`] order.
+ * The first sentence of a doc comment: the one-line abstract DocC and Dokka show in a symbol
+ * list. Code spans are kept whole, so a `.` inside one does not end the sentence.
  *
- * @param {SurfaceDeclaration[]} declarations
- * @param {'swift' | 'kotlin' | 'ts'} fence
+ * @param {string} doc
+ * @returns {string}
+ */
+export function abstractOf(doc) {
+    const paragraph = doc
+        .trim()
+        .split(/\n\s*\n/)[0]
+        .replace(/\s*\n\s*/g, ' ');
+    let inCode = false;
+    for (let i = 0; i < paragraph.length; i += 1) {
+        if (paragraph[i] === '`') inCode = !inCode;
+        if (
+            !inCode &&
+            paragraph[i] === '.' &&
+            (i + 1 === paragraph.length || paragraph[i + 1] === ' ')
+        ) {
+            return paragraph.slice(0, i + 1);
+        }
+    }
+    return paragraph;
+}
+
+/**
+ * A TypeScript function or method signature, split the way TypeDoc shows it: each parameter
+ * with its type and whether it is optional, and the return type. `null` for a signature that
+ * is not a call (a property).
+ *
+ * @param {string} signature One line of the digest.
+ * @returns {{ parameters: Array<{ name: string, optional: boolean, type: string }>, returns: string } | null}
+ */
+export function tsSignature(signature) {
+    const open = signature.indexOf('(');
+    if (open === -1) return null;
+    let depth = 0;
+    let close = -1;
+    const cuts = [];
+    for (let i = open; i < signature.length; i += 1) {
+        const c = signature[i];
+        if (c === '>' && signature[i - 1] === '=') continue;
+        if ('(<[{'.includes(c)) depth += 1;
+        else if (')>]}'.includes(c)) {
+            depth -= 1;
+            if (depth === 0) {
+                close = i;
+                break;
+            }
+        } else if (c === ',' && depth === 1) cuts.push(i);
+    }
+    if (close === -1) return null;
+    const inner = signature.slice(open + 1, close);
+    const parameters = [];
+    if (inner.trim() !== '') {
+        let start = 0;
+        for (const cut of [...cuts.map((c) => c - open - 1), inner.length]) {
+            const part = inner.slice(start, cut).trim();
+            start = cut + 1;
+            const match = /^((?:\.\.\.)?[\w$]+)(\??):\s*(.+)$/.exec(part);
+            if (!match) return null;
+            parameters.push({
+                name: match[1],
+                optional: match[2] === '?',
+                type: match[3],
+            });
+        }
+    }
+    const returns = /^\s*:\s*(.+?);?\s*$/.exec(signature.slice(close + 1));
+    return { parameters, returns: returns ? returns[1] : 'void' };
+}
+
+/**
+ * TypeDoc's Parameters and Returns blocks for a call signature, or `''` when the signature is
+ * not one.
+ *
+ * @param {string} signature
+ * @returns {string}
+ */
+function tsCallParts(signature) {
+    const parts = tsSignature(signature);
+    if (parts === null) return '';
+    const blocks = [];
+    if (parts.parameters.length > 0) {
+        blocks.push(
+            '<p class="sdk-label">Parameters</p>',
+            parts.parameters
+                .map(
+                    ({ name, optional, type }) =>
+                        `- \`${name}${optional ? '?' : ''}\`: ${codeSpan(type)}`,
+                )
+                .join('\n'),
+        );
+    }
+    blocks.push('<p class="sdk-label">Returns</p>', codeSpan(parts.returns));
+    return blocks.join('\n\n');
+}
+
+/**
+ * The kind label a declaration is shown with, as the small eyebrow or chip above its name.
+ *
+ * @param {object} style One of [`SDK_STYLES`].
+ * @param {string} kind
+ * @returns {string}
+ */
+function kindChip(style, kind) {
+    return `<p class="sdk-kind" data-kind="${kind.replace(/\s+/g, '-')}">${style.kinds[kind] ?? kind}</p>`;
+}
+
+/**
+ * A type's members, grouped by `style.topics`: callables as headings of their own (DocC,
+ * TypeDoc), values as a list, and in Dokka every member as a table row.
+ *
+ * @param {SurfaceDeclaration} declaration
+ * @param {object} style
+ * @param {number} level Heading level of the declaration.
+ * @param {ReadonlyMap<string, string>} anchors
  * @param {string} source The artifact, for error messages.
  * @returns {string}
  */
-function renderDeclarations(declarations, fence, source) {
-    const sections = KIND_SECTIONS[fence];
-    const known = new Set(sections.flatMap(([, kinds]) => kinds));
+function renderMembers(declaration, style, level, anchors, source) {
+    const known = new Set(style.topics.flatMap(([, kinds]) => kinds));
+    for (const member of declaration.members) {
+        if (!known.has(member.kind)) {
+            throw new Error(
+                `${source}: ${declaration.name}.${member.name} is a ${member.kind}, which no ` +
+                    `topic of the ${style.fence} page lists. Add it to SDK_STYLES in ${GENERATED_BY}.`,
+            );
+        }
+    }
+    const blocks = [];
+    for (const [topic, kinds] of style.topics) {
+        const members = declaration.members.filter((m) =>
+            kinds.includes(m.kind),
+        );
+        if (members.length === 0) continue;
+        blocks.push(`<p class="sdk-label">${topic}</p>`);
+        if (
+            style.tool !== 'dokka' &&
+            kinds.some((kind) => style.callable.has(kind))
+        ) {
+            for (const member of members) {
+                const sections = [
+                    `${'#'.repeat(level + 1)} \`${member.name}\``,
+                    `\`\`\`${style.fence} wrap\n${member.signature}\n\`\`\``,
+                ];
+                if (member.doc) {
+                    sections.push(docProse(member.doc, level + 1, anchors));
+                }
+                if (style.tool === 'typedoc') {
+                    const call = tsCallParts(member.signature);
+                    if (call) sections.push(call);
+                }
+                blocks.push(sections.join('\n\n'));
+            }
+            continue;
+        }
+        // Values (and, in Dokka, every member): one row each. Dokka sets the name beside
+        // the signature and its full KDoc; DocC and TypeDoc list the declaration and its
+        // description. The description keeps its paragraphs and lists, nested in the item.
+        const items = members.map((member) => {
+            const lines =
+                style.tool === 'dokka'
+                    ? [
+                          `- ${codeSpan(member.name)}`,
+                          `\`\`\`${style.fence} wrap\n${member.signature}\n\`\`\``,
+                      ]
+                    : [`- ${codeSpan(member.signature)}`];
+            if (member.doc) {
+                lines.push(docProse(member.doc, level, anchors));
+            }
+            return [lines[0], ...lines.slice(1).map(indentItem)].join('\n\n');
+        });
+        blocks.push(
+            `<div class="sdk-members" data-tool="${style.tool}">\n\n${items.join('\n\n')}\n\n</div>`,
+        );
+    }
+    return blocks.join('\n\n');
+}
+
+/**
+ * `block` indented to continue a list item: every non-blank line by two spaces, so its
+ * paragraphs, lists and fences stay inside the item.
+ *
+ * @param {string} block
+ * @returns {string}
+ */
+function indentItem(block) {
+    return block
+        .split('\n')
+        .map((line) => (line.trim() === '' ? '' : `  ${line}`))
+        .join('\n');
+}
+
+/**
+ * One top-level declaration in its language's layout.
+ *
+ * - DocC: kind eyebrow, name, abstract, Declaration, Overview, then Topics.
+ * - Dokka: kind chip, name, signature, description, then member tables.
+ * - TypeDoc: kind chip, name, signature, description, Parameters and Returns, members, and
+ *   where it is defined.
+ *
+ * @param {SurfaceDeclaration} declaration
+ * @param {object} style
+ * @param {ReadonlyMap<string, string>} anchors
+ * @param {string} source
+ * @returns {string}
+ */
+function renderSymbol(declaration, style, anchors, source) {
+    const level = 3;
+    const signature = `\`\`\`${style.fence} wrap\n${declaration.signature}\n\`\`\``;
+    const sections = [
+        `<section class="sdk-symbol" data-tool="${style.tool}">`,
+        kindChip(style, declaration.kind),
+        `${'#'.repeat(level)} \`${declaration.name}\``,
+    ];
+    if (style.tool === 'docc') {
+        const abstract = declaration.doc ? abstractOf(declaration.doc) : '';
+        const overview = declaration.doc
+            ? declaration.doc.trim().slice(abstract.length).trim()
+            : '';
+        if (abstract) {
+            sections.push(
+                `<div class="sdk-abstract">\n\n${docProse(abstract, level, anchors)}\n\n</div>`,
+            );
+        }
+        sections.push('<p class="sdk-label">Declaration</p>', signature);
+        if (overview) {
+            sections.push(
+                '<p class="sdk-label">Overview</p>',
+                docProse(overview, level, anchors),
+            );
+        }
+    } else {
+        sections.push(signature);
+        if (declaration.doc) {
+            sections.push(docProse(declaration.doc, level, anchors));
+        }
+        if (style.tool === 'typedoc' && declaration.kind === 'function') {
+            const call = tsCallParts(declaration.signature);
+            if (call) sections.push(call);
+        }
+    }
+    const members = renderMembers(declaration, style, level, anchors, source);
+    if (members) {
+        if (style.tool === 'docc') {
+            sections.push('<p class="sdk-label sdk-topics">Topics</p>');
+        }
+        sections.push(members);
+    }
+    if (style.tool === 'typedoc') {
+        sections.push(
+            `<p class="sdk-source">Defined in <code>${source.split('/').pop()}</code></p>`,
+        );
+    }
+    sections.push('</section>');
+    return sections.join('\n\n');
+}
+
+/**
+ * The page's symbol index, in the tool's own form: DocC's Topics (name and abstract), Dokka's
+ * package summary table, TypeDoc's Index of names grouped by kind.
+ *
+ * @param {Array<[string, SurfaceDeclaration[]]>} groups
+ * @param {object} style
+ * @param {ReadonlyMap<string, string>} anchors
+ * @returns {string}
+ */
+function renderSymbolIndex(groups, style, anchors) {
+    const link = (d) => `[\`${d.name}\`](#${anchors.get(d.name)})`;
+    const body = groups.map(([heading, declarations]) => {
+        const label = `<p class="sdk-label">${heading}</p>`;
+        if (style.tool === 'dokka') {
+            return [
+                label,
+                table(
+                    ['Name', 'Summary'],
+                    declarations.map((d) => [
+                        link(d),
+                        d.doc
+                            ? oneLine(abstractOf(d.doc), anchors, 'cell')
+                            : '—',
+                    ]),
+                ),
+            ].join('\n\n');
+        }
+        if (style.tool === 'docc') {
+            return [
+                label,
+                declarations
+                    .map((d) =>
+                        d.doc
+                            ? `- ${link(d)}\n\n  ${oneLine(abstractOf(d.doc), anchors, 'list')}`
+                            : `- ${link(d)}`,
+                    )
+                    .join('\n\n'),
+            ].join('\n\n');
+        }
+        return [label, declarations.map((d) => `- ${link(d)}`).join('\n')].join(
+            '\n\n',
+        );
+    });
+    return [
+        `<nav class="sdk-index" data-tool="${style.tool}" aria-label="On this page">`,
+        ...body,
+        '</nav>',
+    ].join('\n\n');
+}
+
+/**
+ * The body of an SDK page: the symbol index, then one section per declaration group, in
+ * [`SDK_STYLES`] order.
+ *
+ * @param {SurfaceDeclaration[]} declarations
+ * @param {'swift' | 'kotlin' | 'ts'} language
+ * @param {string} source The artifact, for error messages.
+ * @returns {string}
+ */
+export function renderDeclarations(declarations, language, source) {
+    const style = SDK_STYLES[language];
+    const known = new Set(style.sections.flatMap(([, kinds]) => kinds));
     for (const declaration of declarations) {
         if (!known.has(declaration.kind)) {
             throw new Error(
                 `${source}: ${declaration.name} is a ${declaration.kind}, which no section of ` +
-                    `the ${fence} page lists. Add the kind to KIND_SECTIONS in ${GENERATED_BY}.`,
+                    `the ${language} page lists. Add the kind to SDK_STYLES in ${GENERATED_BY}.`,
             );
         }
     }
-    return sections
-        .map(([heading, kinds]) => {
-            const matching = declarations.filter((d) => kinds.includes(d.kind));
-            if (matching.length === 0) return '';
-            return [
+    const anchors = new Map(declarations.map((d) => [d.name, slugify(d.name)]));
+    const groups = style.sections
+        .map(([heading, kinds]) => [
+            heading,
+            declarations.filter((d) => kinds.includes(d.kind)),
+        ])
+        .filter(([, matching]) => matching.length > 0);
+    return [
+        renderSymbolIndex(groups, style, anchors),
+        ...groups.map(([heading, matching]) =>
+            [
                 `## ${heading}`,
-                ...matching.map((d) => renderDeclaration(d, fence, 3)),
-            ].join('\n\n');
-        })
-        .filter(Boolean)
-        .join('\n\n');
+                ...matching.map((d) => renderSymbol(d, style, anchors, source)),
+            ].join('\n\n'),
+        ),
+    ].join('\n\n');
 }
 
 /**
@@ -1981,7 +2384,6 @@ function sdkHead(page, artifact, intro) {
         '---',
         `title: ${yamlString(page.label)}`,
         `description: ${yamlString(page.description)}`,
-        'status: stable',
         ...generatedFrontmatter(`${page.label} SDK`, artifact),
         '---',
         '',
@@ -2000,14 +2402,11 @@ function sdkHead(page, artifact, intro) {
  */
 export function renderWasmPage(page, declarations) {
     const head = sdkHead(page, WASM_SURFACE, [
-        `Generated from \`${WASM_SURFACE}\`, the public half of the \`capsule_wasm.d.ts\``,
-        'wasm-bindgen emits for `capsule-wasm`, which `mise run wasm-surface-check` keeps',
-        'current in the web gate. To change a description on this page, change the Rust doc',
-        'comment it comes from and regenerate; this file is build output. Classes have no',
-        'public constructor: a caller gets one from the function that returns it, and calls',
-        '`free()` when done with it. Errors are thrown as an `Error` whose `message` is the',
-        'stable code each description names. Which SDK serves which platform is the',
-        '[SDK overview](/reference/sdk/).',
+        ':::note[Usage]',
+        'Classes have no public constructor: a function returns one, and the caller calls `free()`',
+        'when done. Errors are thrown as an `Error` whose `message` is the stable code each',
+        'description names.',
+        ':::',
     ]);
     return `${tidyBlankLines(`${head}\n\n${renderDeclarations(declarations, 'ts', WASM_SURFACE)}`)}\n`;
 }
@@ -2023,14 +2422,7 @@ export function renderBindingsPage(page, dump) {
     const language = page.language;
     const surface = dump.languages[language];
     const head = sdkHead(page, BINDINGS_SURFACE, [
-        `Generated from \`${BINDINGS_SURFACE}\`, the dump \`mise run gen-bindings\` writes from`,
-        `the \`${dump.namespace}\` ${language === 'swift' ? 'Swift' : 'Kotlin'} sources uniffi ${dump.uniffi}`,
-        `generates (\`${surface.source}\`), and checks with \`--check\` in the Rust gate. It lists`,
-        'every declaration the namespace exports; the generated source also carries the',
-        "converters and checksums uniffi needs internally, which are not a caller's surface. To",
-        'change a description on this page, change the Rust doc comment it comes from and',
-        'regenerate; this file is build output. Which SDK serves which platform is the',
-        '[SDK overview](/reference/sdk/).',
+        `Every declaration the \`${dump.namespace}\` namespace exports, as uniffi ${dump.uniffi} spells it in \`${surface.source}\`.`,
     ]);
     return `${tidyBlankLines(`${head}\n\n${renderDeclarations(surface.declarations, language, BINDINGS_SURFACE)}`)}\n`;
 }
@@ -2042,33 +2434,50 @@ export function renderBindingsPage(page, dump) {
  * unparseable one leaves no half-written section behind.
  *
  * @param {string} root Repository root.
+ * @param {{ stale?: string[] }} [options] Artifacts that may be stale on this branch; their
+ *   pages carry `generated.stale`, which the banner shows as a caution.
  * @returns {string[]} Repo-relative paths written, in a stable order.
  */
-export function generate(root) {
+export function generate(root, { stale = [] } = {}) {
     const surface = readCliSurface(root);
     const document = readOpenApiDocument(root);
     const buckets = bucketOperations(document);
     const bindings = readBindingsSurface(root);
     const wasm = readWasmSurface(root);
 
-    /** @type {Array<{ path: string, body: string }>} */
-    const pages = [
+    /** @type {Array<{ path: string, artifact: string, body: string }>} */
+    const rendered = [
         {
             path: `${CLI_OUT}/${CLI_PAGES[0].slug}.md`,
+            artifact: CLI_SURFACE,
             body: renderCliPage(surface),
+        },
+        {
+            path: `${API_OUT}/${API_CONVENTIONS.slug}.md`,
+            artifact: OPENAPI_DOCUMENT,
+            body: renderConventionsPage(document),
         },
         ...API_GROUPS.map((group) => ({
             path: `${API_OUT}/${group.slug}.md`,
+            artifact: OPENAPI_DOCUMENT,
             body: renderApiPage(group, buckets.get(group.slug) ?? [], document),
         })),
         ...SDK_PAGES.filter((page) => page.artifact !== null).map((page) => ({
             path: `${SDK_OUT}/${page.slug}.md`,
+            artifact:
+                page.artifact === 'wasm' ? WASM_SURFACE : BINDINGS_SURFACE,
             body:
                 page.artifact === 'wasm'
                     ? renderWasmPage(page, wasm)
                     : renderBindingsPage(page, bindings),
         })),
     ];
+    const pages = rendered.map(({ path, artifact, body }) => ({
+        path,
+        body: stale.includes(artifact)
+            ? body.replace(/^generated:$/m, 'generated:\n  stale: true')
+            : body,
+    }));
 
     // Cleared, not merged into. A page this run no longer emits — a group renamed, a surface
     // dropped — would otherwise stay on disk, and because the directory is gitignored
@@ -2110,10 +2519,42 @@ export function generate(root) {
     return pages.map(({ path }) => path);
 }
 
+/**
+ * The artifacts that may be stale on this branch, each warned about on stderr with the
+ * command that regenerates it. Empty, with the reason, where the check does not run.
+ *
+ * @param {string} root
+ * @returns {string[]}
+ */
+function checkFreshness(root) {
+    const skipped = skipReason(process.env);
+    if (skipped) {
+        process.stderr.write(
+            `gen-reference: freshness check skipped in ${skipped}\n`,
+        );
+        return [];
+    }
+    const changes = readChanges(root);
+    if (changes === null) {
+        process.stderr.write(
+            'gen-reference: freshness check skipped: git or origin/master is unavailable\n',
+        );
+        return [];
+    }
+    const stale = staleArtifacts(changes, ARTIFACT_SOURCES, mtimes(root));
+    for (const artifact of stale) {
+        process.stderr.write(
+            `gen-reference: ${artifact} may be stale: its source changed on this branch after ` +
+                `it was last regenerated. Run \`${ARTIFACT_SOURCES[artifact].regenerate}\`; the warning clears once it is rewritten.\n`,
+        );
+    }
+    return stale;
+}
+
 function main() {
     // scripts/ -> capsule-docs/ -> repo root
     const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-    const written = generate(root);
+    const written = generate(root, { stale: checkFreshness(root) });
     process.stdout.write(
         `gen-reference: wrote ${written.length} page(s)\n${written.map((path) => `  ${path}`).join('\n')}\n`,
     );

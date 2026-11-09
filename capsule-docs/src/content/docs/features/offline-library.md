@@ -4,10 +4,9 @@ description: A full index of every photo you have ever kept, in every native app
 status: draft
 ---
 
-Most photo services give a device a window onto a library that lives on someone else's
-server. Without a connection, the window closes. Capsule is designed the other way round: every
-native app holds a **full index of every photo and video you have ever kept**, so the whole library
-can be browsed, searched and organized offline.
+Most photo services give a device a window onto a library on someone else's server, and the window
+closes without a connection. In Capsule every native app holds a **full index of every photo and
+video you have ever kept**, so the whole library can be browsed, searched and organized offline.
 
 ## What you get
 
@@ -23,7 +22,6 @@ can be browsed, searched and organized offline.
 ## Why this is possible
 
 The server holds only ciphertext, so search and organization already run on your devices over a
-local index rather than on the server. Keeping that index complete on every device is what makes
-the offline library the default rather than an extra. The contract is
-[Local Gallery](/design/local-gallery/); what each device fetches and keeps is
-[Sync](/design/sync/) and [Download](/design/transfer/download/).
+local index. Keeping that index complete on every device makes the offline library the default
+rather than an extra. The contract is [](/design/local-gallery/); what each device fetches and
+keeps is [](/design/sync/) and [](/design/transfer/download/).

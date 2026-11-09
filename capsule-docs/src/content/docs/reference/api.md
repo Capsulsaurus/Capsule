@@ -1,107 +1,23 @@
 ---
 title: REST API
-description: The auth model, negotiation headers, and error contract common to every Capsule endpoint
+description: How Capsule's REST reference is organized, and what to read before an endpoint
 status: draft
 ---
 
-Capsule's server surface is REST over HTTP, described by a single OpenAPI 3.2 document that
-`capsule-server` emits from its own route types. This page is the hand-written half of that
-reference: the things true of every endpoint, which every per-endpoint page would otherwise
-repeat. The endpoints themselves are the generated pages listed in the sidebar.
+Capsule's server surface is REST over HTTP, described by one OpenAPI 3.2 document `capsule-server`
+emits from its own route types. Every page in this section is generated from that document and
+verified against the code in CI; why the surface is shaped this way is [](/design/api-surfaces/).
 
-Read [API Surfaces](/design/api-surfaces/#surface--transport-map) first if you want the map from
-a surface to the module that owns it and the design document that explains it. This reference
-says what the wire looks like; that one says why.
-
-## The server holds no keys
-
-The most important thing to know before reading any endpoint: **every write is sealed on the
-client before it is sent, and the sync feed returns opaque envelopes.** The server stores,
-addresses, and serves ciphertext, and authorizes who may do so. It cannot read an asset, and no
-endpoint accepts a plaintext one.
-
-The recovery routes under `/v1/auth/escrow` follow the same rule. The server holds the
-account's wrapped master key (`/v1/auth/escrow`), its user identity key sealed under the master
-key (`/v1/auth/escrow/identity`), and each album's keys sealed under the master key
-(`PUT /v1/auth/escrow/albums/{album_id}`, listed by `GET /v1/auth/escrow/albums` with each blob
-in standard base64). Every slot is opaque, held for the caller's own account only, and replaced
-in one operation; nothing deletes one. An account that has escrowed no album lists an empty
-array, not a `404`. See [Backup and Recovery](/design/backup-recovery/#master-key-escrow).
-
-That is also why this reference has no try-it panel. A playground could exercise the version
-handshake, the auth flows, and blob fetch; everything else would either return ciphertext or
-reject an unsealed body, and a reader who succeeded at it would leave believing the API accepts
-plaintext. The honest equivalent is the [command line](/reference/cli/), which performs the
-sealing.
-
-## Authentication
-
-Credentials ride the standard `Authorization: Bearer` header. An access token is short-lived and
-issued by `POST /v1/auth/login`; `POST /v1/auth/refresh` rotates the pair. Each generated page
-marks every operation as requiring authentication or not, read from the document's own security
-requirements rather than from prose here.
-
-An account with a confirmed second factor does not get a session from `login` — it gets a
-challenge, and the sign-in finishes at `POST /v1/auth/login/verify-totp`. A client that treats
-`202` as a failure will appear to work until the first user enables TOTP.
-
-A `401` carries a `WWW-Authenticate` challenge, per RFC 9110.
-
-## Negotiation
-
-The protocol-negotiation header contract — what a client sends, what a server answers with —
-is [API Surfaces](/design/api-surfaces/#negotiation-across-transports). The generated pages
-show, under each operation's parameters and response headers, what each endpoint declares; the
-response window also rides a request no operation answers.
-
-`GET /v1/version` is the unauthenticated reachability probe a client performs before the
-handshake. It has no failure variant by construction. What a server publishes about itself —
-attestation keys, capabilities, announced deprecations, revoked token identifiers — is under
-[Server discovery](/reference/api/well-known/).
-
-## Errors
-
-Failures are `application/problem+json` (RFC 9457) bodies. Beyond the standard members, every
-problem this server renders carries a **`code`**: a stable identifier from the `error.*` catalog
-namespace described in [Internationalization](/design/i18n/). Clients localize the code; the
-`detail` message stays English.
-
-Every problem also carries a **`request_id`**: the same UUIDv7 as that response's `X-Request-Id`
-header, which the server mints per request and files the request's log lines under. Quote it when
-reporting a failure; never parse or switch on it. It is declared on every problem schema but never
-required, so a client stays lenient toward a server that predates it.
-
-**Switch on the code, never on the status alone.** HTTP status is deliberately coarse:
-
-| Rejection class | HTTP status |
-| --- | --- |
-| Structural (bad envelope, unknown enum, sizes) | `400` |
-| Unauthenticated or expired token | `401` |
-| Unauthorized (capability, quota-hard, suspension) | `403` |
-| Not found, including indistinguishable-404 surfaces | `404` |
-| Stale state (chain, cursor, directory regression) | `409` |
-| Payload too large | `413` |
-| Unsupported chunk media type | `415` |
-| Protocol outside `[Min, Max]` | `426` |
-| Rate limited | `429` |
-
-A `404` is sometimes a deliberate indistinguishability, not an absence: a surface that must not
-reveal whether a resource exists to an unauthorized caller answers the same way in both cases.
-
-## Clients
-
-Do not hand-write a client. `capsule-sdk` is generated from this same document, and the
-generated request and response types are the only ones guaranteed to track it. The layering
-rules server code follows are [API Practices](/development/api-practices/).
-
-## How these pages stay true
-
-`capsule-server` emits `capsule-server/openapi.json` from its route types — no database, no key
-material, no network, because the router is built purely to describe it — and
-`mise run openapi-check-kynos` fails the Rust gate if the committed document disagrees with the
-server. The documentation build reads that file and nothing else.
-
-A generated page is never edited. If something on it is wrong, the annotation it came from is
-wrong: fix the handler or model documentation, run `mise run openapi-kynos`, and commit the
-document. The pipeline and the reasoning behind it are
-[Developer Documentation](/design/developer-docs/).
+- **Read [](/reference/api/conventions/) first.** It is the contract every endpoint shares:
+  protocol negotiation and the operations exempt from it, the bearer credential, and how a
+  rejection is coded and mapped to a status.
+- **The server holds no keys.** Every write is sealed on the client, and the sync feed returns
+  opaque envelopes, so no endpoint takes a plaintext asset. That is why there is no try-it
+  panel: a request a reader could send by hand would teach that the API accepts plaintext. The
+  [command line](/reference/cli/) performs the sealing instead.
+- **Each endpoint page** opens with its operations and schemas, then sets each operation beside
+  an example request and example responses. The document itself is
+  [`/openapi.json`](/openapi.json).
+- **Do not hand-write a client.** `capsule-sdk` is generated from the same document; its request
+  and response types are the only ones guaranteed to track it. Server code follows
+  [](/development/api-practices/).

@@ -503,9 +503,9 @@ fn member_dependency_names(root: &Path) -> Result<BTreeSet<String>> {
 
 /// `capsule-server` must not be on the `chrono` path.
 ///
-/// design/dependencies.md makes `cargo tree -i chrono -e no-dev` a review-blocking gate: chrono
-/// exists in this workspace only as the sea-orm column type inside `capsule-cli/entity`, and the
-/// server's own datetime crate is `jiff`. #402 puts sea-orm into `capsule-server` for the
+/// `cargo tree -i chrono -e no-dev` is a review-blocking gate: chrono exists in this workspace
+/// only as the sea-orm column type inside `capsule-cli/entity`, and the server's own datetime
+/// crate is `jiff`. #402 puts sea-orm into `capsule-server` for the
 /// Postgres adapters, which makes that gate worth *enforcing* rather than reading.
 ///
 /// The check is deliberately **per package** rather than a grep of the workspace-wide tree.
@@ -575,7 +575,7 @@ fn check_chrono_isolation(root: &Path, violations: &mut Vec<String>) -> Result<(
         let expected = EXPECTED_ON_THE_PATH.contains(package);
         if reaches_chrono && !expected {
             violations.push(format!(
-                "`{package}` reaches `chrono` through its own manifest; design/dependencies.md \
+                "`{package}` reaches `chrono` through its own manifest; the workspace \
                  permits chrono only as the sea-orm column type in `capsule-cli/entity` and in \
                  `capsule-server-migration`. Check that sea-orm is declared with \
                  `default-features = false`"
@@ -653,7 +653,7 @@ fn workspace_member_names(root: &Path) -> Result<BTreeSet<String>> {
 /// stateless core; they belong to `capsule-library` (local) or the server.
 const STATEFUL_DEPENDENCIES: &[&str] = &["rusqlite", "sea-orm", "sqlite-vec", "sqlx", "walkdir"];
 
-/// The stateless core's boundary (Module Map — Stateless Core): `capsule-core` holds no
+/// The stateless core's boundary (`capsule-core`'s crate docs): `capsule-core` holds no
 /// connection or file handle and reads no environment, so neither its manifest nor its sources
 /// may reach for a database or the process's filesystem and environment.
 ///

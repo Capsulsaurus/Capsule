@@ -6,7 +6,7 @@ status: draft
 
 Move your library from Google Photos into a local Capsule library: export with Google Takeout,
 import with the `capsule` CLI, and verify. No server is needed. The importer's contract is
-[Import — Third-Party Importers](/design/import/pipeline/#third-party-importers).
+[](/design/import/pipeline/#third-party-importers).
 
 ## Before you start
 
@@ -20,14 +20,14 @@ Treat this as copy-and-verify:
 You need free disk for roughly twice the export size (extracted archive plus library) and the
 `capsule` CLI.
 
-## Step 1 — Request your export from Google Takeout
+## Step 1: Request your export from Google Takeout
 
 1. Open [Google Takeout](https://takeout.google.com/), choose **Deselect all**, then select
    **Google Photos** only.
 2. Choose `.zip` and a per-file size. Large libraries are split into **multiple parts**.
 3. Click **Create export** and wait for the emails (hours to days).
 
-## Step 2 — Download and extract every part
+## Step 2: Download and extract every part
 
 Download and extract **every** part; a media file and its JSON sidecar can land in different
 parts.
@@ -39,7 +39,7 @@ unzip 'takeout-*.zip' -d takeout-extracted
 
 Do not rename or reorganize anything: the importer relies on Google's layout.
 
-## Step 3 — Import your originals into a Capsule library
+## Step 3: Import your originals into a Capsule library
 
 ```sh
 capsule import ./takeout-extracted --provider takeout --library ~/capsule-library
@@ -74,22 +74,24 @@ hash.
 A location taken from the JSON is recorded as **manual**, not EXIF, because it did not come from
 the file's bytes.
 
-The importer also handles Takeout's quirks: truncated sidecar names, `photo(1).jpg` /
-`photo.jpg(1).json` duplicates (kept as distinct assets), `-edited` copies (stacked with their
-original, including localized suffixes), and sidecars split across parts. Results are
-deterministic across runs.
+The importer also handles Takeout's quirks, with deterministic results across runs:
+
+- truncated sidecar names;
+- `photo(1).jpg` and `photo.jpg(1).json` duplicates, kept as distinct assets;
+- `-edited` copies, including localized suffixes, stacked with their original;
+- sidecars split across parts.
 
 ## What the importer cannot guarantee
 
-The importer is built against the Takeout layout described above. These are its known limits;
-they do not fail the import, which is why the verification below is not optional:
+These are the known limits of an importer built against the Takeout layout above. They do not fail
+the import, which is why the verification below is not optional.
 
 - **Only the fields in the table are read.** Every other field in a sidecar (people tags, for
   example) is not imported.
 - **A sidecar that cannot be paired or parsed is skipped quietly.** Its media still imports, but
-  without that JSON's caption, favorite or fallback time and location. Pairing tries the
-  exact name, then the JSON's recorded title, then a shared name prefix of at least 16 characters;
-  a renamed file or a shorter truncated name can leave its sidecar unpaired.
+  without that JSON's caption, favorite or fallback time and location. Pairing tries the exact
+  name, then the JSON's recorded title, then a shared name prefix of at least 16 characters, so a
+  renamed file or a shorter truncated name can leave its sidecar unpaired.
 - **Edited copies are recognized by a fixed set of localized suffixes** (`-edited`, `-bearbeitet`,
   `-modifié` and a few others). An edited copy in a language outside that set imports as its own
   asset instead of stacking with its original.
@@ -113,7 +115,7 @@ find takeout-extracted -type f \( -iname '*.jpg' -o -iname '*.heic' \) -print0 \
   | head -z -n 20 | xargs -0 shasum -a 256
 ```
 
-(The `-print0` form matters: the `Google Photos` directory name contains a space.)
+The `-print0` form matters because the `Google Photos` directory name contains a space.
 
 **Metadata.** Pick a few photos that are in albums, favorited or captioned in Google. Read each
 back by hash prefix (eight or more hex characters):

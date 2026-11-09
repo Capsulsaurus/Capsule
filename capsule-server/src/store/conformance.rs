@@ -10,7 +10,7 @@
 //! [`run_all`] call.
 //!
 //! It is also what lets the rest of the Kynos rebuild be tested without live infrastructure —
-//! the acceptance gap design/module-map.md sets for the framework. The in-memory adapter is
+//! the framework's acceptance gap. The in-memory adapter is
 //! only a legitimate stand-in for Valkey to the extent it passes this.
 //!
 //! # What is asserted, and what cannot be

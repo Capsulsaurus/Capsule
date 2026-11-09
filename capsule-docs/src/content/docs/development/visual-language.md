@@ -115,7 +115,11 @@ one is designed.
   document. A REST page opens with an index of its endpoints, each a method pill and path, and its schemas, and lays
   every operation out as the reference (parameters and responses as field lists) beside a sticky
   panel with an example `curl` request and example success bodies. Method pills are coloured by
-  method and status dots by class, from Starlight's semantic colours.
+  method and status dots by class, from Starlight's semantic colours. Every other generated page
+  is laid out the way its readers' own tool lays it out: DocC for Swift (kind eyebrow, abstract,
+  Declaration, Overview, Topics), Dokka for Kotlin (name beside signature and KDoc), TypeDoc for
+  the browser module (kind chips, Parameters, Returns, where it is defined) and a man page for the
+  CLI (Synopsis, Description, Options). A generated page carries no review status.
 - **The blog goes live with its first post.** Until a post is published the production site has no
   blog route, header link, RSS feed, sitemap entry or footer link, so no reader lands on an empty
   index.
@@ -125,6 +129,27 @@ one is designed.
   title, a description of 50 to 160 characters, a date, at least one configured author and one tag,
   and an `<!-- excerpt -->` marker that ends its teaser on the index. A post's header shows its
   date, reading time and authors with their pictures, and its body is set to a reading measure.
+
+## Docs Prose
+
+- **Short and grouped.** One idea per sentence, related sentences in one paragraph, no filler; cut
+  words, never technical depth.
+- **Tables compare, lists enumerate.** A table when several items are compared on two or more
+  attributes; a list when each item has one attribute or needs a sentence; prose for an argument.
+- **The spec is the spec.** Request and response shapes, headers, statuses and per-endpoint rules
+  live in the code that emits the OpenAPI document; a design doc states why and links the
+  generated page.
+- **Labels come from targets.** A link to a page or heading on this site is written with empty
+  text, `[](/design/metadata/#identifiers)`, and renders the target's title or heading
+  (`src/lib/remark-link-titles.mjs`), so a label cannot drift from what it names.
+- **Libraries are linked once per page.** The first mention of a library or tool links its source
+  repository from `src/lib/library-links.mjs`; add a library there, not a URL to a page. A name that
+  is also an ordinary word, or names two things (`gamut`), is linked by hand.
+- **Diagrams are Mermaid.** A graph, flow or state machine is a ```` ```mermaid title="…" ````
+  fence, compiled at build time to SVG in the page's colours (`src/lib/remark-mermaid.mjs`); the
+  title is its caption and accessible name. Flowchart nodes take the house classes `client`,
+  `server`, `store`, `external`, `danger` and `accent`. A literal directory layout stays a text
+  tree.
 
 ## Validation
 
@@ -136,6 +161,9 @@ one is designed.
 - `src/lib/theme-cycle.test.mjs` proves the toggle's cycle and that it stores what Starlight reads;
   `src/lib/build-commit.test.mjs` proves which commit the footer names.
 - `src/lib/sidebar-status.test.mjs` proves which sidebar entries carry a badge.
+- `src/lib/remark-link-titles.test.mjs`, `remark-library-links.test.mjs` and
+  `remark-mermaid.test.mjs` prove the link labels, the library links and the diagram compiler; the
+  build fails on an empty link whose target is missing and on a diagram that does not render.
 - `scripts/gen-reference.test.mjs` proves the REST layout, the endpoint index's anchors, the
   example bodies and requests, and the generated-page banner; `src/lib/fonts.test.mjs` proves every
   `@font-face` names a vendored file.

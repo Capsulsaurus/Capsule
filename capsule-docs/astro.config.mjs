@@ -11,6 +11,9 @@ import { referenceSidebar } from './scripts/reference-groups.mjs';
 import { BLOG_AUTHORS, hasPublishedPost } from './src/lib/blog-posts.mjs';
 import { resolveBuildCommit } from './src/lib/build-commit.mjs';
 import rehypeNoTranslate from './src/lib/rehype-notranslate.mjs';
+import remarkLibraryLinks from './src/lib/remark-library-links.mjs';
+import remarkLinkTitles from './src/lib/remark-link-titles.mjs';
+import remarkMermaid from './src/lib/remark-mermaid.mjs';
 
 // A production build includes the blog (routes, header link, RSS, sitemap,
 // footer link) only once a post is published, so no reader lands on an empty
@@ -38,11 +41,36 @@ const buildCommit = resolveBuildCommit(process.env, () => {
 // https://astro.build/config
 export default defineConfig({
     site: 'https://capsule.justinchung.net', // TODO: Get domain later
-    // Opt technical terms out of browser/machine auto-translation. See the plugin.
-    // Astro 7 deprecates the top-level `markdown.rehypePlugins` key; plugins are
-    // passed to the unified processor directly.
+    // Retired pages; their content moved to the targets or into code docs.
+    redirects: {
+        '/design/module-map/': '/design/principles/',
+        '/design/dependencies/': '/design/licensing/',
+        '/design/cryptography/failure-modes/':
+            '/design/backup-recovery/#recovery-paths',
+        '/reference/crates/': '/reference/sdk/rust/',
+    },
+    // Astro 7 deprecates the top-level `markdown.*Plugins` keys; plugins are
+    // passed to the unified processor directly. See each plugin's header.
     markdown: {
-        processor: unified({ rehypePlugins: [rehypeNoTranslate] }),
+        processor: unified({
+            // An empty-text site link renders its target's title or heading.
+            remarkPlugins: [
+                // ```mermaid fences compile to themed inline SVG.
+                remarkMermaid,
+                [
+                    remarkLinkTitles,
+                    {
+                        contentDir: fileURLToPath(
+                            new URL('./src/content/docs/', import.meta.url),
+                        ),
+                    },
+                ],
+                // The first mention of each library links its source repo.
+                remarkLibraryLinks,
+            ],
+            // Opts technical terms out of browser/machine auto-translation.
+            rehypePlugins: [rehypeNoTranslate],
+        }),
     },
     integrations: [
         starlight({
@@ -103,11 +131,9 @@ export default defineConfig({
                             items: [
                                 { slug: 'design' },
                                 { slug: 'design/principles' },
-                                { slug: 'design/module-map' },
                                 { slug: 'design/api-surfaces' },
                                 { slug: 'design/developer-docs' },
                                 { slug: 'design/networking' },
-                                { slug: 'design/dependencies' },
                                 { slug: 'design/licensing' },
                             ],
                         },
@@ -120,7 +146,6 @@ export default defineConfig({
                                 { slug: 'design/cryptography/encryption' },
                                 { slug: 'design/cryptography/mls' },
                                 { slug: 'design/cryptography/provenance' },
-                                { slug: 'design/cryptography/failure-modes' },
                             ],
                         },
                         {

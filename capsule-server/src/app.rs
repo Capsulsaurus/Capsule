@@ -14,8 +14,7 @@
 //! [`AuthContext`] is one field, not four, and [`UploadContext`] is the second field
 //! beside it rather than five more loose collaborators. `#[derive(Provider)]` emits one
 //! `Provides<T>` per field, and two fields of the same type is a derive error — so the shape
-//! here is "one bundle per cohesive module", which is also the shape design/module-map.md
-//! describes.
+//! here is "one bundle per cohesive module", which is also the shape the crate docs describe.
 //!
 //! [`App::new`] is the **only** constructor, and that is deliberate. There was a `with_auth`
 //! convenience taking the auth module's four collaborators inline beside the other bundles,

@@ -29,7 +29,7 @@ Follow, by module (`capsule-server/src/…`, with its `routes/` handlers):
 | `serve/`, `membership/` | [Download](../../capsule-docs/src/content/docs/design/transfer/download.md) |
 | `verify/`, `attestation/` | [Durability](../../capsule-docs/src/content/docs/design/transfer/durability.md) |
 | `blob/`, `store/`, `ledger/`, `index/`, `postgres/`, `gc/`, and the `capsule-server/migration/` crate | [Filesystem — Server](../../capsule-docs/src/content/docs/design/filesystem/server.md) |
-| `scrub/`, `cli.rs` | [Filesystem — Maintenance](../../capsule-docs/src/content/docs/design/filesystem/maintenance.md), [Failure modes](../../capsule-docs/src/content/docs/design/cryptography/failure-modes.md) |
+| `scrub/`, `cli.rs` | [Filesystem — Maintenance](../../capsule-docs/src/content/docs/design/filesystem/maintenance.md), [Network resilience — Transport Security](../../capsule-docs/src/content/docs/design/networking.md#transport-security) |
 | `auth/`, `discovery/`, `config`, routes `auth`, `sessions`, `totp`, `oidc`, `profile`, `well_known` | [Authentication](../../capsule-docs/src/content/docs/design/authentication.md); `discovery/` also [Schema rules](../../capsule-docs/src/content/docs/design/threat-model/schema-rules.md) |
 | `routes/ops.rs` | [Authorization](../../capsule-docs/src/content/docs/design/authorization.md) |
 | `enrollment/` | [Device enrollment](../../capsule-docs/src/content/docs/design/device-enrollment.md) |
@@ -48,7 +48,8 @@ Follow, by module (`capsule-server/src/…`, with its `routes/` handlers):
 
 Keep current:
 
-- [API surfaces](../../capsule-docs/src/content/docs/design/api-surfaces.md) — its endpoint ↔ module ↔ owning-doc table, whenever a route is added, removed or moved (`check-docs-truth` runs the endpoint census against `openapi.json`; exemptions live in `capsule-docs/endpoint-census-allowlist.txt`).
+- [API surfaces](../../capsule-docs/src/content/docs/design/api-surfaces.md) — its surface ↔ reference page ↔ owner-doc table, when a surface or its owner changes (`check-docs-truth` runs the endpoint census against `openapi.json`; exemptions live in `capsule-docs/endpoint-census-allowlist.txt`).
+- [`openapi/contract.md`](../../capsule-server/src/openapi/contract.md) — the contract every operation shares, emitted as the document's description; a test fails when a route skips the protocol gate without being listed there.
 - `capsule-server/openapi.json` (`mise run openapi-kynos`) and the hand-written [API reference overview](../../capsule-docs/src/content/docs/reference/api.md).
-- [Module Map — Server Modules](../../capsule-docs/src/content/docs/design/module-map.md#server-modules) — a new or renamed top-level module.
+- The module list in the [crate docs](../../capsule-server/src/lib.rs) — a new or renamed top-level module.
 - [Self-hosting guide](../../capsule-docs/src/content/docs/guides/self-hosting.md) — any change to `config`, `cli.rs`, `client_addr`, `compose.yaml`, `.env.example` or the migration procedure.

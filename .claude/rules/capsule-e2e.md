@@ -15,4 +15,4 @@ Follow:
 
 Keep current:
 
-- [Module Map — E2E Test Surface](../../capsule-docs/src/content/docs/design/module-map.md#e2e-test-surface) — when a case is added, removed or renamed.
+- The E2E case index in [`src/lib.rs`](../../capsule-e2e/src/lib.rs) — when a case is added, removed or renamed.
