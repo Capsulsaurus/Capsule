@@ -211,9 +211,10 @@ fn the_document_describes_the_shared_contract() {
 }
 
 /// **The contract names every operation exempt from the protocol gate.** An operation that does
-/// not require `X-Capsule-Protocol` skips the gate; the description must list it, by its own
-/// path or by the family it belongs to, so a route that newly skips the gate cannot do so
-/// silently.
+/// not require `X-Capsule-Protocol` skips the gate; the description must list it by its own path,
+/// or for the well-known, share and drop families by the family. A new route outside those
+/// families that skips the gate fails here; one inside them is covered by the family's line, and
+/// `tests/conformance.rs` pins the exact exempt set.
 #[test]
 fn the_contract_lists_every_operation_the_protocol_gate_exempts() {
     let json = serde_json::to_value(document()).expect("a document serializes");

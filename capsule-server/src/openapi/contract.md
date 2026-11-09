@@ -13,9 +13,9 @@ returns opaque envelopes, so no operation accepts or returns a plaintext asset.
 | `X-Capsule-Min-Client-Build` | response | On every response. Advisory; `0.0.0` means no cutoff. |
 | `X-Request-Id` | response | On every response: a UUIDv7 the server mints. An inbound value is ignored, never echoed. |
 
-- A **write** whose protocol is outside `[Min, Max]` is `426 error.protocol.version_unsupported`;
-  the window is only in the headers.
-- A **read** is admitted at any well-formed protocol date, past or future.
+- A **write** (any method but `GET` and `HEAD`) whose protocol is outside `[Min, Max]` is
+  `426 error.protocol.version_unsupported`; the window is only in the headers.
+- A **read** (`GET` or `HEAD`) is admitted at any well-formed protocol date, past or future.
 - A missing or malformed header on a gated operation is `400 error.request.malformed`.
 - The advertised window and the enforced one come from one source and cannot differ.
 
@@ -41,7 +41,11 @@ it, and the generated client keeps one credential.
 Every rejection is an RFC 9457 problem whose `code` member is a stable `error.*` catalog code.
 A client switches on `code`, never on the status alone, and localizes it itself. `request_id`
 repeats the response's `X-Request-Id`: a client shows it for the user to quote and never parses
-it.
+it. It is declared on every problem but never required, so a client stays lenient toward a
+server that predates it.
+
+The common rejection classes and their statuses follow; each operation lists every status it
+can return.
 
 | Rejection | Status |
 | --- | --- |
@@ -50,6 +54,7 @@ it.
 | Unauthorized: capability, hard quota, suspension | `403` |
 | Not found, including the indistinguishable-`404` surfaces | `404` |
 | Stale state: chain, cursor, directory regression | `409` |
+| Gone: a superseded or deleted record | `410` |
 | Payload too large | `413` |
 | Unsupported chunk media type | `415` |
 | A write forwarded as TLS early data | `425` |
