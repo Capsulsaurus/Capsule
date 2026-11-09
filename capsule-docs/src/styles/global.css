@@ -6,6 +6,7 @@
  * Fonts are self-hosted, so text never waits on a third-party origin.
  */
 @import "tailwindcss";
+@import "./api-reference.css";
 
 /* Upstream Geist 1.9 variable cuts, vendored in src/assets/fonts (see its
    README). Vite fingerprints them into /_astro/, which public/_headers marks

@@ -1,12 +1,15 @@
 ---
 // Starlight PageTitle override: renders the `status` frontmatter field
-// (see src/content.config.ts) as a badge beside the page title. The mapping
-// is shared with the sidebar (src/lib/status-badge.mjs).
-import { Badge } from '@astrojs/starlight/components';
+// (see src/content.config.ts) as a badge beside the page title, and on a page
+// scripts/gen-reference.mjs generated, the banner that says so: which surface
+// it documents, what it was generated from, and where to download that. The
+// status mapping is shared with the sidebar (src/lib/status-badge.mjs).
+import { Badge, Icon } from '@astrojs/starlight/components';
 import Default from '@astrojs/starlight/components/PageTitle.astro';
 import { titleBadge } from '../lib/status-badge.mjs';
 
-const badge = titleBadge(Astro.locals.starlightRoute.entry.data.status);
+const { status, generated } = Astro.locals.starlightRoute.entry.data;
+const badge = titleBadge(status);
 ---
 
 {
@@ -17,6 +20,21 @@ const badge = titleBadge(Astro.locals.starlightRoute.entry.data.status);
     </div>
   ) : (
     <Default><slot /></Default>
+  )
+}
+{
+  generated && (
+    <p class="generated-banner not-content">
+      <span class="surface">{generated.surface}</span>
+      <span class="generated">Generated</span>
+      <span class="source">from {generated.source}</span>
+      {generated.download && (
+        <a href={generated.download} download>
+          <Icon name="download" size="1em" />
+          {generated.download.split('/').pop()}
+        </a>
+      )}
+    </p>
   )
 }
 
@@ -35,5 +53,49 @@ const badge = titleBadge(Astro.locals.starlightRoute.entry.data.status);
      wrapper above instead. */
   .title-with-status :global(h1) {
     margin-top: 0;
+  }
+
+  .generated-banner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-2);
+  }
+
+  .surface,
+  .generated {
+    padding: 0.125rem 0.5rem;
+    border-radius: 999px;
+    font-weight: 600;
+    font-size: var(--sl-text-xs);
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+
+  .surface {
+    background: var(--sl-color-accent-low);
+    color: var(--sl-color-text-accent);
+  }
+
+  .generated {
+    border: 1px dashed var(--sl-color-gray-4);
+    color: var(--sl-color-gray-2);
+  }
+
+  .generated-banner a {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    margin-inline-start: auto;
+    color: var(--sl-color-text-accent);
+    font-weight: 500;
+    text-decoration: none;
+  }
+
+  .generated-banner a:hover {
+    text-decoration: underline;
   }
 </style>

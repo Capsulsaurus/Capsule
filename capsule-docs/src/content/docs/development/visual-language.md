@@ -110,6 +110,12 @@ one is designed.
 - **Footer.** On every page, centred: links to the documentation, the blog (once it is live), the
   roadmap, discussions and the source, then the copyright holder, the licence line and the commit
   the site was built from, linked to that commit.
+- **Generated reference.** A generated page says so under its title: the surface (REST API, CLI,
+  an SDK), a dashed "Generated" tag and its source, and for REST a download of the OpenAPI
+  document. A REST page opens with an index of its endpoints, each a method pill and path, and lays
+  every operation out as the reference (parameters and responses as field lists) beside a sticky
+  panel with an example `curl` request and example success bodies. Method pills are coloured by
+  method and status dots by class, from Starlight's semantic colours.
 - **The blog goes live with its first post.** Until a post is published the production site has no
   blog route, header link, RSS feed, sitemap entry or footer link, so no reader lands on an empty
   index.
@@ -130,6 +136,9 @@ one is designed.
 - `src/lib/theme-cycle.test.mjs` proves the toggle's cycle and that it stores what Starlight reads;
   `src/lib/build-commit.test.mjs` proves which commit the footer names.
 - `src/lib/sidebar-status.test.mjs` proves which sidebar entries carry a badge.
+- `scripts/gen-reference.test.mjs` proves the REST layout, the endpoint index's anchors, the
+  example bodies and requests, and the generated-page banner; `src/lib/fonts.test.mjs` proves every
+  `@font-face` names a vendored file.
 - `mise run build-docs` runs the link validator over every page, front-page feature links included.
   The header and footer components are not seen by the link validator; their links are checked by
   `site-nav.test.mjs` instead.

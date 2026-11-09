@@ -18,6 +18,17 @@ export const collections = {
                     // it: scripts/page-status.test.mjs, part of `test-docs`, fails
                     // on any page that does not.
                     status: z.enum(['draft', 'stable']).optional(),
+                    // Set only by scripts/gen-reference.mjs: which surface a
+                    // generated page documents, the artifact it came from and,
+                    // when served, where to download it. PageTitle.astro
+                    // renders it as the generated-page banner.
+                    generated: z
+                        .object({
+                            surface: z.string(),
+                            source: z.string(),
+                            download: z.string().optional(),
+                        })
+                        .optional(),
                 }),
         }),
     }),

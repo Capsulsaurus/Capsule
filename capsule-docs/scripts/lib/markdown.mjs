@@ -98,7 +98,7 @@ function prose(source) {
 }
 
 /**
- * GitHub's heading-anchor slug: strip inline markup, lowercase, drop every
+ * GitHub's heading-anchor slug: strip inline markup and HTML tags, lowercase, drop every
  * character outside letters, numbers, marks, `_`, `-`, and space, then map each
  * remaining space to a hyphen. Runs are preserved, never collapsed.
  *
@@ -107,6 +107,7 @@ function prose(source) {
  */
 export function slugify(heading) {
     return heading
+        .replace(/<[^>]*>/g, '')
         .replace(/`/g, '')
         .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
         .replace(/\*/g, '')

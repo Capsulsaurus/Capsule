@@ -1,0 +1,214 @@
+/*
+ * The generated REST reference (scripts/gen-reference.mjs): method and status
+ * pills, a two-column operation (reference left, request and response
+ * examples right), and the operation index each page opens with. Colours come
+ * from Starlight's semantic tokens, so both themes work unchanged.
+ */
+
+/* REST pages have no table of contents; the panels use that width instead. */
+html:has(.api-op) {
+    --sl-content-width: 78rem;
+}
+
+.api-method {
+    --api-method-color: var(--sl-color-gray-2);
+    display: inline-block;
+    min-width: 3.75em;
+    margin-inline-end: 0.35em;
+    padding: 0.125em 0.5em;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--api-method-color) 16%, transparent);
+    color: var(--api-method-color);
+    font-family: var(--sl-font-mono);
+    font-size: 0.75em;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    line-height: 1.5;
+    text-align: center;
+    vertical-align: 0.15em;
+}
+
+.api-method[data-method="get"] {
+    --api-method-color: var(--sl-color-green-high);
+}
+.api-method[data-method="post"] {
+    --api-method-color: var(--sl-color-blue-high);
+}
+.api-method[data-method="put"] {
+    --api-method-color: var(--sl-color-orange-high);
+}
+.api-method[data-method="patch"] {
+    --api-method-color: var(--sl-color-purple-high);
+}
+.api-method[data-method="delete"] {
+    --api-method-color: var(--sl-color-red-high);
+}
+
+.api-status {
+    --api-status-color: var(--sl-color-gray-2);
+    font-family: var(--sl-font-mono);
+    font-weight: 600;
+    color: var(--api-status-color);
+    white-space: nowrap;
+}
+
+.api-status::before {
+    content: "";
+    display: inline-block;
+    width: 0.5em;
+    height: 0.5em;
+    margin-inline-end: 0.4em;
+    border-radius: 50%;
+    background: currentColor;
+    vertical-align: 0.1em;
+}
+
+.api-status[data-class="2xx"] {
+    --api-status-color: var(--sl-color-green-high);
+}
+.api-status[data-class="3xx"] {
+    --api-status-color: var(--sl-color-blue-high);
+}
+.api-status[data-class="4xx"] {
+    --api-status-color: var(--sl-color-orange-high);
+}
+.api-status[data-class="5xx"] {
+    --api-status-color: var(--sl-color-red-high);
+}
+
+/* Parameters and responses: name, muted facts, a required marker, then the
+   description beneath, in a hairline-ruled list. */
+.sl-markdown-content .api-fields ul {
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--sl-color-hairline);
+}
+
+.sl-markdown-content .api-fields li {
+    margin: 0;
+    padding-block: 0.625rem;
+    border-bottom: 1px solid var(--sl-color-hairline);
+}
+
+.sl-markdown-content .api-fields li > p {
+    margin: 0;
+}
+
+.sl-markdown-content .api-fields li > p + p {
+    margin-top: 0.25rem;
+    color: var(--sl-color-gray-2);
+    font-size: var(--sl-text-sm);
+}
+
+.sl-markdown-content .api-fields li > p:first-child > code:first-child {
+    background: none;
+    padding: 0;
+    color: var(--sl-color-white);
+    font-weight: 600;
+}
+
+.api-meta {
+    margin-inline-start: 0.5em;
+    color: var(--sl-color-gray-3);
+    font-size: var(--sl-text-sm);
+}
+
+.sl-markdown-content .api-meta code {
+    background: none;
+    padding: 0;
+    color: inherit;
+}
+
+.api-required {
+    margin-inline-start: 0.5em;
+    color: var(--sl-color-orange-high);
+    font-size: var(--sl-text-xs);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+}
+
+/* The operation index. */
+.sl-markdown-content .api-index ul {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
+    gap: 0.25rem 1.5rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--sl-color-hairline);
+    border-radius: var(--capsule-radius-card);
+    background: var(--sl-color-bg-nav);
+    list-style: none;
+}
+
+.sl-markdown-content .api-index li {
+    margin: 0;
+}
+
+.sl-markdown-content .api-index a {
+    color: var(--sl-color-white);
+    text-decoration: none;
+}
+
+.sl-markdown-content .api-index a:hover code {
+    color: var(--sl-color-text-accent);
+}
+
+.sl-markdown-content .api-index code {
+    background: none;
+    padding: 0;
+    font-size: var(--sl-text-sm);
+}
+
+/* One operation. */
+.sl-markdown-content .api-op {
+    display: grid;
+    gap: 1rem 2rem;
+    margin-top: 3rem;
+    padding-top: 2rem;
+    border-top: 1px solid var(--sl-color-hairline);
+}
+
+.sl-markdown-content .api-op h2 {
+    margin-top: 0;
+    font-family: var(--sl-font-mono);
+    font-size: var(--sl-text-h4);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    overflow-wrap: anywhere;
+}
+
+.sl-markdown-content .api-op-main,
+.sl-markdown-content .api-op-panel {
+    min-width: 0;
+}
+
+.sl-markdown-content .api-op-main > :first-child,
+.sl-markdown-content .api-op-panel > :first-child {
+    margin-top: 0;
+}
+
+.sl-markdown-content .api-panel-note {
+    margin-top: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    border: 1px dashed var(--sl-color-hairline);
+    border-radius: var(--capsule-radius-sm);
+    color: var(--sl-color-gray-3);
+    font-size: var(--sl-text-sm);
+}
+
+@media (min-width: 72rem) {
+    .sl-markdown-content .api-op {
+        grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+        align-items: start;
+    }
+
+    /* The examples stay in view while the reference beside them scrolls. */
+    .sl-markdown-content .api-op-panel {
+        position: sticky;
+        top: calc(var(--sl-nav-height) + 1.5rem);
+    }
+
+    .sl-markdown-content .api-op-panel > * {
+        margin-top: 0.75rem;
+    }
+}
