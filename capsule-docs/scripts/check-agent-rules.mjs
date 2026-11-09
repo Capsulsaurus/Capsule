@@ -11,17 +11,14 @@
  *   - A new component directory with no rule scoped to it means nobody is told
  *     which docs it answers to.
  *
- * So this check proves four things, all names against the tracked tree:
+ * So this check proves three things, all names against the tracked tree:
  *
  *   1. every rule file declares `paths:`;
  *   2. every glob matches at least one tracked file;
  *   3. every top-level directory carrying a build manifest has a rule scoped to
  *      the whole of it (`<dir>/**`) — a repo-wide `**\/*.rs`, or another area's
  *      `<dir>/src/**\/*.rs`, is not coverage, because the point of a scoped
- *      rule is the directory-specific doc map;
- *   4. the `AGENTS.md` index links exactly the rule files that exist, so a
- *      reader of `AGENTS.md` alone (any agent that does not load
- *      `.claude/rules/`) can find every rule.
+ *      rule is the directory-specific doc map.
  *
  * Like the rest of docs-truth it proves names resolve, never that a rule's
  * prose — or the bare module names in its doc-map tables — is right. Link
@@ -36,9 +33,6 @@ import { walkFiles } from './lib/walk.mjs';
 
 /** Where the scoped rules live, relative to the repo root. */
 const RULES_DIR = '.claude/rules';
-
-/** The always-loaded instruction file that indexes them. */
-const INDEX = 'AGENTS.md';
 
 /** A file at a top-level directory's root that makes it a component. */
 const MANIFESTS = new Set([
@@ -206,33 +200,13 @@ export function checkAgentRules(root, files = trackedFiles(root)) {
         }
     }
 
-    // The index links exactly the rule files that exist.
-    const indexAbs = join(root, INDEX);
-    const indexed = new Set();
-    if (existsSync(indexAbs)) {
-        const link = /\]\(\.claude\/rules\/([A-Za-z0-9_./-]+\.md)\)/g;
-        for (const match of readFileSync(indexAbs, 'utf8').matchAll(link)) {
-            indexed.add(`${RULES_DIR}/${match[1]}`);
-        }
-    }
-    for (const ruleFile of ruleFiles) {
-        if (!indexed.has(ruleFile)) {
-            findings.push(`${ruleFile}  not linked from the ${INDEX} index`);
-        }
-    }
-    for (const entry of [...indexed].sort()) {
-        if (!ruleFiles.includes(entry)) {
-            findings.push(`${INDEX}  indexes ${entry}, which does not exist`);
-        }
-    }
-
     return { findings, checked: ruleFiles.length };
 }
 
 /** @param {{ findings: string[], checked: number }} result */
 export function reportAgentRules({ findings, checked }) {
     if (findings.length === 0) {
-        return `agent-rules: ${checked} rule file(s) checked, all scoped, live and indexed.`;
+        return `agent-rules: ${checked} rule file(s) checked, all scoped and live.`;
     }
     return [
         `agent-rules: ${findings.length} problem(s) with ${RULES_DIR}/.`,

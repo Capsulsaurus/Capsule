@@ -18,9 +18,9 @@ paths:
 
 ### Agent rules
 
-- `AGENTS.md` holds only what applies everywhere. A rule that governs one directory goes in a `.claude/rules/<area>.md` whose `paths:` globs scope it, listed in the `AGENTS.md` index.
+- `AGENTS.md` holds only what applies everywhere. A rule that governs one directory goes in a `.claude/rules/<area>.md` whose `paths:` globs scope it.
 - Each rule file names the docs a change there must **follow** and the docs it must **keep current**. When a design doc is added, renamed or re-scoped, update the rule files that point at its subject.
-- The `agent-rules` check in `check-docs-truth` fails a rule without `paths:`, a glob that matches no tracked file, a component directory with no rule scoped to `<dir>/**`, and an index that does not link exactly the rule files that exist.
+- The `agent-rules` check in `check-docs-truth` fails a rule without `paths:`, a glob that matches no tracked file, and a component directory with no rule scoped to `<dir>/**`.
 
 ## Docs
 
