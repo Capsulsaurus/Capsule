@@ -417,6 +417,14 @@
     font-size: var(--sl-text-sm);
 }
 
+/* Cross-references: a link to a docs page or heading, labelled from its
+   target by src/lib/remark-link-titles.mjs ("Page — Heading"). It is an
+   ordinary link, meant to be followed; the em dash is quieter than the
+   words, so the page and the heading read as two parts of one address. */
+.sl-markdown-content a.xref .xref-sep {
+    color: var(--sl-color-gray-3);
+}
+
 /* Library badges: the small "repo" pill src/lib/remark-library-links.mjs
    puts after a library's first mention. The name beside it is plain text;
    the pill is quiet and unmistakably a badge, so it never reads as a link an
