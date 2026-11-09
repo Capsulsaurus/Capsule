@@ -6,10 +6,10 @@ name: Rustdoc
 # under /rustdoc/ through a Pages Function. The repository's Pages source must be "GitHub
 # Actions".
 #
-# A workflow of its own rather than a job in CI: a job that names the `github-pages`
-# environment, whose deployment policy admits only master, stops a pull request's CI run
-# from starting even when the job's `if:` would skip it. The CI `rust` gate already checks
-# the rustdoc builds (`doc-check-rust`), and master only takes commits that passed it.
+# A workflow of its own rather than a job in CI, so a pull request's run never references the
+# `github-pages` environment, whose deployment policy admits only master, and a Pages outage
+# never touches the required checks. The CI `rust` gate already checks the rustdoc builds
+# (`doc-check-rust`), and master only takes commits that passed it.
 on:
   push:
     branches: [master]
