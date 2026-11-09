@@ -11,9 +11,8 @@ documentation are commands rather than HTTP requests. The server never sees a ke
 transcript would show ciphertext going in and coming out; a transcript of `capsule` shows the
 operation.
 
-This page is the hand-written half of the CLI reference. [](/reference/cli/commands/) is the
-generated half: every command, argument and option, emitted from the same `clap` definitions the
-binary parses with.
+[](/reference/cli/commands/) lists every command, argument and option, generated from the `clap`
+definitions the binary parses with and verified in CI.
 
 ## Install
 
@@ -80,14 +79,3 @@ flag for one.
   tree this reference is generated from is English, so the artifact cannot vary with the machine
   that emits it.
 
-## How the generated page stays true
-
-`capsule-cli` emits `capsule-cli/cli-surface.json`, a description of the command tree read straight
-from the `clap` definitions, and `mise run cli-surface-check` fails the Rust gate if the committed
-copy disagrees with the code. The documentation build reads that file and nothing else; it never
-runs cargo. A new option therefore cannot reach users without either appearing on the generated
-page or failing CI.
-
-A generated page is never edited. If something on it is wrong, the annotation it came from is
-wrong: fix the `clap` `about` or doc comment, run `mise run cli-surface` and commit the artifact.
-The pipeline and its reasoning are [](/design/developer-docs/).

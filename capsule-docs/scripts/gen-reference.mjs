@@ -3,6 +3,16 @@
 /**
  * gen-reference — emit `/reference/` from the committed description artifacts.
  *
+ * How a generated page stays true to the code:
+ *
+ *   1. Each surface's own toolchain emits a committed artifact (`openapi.json`,
+ *      `cli-surface.json`, `bindings-surface.json`, `wasm-surface.d.ts`).
+ *   2. A required CI gate regenerates it from the code and fails on any byte difference, so
+ *      `master` never holds a stale one; `cargo test` does the same for the REST and CLI
+ *      artifacts, and a dev run warns when a branch changed an artifact's source but not it.
+ *   3. This script reads only those artifacts, before every `astro dev` and `astro build`.
+ *   4. Each page names its artifact in the banner under its title.
+ *
  * `design/developer-docs.md` fixes the boundary at *artifacts, not toolchains*: the CI
  * `docs` job installs bun and nothing else, so this script may never shell out to cargo. It
  * reads committed JSON and writes Markdown, which is the whole of its contract.
@@ -706,10 +716,6 @@ export function renderCliPage(surface) {
         '---',
         '',
         `<!-- Generated from ${CLI_SURFACE} by ${GENERATED_BY}. Do not edit. -->`,
-        '',
-        `Generated from \`${CLI_SURFACE}\`, the committed command tree \`capsule-cli\` emits and`,
-        '`mise run cli-surface-check` keeps current. To change a description on this page, change',
-        'the `clap` annotation it comes from and regenerate — this file is build output.',
         '',
         tidyBlankLines(renderCommand(surface, [surface.name], 2)),
     ].join('\n')}\n`;
@@ -1645,8 +1651,7 @@ export function renderApiPage(group, operations, document) {
         '',
         `<!-- Generated from ${OPENAPI_DOCUMENT} by ${GENERATED_BY}. Do not edit. -->`,
         '',
-        'Generated from the OpenAPI document `capsule-server` emits; change a description at its',
-        'handler or model. What every endpoint shares is on the [REST API overview](/reference/api/).',
+        'What every endpoint shares is on [](/reference/api/conventions/).',
         '',
         renderOperationIndex(operations, documented),
     ].join('\n');
@@ -1661,10 +1666,7 @@ export function renderApiPage(group, operations, document) {
             : [
                   '## Schemas',
                   '',
-                  'The models these endpoints carry. A field whose type names another model links',
-                  'to it when this page documents that model, which it does when some path from',
-                  `an operation reaches it within ${MAX_SCHEMA_DEPTH} references. A model only`,
-                  'ever reached deeper than that is named without being expanded.',
+                  `The models these endpoints carry, to ${MAX_SCHEMA_DEPTH} references deep.`,
                   '',
                   documented
                       .map((name) => renderSchema(name, document, documented))
@@ -2391,14 +2393,11 @@ function sdkHead(page, artifact, intro) {
  */
 export function renderWasmPage(page, declarations) {
     const head = sdkHead(page, WASM_SURFACE, [
-        `Generated from \`${WASM_SURFACE}\`, the public half of the \`capsule_wasm.d.ts\``,
-        'wasm-bindgen emits for `capsule-wasm`, which `mise run wasm-surface-check` keeps',
-        'current in the web gate. To change a description on this page, change the Rust doc',
-        'comment it comes from and regenerate; this file is build output. Classes have no',
-        'public constructor: a caller gets one from the function that returns it, and calls',
-        '`free()` when done with it. Errors are thrown as an `Error` whose `message` is the',
-        'stable code each description names. Which SDK serves which platform is the',
-        '[SDK overview](/reference/sdk/).',
+        ':::note[Usage]',
+        'Classes have no public constructor: a function returns one, and the caller calls `free()`',
+        'when done. Errors are thrown as an `Error` whose `message` is the stable code each',
+        'description names.',
+        ':::',
     ]);
     return `${tidyBlankLines(`${head}\n\n${renderDeclarations(declarations, 'ts', WASM_SURFACE)}`)}\n`;
 }
@@ -2414,14 +2413,7 @@ export function renderBindingsPage(page, dump) {
     const language = page.language;
     const surface = dump.languages[language];
     const head = sdkHead(page, BINDINGS_SURFACE, [
-        `Generated from \`${BINDINGS_SURFACE}\`, the dump \`mise run gen-bindings\` writes from`,
-        `the \`${dump.namespace}\` ${language === 'swift' ? 'Swift' : 'Kotlin'} sources uniffi ${dump.uniffi}`,
-        `generates (\`${surface.source}\`), and checks with \`--check\` in the Rust gate. It lists`,
-        'every declaration the namespace exports; the generated source also carries the',
-        "converters and checksums uniffi needs internally, which are not a caller's surface. To",
-        'change a description on this page, change the Rust doc comment it comes from and',
-        'regenerate; this file is build output. Which SDK serves which platform is the',
-        '[SDK overview](/reference/sdk/).',
+        `Every declaration the \`${dump.namespace}\` namespace exports, as uniffi ${dump.uniffi} spells it in \`${surface.source}\`.`,
     ]);
     return `${tidyBlankLines(`${head}\n\n${renderDeclarations(surface.declarations, language, BINDINGS_SURFACE)}`)}\n`;
 }

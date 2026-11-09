@@ -1,12 +1,12 @@
 ---
 title: REST API
-description: How Capsule's generated REST reference is organized, and what to read before an endpoint
+description: How Capsule's REST reference is organized, and what to read before an endpoint
 status: draft
 ---
 
 Capsule's server surface is REST over HTTP, described by one OpenAPI 3.2 document `capsule-server`
-emits from its own route types. Every page in this section is generated from that document; why
-the surface is shaped this way is [](/design/api-surfaces/).
+emits from its own route types. Every page in this section is generated from that document and
+verified against the code in CI; why the surface is shaped this way is [](/design/api-surfaces/).
 
 - **Read [](/reference/api/conventions/) first.** It is the contract every endpoint shares:
   protocol negotiation and the operations exempt from it, the bearer credential, and how a
@@ -22,9 +22,3 @@ the surface is shaped this way is [](/design/api-surfaces/).
   and response types are the only ones guaranteed to track it. Server code follows
   [](/development/api-practices/).
 
-## How these pages stay true
-
-`mise run openapi-check-kynos` fails the Rust gate when the committed
-`capsule-server/openapi.json` disagrees with the server, and the docs build reads that file and
-nothing else. A wrong page is fixed at the handler or model annotation it came from, then
-regenerated with `mise run openapi-kynos`. The pipeline is [](/design/developer-docs/).

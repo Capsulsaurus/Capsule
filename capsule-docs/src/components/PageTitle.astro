@@ -33,7 +33,7 @@ const badge = titleBadge(status);
   generated && (
     <p class="generated-banner not-content">
       <span class="surface">{generated.surface}</span>
-      <span class="generated">Generated</span>
+      <span class="generated" title="Regenerated from the code; CI fails if the two differ">Generated</span>
       <span class="source">from {generated.source}</span>
       {generated.download && (
         <a href={generated.download} download>
