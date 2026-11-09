@@ -627,9 +627,60 @@ async fn login_rate_limited_maps_retry_after() {
     assert!(matches!(
         error,
         AuthError::RateLimited {
-            retry_after_secs: 42
+            retry_after_secs: 42,
+            ..
         }
     ));
+    assert_eq!(error.error_code(), Some(error_codes::AUTH_RATE_LIMITED));
+}
+
+/// A registration `429` keeps the server's code: a full limiter is
+/// `error.auth.registration_at_capacity`, not the spent-budget code, so the client renders
+/// the message the server chose.
+#[tokio::test]
+async fn a_full_registration_limiter_keeps_its_at_capacity_code() {
+    let handler: Handler = Arc::new(move |req| {
+        Box::pin(async move {
+            match req.path.as_str() {
+                "/register" => MockResponse::json(
+                    429,
+                    r#"{"error":"Too many registrations","code":"error.auth.registration_at_capacity"}"#,
+                )
+                .header("retry-after", "7"),
+                _ => MockResponse::json(404, r#"{"error":"x"}"#),
+            }
+        })
+    });
+
+    let server = start_mock(handler).await;
+    let client = AuthClient::new(&server.base_url).unwrap();
+    let error = client
+        .register("a@example.com", "pw")
+        .await
+        .err()
+        .expect("refused");
+
+    assert!(matches!(
+        error,
+        AuthError::RateLimited {
+            retry_after_secs: 7,
+            ..
+        }
+    ));
+    assert_eq!(
+        error.error_code(),
+        Some(error_codes::AUTH_REGISTRATION_AT_CAPACITY)
+    );
+}
+
+/// A `429` without a code still names the spent-budget code, so a client always has one to
+/// render.
+#[test]
+fn an_uncoded_429_falls_back_to_the_rate_limited_code() {
+    let error = AuthError::RateLimited {
+        retry_after_secs: 1,
+        code: None,
+    };
     assert_eq!(error.error_code(), Some(error_codes::AUTH_RATE_LIMITED));
 }
 
@@ -680,6 +731,28 @@ async fn export_and_resume_roundtrip_session() {
     let resumed = client.resume(persisted).unwrap();
     assert!(resumed.is_authenticated().await);
     assert_eq!(stored_access(&resumed).await, "access-1");
+}
+
+/// A session moved onto another HTTP client keeps the one token store: clearing it through
+/// either handle clears it for both.
+#[tokio::test]
+async fn a_session_on_another_client_shares_its_tokens() {
+    let handler: Handler =
+        Arc::new(move |_req| Box::pin(async move { MockResponse::json(404, r#"{"error":"x"}"#) }));
+    let server = start_mock(handler).await;
+    let client = AuthClient::new(&server.base_url).unwrap();
+    let session = client
+        .resume(PersistedSession {
+            access_token: "a".into(),
+            refresh_token: "r".into(),
+            access_expires_at_unix: far_future(),
+        })
+        .unwrap();
+    let moved = session.with_http_client(crate::net::http_client().unwrap());
+    assert_eq!(stored_access(&moved).await, "a");
+
+    *session.inner.tokens.write().await = None;
+    assert!(!moved.is_authenticated().await);
 }
 
 /// An operation on an empty session reports `NotAuthenticated`.
@@ -1152,6 +1225,152 @@ fn the_server_root_is_the_auth_base_without_its_suffix() {
     assert_eq!(endpoints.login, "https://api.example.test/v1/auth/login");
     let bare = AuthEndpoints::from_base("http://127.0.0.1:4242").unwrap();
     assert_eq!(bare.server_root, "http://127.0.0.1:4242");
+}
+
+// ── Sign-in options (server-info) ─────────────────────────────────
+
+/// A `server-info` record as the server renders it, with `password_disabled` set to `flag` or,
+/// for `None`, left out the way a server that predates the switch leaves it out.
+fn server_info_record(password_disabled: Option<bool>, oidc: bool) -> String {
+    let mut auth = serde_json::json!({
+        "login": "/v1/auth/login",
+        "refresh": "/v1/auth/refresh",
+        "logout": "/v1/auth/logout",
+        "oidc": if oidc {
+            serde_json::json!({
+                "authorize": "/v1/auth/oidc/authorize",
+                "callback": "/v1/auth/oidc/callback",
+            })
+        } else {
+            serde_json::Value::Null
+        },
+    });
+    if let Some(flag) = password_disabled {
+        auth["password_disabled"] = serde_json::Value::Bool(flag);
+    }
+    serde_json::json!({
+        "server_id": "https://capsule.example.test",
+        "api_base_url": "https://capsule.example.test/v1",
+        "auth": auth,
+        "protocol_version": { "min": "2025-01-01", "max": "2026-01-01" },
+        "signing_key": "AAAA",
+        "signing_algorithm": "Ed25519",
+        "deprecations": [],
+    })
+    .to_string()
+}
+
+/// A server answering only its `server-info` record, with `body`.
+fn server_info_handler(body: String) -> Handler {
+    Arc::new(move |req: MockRequest| {
+        let body = body.clone();
+        Box::pin(async move {
+            match req.path.as_str() {
+                "/.well-known/capsule/server-info" => MockResponse::json(200, body),
+                _ => MockResponse::json(404, r#"{"error":"x"}"#),
+            }
+        })
+    })
+}
+
+/// `password_disabled` reads through as published, and a record without it — an older server's
+/// — reads `false`; `oidc` is whether the record names the provider's endpoints.
+#[tokio::test]
+async fn sign_in_options_read_the_password_switch_and_default_a_missing_one_to_false() {
+    for (published, oidc, expected) in [
+        (Some(true), true, true),
+        (Some(false), true, false),
+        (None, false, false),
+    ] {
+        let server = start_mock(server_info_handler(server_info_record(published, oidc))).await;
+        // The CLI's shape: the auth base under `/v1/auth`, the record at the server root.
+        let client = AuthClient::new(&format!("{}/v1/auth", server.base_url)).unwrap();
+        let options = client.sign_in_options().await.unwrap();
+        assert_eq!(
+            options,
+            SignInOptions {
+                server_id: "https://capsule.example.test".to_owned(),
+                oidc,
+                password_disabled: expected,
+            },
+            "published {published:?}"
+        );
+    }
+}
+
+/// A server with no record, a body that is not one, and no server at all are each an error the
+/// caller reads as "unknown" — never a silent `false` or `true` invented here.
+#[tokio::test]
+async fn sign_in_options_without_a_record_are_an_error() {
+    let missing = start_mock(Arc::new(|_req: MockRequest| {
+        Box::pin(async { MockResponse::json(404, r#"{"error":"x"}"#) }) as BoxFut
+    }))
+    .await;
+    let error = AuthClient::new(&missing.base_url)
+        .unwrap()
+        .sign_in_options()
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            AuthError::Unexpected {
+                status: 404,
+                endpoint: "server-info",
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+
+    let garbled = start_mock(server_info_handler(r#"{"server_id":7}"#.to_owned())).await;
+    let error = AuthClient::new(&garbled.base_url)
+        .unwrap()
+        .sign_in_options()
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            AuthError::MalformedResponse {
+                endpoint: "server-info",
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+
+    let error = AuthClient::new("http://127.0.0.1:1/v1/auth")
+        .unwrap()
+        .sign_in_options()
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            AuthError::Network {
+                endpoint: "server-info",
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+}
+
+/// The authority stays the server's: a password login it refuses answers the coded `403`, and
+/// the code reaches the caller to localize.
+#[tokio::test]
+async fn a_refused_password_login_keeps_the_password_disabled_code() {
+    let server = start_mock(Arc::new(|_req: MockRequest| {
+        Box::pin(async { problem(403, error_codes::AUTH_PASSWORD_DISABLED) }) as BoxFut
+    }))
+    .await;
+    let client = AuthClient::new(&server.base_url).unwrap();
+    let error = expect_login_err(client.login("a@example.com", "pw").await);
+    assert_eq!(
+        error.error_code(),
+        Some(error_codes::AUTH_PASSWORD_DISABLED)
+    );
 }
 
 #[test]

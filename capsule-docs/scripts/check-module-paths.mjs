@@ -5,7 +5,8 @@
  * names `capsule-server::federation` and no such module exists, the doc has
  * stopped being a map and started being a story.
  *
- * **Scope is `capsule-docs/` and `AGENTS.md` only.** History (ADRs, the
+ * **Scope is `capsule-docs/`, `AGENTS.md` and the scoped agent rules in
+ * `.claude/rules/` only.** History (ADRs, the
  * retired slice ledger) may name modules that no longer exist.
  *
  * Resolution is strict on the way down and lenient at the leaf, which is what
@@ -29,7 +30,7 @@ import { join } from 'node:path';
 import { walkFiles } from './lib/walk.mjs';
 
 /** Files scanned for citations. */
-const SCOPE = ['capsule-docs/src/content/docs/', 'AGENTS.md'];
+const SCOPE = ['capsule-docs/src/content/docs/', 'AGENTS.md', '.claude/rules/'];
 
 /**
  * Modules the design specifies and the tree does not have yet, as

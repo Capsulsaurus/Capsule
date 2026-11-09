@@ -139,6 +139,22 @@ pub enum HoldOutcome {
     NotFound,
 }
 
+/// What [`AssetIndex::repair_blob_size`] did to one blob reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SizeRepair {
+    /// The reference was recorded at size `0` and now carries the size asked for.
+    Repaired,
+    /// Nothing was written: the reference already carries a non-zero size, the asset holds no
+    /// reference with that role and address, or the size asked for is itself `0`.
+    ///
+    /// One answer for all three, because each means the same thing to the repair pass — this
+    /// reference needs nothing — and because a second run over a repaired index must answer
+    /// exactly this for every row, which is what makes the pass idempotent.
+    Unchanged,
+    /// No such asset.
+    NotFound,
+}
+
 /// One blob the asset holds, as the index knows it: a role and an address, never bytes.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BlobRef {
@@ -219,15 +235,18 @@ pub struct AssetRow {
     ///
     /// # Why the server holds it at all
     ///
-    /// Two documented capabilities rest on it, and both were quietly lost while a lifecycle
-    /// write simply dropped the manifest it superseded:
+    /// Three documented capabilities rest on it, and the first two were quietly lost while a
+    /// lifecycle write simply dropped the manifest it superseded:
     ///
     /// - the integrity scrub's *envelope chain ⇄ index agreement* check has something to walk
     ///   (without the superseded manifests it has nothing);
-    /// - and the takedown rebuttal is **evidentiary**. A server accused of losing an asset
+    /// - the takedown rebuttal is **evidentiary**. A server accused of losing an asset
     ///   answers with the user's own signed `delete` manifest and its elapsed `retention_until`.
     ///   A superseded manifest that has been collected is a rebuttal that is gone precisely when
-    ///   a chain has history worth disputing.
+    ///   a chain has history worth disputing;
+    /// - and a device that first sees the asset past its `create` fetches the chain back to it
+    ///   by address, so it can hold the asset from its start
+    ///   ([`AssetIndex::find_references`] reports these as provenance references).
     ///
     /// These count as references for the collector, so a manifest an asset has moved past is
     /// **not** an orphan. That is the whole retention: content addressing does the rest, and two
@@ -469,7 +488,8 @@ pub struct BlobReference {
     pub owner_id: OwnerId,
     /// The role the address holds in that asset's bundle.
     pub role: BlobRole,
-    /// The asset's lifecycle state — `Tombstoned` is what turns a reference into a `410`.
+    /// The asset's lifecycle state — `Tombstoned`, once its retention window has closed, is
+    /// what turns a reference into a `410` ([`Self::readable_at`]).
     pub state: AssetState,
     /// Whether that asset's original has landed, which is what tells a missing original apart
     /// from a dangling reference.
@@ -480,6 +500,37 @@ pub struct BlobReference {
     /// a takedown from the *same read* that found the reference — one round trip, and no window
     /// in which a hold applied between the two reads is missed.
     pub hold: Option<ServingHold>,
+    /// The retention floor the asset's signed `delete` fixed ([`AssetRow::retention_until`]),
+    /// if it carries one.
+    ///
+    /// Carried for the reason [`Self::hold`] is: whether a trashed asset's blobs are still
+    /// readable is decided from the same read that found the reference.
+    pub retention_until: Option<Timestamp>,
+}
+
+impl BlobReference {
+    /// Whether the asset's lifecycle lets an entitled reader fetch the address at `now`: the
+    /// asset is visible, or it is in trash and its retention window is still open (#1192).
+    ///
+    /// Trash is a signed delete restorable until `retention_until`, and a device that first
+    /// sees the asset at its `delete` needs the asset's records, live metadata blob and
+    /// original to adopt it and sign the `trash-restore`. So the window that admits the
+    /// restore is the window that serves the bytes, decided by the one definition
+    /// [`restore_window_closed`] gives — no instant serves a blob of an asset whose restore it
+    /// would refuse. A purged asset holds no reference at all, so it never reaches here.
+    ///
+    /// Says nothing about **who** may read: the read authority is asked first, and this is a
+    /// fact about the asset only an entitled reader is told.
+    #[must_use]
+    pub fn readable_at(&self, now: Timestamp) -> bool {
+        match self.state {
+            AssetState::Visible => true,
+            AssetState::Tombstoned => {
+                restore_window_closed(self.state, self.retention_until, false, now).is_none()
+            }
+            AssetState::Pending => false,
+        }
+    }
 }
 
 /// A lifecycle write that does not move blob bytes.
@@ -522,6 +573,21 @@ impl OpAction {
     }
 }
 
+/// A blob a lifecycle op points a singular role at: its address, and its size in bytes.
+///
+/// The size rides the op because the op's producer is the one that learned it — the ops route
+/// holds the bytes it stored, and a replace's finalization measured each member it names — and
+/// the index must not learn it any other way: re-`stat`ing the store from here would make the
+/// index depend on the store. A row's [`BlobRef::size`] is what the sync feed serves for a
+/// client to budget a fetch by, so it is never `0` for a blob that has bytes (#1128).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpBlob {
+    /// Its ciphertext content address.
+    pub address: ContentAddress,
+    /// Its size in bytes, as the op's producer measured it.
+    pub size: u64,
+}
+
 /// One accepted lifecycle write, as the index applies it.
 ///
 /// Every field is a fact the gate has already checked. The index decides the two *stateful*
@@ -546,14 +612,14 @@ pub struct LifecycleOp {
     pub amk_version: u64,
     /// The stored provenance blob holding the signed manifest, so the feed serves those exact
     /// bytes for a lifecycle write as it does for an upload.
-    pub provenance: ContentAddress,
+    pub provenance: OpBlob,
     /// The stored metadata blob, when the action carries one.
-    pub metadata: Option<ContentAddress>,
+    pub metadata: Option<OpBlob>,
     /// The stored **original** blob, when the action carries one.
     ///
     /// Only a [`OpAction::Replace`] does. The other four leave the asset's bytes alone by
     /// definition, which is what makes them expressible on a route that never sees a byte.
-    pub original: Option<ContentAddress>,
+    pub original: Option<OpBlob>,
     /// The retention floor the manifest signed, when it carries one.
     ///
     /// Meaningful on a `delete`. A `trash-restore` clears it, because an asset back in the live
@@ -732,6 +798,9 @@ pub struct FeedEntry {
     pub derivative_manifests: Vec<ContentAddress>,
     /// Whether the original has landed — `false` is the derived `awaiting-original` state.
     pub original_held: bool,
+    /// Whether a retention purge has emptied the row ([`is_purged`]), which ends the asset:
+    /// the same fact that refuses a late `trash-restore` ([`restore_refusal`]).
+    pub purged: bool,
     /// When the change happened.
     pub at: Timestamp,
 }
@@ -751,7 +820,7 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
     /// in the same operation when the change is one a client can observe.
     ///
     /// One call, because the blob row, the state transition and the sequence number describe
-    /// one event — the same reason [`crate::store::UploadSessionStore::record_progress`] is one
+    /// one event — the same reason [`crate::store::UploadSessionStore::record_range`] is one
     /// call. Splitting them is how the retired server could publish an asset whose sequence
     /// number had not been minted yet.
     fn record_blob<'a>(
@@ -825,6 +894,19 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
     /// first — a `404` for an entitled member, or a `403` for a member who happened to have
     /// been removed from the *other* album. The serving path folds its authority over all of
     /// them instead.
+    ///
+    /// **A superseded manifest is a reference (#1188).** An asset whose
+    /// [`AssetRow::superseded`] chain names `address` holds it in the
+    /// [`BlobRole::Provenance`] role, exactly as it holds its current manifest, so the record a
+    /// later one names by `prior_provenance_hash` is served under the same read authority as the
+    /// live record. That is how a device that first sees an asset past its `create` walks the
+    /// chain back to it. Where the asset also holds the address in a current role, that role is
+    /// reported. A purge clears the chain with the bytes, so the record stops being served
+    /// exactly when it stops being retained.
+    ///
+    /// **A tombstone's reference carries its retention floor (#1192)**, so the serving path
+    /// decides from this read whether a trashed asset is still inside the window its restore
+    /// is admitted in ([`BlobReference::readable_at`]).
     fn find_references<'a>(
         &'a self,
         address: &'a ContentAddress,
@@ -883,6 +965,29 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
         asset: &'a AssetId,
         hold: Option<ServingHold>,
     ) -> IndexFuture<'a, HoldOutcome>;
+
+    /// Record `size` for `asset`'s `role` reference to `address`, **only** where that reference
+    /// is recorded at size `0`.
+    ///
+    /// The `capsule-server repair-sizes` pass's one write, for rows a lifecycle op re-pointed
+    /// before ops carried their blobs' sizes (#1128). Narrow by construction: it never changes
+    /// an address, a role, a non-zero size, or any other column, and a `size` of `0` writes
+    /// nothing — so running the pass twice, or alongside a live server that re-points the same
+    /// role, can only ever fill in a size that was missing. A reference the row no longer holds
+    /// (an op re-pointed it after the pass listed it) is [`SizeRepair::Unchanged`].
+    ///
+    /// The write holds the asset row's lock like every other writer, so a concurrent op cannot
+    /// write its earlier read of the row back over the repaired size. A repaired row that is on
+    /// the feed takes the owner's next sequence number, so a device that already synced it at
+    /// size `0` is sent it again; an unpublished row takes none. Nothing else about the row
+    /// changes.
+    fn repair_blob_size<'a>(
+        &'a self,
+        asset: &'a AssetId,
+        role: BlobRole,
+        address: &'a ContentAddress,
+        size: u64,
+    ) -> IndexFuture<'a, SizeRepair>;
 
     /// How many asset rows reference `address`.
     ///
@@ -1100,7 +1205,8 @@ pub(crate) fn create_epoch(row: &AssetRow, blob: &BlobRecord) -> Option<u64> {
 /// Shared by every adapter for the reason [`entry_for`] is: the retention rule below —
 /// a superseded *manifest* is kept referenced rather than dropped — is exactly the kind of thing
 /// two implementations drift on, and the drift reclaims the server's own rebuttal evidence.
-pub(crate) fn set_singular(row: &mut AssetRow, role: BlobRole, address: &ContentAddress) {
+pub(crate) fn set_singular(row: &mut AssetRow, role: BlobRole, blob: &OpBlob) {
+    let address = &blob.address;
     // Retention rule: only the provenance role. The other singular roles are ciphertext, and
     // the old bytes of a replaced original are exactly what the collector is for.
     if role == BlobRole::Provenance
@@ -1114,9 +1220,8 @@ pub(crate) fn set_singular(row: &mut AssetRow, role: BlobRole, address: &Content
     row.blobs.push(BlobRef {
         role,
         address: address.clone(),
-        // Size is not a fact this path learns: the bytes were stored by whoever put them in the
-        // blob store, and re-`stat`ing here would make the index depend on the store.
-        size: 0,
+        // The op's producer measured it; see [`OpBlob`].
+        size: blob.size,
     });
     row.blobs
         .sort_by(|a, b| (a.role, a.address.as_str()).cmp(&(b.role, b.address.as_str())));
@@ -1161,6 +1266,7 @@ pub(crate) fn entry_for(row: &AssetRow, after: u64) -> Option<FeedEntry> {
             .map(|blob| blob.address.clone())
             .collect(),
         original_held: row.original_held(),
+        purged: is_purged(row),
         at: row.updated_at,
     })
 }

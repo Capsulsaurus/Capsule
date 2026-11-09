@@ -20,7 +20,7 @@ The navigation graph in `App.kt` is the template's list/detail flow keyed by an
 `objectId: Int`, not by a Capsule asset. No screen reads a Capsule library, and nothing in
 this module calls `capsule-core-kotlin`.
 
-Treat every file under `src/androidMain/` as scaffolding to be replaced rather than as a
+Treat every file under `src/main/` as scaffolding to be replaced rather than as a
 partial implementation to be extended.
 
 `capsule-core-kotlin` — the shared library this app is meant to sit on — now binds the
@@ -33,18 +33,17 @@ Android-capable host (#634). So the app layer is placeholder scaffolding, and th
 library is unverified rather than known-good.
 
 The client contract this app must satisfy is [Clients](../capsule-docs/src/content/docs/design/clients.md);
-the shared-core boundary is [Module Map](../capsule-docs/src/content/docs/design/module-map.md).
+the shared-core boundary is the [`capsule-core-ffi` crate docs](../capsule-core-ffi/src/lib.rs).
 Work items are tracked as GitHub issues; see the repo-root `ROADMAP.md`.
 
 ## Build
 
-**The build commands below do not currently succeed**, and the only remaining red step is
-the `:core` FFI bindings: `:core:compileDebugKotlin` fails inside the generated
-`uniffi/capsule_sdk/capsule_sdk.kt`, where every `FfiError` variant carries a field named
-`message` that clashes with `Throwable.message` (#895). The `:android` sources themselves
-compile; `:android` depends on `:core`, so its build stays red until #895 lands.
-`.github/workflows/build-android.yml` runs these commands on every change under
-`capsule-android/**` and is red for this reason.
+`:android` depends on `:core`, whose generated `uniffi/capsule_sdk/capsule_sdk.kt` renders
+each `FfiError` variant as a Kotlin `Throwable` subclass. The variants carry their English
+text in a field named `detail`, never `message`, because a `message` field would clash with
+`Throwable.message` and fail `:core:compileDebugKotlin`.
+`.github/workflows/build-android.yml` runs the commands below on every change under
+`capsule-android/**`.
 
 Both need the Android SDK (`ANDROID_HOME` or `local.properties`) and a JDK in the supported
 range for the pinned Gradle version — see the toolchain caveats in

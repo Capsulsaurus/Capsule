@@ -97,6 +97,59 @@ async fn the_frameworks_own_rejections_carry_a_code() {
     fixture.client.assert_conformance();
 }
 
+/// **A write forwarded as TLS early data is `425`; a read in early data and a write outside it
+/// pass** (design/networking.md, HTTP Transport; RFC 8470 §5.1).
+#[tokio::test]
+async fn a_write_in_early_data_is_too_early_and_nothing_else_is() {
+    let fixture = Fixture::working();
+    let bad_login = json!({ "email": support::EMAIL, "password": "wrong" });
+
+    // A gated write and an exempt one alike: the rule is per method, not per group.
+    for path in ["/v1/auth/login", "/v1/auth/logout"] {
+        let response = fixture
+            .client
+            .post(path)
+            .header("accept", "application/problem+json")
+            .header("early-data", "1")
+            .json(&bad_login)
+            .send()
+            .await;
+        response.assert_status(StatusCode::TOO_EARLY);
+        assert!(
+            response.header("x-capsule-protocol-min").is_some(),
+            "{path}: the refusal carries the protocol window"
+        );
+        let body: serde_json::Value = response.json();
+        assert_eq!(code_of(&body), "error.request.too_early", "{path}");
+    }
+
+    // The same write outside early data reaches its handler.
+    let refused: serde_json::Value = fixture
+        .client
+        .post("/v1/auth/login")
+        .header("accept", "application/problem+json")
+        .json(&bad_login)
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED)
+        .json();
+    assert_eq!(code_of(&refused), "error.auth.invalid_credentials");
+
+    // A read in early data is let through to its own answer.
+    let read: serde_json::Value = fixture
+        .client
+        .get("/v1/quota")
+        .header("accept", "application/problem+json")
+        .header("early-data", "1")
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED)
+        .json();
+    assert_eq!(code_of(&read), "error.request.unauthenticated");
+
+    fixture.client.assert_conformance();
+}
+
 #[tokio::test]
 async fn a_capsule_rejections_own_code_is_never_replaced() {
     // The property that keeps the interceptor from being able to do damage. A coarse

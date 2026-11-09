@@ -45,8 +45,8 @@ use sea_orm::{
 use super::{
     AssetIndex, AssetRow, AssetState, BlobOutcome, BlobRecord, BlobRef, BlobReference, Custody,
     FeedEntry, HoldOutcome, IndexFuture, LifecycleOp, OpAction, OpOutcome, PendingAsset,
-    PurgeOutcome, Receipted, Reservation, RestoreOutcome, ServingHold, create_epoch, entry_for,
-    is_singular, set_singular,
+    PurgeOutcome, Receipted, Reservation, RestoreOutcome, ServingHold, SizeRepair, create_epoch,
+    entry_for, is_singular, set_singular,
 };
 use crate::attestation;
 use crate::blob::ContentAddress;
@@ -183,6 +183,36 @@ fn size_from(value: i64) -> Result<u64, StoreError> {
 const ASSET_COLUMNS: &str = "asset_id, owner_id, album_id, protocol_version, crypto_suite_id, \
                              state, hold, sync_seq, first_seq, chain_head, amk_version, \
                              retention_until, created_at, updated_at";
+
+/// Every holder of the address `$1`, for [`PostgresAssetIndex::find_references`].
+///
+/// The holders are chosen by `asset_id IN (… UNION …)` over `asset_blobs` and
+/// `asset_superseded`, each probed through its own index on `address`
+/// (`idx_asset_blobs_address`, `idx_asset_superseded_address`), so the read costs the holders
+/// it finds rather than the table: the serving path runs it on every `GET /v1/blob`, for any
+/// authenticated caller. Two correlated `EXISTS` joined by `OR` cannot be pulled up into a
+/// join, so Postgres would evaluate them per row of a full scan of `assets`. A test asserts
+/// the plan (`find_references_probes_the_address_indexes`).
+///
+/// The role subquery picks the first role in `BlobRole`'s order, which is what the in-memory
+/// adapter's `find` over role-sorted blobs picks when one asset holds the same address in two
+/// roles. An asset that names the address only in its superseded chain holds it as a
+/// provenance record, so the role falls back to `provenance`.
+const FIND_REFERENCES_SQL: &str = "SELECT a.asset_id, a.owner_id, a.album_id, a.state, a.hold, \
+       a.retention_until, \
+       COALESCE((SELECT b.role FROM asset_blobs b \
+        WHERE b.asset_id = a.asset_id AND b.address = $1 \
+        ORDER BY CASE b.role WHEN 'original' THEN 0 WHEN 'derivative' THEN 1 \
+          WHEN 'metadata' THEN 2 WHEN 'provenance' THEN 3 WHEN 'backup' THEN 4 \
+          ELSE 5 END \
+        LIMIT 1), 'provenance') AS role, \
+       EXISTS (SELECT 1 FROM asset_blobs o \
+        WHERE o.asset_id = a.asset_id AND o.role = 'original') AS original_held \
+     FROM assets a \
+     WHERE a.state IN ('visible', 'tombstoned') AND a.asset_id IN ( \
+       SELECT b.asset_id FROM asset_blobs b WHERE b.address = $1 \
+       UNION SELECT s.asset_id FROM asset_superseded s WHERE s.address = $1) \
+     ORDER BY a.state = 'tombstoned', a.asset_id COLLATE \"C\"";
 
 /// Turn one `assets` row into an [`AssetRow`] with empty collections.
 ///
@@ -1066,28 +1096,11 @@ impl AssetIndex for PostgresAssetIndex {
             // the reference needs from `asset_blobs`, so they are subqueries here rather than a
             // per-holder `load_collections`: that cost one extra round trip per holder on every
             // fetch, for a list the fold usually stops reading at its first entry.
-            //
-            // The role subquery picks the first role in `BlobRole`'s order, which is what the
-            // in-memory adapter's `find` over role-sorted blobs picks when one asset holds the
-            // same address in two roles.
             let found = self
                 .connection
                 .query_all_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
-                    "SELECT a.asset_id, a.owner_id, a.album_id, a.state, a.hold, \
-                       (SELECT b.role FROM asset_blobs b \
-                        WHERE b.asset_id = a.asset_id AND b.address = $1 \
-                        ORDER BY CASE b.role WHEN 'original' THEN 0 WHEN 'derivative' THEN 1 \
-                          WHEN 'metadata' THEN 2 WHEN 'provenance' THEN 3 WHEN 'backup' THEN 4 \
-                          ELSE 5 END \
-                        LIMIT 1) AS role, \
-                       EXISTS (SELECT 1 FROM asset_blobs o \
-                        WHERE o.asset_id = a.asset_id AND o.role = 'original') AS original_held \
-                     FROM assets a \
-                     WHERE a.state IN ('visible', 'tombstoned') AND EXISTS ( \
-                       SELECT 1 FROM asset_blobs b \
-                       WHERE b.asset_id = a.asset_id AND b.address = $1) \
-                     ORDER BY a.state = 'tombstoned', a.asset_id COLLATE \"C\"",
+                    FIND_REFERENCES_SQL,
                     [Value::from(address.as_str().to_owned())],
                 ))
                 .await
@@ -1102,6 +1115,8 @@ impl AssetIndex for PostgresAssetIndex {
                 let hold: Option<String> = found.try_get("", "hold").map_err(&column)?;
                 let role: String = found.try_get("", "role").map_err(&column)?;
                 let original_held: bool = found.try_get("", "original_held").map_err(&column)?;
+                let retention_until: Option<i64> =
+                    found.try_get("", "retention_until").map_err(&column)?;
                 references.push(BlobReference {
                     asset_id: AssetId::new(asset_id),
                     album_id: AlbumId::new(album_id),
@@ -1110,6 +1125,7 @@ impl AssetIndex for PostgresAssetIndex {
                     state: state_from(&state)?,
                     original_held: crate::upload::visibility::derive_original_held(original_held),
                     hold: hold_from(hold)?,
+                    retention_until: retention_until.map(instant_from).transpose()?,
                 });
             }
             tracing::trace!(
@@ -1229,6 +1245,45 @@ impl AssetIndex for PostgresAssetIndex {
             } else {
                 HoldOutcome::NotFound
             })
+        })
+    }
+
+    fn repair_blob_size<'a>(
+        &'a self,
+        asset: &'a AssetId,
+        role: BlobRole,
+        address: &'a ContentAddress,
+        size: u64,
+    ) -> IndexFuture<'a, SizeRepair> {
+        Box::pin(async move {
+            // Under the asset row's `FOR UPDATE`, like every other writer: `persist` rewrites a
+            // row's whole blob set, so an unlocked `UPDATE` here would be overwritten — size 0
+            // and all — by an op that hydrated the row before it and committed after it, while
+            // this pass reported the reference repaired.
+            let transaction = begin(&self.connection).await?;
+            let Some(mut row) = hydrate_locked(&transaction, asset).await? else {
+                return Ok(SizeRepair::NotFound);
+            };
+            // The guard is re-checked on the locked row: a reference a live op re-pointed
+            // between the pass's listing and this write no longer matches.
+            let Some(blob) = row.blobs.iter_mut().find(|blob| {
+                size > 0 && blob.size == 0 && blob.role == role && &blob.address == address
+            }) else {
+                return Ok(SizeRepair::Unchanged);
+            };
+            blob.size = size;
+            // A published row moves to the feed's head, so a device that already synced it at
+            // size 0 is sent it again at its real size. An unpublished row has no position.
+            if row.sync_seq.is_some() {
+                row.sync_seq = Some(mint(&transaction, &row.owner_id).await?);
+            }
+            persist(&transaction, &row).await?;
+            commit(transaction).await?;
+            tracing::info!(
+                %asset, role = role.as_str(), %address, size, sync_seq = row.sync_seq,
+                "a blob reference recorded at size 0 now carries its size"
+            );
+            Ok(SizeRepair::Repaired)
         })
     }
 

@@ -1,0 +1,14 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run(&scratch, &[\"federation\", \"subscribe\", \"--json\"])"
+---
+status: 2
+--- stdout ---
+
+--- stderr ---
+error: the following required arguments were not provided:
+  --issuer <HOST>
+
+Usage: capsule federation subscribe --issuer <HOST> --json
+
+For more information, try '--help'.

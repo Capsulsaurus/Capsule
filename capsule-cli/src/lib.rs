@@ -19,12 +19,12 @@ use capsule_library::import::{
     plan, scan_paths as scan_files,
 };
 use capsule_library::library::{Library, LibraryError, init_library, open_library, rebuild_index};
-use capsule_library::lifecycle::{DerivativeStatus, Workspace, unmigrated_sidecars};
+use capsule_library::lifecycle::{DerivativeStatus, Workspace, unanchored_sidecars};
 use capsule_sdk::cache_budget::DesktopConnectionClass;
 use cli::{
-    AuthCommands, CacheCommands, Cli, Commands, EditCommands, EditLibraryArgs, ImportProviderArg,
-    LabelArgs, LabelCommands, LibraryCommands, PeerCommands, RegionCommands, RepairCommands,
-    ShareCommands, SyncCommands,
+    AuthCommands, CacheCommands, CameraCommands, Cli, Commands, EditCommands, EditLibraryArgs,
+    FederationCommands, ImportProviderArg, LabelArgs, LabelCommands, LibraryCommands, PathArgs,
+    PeerCommands, RegionCommands, RepairCommands, ShareCommands, SyncCommands, TrashCommands,
 };
 use colored::*;
 use dialoguer::{Confirm, Input, Password};
@@ -36,15 +36,18 @@ use crate::utils::directories::{
 };
 
 pub mod cache;
+pub mod camera_discovery;
+pub mod camera_import;
+pub mod camera_pairing;
 pub mod cli;
 pub mod cull;
 pub mod db;
 pub mod demo;
 pub mod edit;
+pub mod federation;
 pub mod i18n;
 pub mod import_report;
 pub mod import_run;
-pub mod migrate;
 pub mod oidc;
 pub mod peer;
 pub mod peering_state;
@@ -77,20 +80,31 @@ fn as_capsule_cli(ws: Workspace) -> Workspace {
 /// The refusal every networked command gives before a session exists.
 pub(crate) const NOT_AUTHENTICATED: &str = "Not authenticated. Run 'capsule auth login' first.";
 
-/// The `capsule library info` row for the unmigrated-sidecar count, plus the pointer at
-/// `capsule library migrate` — `None` when nothing is left to migrate. The count comes from
-/// the keyless scan, since `info` opens the library without a passphrase.
+/// The line printed when a library holds sidecars no provenance chain anchors — the assets
+/// they name are hidden from every verb — or `None` when it holds none.
 #[must_use]
-fn library_info_unmigrated(unmigrated: usize) -> (String, Option<String>) {
-    let row = format!("Unmigrated sidecars: {unmigrated}");
-    let hint = match unmigrated {
+fn unanchored_notice(unanchored: usize) -> Option<String> {
+    match unanchored {
         0 => None,
-        1 => Some("Run `capsule library migrate` to admit the 1 unsigned sidecar.".to_owned()),
+        1 => Some(
+            "1 sidecar in this library has no provenance chain, so its asset is hidden.".to_owned(),
+        ),
         count => Some(format!(
-            "Run `capsule library migrate` to admit the {count} unsigned sidecars."
+            "{count} sidecars in this library have no provenance chain, so their assets are \
+             hidden."
         )),
-    };
-    (row, hint)
+    }
+}
+
+/// The `capsule library info` row for the unanchored-sidecar count, plus the
+/// [`unanchored_notice`] when there are any. The count comes from the keyless scan, since
+/// `info` opens the library without a passphrase.
+#[must_use]
+fn library_info_unanchored(unanchored: usize) -> (String, Option<String>) {
+    (
+        format!("Unanchored sidecars: {unanchored}"),
+        unanchored_notice(unanchored),
+    )
 }
 
 /// Resolve the persisted-session file path, erroring if the config directory
@@ -234,13 +248,15 @@ async fn dispatch(command: Commands) -> Result<()> {
             AuthCommands::Login {
                 oidc: true,
                 device: true,
+                json,
                 ..
-            } => auth_login_oidc_device().await?,
+            } => auth_login_oidc_device(json).await?,
             AuthCommands::Login {
                 oidc: true,
                 no_browser,
+                json,
                 ..
-            } => auth_login_oidc(no_browser).await?,
+            } => auth_login_oidc(no_browser, json).await?,
             AuthCommands::Login {
                 email,
                 password_stdin,
@@ -258,6 +274,7 @@ async fn dispatch(command: Commands) -> Result<()> {
                 passphrase_stdin,
             } => auth_recover(&library, recovery_secret_stdin, passphrase_stdin).await?,
             AuthCommands::Logout { json } => auth_logout(json).await?,
+            AuthCommands::Activity { limit, json } => auth_activity(limit, json).await?,
             AuthCommands::Status { json: true } => {
                 // A machine reader gets a failure as a non-zero exit, not a line on stdout.
                 let auth_status = status::AuthStatus::check(&session_store()?)
@@ -308,13 +325,13 @@ async fn dispatch(command: Commands) -> Result<()> {
                     cfg.last_scrubbed_at
                         .map_or_else(|| "never".to_string(), |t| t.to_string())
                 );
-                let unmigrated = unmigrated_sidecars(&path).len();
+                let unanchored = unanchored_sidecars(&path).len();
                 tracing::debug!(
                     library = %path.display(),
-                    unmigrated,
-                    "library info: unmigrated-sidecar count"
+                    unanchored,
+                    "library info: unanchored-sidecar count"
                 );
-                let (count_line, hint) = library_info_unmigrated(unmigrated);
+                let (count_line, hint) = library_info_unanchored(unanchored);
                 println!("  {count_line}");
                 if let Some(hint) = hint {
                     println!("{}", hint.yellow());
@@ -333,27 +350,22 @@ async fn dispatch(command: Commands) -> Result<()> {
                 lib.close()
                     .map_err(|e| eyre!("Failed to close library: {e}"))?;
             }
-            LibraryCommands::Migrate {
-                path,
+            LibraryCommands::List {
+                library,
+                view,
                 passphrase_stdin,
-                retain_days,
+                json,
             } => {
-                let mut ws = open_workspace_quiet(&path, passphrase_stdin)?;
-                println!(
-                    "{}",
-                    format!(
-                        "Migrating the unsigned sidecars in {} ({} found)…",
-                        path.to_string_lossy(),
-                        ws.unmigrated_sidecars().len()
-                    )
-                    .cyan()
-                );
-                match migrate::run(&mut ws, retain_days) {
-                    Ok(report) => print!(
-                        "{}",
-                        migrate::render(&report, ws.unmigrated_sidecars().len())
-                    ),
-                    Err(error) => return Err(eyre!("Migration failed: {error}")),
+                use tui::library::catalogue;
+                let ws = open_workspace(&library, passphrase_stdin)?;
+                let listing = catalogue::listing(&catalogue::collect(&ws), view.into());
+                // The workspace holds the library's lock; the listing is owned values.
+                drop(ws);
+                tracing::info!(library = %library.display(), ?view, json, "library list");
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&listing)?);
+                } else {
+                    print!("{}", catalogue::render_listing(&listing));
                 }
             }
         },
@@ -450,7 +462,7 @@ async fn dispatch(command: Commands) -> Result<()> {
                 if push {
                     return push_workspace(
                         &mut ws,
-                        push_options(false, false, staged),
+                        push_options(false, false, staged, PathArgs::default()),
                         Vec::new(),
                         false,
                     )
@@ -511,7 +523,7 @@ async fn dispatch(command: Commands) -> Result<()> {
             if push {
                 let pushed = push_workspace(
                     &mut ws,
-                    push_options(false, false, staged),
+                    push_options(false, false, staged, PathArgs::default()),
                     Vec::new(),
                     false,
                 )
@@ -532,6 +544,9 @@ async fn dispatch(command: Commands) -> Result<()> {
             }
         }
 
+        // ── Camera ────────────────────────────────────────────────────────
+        Commands::Camera { command } => camera_command(command)?,
+
         // ── Push ──────────────────────────────────────────────────────────
         Commands::Push {
             library,
@@ -541,9 +556,16 @@ async fn dispatch(command: Commands) -> Result<()> {
             staged,
             asset,
             json,
+            path,
         } => {
             let mut ws = open_workspace(&library, passphrase_stdin)?;
-            push_workspace(&mut ws, push_options(dry_run, force, staged), asset, json).await?;
+            push_workspace(
+                &mut ws,
+                push_options(dry_run, force, staged, path),
+                asset,
+                json,
+            )
+            .await?;
         }
 
         // ── Restore ───────────────────────────────────────────────────────
@@ -610,21 +632,63 @@ async fn dispatch(command: Commands) -> Result<()> {
             }
         }
 
+        // ── Trash ─────────────────────────────────────────────────────────
+        Commands::Trash { command } => {
+            let (library, passphrase_stdin, json, request) = match command {
+                TrashCommands::Delete {
+                    library,
+                    asset,
+                    retain_days,
+                    passphrase_stdin,
+                    json,
+                } => (
+                    library,
+                    passphrase_stdin,
+                    json,
+                    remote::TrashRequest {
+                        action: remote::TrashAction::Delete,
+                        assets: asset,
+                        retain_days,
+                    },
+                ),
+                TrashCommands::Restore {
+                    library,
+                    asset,
+                    passphrase_stdin,
+                    json,
+                } => (
+                    library,
+                    passphrase_stdin,
+                    json,
+                    remote::TrashRequest {
+                        action: remote::TrashAction::TrashRestore,
+                        assets: asset,
+                        retain_days: cull::DEFAULT_RETAIN_DAYS,
+                    },
+                ),
+            };
+            let mut ws = open_workspace(&library, passphrase_stdin)?;
+            trash_workspace(&mut ws, &request, json).await?;
+        }
+
         // ── Show ──────────────────────────────────────────────────────────
         Commands::Show {
             asset,
             library,
             passphrase_stdin,
+            json,
         } => {
             let ws = open_workspace(&library, passphrase_stdin)?;
-            let view = show::resolve(&ws, &asset).and_then(|id| {
-                show::collect(&ws, &id).ok_or_else(|| show::ShowError::UnknownAsset(id.to_string()))
-            });
-            match view {
-                Ok(view) => print!("{}", show::render(&view)),
-                Err(error) => {
-                    return Err(eyre!("Show failed: {}", show::describe_error(&error)));
-                }
+            let failed =
+                |error: &show::ShowError| eyre!("Show failed: {}", show::describe_error(error));
+            let id = show::resolve(&ws, &asset).map_err(|error| failed(&error))?;
+            let missing = || failed(&show::ShowError::UnknownAsset(id.to_string()));
+            if json {
+                let report = show::report(&ws, &id).ok_or_else(missing)?;
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                let view = show::collect(&ws, &id).ok_or_else(missing)?;
+                print!("{}", show::render(&view));
             }
         }
 
@@ -795,6 +859,31 @@ async fn dispatch(command: Commands) -> Result<()> {
             ShareCommands::Revoke { opaque_id, json } => share_revoke(&opaque_id, json).await?,
         },
 
+        // ── Federation ────────────────────────────────────────────────────
+        Commands::Federation { command } => match command {
+            FederationCommands::Subscribe { issuer, json } => {
+                federation_subscribe(&issuer, &mut std::io::stdin().lock(), json).await?;
+            }
+            FederationCommands::List { json } => federation_list(json).await?,
+            FederationCommands::Unsubscribe {
+                peer,
+                album_id,
+                json,
+            } => federation_unsubscribe(&peer, &album_id, json).await?,
+            FederationCommands::Assets {
+                peer,
+                album_id,
+                json,
+            } => federation_assets(&peer, &album_id, json).await?,
+            FederationCommands::Metadata {
+                peer,
+                album_id,
+                asset_id,
+                out,
+                json,
+            } => federation_metadata(&peer, &album_id, &asset_id, &out, json).await?,
+        },
+
         // ── Peer ──────────────────────────────────────────────────────────
         Commands::Peer { command } => match command {
             PeerCommands::Delegate {
@@ -831,7 +920,7 @@ async fn dispatch(command: Commands) -> Result<()> {
                 json,
             } => {
                 let ws = open_workspace(&library, passphrase_stdin)?;
-                let push = push_options(false, false, staged);
+                let push = push_options(false, false, staged, PathArgs::default());
                 let listen = match listen {
                     Some(address) => Some(
                         peer_listen(address, std::time::Duration::from_secs(listen_timeout))
@@ -864,6 +953,47 @@ async fn dispatch(command: Commands) -> Result<()> {
             } => {
                 let ws = open_workspace(&library, passphrase_stdin)?;
                 peer_discard(&ws, &hand_off, json)?;
+            }
+            PeerCommands::ForgetDelete {
+                library,
+                asset,
+                passphrase_stdin,
+                json,
+            } => {
+                let ws = open_workspace(&library, passphrase_stdin)?;
+                peer_forget_delete(&ws, asset, json)?;
+            }
+            PeerCommands::Offer {
+                library,
+                peer,
+                to,
+                asset,
+                passphrase_stdin,
+                json,
+            } => {
+                let options = peer::OfferOptions {
+                    peer,
+                    to,
+                    assets: asset.into_iter().collect(),
+                };
+                let ws = open_workspace(&library, passphrase_stdin)?;
+                peer_offer(&ws, &options, json).await?;
+            }
+            PeerCommands::Pull {
+                library,
+                listen,
+                listen_timeout,
+                passphrase_stdin,
+                json,
+            } => {
+                let mut ws = open_workspace(&library, passphrase_stdin)?;
+                peer_pull(
+                    &mut ws,
+                    listen,
+                    std::time::Duration::from_secs(listen_timeout),
+                    json,
+                )
+                .await?;
             }
         },
 
@@ -912,6 +1042,9 @@ async fn dispatch(command: Commands) -> Result<()> {
                 Err(e) => println!("{}", format!("Error collecting status: {e}").red()),
             }
         }
+
+        // ── Server info ───────────────────────────────────────────────────
+        Commands::ServerInfo { json } => server_info(json).await?,
 
         // ── List ──────────────────────────────────────────────────────────
         Commands::List { include_deleted } => list(include_deleted).await?,
@@ -1072,10 +1205,38 @@ fn read_stdin_secret(reader: &mut impl std::io::BufRead, flag: &str) -> Result<S
     Ok(secret)
 }
 
+/// What a password sign-in or registration says on a server that accepts only its identity
+/// provider: the English catalog message for `error.auth.password_disabled`, and the sign-in that
+/// works there.
+pub(crate) fn password_disabled_refusal() -> String {
+    format!(
+        "{} Sign in with `capsule auth login --oidc`, or `capsule auth login --oidc --device` \
+         from another device.",
+        error_message(capsule_i18n::error_codes::AUTH_PASSWORD_DISABLED)
+    )
+}
+
+/// Refuse a password sign-in or registration before anything is asked for, when the server's
+/// `server-info` record says it refuses passwords ([`remote::password_sign_in_disabled`]: an
+/// unreadable record lets the prompt through, and the server stays the authority).
+///
+/// Returns what the record said, for the `--json` report of a sign-in that went on.
+async fn refuse_password_if_disabled(remote: &remote::RemoteConfig) -> Result<bool> {
+    let disabled = remote::password_sign_in_disabled(remote).await;
+    if disabled {
+        tracing::info!("server refuses passwords; not asking for one");
+        return Err(eyre!(password_disabled_refusal()));
+    }
+    Ok(disabled)
+}
+
 /// `capsule auth register`: create an account over the SDK and persist the session.
 async fn auth_register(email: Option<String>, password_stdin: bool) -> Result<()> {
     let remote = remote::RemoteConfig::from_env();
     let store = session_store()?;
+    refuse_password_if_disabled(&remote)
+        .await
+        .map_err(|refusal| eyre!("Could not create the account: {refusal}"))?;
 
     // An address and a password, and nothing else. The server takes nothing else: a
     // display name is a fact about a person, and the profile surface that would hold one is
@@ -1117,6 +1278,9 @@ const PASSWORD_PROMPT: &str = "Password";
 async fn auth_login(email: Option<String>, password_stdin: bool, json: bool) -> Result<()> {
     let remote = remote::RemoteConfig::from_env();
     let store = session_store()?;
+    let password_disabled = refuse_password_if_disabled(&remote)
+        .await
+        .map_err(|refusal| login_failed(&refusal.to_string()))?;
 
     let email = flag_or_prompt(email, EMAIL_PROMPT.to_owned())?;
     let password = read_password(
@@ -1137,6 +1301,7 @@ async fn auth_login(email: Option<String>, password_stdin: bool, json: bool) -> 
             signed_in: true,
             email,
             second_factor,
+            password_disabled,
         };
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
@@ -1154,6 +1319,79 @@ struct LoginReport {
     email: String,
     /// Whether the sign-in asked for an authenticator code.
     second_factor: bool,
+    /// What the server's `server-info` record said about password sign-in
+    /// (`auth.password_disabled`): `false` here, since a server that said `true` is refused
+    /// before the password is asked for, and an unreadable or older record reads `false`.
+    password_disabled: bool,
+}
+
+/// What `capsule server-info --json` prints: how the server signs people in.
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+struct ServerInfoReport {
+    /// The server's canonical origin.
+    server_id: String,
+    /// Whether the server has an identity provider (`capsule auth login --oidc`).
+    oidc: bool,
+    /// Whether the server refuses password registration and sign-in. `false` for a server
+    /// whose record predates the field.
+    password_disabled: bool,
+}
+
+impl From<capsule_sdk::auth::SignInOptions> for ServerInfoReport {
+    fn from(options: capsule_sdk::auth::SignInOptions) -> Self {
+        Self {
+            server_id: options.server_id,
+            oidc: options.oidc,
+            password_disabled: options.password_disabled,
+        }
+    }
+}
+
+/// The lines a person reads after `capsule server-info`.
+fn server_info_lines(report: &ServerInfoReport) -> Vec<String> {
+    vec![
+        format!("Server: {}", printable(&report.server_id)),
+        format!(
+            "Identity provider: {}",
+            if report.oidc {
+                "available (capsule auth login --oidc)"
+            } else {
+                "not configured"
+            }
+        ),
+        format!(
+            "Password sign-in: {}",
+            if report.password_disabled {
+                "refused"
+            } else {
+                "accepted"
+            }
+        ),
+    ]
+}
+
+/// `capsule server-info`: read the server's public `server-info` record and say how it signs
+/// people in. Unlike the advisory read a sign-in makes, a record that cannot be read fails the
+/// command: reading it is all this command does.
+///
+/// With `json`, stdout carries exactly one document, [`ServerInfoReport`].
+async fn server_info(json: bool) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let report =
+        ServerInfoReport::from(remote::sign_in_options(&remote).await.map_err(|error| {
+            eyre!(
+                "Could not read the server's info: {}",
+                describe_remote_error(&error)
+            )
+        })?);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        for line in server_info_lines(&report) {
+            println!("{line}");
+        }
+    }
+    Ok(())
 }
 
 /// What `capsule auth logout --json` prints.
@@ -1161,6 +1399,13 @@ struct LoginReport {
 struct LogoutReport {
     /// Whether a session was stored and is now gone; false when there was nothing to sign out.
     signed_out: bool,
+}
+
+/// What `capsule auth activity --json` prints.
+#[derive(Debug, serde::Serialize)]
+struct ActivityReport {
+    /// The account's events, newest first.
+    events: Vec<remote::ActivityEntry>,
 }
 
 /// What `capsule share revoke --json` prints.
@@ -1221,8 +1466,34 @@ async fn finish_second_factor(
     Ok(true)
 }
 
+/// Provider-authored text with its control characters dropped, so a provider cannot write
+/// escape sequences into the terminal: the one filter the CLI's prints and the TUI's account
+/// screen both pass that text through.
+pub(crate) fn printable(text: &str) -> String {
+    text.chars().filter(|c| !c.is_control()).collect()
+}
+
+/// The line a browser sign-in prints above the authorization address.
+pub(crate) const OIDC_OPEN_ADDRESS: &str = "To sign in, open this address in a browser:";
+
+/// The line a browser sign-in prints when no browser could be opened for it.
+pub(crate) const OIDC_NO_BROWSER: &str =
+    "No browser could be opened from here. Open the address above in any browser.";
+
+/// The line a device sign-in prints above the verification address.
+pub(crate) const DEVICE_OPEN_ADDRESS: &str = "On any device with a browser, open this address:";
+
+/// The line a device sign-in prints above the address that already carries the code.
+pub(crate) const DEVICE_OPEN_COMPLETE: &str =
+    "Or open this address, which already carries the code:";
+
+/// The line a device sign-in prints carrying the code to enter.
+pub(crate) fn device_code_line(user_code: &str) -> String {
+    format!("and enter this code: {user_code}")
+}
+
 /// The line a browser sign-in prints while it waits, in whole minutes rounded up.
-fn oidc_waiting_line(waited: std::time::Duration) -> String {
+pub(crate) fn oidc_waiting_line(waited: std::time::Duration) -> String {
     match waited.as_secs().div_ceil(60) {
         1 => "Waiting up to 1 minute for the sign-in to finish…".to_owned(),
         count => format!("Waiting up to {count} minutes for the sign-in to finish…"),
@@ -1230,7 +1501,7 @@ fn oidc_waiting_line(waited: std::time::Duration) -> String {
 }
 
 /// The line a device sign-in prints while it waits, in whole minutes rounded up.
-fn device_waiting_line(waited: std::time::Duration) -> String {
+pub(crate) fn device_waiting_line(waited: std::time::Duration) -> String {
     match waited.as_secs().div_ceil(60) {
         1 => "Waiting up to 1 minute for you to approve the sign-in…".to_owned(),
         count => format!("Waiting up to {count} minutes for you to approve the sign-in…"),
@@ -1240,82 +1511,123 @@ fn device_waiting_line(waited: std::time::Duration) -> String {
 /// The line an identity-provider sign-in prints when it succeeds.
 const OIDC_SUCCESS: &str = "Signed in through your identity provider.";
 
-/// `capsule auth login --oidc`: sign in through the server's identity provider in a browser,
-/// over a loopback listener, and persist the session ([`oidc`] owns the flow).
-async fn auth_login_oidc(no_browser: bool) -> Result<()> {
-    let remote = remote::RemoteConfig::from_env();
-    let store = session_store()?;
-    let ceremony = oidc::SdkCeremony::new(&remote, &store)
-        .map_err(|error| login_failed(&describe_remote_error(&error)))?;
-    let pages = oidc::CallbackPages {
+/// The pages the loopback listener shows the browser: shared by `capsule auth login --oidc` and
+/// the TUI's account screen, both of which finish the sign-in in the terminal.
+pub(crate) fn oidc_callback_pages() -> oidc::CallbackPages {
+    oidc::CallbackPages {
         received: "Capsule received your sign-in. Return to the terminal, which finishes signing \
                    you in."
             .to_owned(),
         refused: "The sign-in did not complete. Return to the terminal to see why.".to_owned(),
-    };
+    }
+}
 
-    println!(
-        "{}",
-        "Signing in to Capsule through your identity provider…".green()
+/// What `capsule auth login --oidc [--device] --json` prints once the session is stored.
+#[derive(Debug, serde::Serialize)]
+struct OidcLoginReport {
+    /// Always true: a sign-in that did not finish exits non-zero and prints no document.
+    signed_in: bool,
+    /// How the identity provider was reached: `browser` (`--oidc`) or `device` (`--device`).
+    flow: &'static str,
+    /// Whether the sign-in asked for an authenticator code.
+    second_factor: bool,
+}
+
+/// Finish an identity-provider sign-in that settled as `step`: the second factor, then the
+/// success line, or under `json` the one [`OidcLoginReport`] on stdout.
+async fn finish_oidc_login(
+    remote: &remote::RemoteConfig,
+    store: &session::SessionStore,
+    step: remote::LoginStep,
+    flow: &'static str,
+    json: bool,
+) -> Result<()> {
+    let second_factor = finish_second_factor(remote, store, step, json).await?;
+    if json {
+        let report = OidcLoginReport {
+            signed_in: true,
+            flow,
+            second_factor,
+        };
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("{}", OIDC_SUCCESS.green());
+    }
+    Ok(())
+}
+
+/// `capsule auth login --oidc`: sign in through the server's identity provider in a browser,
+/// over a loopback listener, and persist the session ([`oidc`] owns the flow).
+///
+/// With `json`, the address and the progress lines go to stderr and stdout carries exactly one
+/// document, [`OidcLoginReport`].
+async fn auth_login_oidc(no_browser: bool, json: bool) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let ceremony = oidc::SdkCeremony::new(&remote, &store)
+        .map_err(|error| login_failed(&describe_remote_error(&error)))?;
+
+    progress(
+        json,
+        "Signing in to Capsule through your identity provider…".green(),
     );
     let show = |authorization_url: &str, waited: std::time::Duration| {
-        println!("To sign in, open this address in a browser:");
-        println!("{authorization_url}");
+        progress(json, OIDC_OPEN_ADDRESS);
+        progress(json, authorization_url);
         if !no_browser && !oidc::open_in_browser(authorization_url) {
-            println!(
-                "{}",
-                "No browser could be opened from here. Open the address above in any browser."
-                    .yellow()
-            );
+            progress(json, OIDC_NO_BROWSER.yellow());
         }
-        println!("{}", oidc_waiting_line(waited));
+        progress(json, oidc_waiting_line(waited));
     };
-    let step = oidc::login(&ceremony, show, &pages, oidc::LISTENER_TIMEOUT)
-        .await
-        .map_err(|error| login_failed(&describe_oidc_error(&error)))?;
+    let step = oidc::login(
+        &ceremony,
+        show,
+        &oidc_callback_pages(),
+        oidc::LISTENER_TIMEOUT,
+    )
+    .await
+    .map_err(|error| login_failed(&describe_oidc_error(&error)))?;
 
-    finish_second_factor(&remote, &store, step, false).await?;
-    println!("{}", OIDC_SUCCESS.green());
-    Ok(())
+    finish_oidc_login(&remote, &store, step, "browser", json).await
 }
 
 /// `capsule auth login --oidc --device`: sign in through the server's identity provider from
 /// another device (RFC 8628, issue #635) — print the address and the code, poll until the person
 /// approves, and persist the session ([`oidc::login_device`] owns the flow).
-async fn auth_login_oidc_device() -> Result<()> {
+///
+/// With `json`, the address, the code and the progress lines go to stderr and stdout carries
+/// exactly one document, [`OidcLoginReport`].
+async fn auth_login_oidc_device(json: bool) -> Result<()> {
     let remote = remote::RemoteConfig::from_env();
     let store = session_store()?;
     let ceremony = oidc::SdkCeremony::new(&remote, &store)
         .map_err(|error| login_failed(&describe_remote_error(&error)))?;
 
-    println!(
-        "{}",
-        "Signing in to Capsule through your identity provider, from another device…".green()
+    progress(
+        json,
+        "Signing in to Capsule through your identity provider, from another device…".green(),
     );
     let show = |pending: &capsule_sdk::auth::OidcDeviceAuthorization,
                 waited: std::time::Duration| {
         // Provider-authored, printed to a terminal: control characters are dropped, as the
         // server already refused any code carrying one.
-        let printable = |text: &str| text.chars().filter(|c| !c.is_control()).collect::<String>();
-        println!("On any device with a browser, open this address:");
-        println!("{}", printable(&pending.verification_uri));
-        println!(
-            "{}",
-            format!("and enter this code: {}", printable(&pending.user_code)).bold()
+        progress(json, DEVICE_OPEN_ADDRESS);
+        progress(json, printable(&pending.verification_uri));
+        progress(
+            json,
+            device_code_line(&printable(&pending.user_code)).bold(),
         );
         if let Some(complete) = &pending.verification_uri_complete {
-            println!("Or open this address, which already carries the code:");
-            println!("{}", printable(complete));
+            progress(json, DEVICE_OPEN_COMPLETE);
+            progress(json, printable(complete));
         }
-        println!("{}", device_waiting_line(waited));
+        progress(json, device_waiting_line(waited));
     };
     let step = oidc::login_device(&ceremony, show, oidc::DEVICE_TIMEOUT)
         .await
         .map_err(|error| login_failed(&describe_oidc_error(&error)))?;
 
-    finish_second_factor(&remote, &store, step, false).await?;
-    println!("{}", OIDC_SUCCESS.green());
-    Ok(())
+    finish_oidc_login(&remote, &store, step, "device", json).await
 }
 
 /// The `capsule auth login` failure line, carrying `reason`.
@@ -1328,7 +1640,7 @@ fn login_failed(reason: &str) -> eyre::Report {
 /// A refused loopback redirect gets the remedy rather than only the code: the server's operator
 /// has to set `OIDC_ALLOW_LOOPBACK_REDIRECT=true`, which is off by default, and nothing the person
 /// at the terminal does will change that.
-fn describe_oidc_error(error: &oidc::OidcLoginError) -> String {
+pub(crate) fn describe_oidc_error(error: &oidc::OidcLoginError) -> String {
     match error {
         oidc::OidcLoginError::Remote(remote::RemoteError::Auth(
             capsule_sdk::auth::AuthError::OidcRedirectInvalid,
@@ -1350,8 +1662,6 @@ fn describe_oidc_error(error: &oidc::OidcLoginError) -> String {
         oidc::OidcLoginError::Denied { error, description } => {
             // Provider-authored text, printed to a terminal: control characters are dropped so
             // a provider cannot write escape sequences into it.
-            let printable =
-                |text: &str| text.chars().filter(|c| !c.is_control()).collect::<String>();
             let error = printable(error);
             match description {
                 Some(description) => format!(
@@ -1572,6 +1882,35 @@ async fn auth_logout(json: bool) -> Result<()> {
     }
 }
 
+/// `capsule auth activity`: the signed-in account's recent security events, newest first.
+///
+/// With `json`, stdout carries exactly one document, [`ActivityReport`].
+async fn auth_activity(limit: Option<u32>, json: bool) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let events = remote::auth_activity(&remote, &store, limit)
+        .await
+        .map_err(|error| eyre!("{}", describe_remote_error(&error)))?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&ActivityReport { events })?
+        );
+        return Ok(());
+    }
+    if events.is_empty() {
+        println!("{}", "No recent activity.".yellow());
+        return Ok(());
+    }
+    for event in &events {
+        match &event.subject {
+            Some(subject) => println!("{}  {}  {subject}", event.at, event.kind.bold()),
+            None => println!("{}  {}", event.at, event.kind.bold()),
+        }
+    }
+    Ok(())
+}
+
 /// The flags of one `capsule sync` run.
 #[derive(Debug, Clone, Copy)]
 struct SyncRun<'a> {
@@ -1700,25 +2039,18 @@ fn sync_run_error(error: &remote::RemoteError) -> eyre::Report {
 /// replacing it — minting a fresh one per run is exactly what left a reopened library unable to
 /// decrypt or extend its own prior imports (and would make a push unrepeatable).
 ///
-/// When the open found unsigned pre-signed-path sidecars, a notice naming their count
-/// and `capsule library migrate` goes to stderr, so every verb over such a library says why
-/// some assets are missing before the user runs the migration.
+/// When the open found sidecars no provenance chain anchors, the [`unanchored_notice`] goes to
+/// stderr, so every verb over such a library says why some assets are missing.
 fn open_workspace(library: &Path, passphrase_stdin: bool) -> Result<Workspace> {
-    let ws = open_workspace_quiet(library, passphrase_stdin)?;
-    if let Some(notice) = migrate::unmigrated_notice(ws.unmigrated_sidecars()) {
-        eprintln!("{}", notice.yellow());
-    }
-    Ok(ws)
-}
-
-/// [`open_workspace`] without the unmigrated-sidecar notice: for `capsule library migrate`,
-/// which reports the same count as the work it is about to do.
-fn open_workspace_quiet(library: &Path, passphrase_stdin: bool) -> Result<Workspace> {
     let passphrase = read_password(
         passphrase_stdin.then_some("--passphrase-stdin"),
         "Library passphrase".to_string(),
     )?;
-    open_workspace_with(library, &passphrase)
+    let ws = open_workspace_with(library, &passphrase)?;
+    if let Some(notice) = unanchored_notice(ws.unanchored_sidecars().len()) {
+        eprintln!("{}", notice.yellow());
+    }
+    Ok(ws)
 }
 
 /// Open the library `args` names, build an edit against it with `build` (which resolves the
@@ -1738,8 +2070,155 @@ fn edit_library(
     Ok(())
 }
 
-/// [`open_workspace_quiet`] with the passphrase already in hand: the TUI's forms collect it
-/// themselves.
+/// The client-local camera pairing state, under the CLI's config directory.
+fn camera_pairing_store() -> Result<camera_pairing::PairingStore> {
+    let dir = get_config_dir().ok_or_else(|| eyre!("Failed to resolve config directory"))?;
+    Ok(camera_pairing::PairingStore::new(
+        dir.join(camera_pairing::PAIRING_FILE),
+    ))
+}
+
+/// `capsule camera discover`, `capsule camera import` and `capsule camera identity`.
+fn camera_command(command: CameraCommands) -> Result<()> {
+    let store = camera_pairing_store()?;
+    let default_name = || camera_pairing::default_name(sysinfo::System::host_name().as_deref());
+    match command {
+        CameraCommands::Discover { timeout, json } => {
+            let window = std::time::Duration::from_secs(timeout);
+            if !json {
+                println!(
+                    "{}",
+                    format!("Looking for cameras on the network for {timeout} s…").cyan()
+                );
+            }
+            let report = camera_discovery::discover(window)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                for line in camera_discovery::summary_lines(&report) {
+                    println!("{}", line.green());
+                }
+            }
+        }
+        CameraCommands::Identity { name, json } => {
+            let (pairing, created) = match name {
+                Some(name) => store.rename(&name)?,
+                None => store.load_or_create(default_name)?,
+            };
+            if json {
+                let document = serde_json::json!({
+                    "guid": pairing.guid,
+                    "name": pairing.name,
+                    "created": created,
+                });
+                println!("{}", serde_json::to_string_pretty(&document)?);
+            } else {
+                println!("Camera identity: {} ({})", pairing.name, pairing.guid);
+                if created {
+                    println!(
+                        "{}",
+                        "Created now; a camera that pairs with it will recognise this client \
+                         from here on."
+                            .cyan()
+                    );
+                }
+            }
+        }
+        CameraCommands::Import {
+            address,
+            library,
+            passphrase_stdin,
+            json,
+        } => {
+            let human = !json;
+            let given = address
+                .as_deref()
+                .map(camera_import::parse_address)
+                .transpose()?;
+            let mut ws = open_workspace(&library, passphrase_stdin)?;
+            let (address, discovered) = if let Some(address) = given {
+                (address, None)
+            } else {
+                let window = std::time::Duration::from_secs(camera_discovery::DEFAULT_WINDOW_SECS);
+                if human {
+                    println!(
+                        "{}",
+                        format!(
+                            "No --address given; looking for a camera on the network for \
+                             {} s…",
+                            window.as_secs()
+                        )
+                        .cyan()
+                    );
+                }
+                let report = camera_discovery::discover(window)?;
+                let camera = camera_discovery::choose(report.cameras, window)?;
+                if human {
+                    println!(
+                        "{}",
+                        format!("Found {} at {}.", camera.name, camera.socket_addr()).cyan()
+                    );
+                }
+                (camera.socket_addr(), Some(camera))
+            };
+            let (pairing, created) = store.load_or_create(default_name)?;
+            if human {
+                if created {
+                    println!(
+                        "{}",
+                        format!(
+                            "Created this client's camera identity, {} ({}).",
+                            pairing.name, pairing.guid
+                        )
+                        .cyan()
+                    );
+                }
+                println!(
+                    "{}",
+                    format!("Connecting to the camera at {address} as {}…", pairing.name).green()
+                );
+            }
+            let report = camera_import::run(&mut ws, address, discovered, &pairing, |camera| {
+                if human {
+                    println!(
+                        "{}",
+                        format!(
+                            "Connected to {} {}. Receiving every object…",
+                            camera.manufacturer, camera.model
+                        )
+                        .cyan()
+                    );
+                }
+            })?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                for outcome in &report.import.outcomes {
+                    if outcome.status != import_report::FileImportStatus::Imported {
+                        let line = format!(
+                            "  {} ({:?}{})",
+                            outcome.path,
+                            outcome.status,
+                            outcome
+                                .error
+                                .as_deref()
+                                .map(|e| format!(": {e}"))
+                                .unwrap_or_default()
+                        );
+                        println!("{}", line.yellow());
+                    }
+                }
+                for line in camera_import::summary_lines(&report) {
+                    println!("{}", line.green());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// [`open_workspace`] with the passphrase already in hand and without the unanchored-sidecar
+/// notice: the TUI's forms collect the passphrase themselves.
 fn open_workspace_with(library: &Path, passphrase: &str) -> Result<Workspace> {
     let mut ws = as_capsule_cli(
         Workspace::open(library, passphrase.as_bytes(), DeviceTier::Normal.params())
@@ -1763,14 +2242,15 @@ fn restore_options(scope: restore::RestoreScope, out: PathBuf) -> restore::Resto
     }
 }
 
-/// The push configuration behind the CLI's three push flags, on the connection class the
-/// desktop source reports now. A `--staged` run opens the tier sessions in ladder order gated by
-/// the class; the default `Full` policy opens them all eagerly unless the class defers bulk
-/// transfers, which stages the push ([`cache::push_options`]). The desktop source has no OS
-/// probe, so it reports `unmetered`.
-fn push_options(dry_run: bool, force: bool, staged: bool) -> remote::PushOptions {
+/// The push configuration behind the CLI's push flags, planned from the path snapshot: the
+/// connection class the desktop source reports now, with the `path` flags laid over it
+/// ([`cache::path_plan`]). A `--staged` run opens the tier sessions in ladder order gated by
+/// the plan; the default `Full` policy opens them all eagerly unless the plan holds bulk
+/// transfers back, which stages the push ([`cache::push_options`]). The desktop source has no
+/// OS probe, so without flags the path is unmetered.
+fn push_options(dry_run: bool, force: bool, staged: bool, path: PathArgs) -> remote::PushOptions {
     cache::push_options(
-        &cache::transfer_plan(&DesktopConnectionClass::new()),
+        &cache::path_plan(&DesktopConnectionClass::new(), path.flags()),
         dry_run,
         force,
         staged,
@@ -2204,6 +2684,42 @@ async fn verify_workspace(
     }
 }
 
+/// Run one `capsule trash delete|restore` over `workspace` and report it: one JSON document
+/// under `--json`, a summary line and one line per failed asset otherwise. A run with any
+/// failed asset exits non-zero.
+async fn trash_workspace(
+    workspace: &mut Workspace,
+    request: &remote::TrashRequest,
+    json: bool,
+) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let summary = remote::trash(&remote, &store, workspace, request)
+        .await
+        .map_err(|error| {
+            if matches!(error, remote::RemoteError::NotAuthenticated) {
+                return eyre!(NOT_AUTHENTICATED);
+            }
+            eyre!("trash failed: {}", describe_remote_error(&error))
+        })?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    } else {
+        println!("{}", remote::trash_line(&summary).cyan());
+        for outcome in summary.failures() {
+            eprintln!("{}", remote::trash_failure_line(outcome).red());
+        }
+    }
+    if summary.failed > 0 {
+        return Err(eyre!(
+            "trash failed: {} of {} assets were not applied",
+            summary.failed,
+            summary.outcomes.len()
+        ));
+    }
+    Ok(())
+}
+
 /// The flags of one `capsule share create` run.
 #[derive(Debug)]
 struct ShareCreateRun<'a> {
@@ -2311,6 +2827,230 @@ async fn share_revoke(opaque_id: &str, json: bool) -> Result<()> {
             share::describe_error(&error)
         )),
     }
+}
+
+/// What `capsule federation list --json` prints.
+#[derive(Debug, serde::Serialize)]
+struct SubscriptionsReport {
+    /// Every subscription, live or lapsed, ordered by peer and then album.
+    subscriptions: Vec<federation::SubscriptionEntry>,
+}
+
+/// What `capsule federation unsubscribe --json` prints.
+#[derive(Debug, serde::Serialize)]
+struct UnsubscribeReport {
+    /// The album's home server, as given.
+    peer: String,
+    /// The album, as given.
+    album_id: String,
+    /// Always true: the album is no longer pulled for this account. A refusal exits non-zero
+    /// and prints no document.
+    unsubscribed: bool,
+}
+
+/// `capsule federation subscribe`: post the capability read from `stdin` for `issuer`'s album.
+///
+/// With `json`, stdout carries exactly one document, [`federation::Subscribed`].
+async fn federation_subscribe(
+    issuer: &str,
+    stdin: &mut impl std::io::BufRead,
+    json: bool,
+) -> Result<()> {
+    let token = read_stdin_secret(stdin, "the capability token")?;
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let subscribed = federation::subscribe(&remote, &store, issuer, &token)
+        .await
+        .map_err(|error| {
+            eyre!(
+                "Subscription not recorded: {}",
+                federation::describe_error(&error)
+            )
+        })?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&subscribed)?);
+        return Ok(());
+    }
+    let entry = &subscribed.subscription;
+    let line = if subscribed.created {
+        format!("Subscribed to album {} on {}.", entry.album_id, entry.peer)
+    } else {
+        format!(
+            "Already subscribed to album {} on {}; its access now lasts until {}.",
+            entry.album_id, entry.peer, entry.expires_at
+        )
+    };
+    println!("{}", line.green());
+    Ok(())
+}
+
+/// `capsule federation list`: the signed-in account's subscriptions.
+///
+/// With `json`, stdout carries exactly one document, [`SubscriptionsReport`].
+async fn federation_list(json: bool) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let subscriptions = federation::list(&remote, &store).await.map_err(|error| {
+        eyre!(
+            "Subscriptions not listed: {}",
+            federation::describe_error(&error)
+        )
+    })?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&SubscriptionsReport { subscriptions })?
+        );
+        return Ok(());
+    }
+    if subscriptions.is_empty() {
+        println!(
+            "{}",
+            "No subscriptions to albums on other servers.".yellow()
+        );
+        return Ok(());
+    }
+    for entry in &subscriptions {
+        let state = if entry.live {
+            format!("live until {}", entry.expires_at).green()
+        } else {
+            "lapsed: post a fresh invite to resume".yellow()
+        };
+        println!("{}  {}  {state}", entry.peer, entry.album_id.bold());
+    }
+    Ok(())
+}
+
+/// `capsule federation unsubscribe`: stop pulling `album_id` from `peer` for this account.
+///
+/// With `json`, stdout carries exactly one document, [`UnsubscribeReport`].
+async fn federation_unsubscribe(peer: &str, album_id: &str, json: bool) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    federation::unsubscribe(&remote, &store, peer, album_id)
+        .await
+        .map_err(|error| eyre!("Not unsubscribed: {}", federation::describe_error(&error)))?;
+    if json {
+        let report = UnsubscribeReport {
+            peer: peer.to_owned(),
+            album_id: album_id.to_owned(),
+            unsubscribed: true,
+        };
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+    println!(
+        "{}",
+        format!("Album {album_id} on {peer} is no longer pulled for this account.").green()
+    );
+    Ok(())
+}
+
+/// `capsule federation assets`: every live asset this account's server pulled for one
+/// subscription.
+///
+/// With `json`, stdout carries exactly one document, [`federation::PulledAssets`].
+async fn federation_assets(peer: &str, album_id: &str, json: bool) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let pulled = federation::assets(&remote, &store, peer, album_id)
+        .await
+        .map_err(|error| {
+            eyre!(
+                "Pulled assets not listed: {}",
+                federation::describe_error(&error)
+            )
+        })?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&pulled)?);
+        return Ok(());
+    }
+    if pulled.assets.is_empty() {
+        println!(
+            "{}",
+            format!(
+                "Nothing pulled yet for album {} on {}.",
+                pulled.album_id, pulled.peer
+            )
+            .yellow()
+        );
+        return Ok(());
+    }
+    for asset in &pulled.assets {
+        println!(
+            "{}  {}  {} bytes  by {}",
+            asset.asset_id.bold(),
+            asset.timestamp,
+            asset.size,
+            asset.author
+        );
+    }
+    Ok(())
+}
+
+/// What `capsule federation metadata --json` prints.
+#[derive(Debug, serde::Serialize)]
+struct PulledMetadataReport {
+    /// The album's home server, as given.
+    peer: String,
+    /// The album, as given.
+    album_id: String,
+    /// The asset, as given.
+    asset_id: String,
+    /// The blob's size in bytes.
+    size: usize,
+    /// The blob's content hash, hex: the address the asset's record commits to.
+    hash: String,
+    /// The file the blob was written to.
+    out: PathBuf,
+}
+
+/// `capsule federation metadata`: write one pulled asset's encrypted metadata blob to `out`.
+///
+/// With `json`, stdout carries exactly one document, [`PulledMetadataReport`].
+async fn federation_metadata(
+    peer: &str,
+    album_id: &str,
+    asset_id: &str,
+    out: &Path,
+    json: bool,
+) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let bytes = federation::metadata(&remote, &store, peer, album_id, asset_id)
+        .await
+        .map_err(|error| {
+            eyre!(
+                "Pulled metadata not fetched: {}",
+                federation::describe_error(&error)
+            )
+        })?;
+    std::fs::write(out, &bytes)
+        .map_err(|error| eyre!("Pulled metadata not written to {}: {error}", out.display()))?;
+    let hash = capsule_core::crypto::hash::hash_bytes(&bytes).to_hex();
+    tracing::info!(%peer, %album_id, %asset_id, %hash, out = %out.display(), "wrote a pulled asset's metadata");
+    if json {
+        let report = PulledMetadataReport {
+            peer: peer.to_owned(),
+            album_id: album_id.to_owned(),
+            asset_id: asset_id.to_owned(),
+            size: bytes.len(),
+            hash,
+            out: out.to_path_buf(),
+        };
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+    println!(
+        "{}",
+        format!(
+            "Wrote the {}-byte metadata of asset {asset_id} to {}.",
+            bytes.len(),
+            out.display()
+        )
+        .green()
+    );
+    Ok(())
 }
 
 /// A whole-run `capsule peer` failure, as the line the process exits with.
@@ -2571,6 +3311,12 @@ async fn peer_status(workspace: &Workspace, acks: &[PathBuf], json: bool) -> Res
                     delete.message.as_deref().unwrap_or("no detail")
                 )
                 .red(),
+                "withheld" => format!(
+                    "{}: delete and restore withheld for good; the library keeps them: {}",
+                    delete.asset_id,
+                    delete.message.as_deref().unwrap_or("no detail")
+                )
+                .yellow(),
                 _ => format!(
                     "{}: {} not applied, kept for the next run: {}",
                     delete.asset_id,
@@ -2608,6 +3354,139 @@ fn peer_discard(workspace: &Workspace, hand_off: &str, json: bool) -> Result<()>
         );
     }
     Ok(())
+}
+
+/// `capsule peer forget-delete`: stop retrying one asset's undeliverable released delete.
+fn peer_forget_delete(workspace: &Workspace, asset: uuid::Uuid, json: bool) -> Result<()> {
+    let state = peer::PeerState::for_device(workspace.device_id())
+        .map_err(|error| peer_run_error("Forget", &error))?;
+    let forgotten = peer::forget_delete(&state, workspace, asset)
+        .map_err(|error| peer_run_error("Forget", &error))?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&forgotten)?);
+    } else {
+        println!(
+            "{}",
+            format!(
+                "{}: released delete dropped ({} outbox entries); no longer retried",
+                forgotten.asset_id, forgotten.entries
+            )
+            .yellow()
+        );
+    }
+    Ok(())
+}
+
+/// `capsule peer offer`: send this library's assets to the device at `--peer`.
+async fn peer_offer(workspace: &Workspace, options: &peer::OfferOptions, json: bool) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let state = peer::PeerState::for_device(workspace.device_id())
+        .map_err(|error| peer_run_error("Offer", &error))?;
+    let versions = peer_floor(workspace, &state, "Offer").await?;
+    let summary = peer::offer(&remote, &store, workspace, &versions, options)
+        .await
+        .map_err(|error| peer_run_error("Offer", &error))?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    } else {
+        if let (Some(receiver), Some(artifact)) = (summary.receiver, &summary.artifact) {
+            println!(
+                "{}",
+                format!(
+                    "Offered {} asset(s) to device {receiver} as {artifact} ({} bytes); it \
+                     pulled {} bytes",
+                    summary.assets.len(),
+                    summary.bytes,
+                    summary.served_bytes
+                )
+                .green()
+            );
+        }
+        for failed in &summary.failed {
+            println!(
+                "{}",
+                format!("{}: not offered: {}", failed.subject, failed.message).red()
+            );
+        }
+    }
+    if summary.failed.is_empty() {
+        Ok(())
+    } else {
+        Err(eyre!(
+            "Offer finished with {} failure(s)",
+            summary.failed.len()
+        ))
+    }
+}
+
+/// `capsule peer pull`: take what the device that dials in offers, against the tombstones this
+/// device persisted.
+async fn peer_pull(
+    workspace: &mut Workspace,
+    listen: std::net::SocketAddr,
+    timeout: std::time::Duration,
+    json: bool,
+) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let state = peer::PeerState::for_device(workspace.device_id())
+        .map_err(|error| peer_run_error("Pull", &error))?;
+    let db = db::init_sqlite()
+        .await
+        .map_err(|e| eyre!("Failed to open local database: {e}"))?;
+    // Read before anything binds or dials: a set that cannot be read refuses the run.
+    peer::ingest_tombstones(&db)
+        .await
+        .map_err(|error| peer_run_error("Pull", &error))?;
+    let versions = peer_floor(workspace, &state, "Pull").await?;
+    let listener = peer::PeerListener::bind(listen, timeout)
+        .await
+        .map_err(|error| peer_run_error("Pull", &error))?;
+    let bound = listener
+        .local_addr()
+        .map_err(|error| peer_run_error("Pull", &error))?;
+    eprintln!(
+        "Listening for a peer on {bound} for up to {}s",
+        timeout.as_secs()
+    );
+    let summary = peer::pull(&remote, &store, workspace, &db, &versions, &listener)
+        .await
+        .map_err(|error| peer_run_error("Pull", &error))?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    } else {
+        let peer = summary
+            .peer
+            .map_or_else(|| "the peer".to_owned(), |id| format!("device {id}"));
+        println!(
+            "{}",
+            format!(
+                "From {peer}: {} applied, {} already held, {} refused as purged here, {} \
+                 quarantined as stale, {} incomplete",
+                summary.applied.len(),
+                summary.identical.len(),
+                summary.tombstoned.len(),
+                summary.quarantined.len(),
+                summary.incomplete.len()
+            )
+            .green()
+        );
+        for failed in summary.failed.iter().chain(&summary.refused) {
+            println!(
+                "{}",
+                format!("{}: {}", failed.subject, failed.message).red()
+            );
+        }
+    }
+    if summary.has_failures() {
+        Err(eyre!(
+            "Pull finished with {} failure(s)",
+            summary.failed.len()
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 /// `capsule list`: query the sync-fed local store and render it.
@@ -2687,3 +3566,9 @@ mod stdin_secret_tests;
 
 #[cfg(test)]
 mod client_build_wiring_tests;
+
+#[cfg(test)]
+mod server_info_tests;
+
+#[cfg(test)]
+mod federation_report_tests;

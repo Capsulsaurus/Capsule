@@ -3,43 +3,51 @@ import Testing
 
 import CapsuleDomain
 
-/// The degrade ladder, per-asset sync states, quarantine surfaces, and paging —
-/// parity rule 6.
-@Suite("The degrade ladder never bottoms out below a colour")
+/// The representation tiers, per-asset sync states, quarantine surfaces, and
+/// paging — parity rule 6.
+@Suite("Representation tiers name a rung and carry no ladder")
 struct RepresentationTests {
-    @Test("the ladder is ordered cheapest first")
-    func ladderOrder() {
-        #expect(RepresentationTier.allCases == [.dominantColour, .lqip, .thumbnail, .preview, .original])
-        #expect(RepresentationTier.dominantColour < RepresentationTier.original)
-        #expect(RepresentationTier.preview.degraded == .thumbnail)
-        #expect(RepresentationTier.dominantColour.degraded == nil)
+    @Test("the tiers are the four rungs, listed cheapest first, with no colour rung")
+    func tiersAreTheFourRungs() {
+        // The LQIP rung paints its dominant colour where it does not decode, so
+        // the colour is how that rung renders, not a fifth tier.
+        #expect(RepresentationTier.allCases == [.lqip, .thumbnail, .preview, .original])
     }
 
-    @Test("the dominant colour is always held, so a tile is never blank")
-    func colourIsAlwaysHeld() {
+    @Test("a tier keeps the raw value it has always encoded with")
+    func rawValuesAreStable() throws {
+        #expect(RepresentationTier.allCases.map(\.rawValue) == [1, 2, 3, 4])
+        let encoded = try JSONEncoder().encode([RepresentationTier.preview])
+        #expect(try JSONDecoder().decode([RepresentationTier].self, from: encoded) == [.preview])
+    }
+
+    @Test("an asset holds exactly the tiers it was given")
+    func holdsWhatItWasGiven() {
         let empty = LocalRepresentations()
-        #expect(empty.holds(.dominantColour))
-        #expect(empty.best == .dominantColour)
-    }
+        #expect(empty.heldTiers.isEmpty)
+        #expect(!empty.holds(.lqip))
 
-    @Test("the best representation is the highest rung actually held")
-    func bestIsHighestHeld() {
         let held = LocalRepresentations(heldTiers: [.lqip, .thumbnail])
-        #expect(held.best == .thumbnail)
+        #expect(held.holds(.thumbnail))
         #expect(!held.isFullResolutionAvailable)
-
-        let full = held.adding(.original)
-        #expect(full.best == .original)
-        #expect(full.isFullResolutionAvailable)
+        #expect(held.adding(.original).isFullResolutionAvailable)
     }
 
-    @Test("eviction degrades down the ladder rather than emptying it")
-    func evictionDegrades() {
+    @Test("eviction removes only the evicted tiers")
+    func evictionRemovesOnlyWhatIsEvicted() {
         let evicted = LocalRepresentations(heldTiers: [.lqip, .thumbnail, .preview, .original])
             .removing(.original)
             .removing(.preview)
-        #expect(evicted.best == .thumbnail)
-        #expect(evicted.holds(.dominantColour))
+        #expect(evicted.heldTiers == [.lqip, .thumbnail])
+    }
+
+    @Test("the ladder is told the encoded tiers and the original, the LQIP being implied")
+    func renderHoldingsOmitTheLqip() {
+        let held = LocalRepresentations(heldTiers: [.lqip, .thumbnail, .original])
+        #expect(held.renderHoldings() == RenderHoldings(held: [.thumbnail, .original]))
+
+        let preview = Dimensions(width: 1616, height: 1080)
+        #expect(held.renderHoldings(embeddedPreview: preview).embeddedPreview == preview)
     }
 
     @Test("an unknown sync scope fetches nothing eagerly rather than over-fetching")

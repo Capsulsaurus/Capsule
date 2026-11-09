@@ -141,4 +141,15 @@ describe('checkModulePaths', () => {
         expect(findings).toHaveLength(1);
         expect(findings[0]).toContain('AGENTS.md');
     });
+
+    it('scans the scoped agent rules under .claude/rules/', () => {
+        const { findings } = checkModulePaths(
+            repo({
+                'capsule-core/src/lib.rs': '',
+                '.claude/rules/core.md': '`capsule-core::gone`\n',
+            }),
+        );
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toContain('.claude/rules/core.md');
+    });
 });

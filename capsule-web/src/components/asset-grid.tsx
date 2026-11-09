@@ -463,6 +463,7 @@ const DateIndicator = ({
     containerRef: React.RefObject<HTMLDivElement | null>;
     rows: RowData[];
 }) => {
+    const intl = useIntl();
     const [dateLabel, setDateLabel] = useState<string | null>(null);
 
     useEffect(() => {
@@ -495,7 +496,7 @@ const DateIndicator = ({
 
             if (index[res]) {
                 const d = index[res].date;
-                const label = d.toLocaleDateString('en-US', {
+                const label = intl.formatDate(d, {
                     month: 'short',
                     year: 'numeric',
                 });
@@ -506,7 +507,7 @@ const DateIndicator = ({
         container.addEventListener('scroll', update);
         update();
         return () => container.removeEventListener('scroll', update);
-    }, [containerRef, rows]);
+    }, [containerRef, rows, intl]);
 
     if (!dateLabel) return null;
 

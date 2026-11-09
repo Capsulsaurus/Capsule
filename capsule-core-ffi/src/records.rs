@@ -33,6 +33,13 @@ pub struct AssetRecord {
     /// Projection of the sidecar `hidden` LWW register: excluded from default views,
     /// served only by the gated Hidden view (SSoT: design/organization § Hidden Assets).
     pub is_hidden: bool,
+    /// Projection of the sidecar `caption` LWW register. `None` is no caption; an empty
+    /// caption is stored as `None`.
+    pub caption: Option<String>,
+    /// Latitude of the sidecar's effective location, in signed decimal degrees.
+    pub latitude: Option<f64>,
+    /// Longitude of the sidecar's effective location, in signed decimal degrees.
+    pub longitude: Option<f64>,
 }
 
 impl From<AssetRow> for AssetRecord {
@@ -57,6 +64,9 @@ impl From<AssetRow> for AssetRecord {
             is_deleted: r.is_deleted,
             deleted_at: r.deleted_at,
             is_hidden: r.is_hidden,
+            caption: r.caption,
+            latitude: r.latitude,
+            longitude: r.longitude,
         }
     }
 }
@@ -83,6 +93,9 @@ impl From<AssetRecord> for AssetRow {
             is_deleted: r.is_deleted,
             deleted_at: r.deleted_at,
             is_hidden: r.is_hidden,
+            caption: r.caption,
+            latitude: r.latitude,
+            longitude: r.longitude,
         }
     }
 }

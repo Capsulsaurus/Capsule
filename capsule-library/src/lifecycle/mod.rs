@@ -10,11 +10,19 @@
 //!   the signed [`SidecarV1`], and gate on `verify_asset == Accept`.
 //! - [`tag_add`](Workspace::tag_add) / [`set_caption`](Workspace::set_caption) — CRDT edits
 //!   emitting a `metadata-update` provenance record.
-//! - [`soft_delete`](Workspace::soft_delete) / [`restore`](Workspace::restore) — `delete`
-//!   (with a signed retention window) and `trash-restore` lifecycle records.
+//! - [`soft_delete`](Workspace::soft_delete) / [`restore`](Workspace::restore) /
+//!   [`purge`](Workspace::purge) — `delete` (with a signed retention window) and
+//!   `trash-restore` lifecycle records, and the hard delete, each judged by the signed
+//!   `retention_until`.
 //! - [`export_backup`](Workspace::export_backup) / [`import_backup`](Workspace::import_backup)
 //!   — the portable artifact round-trip; the client stores plaintext, so ciphertext is
 //!   regenerated deterministically from the manifest's recorded nonce prefix.
+//! - [`adopt_remote_head`](Workspace::adopt_remote_head) /
+//!   [`adopt_remote_original`](Workspace::adopt_remote_original) /
+//!   [`adopt_remote_history`](Workspace::adopt_remote_history) — hold an asset another
+//!   device wrote, from a verified sync entry (and, for an asset first seen past its create,
+//!   its fetched earlier records): its chain, sidecar, sealed metadata blob and original under
+//!   `media/`, indexed, so the verbs above work on it as on an import.
 //!
 //! Clients store **plaintext** locally (original + signed sidecar + provenance chain);
 //! encryption produces the artifacts that cross a boundary. Offline epoch rotation is supported
@@ -32,13 +40,13 @@ mod enrollment;
 mod groups;
 mod import;
 mod metadata;
-mod migrate_unsigned;
 mod open;
 mod organize;
 mod provenance;
 mod reseal;
 mod sharing;
 mod sync_apply;
+mod unanchored;
 mod upload;
 
 use std::collections::{BTreeMap, HashMap};
@@ -68,25 +76,25 @@ use thiserror::Error;
 use uuid::Uuid;
 
 pub use self::album::{AdoptedAlbumKeys, AlbumKeyEscrowPlan};
+pub use self::backup::PeerExport;
 use self::drops::{InboxEntry, IssuedLink};
 pub use self::enrollment::{
     ENROLLMENT_NONCE_LEN, ENROLLMENT_PAYLOAD_VERSION, EnrolleeKeys, EnrollmentPayload,
     EnrollmentPayloadError, InitiatorKeys, MAX_ENROLLMENT_PAYLOAD_CHARS, enrollment_safety_code,
 };
-pub use self::migrate_unsigned::{
-    LEGACY_FOLD_KEY, MigrationSkip, UnmigratedShape, UnmigratedSidecar, UnsignedMigrationOptions,
-    UnsignedMigrationReport, unmigrated_sidecars,
-};
 pub use self::open::HardwareDekBinding;
+pub use self::organize::{FeedDrain, PurgeOutcome, TrashEntry};
 pub use self::reseal::{ResealOutcome, ResealRefusal};
 pub use self::sync_apply::{
-    QuarantineReason, RemoteAssetFacts, RemoteEntry, RemoteHead, RemoteOriginal, SyncApplyOutcome,
-    hash_ciphertext_from,
+    Adoption, QuarantineReason, RemoteAssetFacts, RemoteEntry, RemoteHead, RemoteOriginal,
+    SyncApplyOutcome, hash_ciphertext_from,
 };
+pub use self::unanchored::{UnanchoredShape, UnanchoredSidecar, unanchored_sidecars};
 pub use self::upload::{
-    DerivativeBlob, OPAQUE_CONTENT_TYPE, OriginalCiphertext, UploadBundle,
+    DerivativeBlob, OPAQUE_CONTENT_TYPE, OriginalChanged, OriginalCiphertext, UploadBundle,
     WIRE_ORIGINAL_CONTENT_TYPES, wire_content_type,
 };
+pub use crate::account::HardwareSignerBinding;
 use crate::db::DatabaseDriver;
 use crate::library::{Library, LibraryError};
 
@@ -99,6 +107,22 @@ pub enum LifecycleError {
     /// Unknown album / asset id.
     #[error("not found: {0}")]
     NotFound(String),
+    /// A restore or purge named an asset that is not in the trash. Nothing was written.
+    #[error("asset {0} is not in the trash")]
+    NotInTrash(Uuid),
+    /// A peer copy named an asset this workspace purged: its tombstone refuses every copy, so
+    /// a purged asset is never resurrected. Nothing was written.
+    #[error("asset {0} was purged; its tombstone refuses any copy")]
+    Purged(Uuid),
+    /// A `trash-restore` at or after the signed `retention_until` of the asset's `delete`
+    /// record. Nothing was written; the asset stays in the trash until it is purged.
+    #[error("asset {asset_id}'s retention window closed at {retention_until}")]
+    RetentionElapsed {
+        /// The asset the restore was asked for.
+        asset_id: Uuid,
+        /// The signed retention floor the restore came too late for (RFC 3339).
+        retention_until: String,
+    },
     /// An asset failed its own `verify_asset` self-check (a bug — should never happen).
     #[error("verify_asset self-check failed: {0:?}")]
     SelfVerify(VerifyOutcome),
@@ -106,6 +130,11 @@ pub enum LifecycleError {
     /// the sidecar the workspace just wrote does not round-trip to the committed hash).
     #[error("metadata binding self-check failed: {0:?}")]
     MetadataUnbound(MetadataBinding),
+    /// A restored asset's sealed metadata blob (a backup's, or a peer delta's) is not the one
+    /// its chain commits to, or does not open, decode or verify under the account's user IK.
+    /// Nothing of the asset is written.
+    #[error("restored metadata refused: {0}")]
+    RestoredMetadata(String),
     /// Cryptographic error.
     #[error(transparent)]
     Crypto(#[from] CryptoError),
@@ -139,6 +168,21 @@ pub enum LifecycleError {
     /// on the wire is not what the asset's provenance vouches for.
     #[error("asset {0}: re-derived ciphertext does not match the manifest's ciphertext_hash")]
     CiphertextMismatch(Uuid),
+    /// The plaintext original handed to [`adopt_remote_original`](Workspace::adopt_remote_original)
+    /// does not hash to the digest the entry's signed sidecar commits to: it is not the original
+    /// the chokepoint vouched for. Nothing of the asset was written.
+    #[error("asset {0}: the original handed over does not hash to its signed sidecar's digest")]
+    OriginalMismatch(Uuid),
+    /// [`upload_bundle`](Workspace::upload_bundle) was asked for an asset whose `create` binds a
+    /// metadata blob the library no longer holds: an edit replaced it before the library kept
+    /// the create's blob beside the chain, so neither copy answers the create's
+    /// `metadata_blob_hash`. An upload carries the create, so it cannot be built; nothing was
+    /// sent.
+    #[error(
+        "asset {0}: the metadata blob its create record binds was replaced by a later edit, so \
+         the create cannot be uploaded"
+    )]
+    CreateMetadataSuperseded(Uuid),
     /// [`create_album_with_id`](Workspace::create_album_with_id) was called for an album that
     /// already holds key material. Minting over it would discard the AMKs every existing asset in
     /// that album was encrypted under, so it is refused; use
@@ -487,15 +531,25 @@ pub struct Workspace {
     /// a client refills this from it, so there is nothing here to lose.
     inbox: HashMap<DropId, InboxEntry>,
     /// The `{uuid}.cbor` files under `media/` that no provenance chain anchors, found at
-    /// [`open`](Self::open): unsigned pre-signed-path sidecars awaiting
-    /// [`migrate_unsigned_sidecars`](Self::migrate_unsigned_sidecars), or the debris of an
-    /// interrupted run. Recomputed by the verb; empty for a signed-only library.
-    unmigrated: Vec<UnmigratedSidecar>,
+    /// [`open`](Self::open): the debris of an interrupted write, a torn or foreign file, or a
+    /// retired unsigned record. Empty for a library with no debris.
+    unanchored: Vec<UnanchoredSidecar>,
+    /// The purged assets, each with the whole provenance chain a purge keeps on disk, headed
+    /// by the `delete` that ended it. This is the peering tombstone the workspace owns, and the
+    /// chain a held delete (and an early purge's re-issue) is delivered from once the server
+    /// indexes the create. It is filled by [`purge_at`](Self::purge_at) and, on
+    /// [`open`](Self::open), from every kept chain whose head is a `delete` with no sidecar
+    /// beside it, so a reopen or rebuild reproduces it from the provenance file alone.
+    purged: BTreeMap<Uuid, ProvenanceChain>,
 }
 
 fn now_rfc3339() -> String {
     Timestamp::now().to_string()
 }
+
+/// The shard subdirectory holding the metadata blob each superseded `create` binds
+/// ([`Workspace::create_metadata_blob_path`]).
+const CREATE_METADATA_DIR: &str = "create-metadata";
 
 fn media_dir(root: &Path, capture_utc: i64) -> PathBuf {
     let date = Timestamp::from_second(capture_utc)
@@ -604,6 +658,34 @@ impl Workspace {
     fn metadata_blob_path(&self, asset: &AssetState) -> PathBuf {
         media_dir(&self.root, asset.capture_utc)
             .join(format!("{}.metadata.bin", asset.asset_id.simple()))
+    }
+    /// `media/{YYYY}/{YYYY-MM}/create-metadata/{uuid}.bin` — the **exact** sealed metadata blob
+    /// the asset's `create` record binds, kept once a later edit has replaced
+    /// [`AssetState::metadata_blob`] (written by `append_lifecycle`, read by
+    /// [`upload_bundle`](Self::upload_bundle)).
+    ///
+    /// An upload carries the create, and the server takes the create only with the bytes its
+    /// `metadata_blob_hash` names, which cannot be re-sealed. So the first edit copies them here
+    /// before it replaces them, and they stay for the asset's life, whichever servers have since
+    /// taken the create: only a purge removes them. (A re-seal never meets one: it replaces only
+    /// a chain that is its create alone, and the file appears with the first record after it.)
+    ///
+    /// A subdirectory of the shard rather than a `{uuid}.*` sibling, so a client that predates it
+    /// cannot take it for the original (its `original_extension` reads only `{uuid}.*` names);
+    /// a library without the file reads exactly as before.
+    fn create_metadata_blob_path_of(&self, asset: &AssetState) -> PathBuf {
+        media_dir(&self.root, asset.capture_utc)
+            .join(CREATE_METADATA_DIR)
+            .join(format!("{}.bin", asset.asset_id.simple()))
+    }
+
+    /// The on-disk path of the metadata blob kept for a managed asset's `create` record, or
+    /// `None` for an unknown id. The file exists only once an edit superseded that blob. Exposed
+    /// so a client test can stand in for a library written before the blob was kept.
+    pub fn create_metadata_blob_path(&self, asset_id: &Uuid) -> Option<PathBuf> {
+        self.assets
+            .get(asset_id)
+            .map(|asset| self.create_metadata_blob_path_of(asset))
     }
 
     /// The plaintext bytes of a managed asset (reads from disk).

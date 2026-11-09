@@ -16,6 +16,20 @@
 //! answers zero for it, and [`ShareStore::names_live`] is asked instead. A link that is revoked
 //! or past its expiry holds nothing, so its blobs fall back to the ordinary mark-then-sweep.
 //!
+//! A **pulled album's metadata blob** is the third (#1141). The egress pull worker writes each
+//! pulled page's metadata blobs into the same blob store and records each job's claim on them
+//! (`federation_pulled_metadata_blobs`), and neither the index nor a share link names them. A
+//! collector given the claims ([`CollectionContext::with_held_blobs`]) asks [`HeldBlobs::holds`]
+//! for a blob nothing else references, and treats a held blob as live: never marked, never
+//! swept, and unmarked if a mark is found on it. The puller puts a blob before its claim
+//! commits, so the sweep itself goes through [`HeldBlobs::sweep_unless_held`], which asks again
+//! and removes under a per-address exclusion no such commit can be inside of: the removal lands
+//! wholly before the commit's put, which then stores the bytes again, or wholly after its
+//! claim is visible, which keeps them. A claim that cannot be read fails the pass, so
+//! "could not ask" is never read as "unreferenced". A job forgotten (its `federation_pulled_albums`
+//! row deleted, cascading to its claims) holds nothing, and its blobs fall back to the ordinary
+//! mark-then-sweep.
+//!
 //! A **tombstoned** asset still holds its references. Deleting is not purging: the bytes stay
 //! until the retention window the user signed into the delete manifest has passed, which is
 //! what makes trash recoverable.
@@ -74,6 +88,17 @@
 //! that sweep over the whole view — see [`ProgressSweep`]. A dry run skips it, because it
 //! removes entries, and a dry run removes nothing.
 //!
+//! # The pass also sweeps expired account activity (#1112)
+//!
+//! The account activity log deletes an account's expired events when that account records
+//! again, so an account that stopped recording keeps them until something sweeps the table
+//! (design/activity-log.md, Retention). A collection pass carrying the activity store
+//! ([`CollectionContext::with_activity_sweep`]) ends by deleting every event recorded before
+//! [`crate::activity::horizon`] of its own clock, in batches of [`ACTIVITY_SWEEP_BATCH`] so no
+//! statement holds locks on more rows than that. A dry run counts them instead and deletes
+//! nothing; both report the number as [`CollectionReport::expired_activity`]. The sweep reads
+//! no blob and no asset row, and deletes nothing but activity events past retention.
+//!
 //! # A purge is ledgered before it is applied (#767)
 //!
 //! The owner ledger is never rewritten, so a retention purge appends a purge entry to the
@@ -99,6 +124,7 @@ use std::sync::Arc;
 
 use jiff::{SignedDuration, Timestamp};
 
+use crate::activity::ActivityStore;
 use crate::attestation::AttestationContext;
 use crate::blob::{BlobStore, ContentAddress};
 use crate::index::{AssetIndex, AssetRow, PurgeOutcome, purge_refusal};
@@ -112,6 +138,13 @@ use crate::store::{AssetId, StoreError, StoreFuture, UploadSessionStore};
 /// Long enough for an in-flight finalization retry to re-reference it, and short enough that an
 /// orphan is not held forever. The design's range is 24–72 hours.
 pub const DEFAULT_GRACE_WINDOW: SignedDuration = SignedDuration::from_hours(24);
+
+/// The most expired activity events one sweep statement deletes.
+///
+/// The sweep deletes in batches of this size until a batch comes back short, so a backlog of any
+/// size never holds row locks on more than this many events at once, and an append to the same
+/// table waits on at most one batch.
+pub const ACTIVITY_SWEEP_BATCH: usize = 1_000;
 
 /// Whether a pass may change anything.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,6 +190,11 @@ pub struct CollectionReport {
     /// is exactly the complaint this exists to answer, and an operator needs to be able to say
     /// what the pass gave back and to whom.
     pub credited: Vec<(crate::store::UserId, u64)>,
+    /// Account activity events past retention: deleted by an applied pass, counted by a dry run.
+    ///
+    /// A count rather than a list: the events are the owners' records, and their ids name
+    /// nothing an operator acts on. Zero when the collector carries no activity store.
+    pub expired_activity: u64,
 }
 
 /// What one purge pass found.
@@ -232,6 +270,40 @@ impl ProgressSweep for Arc<dyn UploadSessionStore> {
     }
 }
 
+/// The claims pulled albums hold on metadata blobs no asset row names (#1141).
+///
+/// A reference port of one question rather than the whole pulled-album store, because one
+/// question is all the collector and the scrub ask of it, and so a test can make it fail.
+/// An implementation only ever *adds* references: answering `true` keeps a blob, and nothing a
+/// caller does with the answer deletes anything.
+pub trait HeldBlobs: std::fmt::Debug + Send + Sync {
+    /// Whether any pulled album holds the blob at `address`.
+    ///
+    /// # Errors
+    ///
+    /// A store failure, which the collector treats as fatal to the pass: a claim it could not
+    /// read is not a claim it may assume absent.
+    fn holds<'a>(&'a self, address: &'a ContentAddress) -> StoreFuture<'a, bool>;
+
+    /// Ask [`Self::holds`] again and, only if nothing holds `address`, run `sweep`, excluding
+    /// every commit that would claim `address` from the question until `sweep` has finished.
+    /// Answers whether the blob was held, in which case `sweep` never ran.
+    ///
+    /// The exclusion is what makes the sweep safe against a commit in flight: a puller writes a
+    /// metadata blob into the blob store *before* its claim commits, so without it a collector
+    /// could read "not held" between that put and that commit and remove bytes the commit is
+    /// about to name. Held for one address and one sweep, never across a pass.
+    ///
+    /// # Errors
+    ///
+    /// A store failure asking, which leaves `sweep` unrun, or the failure `sweep` returned.
+    fn sweep_unless_held<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+        sweep: StoreFuture<'a, ()>,
+    ) -> StoreFuture<'a, bool>;
+}
+
 /// The collector's collaborators.
 #[derive(Debug, Clone)]
 pub struct CollectionContext {
@@ -247,6 +319,10 @@ pub struct CollectionContext {
     progress: Option<Arc<dyn ProgressSweep>>,
     /// Set by [`Self::with_attestation`]; `None` refuses an applied purge.
     attestation: Option<AttestationContext>,
+    /// Set by [`Self::with_activity_sweep`]; `None` sweeps no activity events.
+    activity: Option<Arc<dyn ActivityStore>>,
+    /// Set by [`Self::with_held_blobs`]; `None` counts no pulled-album claim as a reference.
+    held: Option<Arc<dyn HeldBlobs>>,
 }
 
 impl CollectionContext {
@@ -270,7 +346,21 @@ impl CollectionContext {
             grace_window,
             progress: None,
             attestation: None,
+            activity: None,
+            held: None,
         }
+    }
+
+    /// The same collector, counting every claim `held` answers for as a reference (#1141).
+    ///
+    /// A builder rather than a constructor argument, unlike the share links: the pulled-album
+    /// store is federation's, and a collector over a blob store no puller writes has no claims to
+    /// ask about. Every assembly whose blob store a puller writes must call it, which `boot` does
+    /// on both arms (`serve` and `gc` alike).
+    #[must_use]
+    pub fn with_held_blobs(mut self, held: Arc<dyn HeldBlobs>) -> Self {
+        self.held = Some(held);
+        self
     }
 
     /// The same collector, ledgering every purge it applies through `attestation` (#767).
@@ -291,6 +381,17 @@ impl CollectionContext {
     #[must_use]
     pub fn with_progress_sweep(mut self, sweep: Arc<dyn ProgressSweep>) -> Self {
         self.progress = Some(sweep);
+        self
+    }
+
+    /// The same collector, ending every pass with a sweep of `activity`'s expired events: deleted
+    /// by an applied pass, counted by a dry run (#1112).
+    ///
+    /// A builder for the reason [`Self::with_progress_sweep`] is: the sweep is housekeeping the
+    /// pass carries for another store.
+    #[must_use]
+    pub fn with_activity_sweep(mut self, activity: Arc<dyn ActivityStore>) -> Self {
+        self.activity = Some(activity);
         self
     }
 
@@ -343,6 +444,7 @@ pub async fn collect(
     }
 
     sweep_progress(context, now, mode).await?;
+    report.expired_activity = sweep_activity(context, now, mode).await?;
 
     tracing::info!(
         marked = report.marked.len(),
@@ -350,6 +452,7 @@ pub async fn collect(
         swept = report.swept.len(),
         reprieved = report.reprieved.len(),
         dangling = report.dangling.len(),
+        expired_activity = report.expired_activity,
         "a collection pass finished"
     );
     Ok(report)
@@ -373,6 +476,62 @@ async fn sweep_progress(
     Ok(())
 }
 
+/// Sweep the activity log's expired events, if this collector carries the store: delete them
+/// in batches on an applied pass, count them on a dry run. Answers how many.
+///
+/// The instant is [`crate::activity::horizon`] of the pass's clock, the same one every read
+/// hides events before, so the sweep deletes only what no read could return.
+async fn sweep_activity(
+    context: &CollectionContext,
+    now: Timestamp,
+    mode: Mode,
+) -> Result<u64, StoreError> {
+    let Some(activity) = &context.activity else {
+        return Ok(0);
+    };
+    let before = crate::activity::horizon(now);
+    if !mode.applies() {
+        let expired = activity.count_expired(before).await?;
+        tracing::info!(expired, %before, "a dry run counted the expired activity events");
+        return Ok(expired);
+    }
+    let mut deleted = 0_u64;
+    let mut batches = 0_u64;
+    loop {
+        let batch = activity
+            .delete_expired(before, ACTIVITY_SWEEP_BATCH)
+            .await?;
+        deleted = deleted.saturating_add(batch);
+        batches += 1;
+        tracing::debug!(batch, deleted, "deleted a batch of expired activity events");
+        if batch < u64::try_from(ACTIVITY_SWEEP_BATCH).unwrap_or(u64::MAX) {
+            break;
+        }
+    }
+    tracing::info!(deleted, batches, %before, "swept the expired activity events");
+    Ok(deleted)
+}
+
+/// Whether a pulled album holds `address`, when this collector counts their claims.
+pub(crate) async fn held_by(
+    held: Option<&Arc<dyn HeldBlobs>>,
+    address: &ContentAddress,
+) -> Result<bool, StoreError> {
+    let Some(held) = held else {
+        return Ok(false);
+    };
+    let holds = held.holds(address).await.inspect_err(|error| {
+        tracing::error!(
+            %address,
+            %error,
+            "the pulled-album claims could not be read; the pass stops rather than treat the \
+             blob as unreferenced"
+        );
+    })?;
+    tracing::trace!(%address, holds, "asked the pulled-album claims");
+    Ok(holds)
+}
+
 /// Decide one blob.
 async fn visit(
     context: &CollectionContext,
@@ -386,15 +545,19 @@ async fn visit(
     // and a blob a link serves must outlive the link's ability to serve it. Asked only when no
     // asset holds the blob, which is the rare case, so the ordinary blob costs one query.
     let shared = references == 0 && context.shares.names_live(address, now).await?;
+    // A pulled album's claim is a reference too (#1141), asked last for the same reason. An
+    // error here fails the pass: a claim that could not be read is never assumed absent.
+    let held = references == 0 && !shared && held_by(context.held.as_ref(), address).await?;
     let marked_since = context.marks.marked_since(address).await?;
 
-    if references > 0 || shared {
+    if references > 0 || shared || held {
         // Live. If it was marked, a reference reappeared during the window and the mark goes.
         if marked_since.is_some() {
             tracing::info!(
                 %address,
                 references,
                 shared,
+                held,
                 "a mark was cancelled: a reference reappeared"
             );
             if mode.applies() {
@@ -420,18 +583,40 @@ async fn visit(
         return Ok(());
     }
 
-    // Past the window at zero references. The count was just re-read, which is the
-    // re-confirmation the contract asks for — the arm above is what fires when it disagrees.
+    // Past the window at zero references. The count, the links and the pulled-album claims were
+    // just re-read, which is the re-confirmation the contract asks for — the arm above is what
+    // fires when any of them disagrees.
     tracing::info!(%address, marked_since = %since, "sweeping an unreferenced blob");
     if mode.applies() {
-        context
-            .blobs
-            .remove(address)
-            .await
-            .map_err(|error| StoreError::Unavailable {
-                store: "blobs",
-                detail: error.to_string(),
-            })?;
+        let removal: StoreFuture<'_, ()> = Box::pin(async move {
+            context
+                .blobs
+                .remove(address)
+                .await
+                .map(drop)
+                .map_err(|error| StoreError::Unavailable {
+                    store: "blobs",
+                    detail: error.to_string(),
+                })
+        });
+        // A pulled album's commit puts its metadata blob before its claim commits, so the claim
+        // is asked once more under the exclusion that keeps such a commit out until the removal
+        // is done (#1141). A claim found there is a reference that appeared during the window.
+        let held = if let Some(held) = context.held.as_ref() {
+            held.sweep_unless_held(address, removal).await?
+        } else {
+            removal.await?;
+            false
+        };
+        if held {
+            tracing::info!(
+                %address,
+                "a mark was cancelled: a pulled album claimed the blob as it was swept"
+            );
+            context.marks.unmark(address).await?;
+            report.unmarked.push(address.clone());
+            return Ok(());
+        }
         context.marks.unmark(address).await?;
         // The credit belongs **here**, to the sweep, and after the removal.
         //

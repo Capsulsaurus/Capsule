@@ -7,6 +7,7 @@ pub(crate) mod region;
 pub mod shape;
 pub mod sidecar_v1;
 pub(crate) mod signed_doc;
+pub(crate) mod smart_album;
 pub(crate) mod stack_doc;
 
 pub use album_doc::{ALBUM_DOC_SCHEMA_V1, AlbumDocV1};
@@ -23,4 +24,5 @@ pub use sidecar_v1::{
     StackMembership, StackRole,
 };
 pub use signed_doc::DocError;
+pub use smart_album::{LabelContext, LabelLevel};
 pub use stack_doc::{STACK_DOC_SCHEMA_V1, StackDocV1};

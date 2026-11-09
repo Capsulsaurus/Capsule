@@ -99,8 +99,8 @@ pub(crate) const SIBLING_LOG_SUFFIXES: [&str; 4] = [
 
 /// Whether a file name under `media/` names an asset's sidecar: exactly `{uuid}.cbor`, never one
 /// of the [sibling logs](SIBLING_LOG_SUFFIXES). The one filter `rebuild_index`, `Workspace::open`
-/// and the unsigned-sidecar migration share, so a new sibling cannot be added to one walk and
-/// parsed as a sidecar by another.
+/// and the unanchored-sidecar scan (`lifecycle/unanchored.rs`) share, so a new sibling cannot be
+/// added to one walk and parsed as a sidecar by another.
 pub(crate) fn is_sidecar_file_name(name: &str) -> bool {
     // Exact-case on purpose: the library writes every one of these names itself, lowercase.
     Path::new(name).extension().is_some_and(|ext| ext == "cbor")

@@ -58,6 +58,11 @@ async fn a_stored_escrow_comes_back_byte_for_byte() {
         .await
         .json();
     assert_eq!(body["replaced"], false);
+    assert_eq!(
+        fixture.activity_kinds(&support::user()).await,
+        [capsule_server::activity::ActivityKind::SignInPassword],
+        "a first escrow invalidates no recovery secret, so the log records only the sign-in"
+    );
 
     let fetched = fetch(&fixture, &bearer, StatusCode::OK).await;
     assert_eq!(
@@ -84,6 +89,14 @@ async fn a_rotation_replaces_the_escrow_and_the_old_one_is_gone() {
     assert_eq!(
         body["replaced"], true,
         "a rotation and a first escrow are different events, and a client acts on which it was"
+    );
+    assert_eq!(
+        fixture.activity_kinds(&support::user()).await,
+        [
+            capsule_server::activity::ActivityKind::EscrowReplaced,
+            capsule_server::activity::ActivityKind::SignInPassword
+        ],
+        "the rotation is a credential change the owner's log records"
     );
 
     let fetched = fetch(&fixture, &bearer, StatusCode::OK).await;

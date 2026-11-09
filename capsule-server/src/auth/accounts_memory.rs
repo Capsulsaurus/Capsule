@@ -263,7 +263,7 @@ impl InMemoryAccounts {
         };
         if held.locked(now, self.lockout_attempts, window) {
             tracing::debug!(user = %held.user_id, "a credential presentation met a lockout");
-            return Reservation::Locked;
+            return Reservation::Locked(held.user_id.clone());
         }
         if held
             .last_failure_at
@@ -314,13 +314,13 @@ impl InMemoryAccounts {
                 // difference between an unknown address and a wrong password in the response
                 // time, whatever the body said.
                 self.credentials.absorb_miss(password).await;
-                return Ok(Authentication::Refused);
+                return Ok(Authentication::Refused(None));
             }
-            Reservation::Locked => {
+            Reservation::Locked(user_id) => {
                 // Still absorbed: a locked account that returned instantly would tell an
                 // attacker which addresses they have already spent attempts on.
                 self.credentials.absorb_miss(password).await;
-                return Ok(Authentication::Locked);
+                return Ok(Authentication::Locked(user_id));
             }
             Reservation::Reserved { user_id, stored } => (user_id, stored),
         };
@@ -333,7 +333,7 @@ impl InMemoryAccounts {
             self.settle_success(&user_id);
             Ok(Authentication::Granted(user_id))
         } else {
-            Ok(Authentication::Refused)
+            Ok(Authentication::Refused(Some(user_id)))
         }
     }
 }
@@ -352,8 +352,8 @@ enum Key<'a> {
 enum Reservation {
     /// No account answers to the key, or the one that does holds no credential.
     NoSuchAccount,
-    /// The account is refusing attempts; nothing was charged.
-    Locked,
+    /// This account is refusing attempts; nothing was charged.
+    Locked(UserId),
     /// One failure was charged, and this is what to verify against.
     Reserved {
         user_id: UserId,

@@ -1,5 +1,6 @@
 import AssetKit
 import AVKit
+import CapsuleDomain
 import CapsuleFoundation
 import CapsuleUI
 import ImagePipeline
@@ -25,11 +26,18 @@ struct AssetPageView: View {
 
 // MARK: - Photo
 
+/// The photo, drawn through the render ladder: the single-asset view asks for
+/// the Preview rung at the size it opened at, shows the best rung held at once
+/// — a RAW's embedded preview where it covers the view — and upgrades in place
+/// as a better one is produced.
 private struct PhotoPage: View {
     let asset: Asset
     let mediaLoader: ViewerMediaLoader
     @Environment(\.displayScale) private var displayScale
     @State private var image: PlatformImage?
+    /// What this page shows, and for which asset: passed back on the next load
+    /// so the ladder never downgrades it, and never carried to another asset.
+    @State private var shown: ShownRendition?
 
     var body: some View {
         GeometryReader { geometry in
@@ -43,16 +51,40 @@ private struct PhotoPage: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Keyed on the asset alone, so the surface is the one the page
+            // opened at: a view that later grows keeps its rung.
             .task(id: asset.id) {
-                // Decode with 2× headroom over the screen so pinch-zoom stays sharp.
-                let pixels = CGSize(
-                    width: geometry.size.width * displayScale * 2,
-                    height: geometry.size.height * displayScale * 2
+                let surface = CGSize(
+                    width: geometry.size.width * displayScale,
+                    height: geometry.size.height * displayScale
                 )
-                image = await mediaLoader.fullImage(for: asset, targetSize: pixels)
+                // Decode with 2× headroom over the screen so pinch-zoom stays sharp.
+                let pixels = CGSize(width: surface.width * 2, height: surface.height * 2)
+                let assetID = asset.id
+                let previous = shown?.assetID == assetID ? shown?.rendition : nil
+                if previous == nil {
+                    // Another asset's pixels are never this one's placeholder.
+                    image = nil
+                    shown = nil
+                }
+                await mediaLoader.loadViewerImage(
+                    for: asset,
+                    surface: surface,
+                    targetSize: pixels,
+                    shown: previous
+                ) { frame in
+                    image = frame.image
+                    shown = frame.rendition.map { ShownRendition(assetID: assetID, rendition: $0) }
+                }
             }
         }
     }
+}
+
+/// A rendition a page shows, tied to the asset it was shown for.
+private struct ShownRendition: Equatable {
+    let assetID: Asset.ID
+    let rendition: Rendition
 }
 
 // MARK: - Live Photo

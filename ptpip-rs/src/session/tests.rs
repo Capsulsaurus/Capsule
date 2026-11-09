@@ -385,3 +385,119 @@ fn transaction_ids_wrap_past_the_reserved_values() {
     assert_eq!(session.take_transaction(), 0xFFFF_FFFE);
     assert_eq!(session.take_transaction(), 1);
 }
+
+/// An event channel whose first `timeouts` reads time out before the script replays, setting
+/// `stop_on_timeout` (when given) as they do.
+struct Idle<'a> {
+    timeouts: usize,
+    stop_on_timeout: Option<&'a AtomicBool>,
+    inner: Scripted,
+}
+
+impl Read for Idle<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.timeouts > 0 {
+            self.timeouts -= 1;
+            if let Some(stop) = self.stop_on_timeout {
+                stop.store(true, Ordering::Relaxed);
+            }
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        self.inner.read(buf)
+    }
+}
+
+impl Write for Idle<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.inner.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn event(code: u16) -> Packet {
+    Packet::Event {
+        code,
+        transaction: 0,
+        params: vec![7],
+    }
+}
+
+#[test]
+fn the_event_reader_answers_probes_and_hands_over_events_until_the_channel_closes() {
+    let mut channel = Scripted::new(&[
+        Packet::ProbeRequest,
+        event(0x4002),
+        Packet::ProbeRequest,
+        event(0x400D),
+    ]);
+    let mut seen = Vec::new();
+    let served = serve_events(&mut channel, &AtomicBool::new(false), |e| seen.push(e)).unwrap();
+    assert_eq!(
+        served,
+        EventsServed {
+            events: 2,
+            probes: 2
+        }
+    );
+    assert_eq!(
+        seen.iter().map(|e| e.code).collect::<Vec<_>>(),
+        [0x4002, 0x400D]
+    );
+    assert_eq!(seen[0].params, [7]);
+    assert_eq!(
+        channel.sent_packets(),
+        [Packet::ProbeResponse, Packet::ProbeResponse]
+    );
+}
+
+#[test]
+fn the_event_reader_waits_through_idle_timeouts() {
+    let mut channel = Idle {
+        timeouts: 3,
+        stop_on_timeout: None,
+        inner: Scripted::new(&[Packet::ProbeRequest]),
+    };
+    let served = serve_events(&mut channel, &AtomicBool::new(false), |_| {}).unwrap();
+    assert_eq!(served.probes, 1);
+    assert_eq!(channel.inner.sent_packets(), [Packet::ProbeResponse]);
+}
+
+#[test]
+fn the_event_reader_stops_within_one_idle_timeout_of_being_asked() {
+    let stop = AtomicBool::new(false);
+    let mut channel = Idle {
+        timeouts: 1,
+        stop_on_timeout: Some(&stop),
+        // Never reached: the stop is seen before the next read.
+        inner: Scripted::new(&[Packet::ProbeRequest]),
+    };
+    let served = serve_events(&mut channel, &stop, |_| {}).unwrap();
+    assert_eq!(served, EventsServed::default());
+    assert!(channel.inner.sent.is_empty());
+}
+
+#[test]
+fn the_event_reader_refuses_a_packet_the_event_channel_does_not_carry() {
+    let mut channel = Scripted::new(&[ok(1)]);
+    assert!(matches!(
+        serve_events(&mut channel, &AtomicBool::new(false), |_| {}),
+        Err(Error::UnexpectedPacket {
+            received: PacketType::OperationResponse,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn the_event_reader_fails_on_a_packet_cut_off_midway() {
+    let mut bytes = Packet::ProbeRequest.encode();
+    bytes.extend_from_slice(&event(0x4002).encode()[..6]);
+    let mut channel = Scripted::from_bytes(bytes);
+    assert!(matches!(
+        serve_events(&mut channel, &AtomicBool::new(false), |_| {}),
+        Err(Error::Io(error)) if error.kind() == io::ErrorKind::UnexpectedEof
+    ));
+}

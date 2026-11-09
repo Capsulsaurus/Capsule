@@ -1,7 +1,8 @@
 //! The CLI's machine contract, snapshotted (testing plan, `capsule-cli` row: "Every
 //! subcommand's `--json` output and exit code are a stable contract").
 //!
-//! Each case spawns the real `capsule` binary in a scratch home, with no server and no network,
+//! Each case spawns the real `capsule` binary in a scratch home, with no server and no network
+//! (the `server-info` cases excepted: they talk to a loopback double serving one record),
 //! and snapshots one rendering of the run: its exit status, its stdout and its stderr. A change
 //! to any of the three is a snapshot diff a reviewer accepts (`cargo insta review`, or
 //! `INSTA_UPDATE=always` on the test run) or refuses; CI never writes one. Scratch paths are
@@ -11,7 +12,10 @@
 //! The `--json` subcommands today are `import`, `push`, `restore`, `verify`, `cache budget`,
 //! `cache sweep`, `sync`, `sync reannounce`, `share create`, `share revoke`, `auth login`,
 //! `auth logout`, `auth status`, `label add`, `label remove`, `region add`, `region delete`,
-//! `edit capture-time` and `edit location`; each has its offline cases here, and every `--json`
+//! `edit capture-time`, `edit location`, `show`, `library list`, `camera import`,
+//! `camera identity`, `federation subscribe`, `federation list`, `federation unsubscribe` and
+//! `server-info`; each has its offline cases
+//! here, and every `--json`
 //! subcommand that lands joins this file the same way.
 //! What needs a live server (a push or restore that reaches its assets) is the end-to-end
 //! suites' to cover.
@@ -56,7 +60,28 @@
 //!   no session is stored.
 //! - `auth_logout_json_without_a_session_reports_nothing_signed_out` — exit 0, one JSON document
 //!   saying there was no session to sign out.
-//! - `auth_login_json_with_oidc_is_a_usage_error` — the parser's exit status 2.
+//! - `auth_login_oidc_json_without_a_server_prints_nothing_on_stdout` — `--oidc --json` parses;
+//!   with no server to begin the ceremony: non-zero exit, empty stdout, the progress line and the
+//!   reason on stderr.
+//! - `auth_login_oidc_device_json_without_a_server_prints_nothing_on_stdout` — the same for
+//!   `--oidc --device --json`.
+//! - `server_info_json_without_a_server_prints_nothing_on_stdout` — the record cannot be read:
+//!   non-zero exit, empty stdout, the reason on stderr.
+//! - `server_info_json_reports_a_server_that_refuses_passwords`,
+//!   `server_info_json_reports_a_server_that_accepts_passwords` and
+//!   `server_info_json_reads_a_record_without_the_switch_as_accepting_passwords` — against a
+//!   loopback double serving only the `server-info` record: exit 0, one JSON document with
+//!   `password_disabled` `true`, `false`, and `false` for an older server's record without it.
+//! - `auth_login_json_on_a_server_refusing_passwords_asks_for_nothing` and
+//!   `auth_register_on_a_server_refusing_passwords_asks_for_nothing` — the record says the
+//!   server refuses passwords: non-zero exit before the password is read, the
+//!   `error.auth.password_disabled` message and `--oidc` on stderr.
+//! - `auth_login_json_on_a_server_accepting_passwords_goes_on_to_sign_in`,
+//!   `auth_login_json_on_an_older_server_goes_on_to_sign_in` and
+//!   `auth_login_json_without_a_server_goes_on_to_sign_in` — a record saying `false`, one
+//!   without the switch, and no record at all each let the password sign-in go on to the login
+//!   request: the double signs it in (exit 0, the `LoginReport` with `password_disabled:
+//!   false`), and with no server the login itself fails.
 //! - `share_create_json_over_an_empty_scope_prints_nothing_on_stdout` — a local refusal before
 //!   any request: non-zero exit, empty stdout, the reason on stderr.
 //! - `share_revoke_json_with_a_malformed_id_prints_nothing_on_stdout` — a local refusal before
@@ -85,6 +110,40 @@
 //! - `edit_capture_time_json_reports_the_correction_beside_the_original` — exit 0: the
 //!   instant in UTC and the as-imported one kept.
 //! - `edit_location_json_clear_records_no_location` — `--clear`: exit 0, `location: null`.
+//! - `show_json_reports_the_sidecar_and_its_history` — exit 0, one JSON document: every sidecar
+//!   field (`null` where unset) and the provenance history record by record.
+//! - `show_json_of_an_unknown_asset_prints_nothing_on_stdout` — the selector's refusal:
+//!   non-zero exit, empty stdout, the reason on stderr.
+//! - `library_list_json_lists_the_timeline` — exit 0, one JSON document: the timeline's assets,
+//!   newest first, with their labels.
+//! - `library_list_json_lists_the_albums` — `--view albums`: every album with its labels and
+//!   its assets.
+//! - `library_list_json_lists_a_stack_primary_first` — `--view stacks`: the stack's labels and
+//!   its members, the primary first; the timeline lists only the primary.
+//! - `library_list_json_without_a_library_is_a_usage_error` — the parser's exit status 2.
+//! - `library_list_json_of_an_unknown_view_is_a_usage_error` — the parser's exit status 2.
+//! - `camera_identity_json_reports_a_renamed_identity_and_keeps_it` — exit 0, one JSON
+//!   document: the GUID (redacted) and the name, `created` on the naming run that minted it,
+//!   and otherwise identical on a second run.
+//! - `camera_import_json_with_a_blank_address_prints_nothing_on_stdout` — a run-level failure
+//!   before any library or camera is opened.
+//! - `camera_import_json_without_an_address_opens_the_library_before_looking` — no
+//!   `--address` is not a usage error: the library is opened first, so a library that does not
+//!   open fails the run before the network is browsed. A run that reaches a camera is
+//!   `tests/camera_import.rs`'s, against a scripted responder; discovery's window and choice are
+//!   `camera_discovery`'s unit tests, against a scripted mDNS responder.
+//! - `camera_discover_json_with_an_unbounded_timeout_is_a_usage_error` — the parser's exit
+//!   status 2 for a window of 0 s or over 60 s, before the network is browsed.
+//! - `federation_subscribe_json_without_a_session_prints_nothing_on_stdout` — the token is read
+//!   from stdin, then the run fails without a session: non-zero exit, empty stdout, the reason
+//!   on stderr.
+//! - `federation_subscribe_json_without_an_issuer_is_a_usage_error` — the parser's exit
+//!   status 2.
+//! - `federation_list_json_without_a_session_prints_nothing_on_stdout` — a run-level failure.
+//! - `federation_unsubscribe_json_without_a_session_prints_nothing_on_stdout` — a run-level
+//!   failure.
+//! - `federation_unsubscribe_json_without_an_album_is_a_usage_error` — the parser's exit
+//!   status 2.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -156,6 +215,13 @@ fn strip_ansi(text: &str) -> String {
 /// Run `capsule` with `args` in `scratch`'s home under the `rust_log` filter, the passphrase on
 /// stdin, and return what it exited with and printed.
 fn spawn(scratch: &Scratch, args: &[&str], rust_log: &str) -> Output {
+    // No server is listening here: a case that reached for the network would fail fast
+    // rather than reach a real one.
+    spawn_at(scratch, args, rust_log, "http://127.0.0.1:9")
+}
+
+/// [`spawn`] against the server at `endpoint`.
+fn spawn_at(scratch: &Scratch, args: &[&str], rust_log: &str, endpoint: &str) -> Output {
     let home = scratch.home();
     let mut child = Command::new(env!("CARGO_BIN_EXE_capsule"))
         .args(args)
@@ -167,9 +233,7 @@ fn spawn(scratch: &Scratch, args: &[&str], rust_log: &str) -> Output {
         .env("XDG_CONFIG_HOME", home.join("config"))
         .env("XDG_DATA_HOME", home.join("data"))
         .env("XDG_CACHE_HOME", home.join("cache"))
-        // No server is listening here: a case that reached for the network would fail fast
-        // rather than reach a real one.
-        .env("CAPSULE_ENDPOINT", "http://127.0.0.1:9")
+        .env("CAPSULE_ENDPOINT", endpoint)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -194,7 +258,17 @@ fn spawn(scratch: &Scratch, args: &[&str], rust_log: &str) -> Output {
 
 /// Run `capsule` with `args` and logging off, and render the run as the snapshot sees it.
 fn run(scratch: &Scratch, args: &[&str]) -> String {
-    let out = spawn(scratch, args, "off");
+    render(scratch, &spawn(scratch, args, "off"))
+}
+
+/// [`run`] against the server at `endpoint`, with the endpoint redacted from what it printed.
+fn run_at(scratch: &Scratch, args: &[&str], endpoint: &str) -> String {
+    render(scratch, &spawn_at(scratch, args, "off", endpoint)).replace(endpoint, "[SERVER]")
+}
+
+/// A finished run as the snapshot sees it: its exit status, stdout and stderr, scratch paths
+/// redacted and stderr cut at color-eyre's `Location:` section.
+fn render(scratch: &Scratch, out: &Output) -> String {
     let redact = |text: &[u8]| {
         strip_ansi(&String::from_utf8_lossy(text)).replace(path(&scratch.0), "[SCRATCH]")
     };
@@ -592,9 +666,216 @@ fn auth_logout_json_without_a_session_reports_nothing_signed_out() {
 }
 
 #[test]
-fn auth_login_json_with_oidc_is_a_usage_error() {
+fn auth_login_oidc_json_without_a_server_prints_nothing_on_stdout() {
     let scratch = Scratch::new();
-    insta::assert_snapshot!(run(&scratch, &["auth", "login", "--oidc", "--json"]));
+    insta::assert_snapshot!(run(
+        &scratch,
+        &["auth", "login", "--oidc", "--no-browser", "--json"]
+    ));
+}
+
+#[test]
+fn auth_login_oidc_device_json_without_a_server_prints_nothing_on_stdout() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(
+        &scratch,
+        &["auth", "login", "--oidc", "--device", "--json"]
+    ));
+}
+
+/// A server that answers its `server-info` record with `password_disabled` set to the given
+/// value — or, for `None`, left out as a server predating the switch leaves it out — signs in
+/// any password login it is sent (it does not refuse one itself, so a refusal in a snapshot is
+/// the CLI's), and answers `404` to everything else. It runs on a thread for the life of the test process; its origin is
+/// returned.
+fn serve_server_info(password_disabled: Option<bool>) -> String {
+    use std::io::{BufRead as _, BufReader};
+    let mut auth = serde_json::json!({
+        "login": "/v1/auth/login",
+        "refresh": "/v1/auth/refresh",
+        "logout": "/v1/auth/logout",
+        "oidc": {
+            "authorize": "/v1/auth/oidc/authorize",
+            "callback": "/v1/auth/oidc/callback",
+        },
+    });
+    if let Some(flag) = password_disabled {
+        auth["password_disabled"] = Value::Bool(flag);
+    }
+    let record = serde_json::json!({
+        "server_id": "https://capsule.example.test",
+        "api_base_url": "https://capsule.example.test/v1",
+        "auth": auth,
+        "protocol_version": { "min": "2025-01-01", "max": "2026-01-01" },
+        "signing_key": "AAAA",
+        "signing_algorithm": "Ed25519",
+        "deprecations": [],
+    })
+    .to_string();
+    // A password sign-in that reaches the double is signed in: a token pair good for an hour.
+    let token = serde_json::json!({
+        "access_token": "access",
+        "refresh_token": "refresh",
+        "token_type": "Bearer",
+        "expires_by": jiff::Timestamp::now().as_second() + 3600,
+    })
+    .to_string();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+    let origin = format!("http://{}", listener.local_addr().expect("an address"));
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut reader = BufReader::new(stream.try_clone().expect("a second handle"));
+            let mut request_line = String::new();
+            if reader.read_line(&mut request_line).is_err() {
+                continue;
+            }
+            // Drain the head and the body, so closing the connection resets nothing unread.
+            let mut length = 0;
+            let mut line = String::new();
+            while reader.read_line(&mut line).is_ok_and(|n| n > 2) {
+                if let Some((name, value)) = line.split_once(':')
+                    && name.eq_ignore_ascii_case("content-length")
+                {
+                    length = value.trim().parse().unwrap_or(0);
+                }
+                line.clear();
+            }
+            let mut body = vec![0; length];
+            if std::io::Read::read_exact(&mut reader, &mut body).is_err() {
+                continue;
+            }
+            let (status, body) =
+                if request_line.starts_with("GET /.well-known/capsule/server-info ") {
+                    ("200 OK", record.as_str())
+                } else if request_line.starts_with("POST /v1/auth/login ") {
+                    ("200 OK", token.as_str())
+                } else {
+                    ("404 Not Found", "")
+                };
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\
+                 connection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    origin
+}
+
+#[test]
+fn server_info_json_without_a_server_prints_nothing_on_stdout() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(&scratch, &["server-info", "--json"]));
+}
+
+#[test]
+fn server_info_json_reports_a_server_that_refuses_passwords() {
+    let scratch = Scratch::new();
+    let server = serve_server_info(Some(true));
+    insta::assert_snapshot!(run_at(&scratch, &["server-info", "--json"], &server));
+}
+
+#[test]
+fn server_info_json_reports_a_server_that_accepts_passwords() {
+    let scratch = Scratch::new();
+    let server = serve_server_info(Some(false));
+    insta::assert_snapshot!(run_at(&scratch, &["server-info", "--json"], &server));
+}
+
+#[test]
+fn server_info_json_reads_a_record_without_the_switch_as_accepting_passwords() {
+    let scratch = Scratch::new();
+    let server = serve_server_info(None);
+    insta::assert_snapshot!(run_at(&scratch, &["server-info", "--json"], &server));
+}
+
+#[test]
+fn auth_login_json_on_a_server_refusing_passwords_asks_for_nothing() {
+    let scratch = Scratch::new();
+    let server = serve_server_info(Some(true));
+    insta::assert_snapshot!(run_at(
+        &scratch,
+        &[
+            "auth",
+            "login",
+            "--email",
+            "me@example.test",
+            "--password-stdin",
+            "--json"
+        ],
+        &server
+    ));
+}
+
+#[test]
+fn auth_register_on_a_server_refusing_passwords_asks_for_nothing() {
+    let scratch = Scratch::new();
+    let server = serve_server_info(Some(true));
+    insta::assert_snapshot!(run_at(
+        &scratch,
+        &[
+            "auth",
+            "register",
+            "--email",
+            "me@example.test",
+            "--password-stdin"
+        ],
+        &server
+    ));
+}
+
+#[test]
+fn auth_login_json_on_a_server_accepting_passwords_goes_on_to_sign_in() {
+    let scratch = Scratch::new();
+    let server = serve_server_info(Some(false));
+    insta::assert_snapshot!(run_at(
+        &scratch,
+        &[
+            "auth",
+            "login",
+            "--email",
+            "me@example.test",
+            "--password-stdin",
+            "--json"
+        ],
+        &server
+    ));
+}
+
+#[test]
+fn auth_login_json_on_an_older_server_goes_on_to_sign_in() {
+    let scratch = Scratch::new();
+    let server = serve_server_info(None);
+    insta::assert_snapshot!(run_at(
+        &scratch,
+        &[
+            "auth",
+            "login",
+            "--email",
+            "me@example.test",
+            "--password-stdin",
+            "--json"
+        ],
+        &server
+    ));
+}
+
+#[test]
+fn auth_login_json_without_a_server_goes_on_to_sign_in() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(
+        &scratch,
+        &[
+            "auth",
+            "login",
+            "--email",
+            "me@example.test",
+            "--password-stdin",
+            "--json"
+        ]
+    ));
 }
 
 #[test]
@@ -620,6 +901,51 @@ fn share_create_json_over_an_empty_scope_prints_nothing_on_stdout() {
 fn share_revoke_json_with_a_malformed_id_prints_nothing_on_stdout() {
     let scratch = Scratch::new();
     insta::assert_snapshot!(run(&scratch, &["share", "revoke", "not-an-id", "--json"]));
+}
+
+#[test]
+fn federation_subscribe_json_without_a_session_prints_nothing_on_stdout() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(
+        &scratch,
+        &["federation", "subscribe", "--issuer", "home.test", "--json"]
+    ));
+}
+
+#[test]
+fn federation_subscribe_json_without_an_issuer_is_a_usage_error() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(&scratch, &["federation", "subscribe", "--json"]));
+}
+
+#[test]
+fn federation_list_json_without_a_session_prints_nothing_on_stdout() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(&scratch, &["federation", "list", "--json"]));
+}
+
+#[test]
+fn federation_unsubscribe_json_without_a_session_prints_nothing_on_stdout() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(
+        &scratch,
+        &[
+            "federation",
+            "unsubscribe",
+            "home.test",
+            "album-1",
+            "--json"
+        ]
+    ));
+}
+
+#[test]
+fn federation_unsubscribe_json_without_an_album_is_a_usage_error() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(
+        &scratch,
+        &["federation", "unsubscribe", "home.test", "--json"]
+    ));
 }
 
 /// The one asset `library(scratch, 1)` imported. Opening the workspace here holds its lock
@@ -968,4 +1294,300 @@ fn edit_location_json_clear_records_no_location() {
     assert_eq!(report["edit"], "location-clear");
     assert_eq!(report["changed"], true);
     assert_eq!(report.get("location"), Some(&Value::Null), "{report}");
+}
+
+/// `value` with every string under one of `keys` (or in an array under one) replaced by the
+/// key's marker, at any depth: ids, instants, the signing device and the build's client version
+/// are minted per run or per commit, so they are not part of the contract.
+fn redact_keys(value: &mut Value, keys: &[&str]) {
+    match value {
+        Value::Object(map) => {
+            for (key, inner) in map.iter_mut() {
+                if keys.contains(&key.as_str()) {
+                    let marker = Value::String(format!("[{}]", key.to_ascii_uppercase()));
+                    match inner {
+                        Value::String(_) => *inner = marker,
+                        Value::Array(items) => {
+                            for item in items.iter_mut() {
+                                if item.is_string() {
+                                    *item = marker.clone();
+                                } else {
+                                    redact_keys(item, keys);
+                                }
+                            }
+                        }
+                        _ => redact_keys(inner, keys),
+                    }
+                } else {
+                    redact_keys(inner, keys);
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(|item| redact_keys(item, keys)),
+        _ => {}
+    }
+}
+
+/// The run-time values a `show` or `library list` document carries.
+const MINTED: &[&str] = &[
+    "asset_id",
+    "album_id",
+    "stack_id",
+    "assets",
+    "capture_timestamp",
+    "import_timestamp",
+    "timestamp",
+    "device",
+    "client_version",
+];
+
+/// `run`, with stdout parsed as one JSON document and its [`MINTED`] values redacted.
+fn run_document(scratch: &Scratch, args: &[&str]) -> String {
+    let out = run(scratch, args);
+    let (head, rest) = out
+        .split_once("--- stdout ---\n")
+        .expect("a stdout section");
+    let (stdout, stderr) = rest
+        .split_once("\n--- stderr ---")
+        .expect("a stderr section");
+    let mut document: Value = serde_json::from_str(stdout).expect("one JSON document on stdout");
+    redact_keys(&mut document, MINTED);
+    format!(
+        "{head}--- stdout ---\n{}\n--- stderr ---{stderr}",
+        serde_json::to_string_pretty(&document).expect("render")
+    )
+}
+
+#[test]
+fn show_json_reports_the_sidecar_and_its_history() {
+    let scratch = Scratch::new();
+    library(&scratch, 1);
+    let asset = only_asset(&scratch);
+    let library = scratch.library();
+    let labelled = run(
+        &scratch,
+        &[
+            "label",
+            "add",
+            "beach",
+            "--asset",
+            &asset,
+            "--library",
+            path(&library),
+            "--passphrase-stdin",
+        ],
+    );
+    assert!(labelled.starts_with("status: 0"), "{labelled}");
+    insta::assert_snapshot!(run_document(
+        &scratch,
+        &[
+            "show",
+            &asset,
+            "--library",
+            path(&library),
+            "--passphrase-stdin",
+            "--json",
+        ],
+    ));
+}
+
+#[test]
+fn show_json_of_an_unknown_asset_prints_nothing_on_stdout() {
+    let scratch = Scratch::new();
+    library(&scratch, 0);
+    insta::assert_snapshot!(run(
+        &scratch,
+        &[
+            "show",
+            "0192f1a0-0000-7000-8000-000000000009",
+            "--library",
+            path(&scratch.library()),
+            "--passphrase-stdin",
+            "--json",
+        ],
+    ));
+}
+
+/// `capsule library list` over the scratch library with `extra` arguments and `--json`.
+fn library_list(scratch: &Scratch, extra: &[&str]) -> String {
+    let library = scratch.library();
+    let mut args = vec![
+        "library",
+        "list",
+        "--library",
+        path(&library),
+        "--passphrase-stdin",
+        "--json",
+    ];
+    args.extend_from_slice(extra);
+    run_document(scratch, &args)
+}
+
+#[test]
+fn library_list_json_lists_the_timeline() {
+    let scratch = Scratch::new();
+    library(&scratch, 2);
+    insta::assert_snapshot!(library_list(&scratch, &[]));
+}
+
+#[test]
+fn library_list_json_lists_the_albums() {
+    let scratch = Scratch::new();
+    library(&scratch, 2);
+    insta::assert_snapshot!(library_list(&scratch, &["--view", "albums"]));
+}
+
+#[test]
+fn library_list_json_lists_a_stack_primary_first() {
+    let scratch = Scratch::new();
+    library(&scratch, 2);
+    let stack = uuid::Uuid::now_v7();
+    let (primary, member) = {
+        let mut ws = Workspace::open(&scratch.library(), PASSPHRASE.as_bytes(), FAST_KDF)
+            .expect("open the library");
+        let ids = ws.asset_ids();
+        for (id, role) in [(ids[1], StackRole::Member), (ids[0], StackRole::Primary)] {
+            ws.set_stack_membership(
+                &id,
+                Some(StackMembership {
+                    stack_id: stack,
+                    stack_type: StackType::Burst,
+                    role,
+                    member_index: None,
+                }),
+            )
+            .expect("stack the asset");
+        }
+        ws.add_stack_label(stack, "best").expect("label the stack");
+        (ids[0].to_string(), ids[1].to_string())
+    };
+    let stacks = run_json(&scratch, &["library", "list", "--view", "stacks"]);
+    assert_eq!(stacks["view"], "stacks");
+    assert_eq!(stacks["stacks"][0]["stack_id"], stack.to_string());
+    assert_eq!(stacks["stacks"][0]["labels"], serde_json::json!(["best"]));
+    assert_eq!(
+        stacks["stacks"][0]["members"],
+        serde_json::json!([
+            {"asset_id": primary, "role": "primary"},
+            {"asset_id": member, "role": "member"},
+        ])
+    );
+    let timeline = run_json(&scratch, &["library", "list"]);
+    assert_eq!(timeline["view"], "timeline");
+    let listed: Vec<&Value> = timeline["assets"]
+        .as_array()
+        .expect("an asset list")
+        .iter()
+        .map(|asset| &asset["asset_id"])
+        .collect();
+    assert_eq!(
+        listed,
+        [&Value::String(primary)],
+        "only the primary stands for its stack"
+    );
+    insta::assert_snapshot!(library_list(&scratch, &["--view", "stacks"]));
+}
+
+#[test]
+fn library_list_json_without_a_library_is_a_usage_error() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(&scratch, &["library", "list", "--json"]));
+}
+
+#[test]
+fn library_list_json_of_an_unknown_view_is_a_usage_error() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(
+        &scratch,
+        &[
+            "library",
+            "list",
+            "--library",
+            "lib",
+            "--view",
+            "faces",
+            "--json"
+        ],
+    ));
+}
+
+/// `text` with the value of every `"guid"` line replaced: a camera identity's GUID is minted
+/// fresh, so it is not part of the contract.
+fn redact_guids(text: &str) -> String {
+    text.lines()
+        .map(|line| match line.split_once("\"guid\": \"") {
+            Some((head, _)) => format!("{head}\"guid\": \"[GUID]\","),
+            None => line.to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn camera_identity_json_reports_a_renamed_identity_and_keeps_it() {
+    let scratch = Scratch::new();
+    let named = run(
+        &scratch,
+        &["camera", "identity", "--name", "Contract", "--json"],
+    );
+    let again = run(&scratch, &["camera", "identity", "--json"]);
+    assert!(
+        named.contains("\"created\": true"),
+        "the naming run created the identity:\n{named}"
+    );
+    assert_eq!(
+        named.replace("\"created\": true", "\"created\": false"),
+        again,
+        "the identity persists between runs"
+    );
+    insta::assert_snapshot!(redact_guids(&again));
+}
+
+#[test]
+fn camera_import_json_with_a_blank_address_prints_nothing_on_stdout() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(
+        &scratch,
+        &[
+            "camera",
+            "import",
+            "--address",
+            " ",
+            "--library",
+            "lib",
+            "--passphrase-stdin",
+            "--json"
+        ],
+    ));
+}
+
+#[test]
+fn camera_import_json_without_an_address_opens_the_library_before_looking() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(
+        &scratch,
+        &[
+            "camera",
+            "import",
+            "--library",
+            "lib",
+            "--passphrase-stdin",
+            "--json"
+        ],
+    ));
+}
+
+#[test]
+fn camera_discover_json_with_an_unbounded_timeout_is_a_usage_error() {
+    let scratch = Scratch::new();
+    let zero = run(
+        &scratch,
+        &["camera", "discover", "--timeout", "0", "--json"],
+    );
+    let over = run(
+        &scratch,
+        &["camera", "discover", "--timeout", "61", "--json"],
+    );
+    assert!(over.starts_with("status: 2"), "{over}");
+    insta::assert_snapshot!(zero);
 }

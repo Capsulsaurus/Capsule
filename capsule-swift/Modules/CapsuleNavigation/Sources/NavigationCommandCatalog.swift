@@ -74,7 +74,55 @@ public extension NavigationCommand {
             titleKey: "apple.menu.close_window", systemImage: "xmark",
             shortcut: CommandShortcut("w"), placement: .window
         ),
+    ] + Self.culling
+
+    /// The cull pass: one bare key per verdict and per stack move, so a whole
+    /// pass runs with one hand on the keyboard and the arrows
+    /// (``NavigationAction/nextAsset``, ``NavigationAction/previousAsset``) in
+    /// the other.
+    ///
+    /// P, U and X are the pick, unflag and reject keys every culling tool on the
+    /// platform already taught photographers. Expand and collapse are E and C.
+    /// The sweep alone carries ⌘, on ⌘⌫ — the platform's move-to-trash key —
+    /// because it is the one destructive step, and a bare key would be one stray
+    /// press from a confirmation prompt.
+    private static let culling: [NavigationCommand] = [
+        NavigationCommand(
+            action: .cullPick,
+            titleKey: "apple.menu.culling.pick", systemImage: "flag",
+            shortcut: CommandShortcut("p", modifiers: []), placement: .culling
+        ),
+        NavigationCommand(
+            action: .cullNeutral,
+            titleKey: "apple.menu.culling.unflag", systemImage: "flag.slash",
+            shortcut: CommandShortcut("u", modifiers: []), placement: .culling
+        ),
+        NavigationCommand(
+            action: .cullReject,
+            titleKey: "apple.menu.culling.reject", systemImage: "xmark.circle",
+            shortcut: CommandShortcut("x", modifiers: []), placement: .culling
+        ),
+        NavigationCommand(
+            action: .expandStack,
+            titleKey: "apple.menu.culling.expand_stack", systemImage: "square.stack.3d.down.right",
+            shortcut: CommandShortcut("e", modifiers: []), placement: .culling
+        ),
+        NavigationCommand(
+            action: .collapseStack,
+            titleKey: "apple.menu.culling.collapse_stack", systemImage: "square.stack.3d.up",
+            shortcut: CommandShortcut("c", modifiers: []), placement: .culling
+        ),
+        NavigationCommand(
+            action: .rejectSweep,
+            titleKey: "apple.menu.culling.sweep", systemImage: "trash",
+            shortcut: CommandShortcut(.delete), placement: .culling
+        ),
     ]
+
+    /// Every action the culling surface answers, paging included: the list its
+    /// in-app shortcut sheet shows, in the order a pass uses them.
+    static let cullingPass: [NavigationCommand] =
+        [NavigationAction.nextAsset, .previousAsset].compactMap { Self.command(for: $0) } + Self.culling
 
     /// The commands in one menu, in order.
     static func commands(in placement: CommandPlacement) -> [NavigationCommand] {

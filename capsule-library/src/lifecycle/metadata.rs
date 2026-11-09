@@ -73,6 +73,11 @@ impl Workspace {
     }
 
     /// Set the caption (LWW register) and emit a `metadata-update` provenance record.
+    ///
+    /// An empty `caption` clears it: the register is stamped with `""`, and the index projects
+    /// that as no caption. The index row's `caption` column is refreshed by the same
+    /// `append_lifecycle` write, so the caption reads back from the catalog without a rebuild.
+    #[tracing::instrument(skip(self, caption), fields(asset_id = %asset_id, len = caption.len()))]
     pub fn set_caption(&mut self, asset_id: &Uuid, caption: &str) -> Result<()> {
         let caption = caption.to_string();
         let device = self.account.device.device_id;

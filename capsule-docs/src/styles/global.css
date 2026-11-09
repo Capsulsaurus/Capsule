@@ -1,19 +1,68 @@
-@import url("https://fonts.googleapis.com/css2?family=Geist+Mono:wght@100..900&family=Geist:wght@100..900&display=swap");
+/*
+ * Capsule docs theme. Token values and the rules they implement are owned by
+ * the Visual Language doc (src/content/docs/development/visual-language.md):
+ * change a value there first, then here.
+ *
+ * Fonts are self-hosted, so text never waits on a third-party origin.
+ */
 @import "tailwindcss";
+@import "./api-reference.css";
+@import "./sdk-reference.css";
 
-/* Dark mode colors. */
+/* Upstream Geist 1.9 variable cuts, vendored in src/assets/fonts (see its
+   README). Vite fingerprints them into /_astro/, which public/_headers marks
+   immutable so Cloudflare caches them at the edge. */
+@font-face {
+    font-family: "Geist";
+    font-style: normal;
+    font-weight: 100 900;
+    font-display: swap;
+    src: url("../assets/fonts/Geist-Variable.woff2") format("woff2");
+}
+
+@font-face {
+    font-family: "Geist";
+    font-style: italic;
+    font-weight: 100 900;
+    font-display: swap;
+    src: url("../assets/fonts/Geist-Italic-Variable.woff2") format("woff2");
+}
+
+@font-face {
+    font-family: "Geist Mono";
+    font-style: normal;
+    font-weight: 100 900;
+    font-display: swap;
+    src: url("../assets/fonts/GeistMono-Variable.woff2") format("woff2");
+}
+
 :root {
-    --sl-color-accent-low: #0f2927;
-    --sl-color-accent: #007a75;
-    --sl-color-accent-high: #b2d0cd;
-    --sl-color-white: #ffffff;
-    --sl-color-gray-1: #eceeef;
-    --sl-color-gray-2: #c6c9c9;
-    --sl-color-gray-3: #9fa5a6;
-    --sl-color-gray-4: #54595a;
-    --sl-color-gray-5: #34393a;
-    --sl-color-gray-6: #232828;
-    --sl-color-black: #161919;
+    /* Brand accent: Slate Blue, OKLCH hue 255, chroma 0.09. */
+    --capsule-accent-light-low: #dce9fa;
+    --capsule-accent-light: #3e6596;
+    --capsule-accent-light-high: #173357;
+    --capsule-accent-dark-low: #19273a;
+    --capsule-accent-dark: #7ea7dc;
+    --capsule-accent-dark-high: #a1c7f8;
+
+    /* Neutral ramp: near-grey with the accent hue at chroma 0.006. */
+    --capsule-neutral-50: #f7fafe;
+    --capsule-neutral-100: #eff2f6;
+    --capsule-neutral-200: #e2e5e9;
+    --capsule-neutral-300: #c8cbce;
+    --capsule-neutral-400: #a2a5a8;
+    --capsule-neutral-500: #787a7e;
+    --capsule-neutral-600: #535559;
+    --capsule-neutral-700: #333638;
+    --capsule-neutral-800: #222427;
+    --capsule-neutral-900: #141619;
+    --capsule-neutral-950: #0c0d10;
+
+    /* Radius scale, shared with CapsuleTheme.swift. */
+    --capsule-radius-sm: 8px;
+    --capsule-radius-card: 12px;
+    --capsule-radius-md: 16px;
+    --capsule-radius-lg: 22px;
 
     --sl-font:
         "Geist", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji",
@@ -22,20 +71,149 @@
         "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
         "Liberation Mono", "Courier New", monospace;
 }
-/* Light mode colors. */
+
+/* Dark mode (Starlight's default). */
+:root {
+    --sl-color-accent-low: var(--capsule-accent-dark-low);
+    --sl-color-accent: var(--capsule-accent-dark);
+    --sl-color-accent-high: var(--capsule-accent-dark-high);
+    --sl-color-white: #ffffff;
+    --sl-color-gray-1: var(--capsule-neutral-100);
+    --sl-color-gray-2: var(--capsule-neutral-300);
+    --sl-color-gray-3: var(--capsule-neutral-400);
+    --sl-color-gray-4: var(--capsule-neutral-600);
+    --sl-color-gray-5: var(--capsule-neutral-700);
+    --sl-color-gray-6: var(--capsule-neutral-800);
+    --sl-color-black: var(--capsule-neutral-900);
+}
+
+/* Light mode. */
 :root[data-theme="light"] {
-    --sl-color-accent-low: #c6dcda;
-    --sl-color-accent: #005854;
-    --sl-color-accent-high: #0d3a38;
-    --sl-color-white: #161919;
-    --sl-color-gray-1: #232828;
-    --sl-color-gray-2: #34393a;
-    --sl-color-gray-3: #54595a;
-    --sl-color-gray-4: #878d8e;
-    --sl-color-gray-5: #bfc3c3;
-    --sl-color-gray-6: #eceeef;
-    --sl-color-gray-7: #f5f6f7;
+    --sl-color-accent-low: var(--capsule-accent-light-low);
+    --sl-color-accent: var(--capsule-accent-light);
+    --sl-color-accent-high: var(--capsule-accent-light-high);
+    --sl-color-white: var(--capsule-neutral-900);
+    --sl-color-gray-1: var(--capsule-neutral-800);
+    --sl-color-gray-2: var(--capsule-neutral-700);
+    --sl-color-gray-3: var(--capsule-neutral-600);
+    --sl-color-gray-4: var(--capsule-neutral-500);
+    --sl-color-gray-5: var(--capsule-neutral-300);
+    --sl-color-gray-6: var(--capsule-neutral-100);
+    --sl-color-gray-7: var(--capsule-neutral-50);
     --sl-color-black: #ffffff;
+}
+
+/* Header: a translucent bar, the web's analogue of the apps' glass chrome. */
+.header {
+    background-color: color-mix(
+        in srgb,
+        var(--sl-color-black) 78%,
+        transparent
+    );
+    backdrop-filter: saturate(160%) blur(14px);
+    -webkit-backdrop-filter: saturate(160%) blur(14px);
+    border-bottom-color: color-mix(
+        in srgb,
+        var(--sl-color-gray-5) 60%,
+        transparent
+    );
+}
+
+/* Sidebar: the same surface as the page, divided by a hairline, so it reads
+   as part of the page rather than a slab beside it. */
+:root,
+:root[data-theme="light"] {
+    --sl-color-bg-sidebar: var(--sl-color-bg);
+}
+
+.sidebar-pane {
+    border-inline-end-color: var(--sl-color-hairline);
+}
+
+/* The current page: an accent-tinted pill, not a solid accent block. */
+.sidebar-content a[aria-current="page"],
+.sidebar-content a[aria-current="page"]:hover,
+.sidebar-content a[aria-current="page"]:focus {
+    color: var(--sl-color-text-accent);
+    background-color: var(--sl-color-accent-low);
+    border-radius: var(--capsule-radius-sm);
+}
+
+/* Front-page hero: the theme-matched app screenshot. */
+.hero-shot {
+    width: min(100%, 18rem);
+    height: auto;
+    filter: drop-shadow(0 18px 40px rgb(0 0 0 / 0.18));
+}
+
+:root[data-theme="light"] .hero-shot-dark,
+:root:not([data-theme="light"]) .hero-shot-light {
+    display: none;
+}
+
+/* Cards take the brand accent rather than Starlight's rotating palette. */
+.card {
+    --sl-card-border: var(--sl-color-accent);
+    --sl-card-bg: var(--sl-color-accent-low);
+}
+
+.card .icon {
+    color: var(--sl-color-text-accent);
+}
+
+/* Status badges: tinted pills in the body font, readable without shouting.
+   `-high` is the readable-text end of each Starlight hue in both themes. */
+:root {
+    --sl-badge-caution-text: var(--sl-color-orange-high);
+    --sl-badge-caution-bg: color-mix(
+        in srgb,
+        var(--sl-color-orange) 14%,
+        transparent
+    );
+    --sl-badge-caution-border: color-mix(
+        in srgb,
+        var(--sl-color-orange) 45%,
+        transparent
+    );
+    --sl-badge-success-text: var(--sl-color-green-high);
+    --sl-badge-success-bg: color-mix(
+        in srgb,
+        var(--sl-color-green) 14%,
+        transparent
+    );
+    --sl-badge-success-border: color-mix(
+        in srgb,
+        var(--sl-color-green) 45%,
+        transparent
+    );
+}
+
+.sl-badge {
+    font-family: var(--sl-font);
+    font-weight: 500;
+    border-radius: 999px;
+}
+
+.sidebar-content .sl-badge {
+    font-size: 0.6875rem;
+    padding: 0.0625rem 0.4rem;
+    white-space: nowrap;
+}
+
+/* Quieter, rounder content surfaces. */
+.sl-markdown-content :is(.expressive-code .frame, table),
+.card,
+.sl-link-card {
+    border-radius: var(--capsule-radius-card);
+}
+
+.sl-markdown-content .starlight-aside {
+    border-radius: var(--capsule-radius-sm);
+    border-inline-start-width: 3px;
+}
+
+.sl-markdown-content :is(h1, h2, h3) {
+    letter-spacing: -0.015em;
 }
 
 .sl-markdown-content > ul > li {
@@ -43,4 +221,125 @@
     list-style-type: disc;
     list-style-position: outside;
     margin-left: 1.5rem;
+}
+
+/*
+ * Blog posts. A post's content is the Markdown body that opens with the
+ * plugin's metadata block, so `:has(> .sl-blog-metadata)` scopes these rules
+ * to posts without touching docs pages. Prose gets a reading measure and a
+ * looser rhythm than reference docs.
+ */
+.sl-markdown-content:has(> .sl-blog-metadata) {
+    --capsule-measure: 68ch;
+    font-size: 1.0625rem;
+    line-height: 1.75;
+}
+
+.sl-markdown-content:has(> .sl-blog-metadata)
+    > :is(p, ul, ol, blockquote, h2, h3, h4) {
+    max-inline-size: var(--capsule-measure);
+}
+
+.sl-markdown-content:has(> .sl-blog-metadata) > :is(h2, h3) {
+    margin-block-start: 2.5rem;
+}
+
+.sl-markdown-content:has(> .sl-blog-metadata) figure figcaption {
+    margin-block-start: 0.5rem;
+    color: var(--sl-color-gray-3);
+    font-size: var(--sl-text-sm);
+    text-align: center;
+}
+
+/* Metadata: the date, last update and reading time on one line, then the
+   authors with their avatars, divided from the body by a hairline. Author
+   rules are scoped under `.sl-blog-metadata-authors` so they outrank the
+   plugin's own component styles, which load after this file. */
+.sl-blog-metadata {
+    padding-block-end: 1.5rem;
+    margin-block-end: 2rem;
+    border-block-end: 1px solid var(--sl-color-hairline);
+}
+
+.sl-blog-metadata-items {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.25rem 0.5rem;
+    color: var(--sl-color-gray-3);
+}
+
+.sl-blog-metadata-items > * + *::before {
+    content: "·";
+    margin-inline-end: 0.5rem;
+    color: var(--sl-color-gray-4);
+}
+
+.sl-blog-metadata-authors .sl-blog-author-picture {
+    width: 2.25rem;
+    height: 2.25rem;
+    border: 1px solid var(--sl-color-hairline);
+}
+
+.sl-blog-metadata-authors .sl-blog-author-name {
+    font-size: var(--sl-text-sm);
+}
+
+.sl-blog-metadata-authors .sl-blog-author[href] .sl-blog-author-name {
+    color: var(--sl-color-white);
+}
+
+.sl-blog-metadata-authors .sl-blog-author[href]:hover .sl-blog-author-name {
+    color: var(--sl-color-text-accent);
+}
+
+.sl-blog-metadata-authors .sl-blog-author-title {
+    color: var(--sl-color-gray-3);
+}
+
+/* Tags: accent pills, like the header's current section. */
+.sl-blog-tags .sl-blog-tag {
+    padding: 0.125rem 0.625rem;
+    border: 0;
+    border-radius: 999px;
+    background: var(--sl-color-accent-low);
+    color: var(--sl-color-text-accent);
+    font-size: var(--sl-text-xs);
+    font-weight: 500;
+    text-decoration: none;
+}
+
+/* The index: each post a quiet card with its excerpt. */
+.sl-blog-preview {
+    padding: 1.5rem;
+    border: 1px solid var(--sl-color-hairline);
+    border-radius: var(--capsule-radius-md);
+}
+
+.sl-blog-preview-title {
+    letter-spacing: -0.015em;
+}
+
+/* Diagrams: Mermaid compiled to inline SVG (src/lib/remark-mermaid.mjs),
+   centred on a hairline card. */
+.sl-markdown-content .diagram {
+    margin-block: 1.5rem;
+    padding: 1.25rem 1rem 0.75rem;
+    border: 1px solid var(--sl-color-hairline);
+    border-radius: var(--capsule-radius-card);
+    overflow-x: auto;
+    text-align: center;
+}
+
+/* Natural size, never scaled down: a diagram's text stays the size of the
+   page's small text, and a wide one scrolls inside its card. */
+.sl-markdown-content .diagram svg {
+    max-width: none;
+    height: auto;
+}
+
+.sl-markdown-content figure.diagram figcaption {
+    margin-top: 0.5rem;
+    color: var(--sl-color-gray-3);
+    font-size: var(--sl-text-sm);
 }

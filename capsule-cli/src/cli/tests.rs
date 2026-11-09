@@ -20,6 +20,20 @@ fn arg<'a>(command: &'a Value, id: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("argument `{id}` is described"))
 }
 
+/// **The committed `cli-surface.json` is this tree, byte for byte.** The same comparison
+/// `mise run cli-surface-check` makes, run by `cargo test` too, so a changed `clap` attribute
+/// fails locally before CI. The fix is `mise run cli-surface`.
+#[test]
+fn the_committed_surface_matches_the_tree() {
+    let committed = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("cli-surface.json");
+    let committed = std::fs::read_to_string(&committed).expect("the committed surface is readable");
+    assert!(
+        committed == command_tree_json(),
+        "capsule-cli/cli-surface.json is stale against the command tree; run \
+         `mise run cli-surface` and commit the result"
+    );
+}
+
 /// The property the committed artifact and its `--check` gate rest on. A tree that
 /// varied between calls would fail `cli-surface-check` on a tree nobody changed.
 #[test]
@@ -273,6 +287,81 @@ fn bare_capsule_off_a_terminal_is_the_help_usage_error() {
         clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
     );
     assert_eq!(error.exit_code(), 2);
+}
+
+/// `capsule push` takes the path snapshot from its flags, and each maps onto the SDK's sample.
+#[test]
+fn push_takes_the_path_snapshot_from_flags() {
+    use capsule_sdk::net::path::{PathCost, PathInterface, PowerState, ThermalState};
+
+    let cli = try_parse_from(
+        false,
+        [
+            "capsule",
+            "push",
+            "--library",
+            "lib",
+            "--path-cost",
+            "metered",
+            "--path-interface",
+            "cellular",
+            "--power",
+            "low-power",
+            "--thermal",
+            "serious",
+            "--background-deadline",
+            "30",
+        ],
+    )
+    .expect("parses");
+    let Some(Commands::Push { path, .. }) = cli.command else {
+        panic!("a push");
+    };
+    assert_eq!(
+        path.flags(),
+        crate::cache::PathFlags {
+            cost: Some(PathCost::Metered),
+            interface: Some(PathInterface::Cellular),
+            power: Some(PowerState::LowPower),
+            thermal: Some(ThermalState::Serious),
+            background_deadline: Some(std::time::Duration::from_secs(30)),
+        }
+    );
+
+    let bare = try_parse_from(false, ["capsule", "push", "--library", "lib"]).expect("parses");
+    let Some(Commands::Push { path, .. }) = bare.command else {
+        panic!("a push");
+    };
+    assert_eq!(path.flags(), crate::cache::PathFlags::default());
+}
+
+/// `capsule auth activity` takes an optional limit and the `--json` switch.
+#[test]
+fn auth_activity_parses_its_limit_and_json() {
+    let cli = try_parse_from(
+        false,
+        ["capsule", "auth", "activity", "--limit", "5", "--json"],
+    )
+    .expect("parses");
+    assert!(matches!(
+        cli.command,
+        Some(Commands::Auth {
+            command: AuthCommands::Activity {
+                limit: Some(5),
+                json: true
+            }
+        })
+    ));
+    let bare = try_parse_from(false, ["capsule", "auth", "activity"]).expect("parses");
+    assert!(matches!(
+        bare.command,
+        Some(Commands::Auth {
+            command: AuthCommands::Activity {
+                limit: None,
+                json: false
+            }
+        })
+    ));
 }
 
 /// A subcommand parses the same whether or not a terminal is attached.

@@ -132,14 +132,29 @@ impl Workspace {
         self.albums.contains_key(album_id)
     }
 
-    /// Every album this workspace holds key material for, as `(album_id, name)`.
+    /// Every album this workspace holds key material for, as `(album_id, name)`, in the album
+    /// order ([`AlbumRecency`](crate::db::AlbumRecency)): the album with the most recent
+    /// visible, untrashed asset first; an empty album by its id's creation time; ties by
+    /// ascending id. Every client lists albums in this order rather than sorting its own.
+    ///
+    /// Recency is read from the index on each call. Should that read fail, the albums are
+    /// listed by creation time and id alone (logged at `ERROR`): a listing that is complete but
+    /// coarser rather than one that loses albums.
+    #[tracing::instrument(level = "debug", skip_all, fields(albums = self.albums.len()))]
     pub fn albums(&self) -> Vec<(Uuid, String)> {
         let mut out: Vec<(Uuid, String)> = self
             .albums
             .values()
             .map(|a| (a.album_id, a.name.clone()))
             .collect();
-        out.sort_by_key(|(id, _)| *id);
+        let recency = self.library.db.album_recency().unwrap_or_else(|error| {
+            tracing::error!(
+                %error,
+                "album recency unreadable from the index; listing albums by creation time"
+            );
+            crate::db::AlbumRecency::default()
+        });
+        recency.sort(&mut out, |(id, _)| id.to_string());
         out
     }
 

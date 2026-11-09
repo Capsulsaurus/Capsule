@@ -353,3 +353,34 @@ fn an_opaque_id_is_a_hundred_and_twenty_eight_bits_of_lowercase_hex() {
     assert!(!is_opaque_id("0123456789abcdef"));
     assert!(!is_opaque_id("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e6f"));
 }
+
+#[test]
+fn every_deposit_failure_is_recorded_under_a_catalog_code() {
+    use capsule_i18n::error_codes;
+
+    use super::deposit::DepositFailure;
+
+    let cases = [
+        (
+            DepositFailure::ContentHashMismatch {
+                expected: "a".into(),
+                actual: "b".into(),
+            },
+            error_codes::UPLOAD_CONTENT_HASH_MISMATCH,
+        ),
+        (
+            DepositFailure::StorageInconsistent {
+                expected: 4096,
+                on_disk: None,
+            },
+            error_codes::UPLOAD_STORAGE_INCONSISTENT,
+        ),
+        (
+            DepositFailure::Unavailable("down".into()),
+            error_codes::DROP_UNAVAILABLE,
+        ),
+    ];
+    for (failure, code) in cases {
+        assert_eq!(failure.code(), code, "{failure}");
+    }
+}

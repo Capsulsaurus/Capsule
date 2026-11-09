@@ -1,9 +1,203 @@
 use clap::{CommandFactory as _, Parser as _};
 
 use super::{
-    Cli, CollectionReport, Command, Mode, PurgeReport, QuotaAction, RebuildReport, ScrubReport,
-    mode, render_collection, render_purge, render_rebuild, render_scrub,
+    Cli, CollectionReport, Command, Mode, ModerationCommand, PeerAction, PurgeReport, QuotaAction,
+    RebuildReport, ScrubReport, mode, render_block, render_collection, render_peer, render_pin,
+    render_purge, render_rebuild, render_reports, render_scrub, render_size_repair,
 };
+use crate::federation::{BlockOutcome, Blocked, PeerId, PeerRecord, PinOutcome};
+
+#[test]
+fn the_peer_and_moderation_acts_are_maintenance_commands_that_carry_their_backend() {
+    let backend = ["--memory", "--blob-root", "/var/lib/capsule/blobs"];
+    let argvs: [&[&str]; 5] = [
+        &["peer", "pin", "other.test", "AAAA"],
+        &["peer", "block", "other.test", "--note", "spam"],
+        &["peer", "unblock", "other.test"],
+        &["peer", "show", "other.test"],
+        &["moderation", "reports"],
+    ];
+    for argv in argvs {
+        let cli = Cli::parse_from(
+            std::iter::once("capsule-server")
+                .chain(argv.iter().copied())
+                .chain(backend),
+        );
+        assert_eq!(
+            cli.command.demands(),
+            crate::config::Demands::Maintenance,
+            "{argv:?}: an operator's act needs no key material"
+        );
+        let overrides = cli.command.overrides(None);
+        assert!(overrides.memory, "{argv:?}");
+        assert_eq!(
+            overrides.blob_root.as_deref(),
+            Some(std::path::Path::new("/var/lib/capsule/blobs")),
+            "{argv:?}"
+        );
+        match cli.command {
+            Command::Peer { action } => assert_eq!(action.peer(), "other.test", "{argv:?}"),
+            Command::Moderation {
+                action: ModerationCommand::Reports { .. },
+            } => {}
+            other => panic!("{argv:?} parsed as {other:?}"),
+        }
+    }
+    let cli = Cli::parse_from([
+        "capsule-server",
+        "peer",
+        "block",
+        "other.test",
+        "--note",
+        "spam",
+    ]);
+    let Command::Peer {
+        action: PeerAction::Block { note, .. },
+    } = cli.command
+    else {
+        panic!("that is the subcommand that was parsed")
+    };
+    assert_eq!(note.as_deref(), Some("spam"));
+}
+
+#[test]
+fn a_peer_act_says_what_changed() {
+    let peer = PeerId::new("other.test");
+    assert_eq!(
+        render_pin(&peer, PinOutcome::Pinned),
+        "peer key pinned: other.test"
+    );
+    assert_eq!(
+        render_pin(&peer, PinOutcome::Rotated),
+        "peer key replaced: other.test"
+    );
+    assert_eq!(
+        render_pin(&peer, PinOutcome::Unchanged),
+        "peer key already pinned: other.test"
+    );
+    assert_eq!(
+        render_block(
+            &peer,
+            Blocked {
+                outcome: BlockOutcome::Blocked,
+                revoked: 3
+            }
+        ),
+        "peer blocked: other.test (3 live grants revoked)"
+    );
+    assert_eq!(
+        render_block(
+            &peer,
+            Blocked {
+                outcome: BlockOutcome::AlreadyBlocked,
+                revoked: 0
+            }
+        ),
+        "peer already blocked: other.test (0 live grants revoked)"
+    );
+}
+
+#[test]
+fn a_peer_record_shows_its_key_tier_and_block_with_free_text_escaped() {
+    let peer = PeerId::new("other.test");
+    let now = jiff::Timestamp::UNIX_EPOCH;
+    assert_eq!(
+        render_peer(&peer, None, now).to_string(),
+        "peer not recorded: other.test\n"
+    );
+
+    let record = PeerRecord {
+        server_id: peer.clone(),
+        signing_key: Some([0; 32]),
+        first_seen_at: now,
+        blocked_at: Some(now),
+        note: Some("line\u{1b}[2Jbreak".to_owned()),
+    };
+    let shown = render_peer(&peer, Some(&record), now).to_string();
+    assert!(
+        shown.contains("signing key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="),
+        "{shown}"
+    );
+    assert!(shown.contains("tier: probation"), "{shown}");
+    assert!(shown.contains("blocked since:"), "{shown}");
+    assert!(
+        !shown.contains('\u{1b}'),
+        "a control character in the note reaches the terminal escaped: {shown}"
+    );
+
+    let unblocked = PeerRecord {
+        signing_key: None,
+        blocked_at: None,
+        note: None,
+        ..record
+    };
+    let later = crate::store::deadline(now, crate::counter::budgets::PEER_PROBATION);
+    let shown = render_peer(&peer, Some(&unblocked), later).to_string();
+    assert!(shown.contains("signing key: none pinned"), "{shown}");
+    assert!(shown.contains("tier: established"), "{shown}");
+    assert!(shown.contains("blocked: no"), "{shown}");
+}
+
+#[test]
+fn the_report_queue_lists_every_report_with_the_peers_reason_escaped() {
+    assert_eq!(
+        render_reports(&[]).to_string(),
+        "federated reports (0 on file)\n"
+    );
+    let at = jiff::Timestamp::UNIX_EPOCH;
+    let report = crate::moderation::FederatedReport {
+        report_id: "01937b7c-0000-7000-8000-0000000000r1".to_owned(),
+        reporting_server: "other.test".to_owned(),
+        reported_user: crate::store::UserId::new("bob"),
+        asset_hash: "ab".repeat(32),
+        album_id: crate::store::AlbumId::new("album-1"),
+        reason: Some("spam\u{7}".to_owned()),
+        reported_at: at,
+        received_at: at,
+        signature: Vec::new(),
+        signed: Vec::new(),
+    };
+    let shown = render_reports(std::slice::from_ref(&report)).to_string();
+    assert!(
+        shown.starts_with("federated reports (1 on file)\n"),
+        "{shown}"
+    );
+    for fact in [
+        "report 01937b7c-0000-7000-8000-0000000000r1",
+        "from: other.test",
+        "against: bob",
+        "in album \"album-1\"",
+        "reason: \"spam\\u{7}\"",
+    ] {
+        assert!(shown.contains(fact), "{fact}: {shown}");
+    }
+}
+
+#[test]
+fn the_report_queue_escapes_a_peers_asset_hash_and_album_id() {
+    // Intake trims and length-caps these and nothing more, so a pinned peer chooses them: an
+    // ANSI erase or an OSC 52 clipboard write must reach the operator's terminal escaped.
+    let at = jiff::Timestamp::UNIX_EPOCH;
+    let report = crate::moderation::FederatedReport {
+        report_id: "01937b7c-0000-7000-8000-0000000000r2".to_owned(),
+        reporting_server: "other.test".to_owned(),
+        reported_user: crate::store::UserId::new("bob"),
+        asset_hash: "\u{1b}[2J".to_owned(),
+        album_id: crate::store::AlbumId::new("\u{1b}]52;c;cHduZWQ=\u{7}"),
+        reason: None,
+        reported_at: at,
+        received_at: at,
+        signature: Vec::new(),
+        signed: Vec::new(),
+    };
+    let shown = render_reports(std::slice::from_ref(&report)).to_string();
+    assert!(!shown.contains('\u{1b}'), "{shown:?}");
+    assert!(!shown.contains('\u{7}'), "{shown:?}");
+    assert!(
+        shown.contains("asset: \"\\u{1b}[2J\" in album \"\\u{1b}]52;c;cHduZWQ=\\u{7}\""),
+        "{shown}"
+    );
+}
 
 #[test]
 fn the_command_line_is_well_formed() {
@@ -151,6 +345,25 @@ fn a_collection_pass_names_the_blobs_rather_than_counting_them() {
 }
 
 #[test]
+fn a_collection_pass_reports_the_expired_activity_it_deleted_or_would_delete() {
+    let report = CollectionReport {
+        expired_activity: 42,
+        ..CollectionReport::default()
+    };
+    let applied = render_collection(&report, Mode::Apply).to_string();
+    assert!(
+        applied.contains("expired activity events (deleted 42)"),
+        "{applied}"
+    );
+    assert!(!applied.contains("nothing to do"), "{applied}");
+    let dry = render_collection(&report, Mode::DryRun).to_string();
+    assert!(
+        dry.contains("expired activity events (would delete 42)"),
+        "{dry}"
+    );
+}
+
+#[test]
 fn a_purge_reports_what_is_still_waiting() {
     // "Why has this not gone yet" is exactly the question a dry run is run to answer.
     let report = PurgeReport {
@@ -257,6 +470,54 @@ fn a_rebuild_is_a_dry_run_unless_applied() {
 }
 
 #[test]
+fn a_size_repair_is_a_maintenance_dry_run_unless_applied() {
+    let dry = Cli::parse_from(["capsule-server", "repair-sizes", "--memory"]).command;
+    assert!(matches!(dry, Command::RepairSizes { apply: false, .. }));
+    assert!(matches!(dry.demands(), crate::config::Demands::Maintenance));
+    let applied = Cli::parse_from(["capsule-server", "repair-sizes", "--apply"]).command;
+    assert!(matches!(applied, Command::RepairSizes { apply: true, .. }));
+}
+
+#[test]
+fn a_size_repair_report_names_every_reference_and_its_posture() {
+    use crate::ledger::rebuild::sizes::{Resized, SizeRepairReport, ZeroSized};
+    use crate::store::{AssetId, BlobRole};
+
+    let reference = |name: &str, role| ZeroSized {
+        asset: AssetId::new(name),
+        role,
+        address: crate::blob::ContentAddress::parse(&"ab".repeat(32)).expect("an address"),
+    };
+    let report = SizeRepairReport {
+        applied: false,
+        repaired: vec![Resized {
+            reference: reference("fixed", BlobRole::Provenance),
+            size: 812,
+        }],
+        moved: vec![Resized {
+            reference: reference("raced", BlobRole::Metadata),
+            size: 9,
+        }],
+        missing: vec![reference("lost", BlobRole::Original)],
+        empty: vec![reference("hollow", BlobRole::Metadata)],
+    };
+    let rendered = render_size_repair(&report, Mode::DryRun).to_string();
+    assert!(rendered.contains("dry run"), "{rendered}");
+    assert!(rendered.contains("repaired (1)"), "{rendered}");
+    assert!(rendered.contains("fixed provenance"), "{rendered}");
+    assert!(rendered.contains("-> 812 bytes"), "{rendered}");
+    assert!(rendered.contains("moved before repair"), "{rendered}");
+    assert!(rendered.contains("blob missing, kept (1)"), "{rendered}");
+    assert!(rendered.contains("lost original"), "{rendered}");
+    assert!(rendered.contains("blob empty, kept (1)"), "{rendered}");
+    assert!(rendered.contains("hollow metadata"), "{rendered}");
+
+    let quiet = render_size_repair(&SizeRepairReport::default(), Mode::Apply).to_string();
+    assert!(quiet.contains("applied"), "{quiet}");
+    assert!(quiet.contains("nothing to do"), "{quiet}");
+}
+
+#[test]
 fn a_rebuild_report_names_what_it_restored_and_what_it_found() {
     use crate::ledger::ChainFault;
     use crate::ledger::directory::{DirectoryFault, Refusal};
@@ -294,6 +555,20 @@ fn a_rebuild_report_names_what_it_restored_and_what_it_found() {
         links_only: true,
         owners: vec![owner],
         orphans: vec![address(0xDD)],
+        pulled_drift: vec![
+            crate::quota::PulledDrift {
+                user: crate::store::UserId::new("drifted-total"),
+                stored: 14,
+                derived: 9,
+                holdings: false,
+            },
+            crate::quota::PulledDrift {
+                user: crate::store::UserId::new("drifted-refs"),
+                stored: 9,
+                derived: 9,
+                holdings: true,
+            },
+        ],
     };
     let rendered = render_rebuild(&report, Mode::DryRun).to_string();
     for expected in [
@@ -313,6 +588,9 @@ fn a_rebuild_report_names_what_it_restored_and_what_it_found() {
         "ledger entry 3 (the directory copy is missing)",
         "needs a new sync epoch",
         "orphans, left to gc (1)",
+        "pulled quota totals that drifted, would rebuild (2)",
+        "drifted-total: stored 14, derived 9\n",
+        "drifted-refs: stored 9, derived 9, holdings differ",
     ] {
         assert!(
             rendered.contains(expected),
@@ -366,8 +644,18 @@ fn a_rebuild_report_names_the_way_out_of_a_caught_rewrite() {
             ),
         ],
         orphans: Vec::new(),
+        pulled_drift: vec![crate::quota::PulledDrift {
+            user: crate::store::UserId::new("drifted"),
+            stored: 3,
+            derived: 1,
+            holdings: false,
+        }],
     };
     let rendered = render_rebuild(&report, Mode::Apply).to_string();
+    assert!(
+        rendered.contains("pulled quota totals that drifted, rebuilt (1)"),
+        "{rendered}"
+    );
     assert!(
         rendered.contains("rebuild --apply --accept-rewrites"),
         "{rendered}"

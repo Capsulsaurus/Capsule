@@ -581,7 +581,7 @@ async fn e2e_case_6_a_recovery_whose_directory_join_fails_leaves_nothing_behind(
 async fn e2e_case_6_the_cli_escrow_command_sets_up_what_recover_restores() {
     let server = Server::boot().await;
     // An account no library has published a directory for: the CLI library below is its only
-    // one, so the recovery publishes the account's first directory.
+    // one, so its escrow publishes the account's first directory (#920).
     let (signed_in, account_id) = register_without_a_directory(&server).await;
 
     let home = tempfile::tempdir().expect("a temp CLI home");
@@ -689,6 +689,15 @@ async fn e2e_case_6_the_cli_escrow_command_sets_up_what_recover_restores() {
         .fetch_sealed_identity()
         .await
         .expect("the sealed identity is stored beside the escrow");
+    // #920: the account had no directory, so the escrow published the bound library's own, and
+    // the server accepts what this device uploads.
+    let directory = DirectoryClient::new(signed_in.clone(), &server.auth_base());
+    let escrowed = directory
+        .fetch(account_id, &library.user_ik_public())
+        .await
+        .expect("the escrow published the account's first directory");
+    assert_eq!(&escrowed, library.device_directory());
+    assert!(escrowed.device(&library.device_id()).is_some());
 
     // A second setup without --replace would retire the secret just shown: refused, and the
     // secret is never minted.
@@ -727,15 +736,19 @@ async fn e2e_case_6_the_cli_escrow_command_sets_up_what_recover_restores() {
     assert_eq!(recovered.default_album_id(), library.default_album_id());
     assert_ne!(recovered.device_id(), library.device_id());
 
-    // #625: with no directory published for the account, the recovered library's own — the new
-    // device alone, at version 1 — became the account's first.
-    let published = DirectoryClient::new(signed_in.clone(), &server.auth_base())
+    // #625: the recovery extended the directory the escrow published with the new device,
+    // keeping the escrowed library's.
+    let published = directory
         .fetch(account_id, &library.user_ik_public())
         .await
-        .expect("the account's first directory fetches and verifies");
-    assert_eq!(published.core.directory_version, 1);
+        .expect("the account's directory fetches and verifies");
+    assert_eq!(
+        published.core.directory_version,
+        escrowed.core.directory_version + 1
+    );
     assert_eq!(&published, recovered.device_directory());
     assert!(published.device(&recovered.device_id()).is_some());
+    assert!(published.device(&library.device_id()).is_some());
     drop(recovered);
 
     // --replace stores a new escrow, and the first secret stops opening it.

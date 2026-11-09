@@ -180,6 +180,14 @@ impl Harness {
         address
     }
 
+    /// Store `bytes` and name them as a lifecycle op's blob, at their size.
+    async fn op_blob(&self, bytes: &[u8]) -> crate::index::OpBlob {
+        crate::index::OpBlob {
+            address: self.store(bytes).await,
+            size: bytes.len() as u64,
+        }
+    }
+
     /// Publish `asset` holding `bytes` as a derivative, and return the address.
     async fn publish(&self, asset: &str, bytes: &[u8]) -> ContentAddress {
         let id = AssetId::new(asset);
@@ -245,7 +253,7 @@ impl Harness {
                     .chain_head,
                 amk_version: 1,
                 provenance: self
-                    .store(format!("{asset}-delete-manifest").as_bytes())
+                    .op_blob(format!("{asset}-delete-manifest").as_bytes())
                     .await,
                 original: None,
                 metadata: None,
@@ -612,7 +620,7 @@ async fn a_restore_clears_the_retention_floor() {
             manifest_hash: Hash32([2; 32]),
             prior_provenance_hash: head,
             amk_version: 1,
-            provenance: h.store(b"restored-manifest").await,
+            provenance: h.op_blob(b"restored-manifest").await,
             original: None,
             metadata: None,
             retention_until: None,
@@ -907,6 +915,16 @@ impl AssetIndex for RacesTheListing {
         self.inner.set_hold(asset, hold)
     }
 
+    fn repair_blob_size<'a>(
+        &'a self,
+        asset: &'a AssetId,
+        role: BlobRole,
+        address: &'a ContentAddress,
+        size: u64,
+    ) -> crate::index::IndexFuture<'a, crate::index::SizeRepair> {
+        self.inner.repair_blob_size(asset, role, address, size)
+    }
+
     fn reference_count<'a>(
         &'a self,
         address: &'a ContentAddress,
@@ -1064,7 +1082,7 @@ async fn a_restore_between_listing_and_purge_keeps_its_bytes() {
         manifest_hash: Hash32([2; 32]),
         prior_provenance_hash: before.chain_head,
         amk_version: 1,
-        provenance: h.store(b"raced-restore-manifest").await,
+        provenance: h.op_blob(b"raced-restore-manifest").await,
         original: None,
         metadata: None,
         retention_until: None,
@@ -1134,7 +1152,7 @@ async fn a_restore_after_the_window_is_refused_and_the_purge_proceeds() {
             manifest_hash: Hash32([2; 32]),
             prior_provenance_hash: before.chain_head,
             amk_version: 1,
-            provenance: h.store(b"late-restore-manifest").await,
+            provenance: h.op_blob(b"late-restore-manifest").await,
             original: None,
             metadata: None,
             retention_until: None,
@@ -1309,9 +1327,11 @@ async fn the_upload_session_store_sweeps_through_its_pressure_listing() {
                 blob_role: BlobRole::Original,
                 intent_id: None,
                 manifest_envelope: "{}".to_owned(),
-                received_bytes: 0,
+                committed: crate::store::CommittedSet::default(),
+                in_flight_cap: 1,
                 total_size: 1,
                 status: crate::store::upload::UploadSessionStatus::Pending,
+                failure_code: None,
                 created_at: clock.now(),
                 last_progress_at: clock.now(),
             })
@@ -1612,4 +1632,374 @@ async fn a_purge_dry_run_appends_nothing_to_the_ledger() {
         .await
         .expect("a pass");
     assert!(h.ledger_entries().await.is_empty());
+}
+
+/// An activity log holding `expired` events per account in `stale` recorded a day after the
+/// epoch, one event recorded exactly at the horizon of `now`, and one inside the window.
+async fn activity_log(
+    stale: &[&str],
+    expired: usize,
+    now: Timestamp,
+) -> Arc<crate::activity::InMemoryActivity> {
+    use crate::activity::{ActivityEvent, ActivityKind};
+    let log = Arc::new(crate::activity::InMemoryActivity::new());
+    let event = |user: &str, n: usize, at: Timestamp| ActivityEvent {
+        event_id: format!("{user}-{n}"),
+        user_id: crate::store::UserId::new(user),
+        kind: ActivityKind::SignOut,
+        at,
+        request_id: None,
+        session_id: None,
+        subject: None,
+    };
+    for user in stale {
+        for n in 0..expired {
+            log.record(
+                event(user, n, Timestamp::UNIX_EPOCH + days(1)),
+                Timestamp::MIN,
+            )
+            .await
+            .expect("a record");
+        }
+    }
+    let horizon = crate::activity::horizon(now);
+    log.record(event("active", 0, horizon), Timestamp::MIN)
+        .await
+        .expect("a record");
+    log.record(event("active", 1, now), Timestamp::MIN)
+        .await
+        .expect("a record");
+    log
+}
+
+#[tokio::test]
+async fn an_applied_pass_deletes_every_accounts_expired_activity_in_batches() {
+    let h = Harness::new();
+    h.clock.advance(days(100));
+    let now = h.clock.now();
+    // More expired events than one batch, across accounts that stopped recording.
+    let per_account = ACTIVITY_SWEEP_BATCH / 2 + 3;
+    let log = activity_log(&["gone-quiet", "also-quiet"], per_account, now).await;
+    let context = h.context.clone().with_activity_sweep(log.clone());
+
+    let report = collect(&context, Mode::Apply).await.expect("a pass");
+
+    assert_eq!(
+        report.expired_activity,
+        u64::try_from(per_account * 2).expect("a small count")
+    );
+    assert_eq!(
+        log.count_expired(crate::activity::horizon(now))
+            .await
+            .expect("a count"),
+        0,
+        "no event past retention remains, for any account"
+    );
+    for user in ["gone-quiet", "also-quiet"] {
+        let held = log
+            .recent(&crate::store::UserId::new(user), Timestamp::MIN, usize::MAX)
+            .await
+            .expect("a read");
+        assert!(held.is_empty(), "{user} still holds {held:?}");
+    }
+    let active = log
+        .recent(
+            &crate::store::UserId::new("active"),
+            Timestamp::MIN,
+            usize::MAX,
+        )
+        .await
+        .expect("a read");
+    assert_eq!(
+        active.len(),
+        2,
+        "the event at the horizon and the one inside the window are kept"
+    );
+}
+
+#[tokio::test]
+async fn a_dry_run_counts_the_expired_activity_and_deletes_none() {
+    let h = Harness::new();
+    h.clock.advance(days(100));
+    let now = h.clock.now();
+    let log = activity_log(&["gone-quiet"], 3, now).await;
+    let context = h.context.clone().with_activity_sweep(log.clone());
+
+    let report = collect(&context, Mode::DryRun).await.expect("a pass");
+
+    assert_eq!(report.expired_activity, 3);
+    assert_eq!(
+        log.count_expired(crate::activity::horizon(now))
+            .await
+            .expect("a count"),
+        3,
+        "a dry run deletes nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_collector_without_the_activity_store_sweeps_no_activity() {
+    let h = Harness::new();
+    h.clock.advance(days(100));
+
+    let report = collect(&h.context, Mode::Apply).await.expect("a pass");
+
+    assert_eq!(report.expired_activity, 0);
+}
+
+// ===========================================================================================
+// Pulled albums' held metadata blobs (#1141)
+// ===========================================================================================
+
+/// Pull one page carrying `bytes` as a metadata blob into `pulled` for `album`, putting the
+/// bytes in the harness's blob store as the durable adapter does, and answer their address.
+async fn pull_metadata_blob(
+    h: &Harness,
+    pulled: &crate::federation::pull::InMemoryPulledAlbums,
+    album: &str,
+    bytes: &[u8],
+) -> ContentAddress {
+    use crate::federation::pull::PulledAlbums as _;
+    use crate::federation::pull::pulled::{Committed, PulledAlbum, ValidatedPage};
+    let address = h.store(bytes).await;
+    let job = crate::federation::pull::JobKey::new(
+        crate::federation::PeerId::new("home.gc.test"),
+        AlbumId::new(album),
+    );
+    let page = ValidatedPage {
+        entries: Vec::new(),
+        metadata_blobs: std::collections::BTreeMap::from([(hash_bytes(bytes), bytes.to_vec())]),
+        state: PulledAlbum {
+            cursor: Some("c1".to_owned()),
+            high_water: Some(1),
+            ..PulledAlbum::default()
+        },
+    };
+    assert_eq!(
+        pulled.commit(&job, None, page).await.expect("a commit"),
+        Committed::Written
+    );
+    address
+}
+
+/// The regression #1141 is: a pulled page's metadata blob has no asset row and no share link,
+/// and the collector swept it once the grace window passed.
+#[tokio::test]
+async fn a_blob_a_pulled_album_holds_outlives_the_grace_window() {
+    let h = Harness::new();
+    let pulled = Arc::new(crate::federation::pull::InMemoryPulledAlbums::new());
+    let context = h.context.clone().with_held_blobs(pulled.clone());
+    let held = pull_metadata_blob(&h, &pulled, "held", b"a pulled album's metadata blob").await;
+    let orphan = h.store(b"an orphan beside it").await;
+
+    let report = collect(&context, Mode::Apply).await.expect("a pass");
+    assert_eq!(report.marked, vec![orphan.clone()], "{report:?}");
+    h.clock.advance(days(3));
+    let report = collect(&context, Mode::Apply).await.expect("a pass");
+    assert_eq!(report.swept, vec![orphan], "past the window: {report:?}");
+    assert!(
+        h.blobs.stat(&held).await.expect("stat").is_some(),
+        "a held pulled metadata blob must outlive the grace window"
+    );
+    assert_eq!(h.marks.marked_since(&held).await.expect("a lookup"), None);
+}
+
+/// Without the claims the same blob is an orphan: the case above is what the builder buys.
+#[tokio::test]
+async fn a_collector_not_given_the_claims_sweeps_a_pulled_blob() {
+    let h = Harness::new();
+    let pulled = crate::federation::pull::InMemoryPulledAlbums::new();
+    let held = pull_metadata_blob(&h, &pulled, "unclaimed", b"a blob nobody told gc about").await;
+
+    collect(&h.context, Mode::Apply).await.expect("a pass");
+    h.clock.advance(days(3));
+    let report = collect(&h.context, Mode::Apply).await.expect("a pass");
+    assert_eq!(report.swept, vec![held]);
+}
+
+/// A blob marked before a pulled album held it — the crash orphan a later commit re-holds, or
+/// a page committed mid-window — has its mark cancelled, not merely deferred.
+#[tokio::test]
+async fn a_marked_blob_a_pulled_album_comes_to_hold_is_unmarked() {
+    let h = Harness::new();
+    let pulled = Arc::new(crate::federation::pull::InMemoryPulledAlbums::new());
+    let context = h.context.clone().with_held_blobs(pulled.clone());
+    let bytes = b"bytes marked before a page held them";
+    let address = h.store(bytes).await;
+    let report = collect(&context, Mode::Apply).await.expect("a pass");
+    assert_eq!(report.marked, vec![address.clone()]);
+
+    pull_metadata_blob(&h, &pulled, "late", bytes).await;
+    let report = collect(&context, Mode::DryRun).await.expect("a dry run");
+    assert_eq!(report.unmarked, vec![address.clone()], "{report:?}");
+    assert!(
+        h.marks
+            .marked_since(&address)
+            .await
+            .expect("a lookup")
+            .is_some(),
+        "a dry run reports the unmark and leaves the mark"
+    );
+    let report = collect(&context, Mode::Apply).await.expect("a pass");
+    assert_eq!(report.unmarked, vec![address.clone()], "{report:?}");
+    assert_eq!(
+        h.marks.marked_since(&address).await.expect("a lookup"),
+        None
+    );
+
+    h.clock.advance(days(3));
+    let report = collect(&context, Mode::Apply).await.expect("a pass");
+    assert!(
+        report.swept.is_empty() && report.marked.is_empty(),
+        "{report:?}"
+    );
+    assert!(h.blobs.stat(&address).await.expect("stat").is_some());
+}
+
+/// Claims that answer per a switch, and fail when told to.
+#[derive(Debug, Default)]
+struct SwitchedClaims {
+    holds: std::sync::atomic::AtomicBool,
+    fails: std::sync::atomic::AtomicBool,
+    asked: std::sync::atomic::AtomicUsize,
+    /// A claim that commits between the collector's first question and its sweep: only the
+    /// question asked under the sweep's exclusion sees it.
+    claimed_at_sweep: std::sync::atomic::AtomicBool,
+}
+
+impl HeldBlobs for SwitchedClaims {
+    fn holds<'a>(&'a self, _address: &'a ContentAddress) -> StoreFuture<'a, bool> {
+        use std::sync::atomic::Ordering;
+        Box::pin(async move {
+            self.asked.fetch_add(1, Ordering::SeqCst);
+            if self.fails.load(Ordering::SeqCst) {
+                return Err(StoreError::Unavailable {
+                    store: "pulled albums",
+                    detail: "the claims cannot be read".to_owned(),
+                });
+            }
+            Ok(self.holds.load(Ordering::SeqCst))
+        })
+    }
+
+    fn sweep_unless_held<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+        sweep: StoreFuture<'a, ()>,
+    ) -> StoreFuture<'a, bool> {
+        use std::sync::atomic::Ordering;
+        Box::pin(async move {
+            if self.holds(address).await? || self.claimed_at_sweep.load(Ordering::SeqCst) {
+                return Ok(true);
+            }
+            sweep.await?;
+            Ok(false)
+        })
+    }
+}
+
+/// A claim that becomes visible only under the sweep's exclusion — a pulled commit whose put
+/// preceded the collector's first question and whose claim committed before its sweep — keeps
+/// the blob: nothing is removed, nothing is credited, and the mark is cancelled.
+#[tokio::test]
+async fn a_claim_seen_only_at_the_sweep_keeps_the_blob_and_cancels_the_mark() {
+    use std::sync::atomic::Ordering;
+    let h = Harness::new();
+    let claims = Arc::new(SwitchedClaims::default());
+    let context = h.context.clone().with_held_blobs(claims.clone());
+    let address = h
+        .store(b"an orphan a pulled commit is about to claim")
+        .await;
+    let report = collect(&context, Mode::Apply).await.expect("a pass");
+    assert_eq!(report.marked, vec![address.clone()], "{report:?}");
+
+    claims.claimed_at_sweep.store(true, Ordering::SeqCst);
+    h.clock.advance(days(3));
+    let report = collect(&context, Mode::Apply).await.expect("a pass");
+    assert!(report.swept.is_empty(), "{report:?}");
+    assert!(report.credited.is_empty(), "{report:?}");
+    assert_eq!(report.unmarked, vec![address.clone()], "{report:?}");
+    assert!(
+        h.blobs.stat(&address).await.expect("stat").is_some(),
+        "a blob claimed under the sweep's exclusion is not removed"
+    );
+    assert_eq!(
+        h.marks.marked_since(&address).await.expect("a lookup"),
+        None
+    );
+}
+
+/// A claim that cannot be read is never read as "unreferenced": the pass fails, at the mark and
+/// at the sweep, and the blob is neither marked nor swept.
+#[tokio::test]
+async fn a_claim_that_cannot_be_read_fails_the_pass_closed() {
+    use std::sync::atomic::Ordering;
+    let h = Harness::new();
+    let claims = Arc::new(SwitchedClaims::default());
+    claims.fails.store(true, Ordering::SeqCst);
+    let context = h.context.clone().with_held_blobs(claims.clone());
+    let address = h.store(b"a blob whose claims are unreadable").await;
+
+    let error = collect(&context, Mode::Apply)
+        .await
+        .expect_err("the pass fails");
+    assert!(matches!(error, StoreError::Unavailable { .. }), "{error:?}");
+    assert_eq!(
+        h.marks.marked_since(&address).await.expect("a lookup"),
+        None,
+        "an unreadable claim marks nothing"
+    );
+
+    // Marked while the claims answered, then unreadable at the sweep: still kept.
+    claims.fails.store(false, Ordering::SeqCst);
+    collect(&context, Mode::Apply).await.expect("a pass");
+    assert!(
+        h.marks
+            .marked_since(&address)
+            .await
+            .expect("a lookup")
+            .is_some()
+    );
+    claims.fails.store(true, Ordering::SeqCst);
+    h.clock.advance(days(3));
+    collect(&context, Mode::Apply)
+        .await
+        .expect_err("the sweep pass fails");
+    assert!(
+        h.blobs.stat(&address).await.expect("stat").is_some(),
+        "an unreadable claim at sweep time sweeps nothing"
+    );
+}
+
+/// The claims are asked only for a blob nothing else references, and a released claim — a
+/// forgotten job — leaves its blob to the ordinary mark-then-sweep.
+#[tokio::test]
+async fn claims_are_asked_last_and_a_released_claim_is_collectable() {
+    use std::sync::atomic::Ordering;
+    let h = Harness::new();
+    let claims = Arc::new(SwitchedClaims::default());
+    claims.holds.store(true, Ordering::SeqCst);
+    let context = h.context.clone().with_held_blobs(claims.clone());
+    h.publish("referenced", b"bytes an asset references").await;
+    let record = h.store(b"a record a live link serves").await;
+    h.share(9, &[&record], None).await;
+
+    collect(&context, Mode::Apply).await.expect("a pass");
+    assert_eq!(
+        claims.asked.load(Ordering::SeqCst),
+        0,
+        "a blob an asset or a live link holds costs no claim query"
+    );
+
+    let released = h.store(b"a blob whose job was forgotten").await;
+    let report = collect(&context, Mode::Apply).await.expect("a pass");
+    assert!(report.marked.is_empty(), "held: {report:?}");
+    assert_eq!(claims.asked.load(Ordering::SeqCst), 1);
+
+    claims.holds.store(false, Ordering::SeqCst);
+    let report = collect(&context, Mode::Apply).await.expect("a pass");
+    assert_eq!(report.marked, vec![released.clone()]);
+    h.clock.advance(days(3));
+    let report = collect(&context, Mode::Apply).await.expect("a pass");
+    assert_eq!(report.swept, vec![released]);
 }

@@ -1,0 +1,28 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "library_list(&scratch, &[])"
+---
+status: 0
+--- stdout ---
+{
+  "assets": [
+    {
+      "album_id": "[ALBUM_ID]",
+      "asset_id": "[ASSET_ID]",
+      "capture_timestamp": "[CAPTURE_TIMESTAMP]",
+      "ext": "jpg",
+      "labels": [],
+      "stack": null
+    },
+    {
+      "album_id": "[ALBUM_ID]",
+      "asset_id": "[ASSET_ID]",
+      "capture_timestamp": "[CAPTURE_TIMESTAMP]",
+      "ext": "jpg",
+      "labels": [],
+      "stack": null
+    }
+  ],
+  "view": "timeline"
+}
+--- stderr ---

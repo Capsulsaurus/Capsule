@@ -5,7 +5,7 @@
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use super::auth::AuthAction;
+use super::auth::{AuthAction, ProviderFlow};
 use super::form::FormKey;
 use super::import::ImportAction;
 use super::label_editor::{LabelAction, Nudge};
@@ -131,6 +131,27 @@ pub const BINDINGS: &[Binding] = &[
         "o",
         "Sign out",
         Action::Auth(AuthAction::SignOut),
+    ),
+    on(
+        Screen::Auth,
+        KeyCode::Char('w'),
+        "w",
+        "Sign in with a browser",
+        Action::Auth(AuthAction::BeginProvider(ProviderFlow::Browser)),
+    ),
+    on(
+        Screen::Auth,
+        KeyCode::Char('d'),
+        "d",
+        "Sign in on another device",
+        Action::Auth(AuthAction::BeginProvider(ProviderFlow::Device)),
+    ),
+    on(
+        Screen::Auth,
+        KeyCode::Char('x'),
+        "x",
+        "Cancel the sign-in",
+        Action::Auth(AuthAction::CancelProvider),
     ),
     // ── Sync ─────────────────────────────────────────────────────────────
     on(

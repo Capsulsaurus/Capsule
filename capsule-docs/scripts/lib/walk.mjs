@@ -26,6 +26,7 @@
 
 import { readdirSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
+import { SDK_PAGES } from '../reference-groups.mjs';
 
 /** Directories never descended into, matched on their basename. */
 const SKIP_DIRS = new Set([
@@ -49,6 +50,18 @@ const SKIP_PREFIXES = [
     'capsule-docs/src/content/docs/reference/cli/',
     'capsule-docs/src/content/docs/reference/api/',
 ];
+
+/**
+ * Generated files skipped one by one: `reference/sdk/` also holds a hand-written page, so the
+ * directory cannot be pruned whole. Derived from the page table so a new generated SDK page is
+ * skipped the day it is added. Their prose is Rust doc comments republished verbatim, checked
+ * where it is written rather than here, where it exists on no CI runner.
+ */
+const SKIP_FILES = new Set(
+    SDK_PAGES.filter((page) => page.artifact !== null).map(
+        (page) => `capsule-docs/src/content/docs/reference/sdk/${page.slug}.md`,
+    ),
+);
 
 /**
  * Yield repo-relative paths of every file under `root` whose name matches
@@ -78,7 +91,7 @@ export function walkFiles(root, predicate) {
             }
             if (!entry.isFile()) continue;
             const rel = relative(root, abs).split(sep).join('/');
-            if (predicate(rel)) found.push(rel);
+            if (!SKIP_FILES.has(rel) && predicate(rel)) found.push(rel);
         }
     };
 

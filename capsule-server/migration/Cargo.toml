@@ -9,7 +9,7 @@ publish.workspace = true
 #
 # `capsule-server` takes this crate as a **dev-dependency only**, which is a deliberate
 # constraint rather than an accident of layering: `sea-orm-migration` pulls `sea-orm` with its
-# default features, `with-chrono` among them, and design/dependencies.md makes
+# default features, `with-chrono` among them, and `cargo xtask architecture-check` makes
 # `cargo tree -i chrono -e no-dev` a review-blocking gate. Keeping the migrator out of the
 # server's normal dependency graph is what keeps that gate resolving to `capsule-cli/entity`
 # and sea-orm's own internals. The consequence is recorded where it is felt:
@@ -30,8 +30,8 @@ path = "src/main.rs"
 # The runtime `cli::run_cli` drives. Already the workspace's async runtime.
 tokio = { workspace = true }
 # The migrator itself, pinned at the workspace with `sqlx-postgres` and `runtime-tokio-rustls`
-# — the server's schema is PostgreSQL's, and the TLS rule is rustls only. See the ORM row in
-# design/dependencies.md; this crate opens no new dependency domain.
+# — the server's schema is PostgreSQL's, and the TLS rule is rustls only. This crate opens no
+# new dependency domain.
 sea-orm-migration = { workspace = true }
 # The per-migration content checksum (#524): SHA-256 of each migration's source, hex-encoded.
 # Both are already workspace dependencies, so this opens no new dependency domain, and neither

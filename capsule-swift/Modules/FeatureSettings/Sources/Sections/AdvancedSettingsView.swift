@@ -58,6 +58,7 @@ public struct AdvancedSettingsView: View {
                     Text(verbatim: scenario.rawValue).tag(scenario)
                 }
             }
+            .disabled(!model.canChooseScenario)
             .accessibilityIdentifier("settings.advanced.scenario")
             if model.appliesOnNextLaunch {
                 SettingsNoteRow(textKey: "app.settings.advanced.scenario.next_launch")

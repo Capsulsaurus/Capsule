@@ -78,17 +78,23 @@ jobs:
               - 'locales/**'
               - 'capsule-web/src/i18n/messages/**'
               - 'capsule-swift/Generated/**'
-              - 'capsule-android/src/androidMain/res/values*/strings.xml'
+              - 'capsule-android/src/main/res/values*/strings.xml'
               # The `prev-release-compat` job's flow.
               - 'scripts/prev-release-compat.sh'
               - '.github/workflows/ci.yml'
             web:
               - 'capsule-web/**'
+              # `check-web` builds capsule-wasm and runs `wasm-surface-check` against the
+              # committed digest beside it, so a change to the module's exports, to the
+              # digest, or to the step that cuts it must pay the web gate.
+              - 'capsule-wasm/**'
+              - 'xtask/src/wasm_surface.rs'
+              - 'xtask/src/wasm_surface/**'
               - 'mise.toml'
               - 'mise-tasks/**'
               - '.github/workflows/ci.yml'
             # Every artifact the docs build reads, not just `capsule-docs/**` — the
-            # generator turns two committed description artifacts into the `/reference/`
+            # generator turns four committed description artifacts into the `/reference/`
             # pages, so a filter that names only the site lets a stale reference page
             # publish on a change to the surface it describes. See
             # design/developer-docs.md, "Artifacts cross the boundary, not toolchains".
@@ -96,6 +102,8 @@ jobs:
               - 'capsule-docs/**'
               - 'capsule-cli/cli-surface.json'
               - 'capsule-server/openapi.json'
+              - 'capsule-sdk/bindings-surface.json'
+              - 'capsule-wasm/wasm-surface.d.ts'
               # `capsule-docs/biome.jsonc` extends the root one, so a change there can fail
               # this job's format and lint steps from outside `capsule-docs/**`.
               - 'biome.jsonc'
@@ -117,8 +125,11 @@ jobs:
               - 'capsule-server/openapi.json'
               # No check reads this one today; it is here because the cross-links check
               # resolves any repo-relative path a document names, and the reference prose
-              # now names this artifact. Cheap: the job installs nothing.
+              # now names this artifact. Cheap: the job installs nothing. The SDK pages
+              # name the two binding dumps the same way.
               - 'capsule-cli/cli-surface.json'
+              - 'capsule-sdk/bindings-surface.json'
+              - 'capsule-wasm/wasm-surface.d.ts'
               - 'capsule-*/src/**'
               - '**/*.md'
               - '**/*.mdx'
@@ -126,6 +137,23 @@ jobs:
               - 'NOTICE'
               - 'mise.toml'
               - '.github/workflows/ci.yml'
+              # The agent-rules check matches every `.claude/rules/` glob against the tracked
+              # tree, so renaming or deleting anything a glob names can strand a rule. Every
+              # top-level component and the root build files are in that set.
+              - '.claude/**'
+              - 'capsule-*/**'
+              - 'xtask/**'
+              - 'ptpip-rs/**'
+              - 'locales/**'
+              - 'legacy-review/**'
+              - 'mise-tasks/**'
+              - 'gradle/**'
+              - '.config/**'
+              - '.github/workflows/**'
+              - '*.toml'
+              - '*.kts'
+              - 'Cargo.lock'
+              - 'hk.pkl'
             markdown:
               - '**/*.md'
               - '.markdownlint-cli2.jsonc'
@@ -255,7 +283,26 @@ jobs:
     # Kynos's `TestClient` drives a built service in-process; the container-gated cases skip
     # here and run against real Postgres and Valkey containers in `rust-containers`. A gate
     # that is allowed to fail is not a gate.
+    #
+    # Disk (#1193): the workspace's test binaries, plus the `ffi` and `http3` variants, filled a
+    # standard runner and failed links with `No space left on device` and `ld`/`rust-lld`
+    # signal 7. CI never attaches a debugger, so test builds carry no debug info at all (the
+    # workspace default is `line-tables-only`, see `[profile.test]` in Cargo.toml); a panic still
+    # reports its `file:line`, which does not come from debug info. The cargo cache keys on
+    # `CARGO_*` variables, so this job's cache is its own. Every test still runs.
+    env:
+      CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
+      # Preinstalled toolchains this job never touches, tens of GB between them. No Docker
+      # image is needed either, since the container-gated cases skip here and run in
+      # `rust-containers`.
+      - name: Free runner disk
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/share/swift
+          sudo docker image prune --all --force
+          df -h /
       - uses: actions/checkout@v4
       - name: Install Rust toolchain
         run: rustup toolchain install
@@ -273,10 +320,18 @@ jobs:
         uses: jdx/mise-action@v2
         with:
           install: false
+      # After the restored cargo cache and the apt packages, so it is the space the build has.
+      - name: Disk before test build
+        run: df -h /
       - name: Test
         env:
           NEXTEST_PROFILE: ci
         run: mise run test-rust
+      # The free space left by the test-profile build, logged even when it failed, so a
+      # runner nearing full shows up here before it breaks a link.
+      - name: Disk after test build
+        if: always()
+        run: df -h /
       # The release-profile half: `#[cfg(not(debug_assertions))]` tests are compiled out of
       # every test-profile build above. Scoped to the crates that carry one, with a guard that
       # fails when one appears anywhere else (see `test-rust-release` in mise.toml, #428).
@@ -284,6 +339,9 @@ jobs:
         env:
           NEXTEST_PROFILE: ci
         run: mise run test-rust-release
+      - name: Disk after release build
+        if: always()
+        run: df -h /
 
   # The container tiers `rust-test` skips (#514). Every Postgres adapter conformance suite, the
   # migration round trip, the durable boot arm and process cases, and the Valkey suite are gated

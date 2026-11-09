@@ -77,6 +77,7 @@ impl Fix {
             )
             .unwrap()
             .0,
+            create_metadata_blob: Vec::new(),
             provenance: vec![record],
             receipts: Vec::new(),
             attestations: Vec::new(),
@@ -102,6 +103,25 @@ impl Fix {
         asset.ciphertext = Arc::new(ct);
         asset.provenance[0].manifest = core.sign(&self.device, &self.write).unwrap();
         asset
+    }
+
+    /// Build a backup asset whose create binds a sealed metadata blob that a later edit has
+    /// replaced: the create signs `metadata_blob_hash` over the returned blob, which rides as
+    /// `create_metadata_blob`, while `metadata_blob` stays the (different) current blob.
+    fn edited_asset(&self, asset_id: u128, plaintext: &[u8]) -> (BackupAsset, Vec<u8>) {
+        let amk = Amk::from_bytes(self.amk);
+        let mut asset = self.asset(asset_id, plaintext);
+        let file_id = Uuid::from_u128(asset_id);
+        let create_blob =
+            crate::crypto::encryption::seal_metadata_blob(&amk, &file_id, b"{create}", None)
+                .unwrap()
+                .0;
+        let mut core = asset.provenance[0].manifest.core.clone();
+        core.metadata_blob_hash = Some(blob_ciphertext_hash(&create_blob));
+        asset.provenance[0] =
+            ProvenanceRecord::new(file_id, core.sign(&self.device, &self.write).unwrap(), None);
+        asset.create_metadata_blob.clone_from(&create_blob);
+        (asset, create_blob)
     }
 
     /// The album's admin-signed epoch ledger attesting `self.write` for epoch 1.
@@ -403,6 +423,98 @@ fn storage_attestations_ride_the_artifact_and_restore_verbatim() {
     };
     assert_eq!(restored(1).attestations, b"attestation-log-cbor-bytes");
     assert!(restored(2).attestations.is_empty());
+}
+
+#[test]
+fn the_creates_superseded_metadata_blob_rides_the_artifact_and_restores_verbatim() {
+    // An asset edited before its first upload needs the blob its create binds to upload that
+    // create, so the blob rides its own entry beside the head's and comes back byte for byte.
+    let f = Fix::new();
+    let (edited, create_blob) = f.edited_asset(1, b"edited");
+    let plain = f.asset(2, b"never edited"); // empty = no entry emitted
+    let bytes = export_with_params(&f.input(vec![edited, plain]), b"pw", FAST, &f.device).unwrap();
+
+    let art = BackupArtifact::open(&bytes, b"pw", &f.device.verifying_key()).unwrap();
+    let paths: Vec<&str> = art.core.entries.iter().map(|e| e.path.as_str()).collect();
+    assert!(paths.contains(&format!("create-meta/{}", Uuid::from_u128(1)).as_str()));
+    assert!(
+        !paths.contains(&format!("create-meta/{}", Uuid::from_u128(2)).as_str()),
+        "no superseded create blob → no entry"
+    );
+
+    let report = art.restore(RestoreMode::Commit, &BTreeMap::new()).unwrap();
+    let restored = |id: u128| {
+        report
+            .applied
+            .iter()
+            .find(|a| a.asset_id == Uuid::from_u128(id))
+            .unwrap()
+    };
+    assert_eq!(restored(1).create_metadata_blob, create_blob);
+    assert_ne!(
+        restored(1).metadata_blob,
+        create_blob,
+        "the head's blob rides apart"
+    );
+    assert!(restored(2).create_metadata_blob.is_empty());
+}
+
+#[test]
+fn an_artifact_carrying_the_creates_blob_stays_deterministic() {
+    let f = Fix::new();
+    let input = f.input(vec![f.edited_asset(1, b"edited").0, f.asset(2, b"beta")]);
+    let salt = [0x22; 32];
+    let a = export_with_salt_and_params(&input, b"pw", salt, FAST, &f.device).unwrap();
+    let b = export_with_salt_and_params(&input, b"pw", salt, FAST, &f.device).unwrap();
+    assert_eq!(a, b);
+}
+
+#[test]
+fn a_carried_create_blob_that_does_not_answer_the_create_is_dropped_not_refused() {
+    // Authentic in the manifest but not the bytes the signed create names: the asset still
+    // restores, without a create blob a server would refuse under that address.
+    let f = Fix::new();
+    let (mut edited, _) = f.edited_asset(1, b"edited");
+    edited.create_metadata_blob = b"not the create's blob".to_vec();
+    // And a create that binds no blob at all carries nothing either.
+    let mut unbound = f.asset(2, b"binds none");
+    unbound.create_metadata_blob = b"stray".to_vec();
+    let bytes =
+        export_with_params(&f.input(vec![edited, unbound]), b"pw", FAST, &f.device).unwrap();
+
+    let art = BackupArtifact::open(&bytes, b"pw", &f.device.verifying_key()).unwrap();
+    let report = art.restore(RestoreMode::Commit, &BTreeMap::new()).unwrap();
+    assert_eq!(
+        report.applied.len(),
+        2,
+        "the restore is never refused for it"
+    );
+    for restored in &report.applied {
+        assert!(restored.create_metadata_blob.is_empty());
+        assert!(!restored.plaintext.is_empty());
+    }
+}
+
+#[test]
+fn a_tampered_create_blob_fails_the_open() {
+    // Like every entry, its bytes are committed to by the authenticated MANIFEST.
+    let f = Fix::new();
+    let (edited, _) = f.edited_asset(1, b"edited");
+    let bytes = export_with_params(&f.input(vec![edited]), b"pw", FAST, &f.device).unwrap();
+    let path = format!("create-meta/{}", Uuid::from_u128(1));
+    let mut builder = tar::Builder::new(Vec::new());
+    for (entry, mut data) in tar_read(&bytes).unwrap() {
+        if entry == path {
+            data[0] ^= 1;
+        }
+        tar_append(&mut builder, &entry, &data).unwrap();
+    }
+    let tampered = builder.into_inner().unwrap();
+
+    assert!(matches!(
+        BackupArtifact::open(&tampered, b"pw", &f.device.verifying_key()),
+        Err(BackupError::Corrupt(p)) if p == path
+    ));
 }
 
 #[test]

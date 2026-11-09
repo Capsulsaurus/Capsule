@@ -135,21 +135,37 @@ enum Retention {
     Open,
     /// The asset is in trash until this deadline, in unix seconds rounded up.
     Until(i64),
+    /// The server says it has purged the asset: its window has closed whatever any clock says.
+    Purged,
 }
 
-/// The retention window `entry` names. Only a `Deleted` entry has one: the server serves a
-/// tombstone with its signed delete record as the manifest, whose `retention_until` is the
-/// deadline after which the server refuses a `trash-restore` ([Organization § Retention
-/// Window]). A delete with no manifest, or whose record does not decode, is not a delete of this
-/// asset, or names no readable deadline is [`Retention::Open`]: a tombstone is permanent, so a
-/// delete this device cannot read is left in trash rather than recorded. That includes the
-/// entry of an asset already purged (the purge drops the record), and every tombstone from a
-/// server that predates serving the record, since neither is positive evidence of a purge.
+/// The deadline stored for a [`Retention::Purged`] asset: one every judging time has passed, so
+/// the sweep ([`record_elapsed_purges`]) records it on its next run, like any closed window.
+const PURGED_DEADLINE: i64 = i64::MIN;
+
+/// The retention window `entry` names. Only a `Deleted` entry has one.
+///
+/// A tombstone carrying the server's purge signal is [`Retention::Purged`] on that signal alone
+/// (#885): the server purges only once the window has closed, so this is how a device that first
+/// syncs after a purge, and so never saw the delete record, records its tombstone.
+///
+/// Otherwise the server serves a tombstone with its signed delete record as the manifest, whose
+/// `retention_until` is the deadline after which the server refuses a `trash-restore`
+/// ([Organization § Retention Window]). A delete with no manifest, or whose record does not
+/// decode, is not a delete of this asset, or names no readable deadline is [`Retention::Open`]:
+/// a tombstone is permanent, so a delete this device cannot read is left in trash rather than
+/// recorded. That includes every tombstone from a server that predates serving the record or the
+/// signal, and one whose record the server could not produce, since none is positive evidence of
+/// a purge.
 ///
 /// [Organization § Retention Window]: https://docs/design/organization/#retention-window
 fn retention_of(entry: &FeedEntry) -> Retention {
     if entry.kind != ChangeKind::Deleted {
         return Retention::Open;
+    }
+    if entry.purged {
+        tracing::debug!("sync: the server has purged a deleted asset; its window has closed");
+        return Retention::Purged;
     }
     if entry.manifest_cbor.is_empty() {
         tracing::debug!("sync: a delete carries no manifest; it is held in trash with no deadline");
@@ -190,7 +206,10 @@ fn ceil_second(at: Timestamp) -> i64 {
 }
 
 /// The latest `changed_at` among `page`'s entries, or `None` when none parses. A `changed_at`
-/// is a reading of the server's clock, the one that refuses a late `trash-restore`.
+/// is a reading of the server's clock, the one that refuses a late `trash-restore`, and the
+/// latest one a drain saw is the only instant retention deadlines are judged at
+/// ([`record_elapsed_purges`]): never this device's clock, which running ahead would record a
+/// purge early and then refuse a peer's copy of an asset the server restored in time.
 #[must_use]
 pub fn latest_changed_at(page: &SyncPage) -> Option<Timestamp> {
     page.entries
@@ -199,20 +218,13 @@ pub fn latest_changed_at(page: &SyncPage) -> Option<Timestamp> {
         .max()
 }
 
-/// The time retention deadlines are judged at: the device's clock `now`, floored by `server`,
-/// the latest server clock reading the drain saw ([`latest_changed_at`]). A deadline the server's
-/// clock has passed has passed on the server too, however far behind this device's clock is.
-#[must_use]
-pub fn judged_at(now: Timestamp, server: Option<Timestamp>) -> Timestamp {
-    server.map_or(now, |server| server.max(now))
-}
-
 /// Land a validated page: upsert every asset and advance the stored cursor, in one transaction.
 /// Returns the number of entries written.
 ///
 /// A `Deleted` entry marks the asset tombstoned and stores its retention deadline, the
 /// `retention_until` of its delete record: a delete moves the asset to trash, which a
 /// `trash-restore` reverses until that deadline, so the delete alone is not a peering tombstone.
+/// A tombstone carrying the server's purge signal stores a deadline that has always passed.
 /// Any other entry clears the deadline, which is how a restore takes the asset out of the sweep.
 /// Landing a page records no purge: a restore of the same asset may sit on a later page, so the
 /// sweep ([`record_elapsed_purges`]) runs only once the drain has reached the feed's head.
@@ -227,6 +239,7 @@ pub async fn persist_page<C: ConnectionTrait + TransactionTrait>(
         let retention_until = match retention_of(entry) {
             Retention::Open => None,
             Retention::Until(until) => Some(until),
+            Retention::Purged => Some(PURGED_DEADLINE),
         };
         let model = synced_asset::ActiveModel {
             asset_id: Set(encode_id(&entry.asset_id)),
@@ -278,8 +291,10 @@ pub async fn persist_page<C: ConnectionTrait + TransactionTrait>(
 /// recorded once; recording an asset again would keep its first record anyway, so the sweep is
 /// safe to repeat. A sync run runs it once the drain has reached the feed's head, and only
 /// then: a delete on one page may be restored on a later one, and the restore clears the
-/// deadline only when that page lands. It runs on a run that landed no page too, since a window
-/// closes on the clock and not on a feed entry.
+/// deadline only when that page lands. `at` is the latest server `changed_at` the drain saw
+/// ([`latest_changed_at`]), so a run that landed no entry has no reading to judge by and does
+/// not sweep: a window the server's clock has closed is recorded by the next drain that lands
+/// one, and a late record loses nothing.
 ///
 /// # Errors
 ///

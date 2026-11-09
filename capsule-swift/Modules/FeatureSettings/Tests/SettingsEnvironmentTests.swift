@@ -219,6 +219,58 @@ struct AdvancedSettingsModelTests {
         #expect(model.pickedScenario == .offline)
         #expect(!model.appliesOnNextLaunch)
         #expect(model.scenarios == MockScenario.allCases)
+        #expect(model.launchArgumentNamesScenario)
+        #expect(!model.canChooseScenario, "the argument wins, so the picker is not offered for choosing")
+    }
+
+    @Test("an argument-less mock launch lets the switcher choose")
+    func argumentLessLaunchCanChoose() throws {
+        let store = try IsolatedDefaults()
+        let model = AdvancedSettingsModel(
+            activeScenarioName: MockScenario.healthy.rawValue,
+            launchArguments: ["app"],
+            selection: MockScenarioSelection(defaults: store.defaults)
+        )
+
+        #expect(!model.launchArgumentNamesScenario)
+        #expect(model.canChooseScenario)
+    }
+
+    @Test("a launch that names its world refuses a choice and shows no relaunch notice")
+    func argumentLaunchRefusesChoosing() throws {
+        let store = try IsolatedDefaults()
+        let selection = MockScenarioSelection(defaults: store.defaults)
+        let model = AdvancedSettingsModel(
+            activeScenarioName: MockScenario.offline.rawValue,
+            launchArguments: ["app", MockScenario.launchArgument, MockScenario.offline.rawValue],
+            selection: selection
+        )
+
+        model.choose(.quarantine)
+
+        #expect(model.nextLaunchScenario == nil)
+        #expect(selection.selected() == nil, "nothing is written that the next launch would ignore")
+        #expect(model.pickedScenario == .offline)
+        #expect(!model.appliesOnNextLaunch)
+    }
+
+    @Test("a mistyped launch argument still names the world, as the launch path reads it")
+    func mistypedArgumentStillWins() throws {
+        let store = try IsolatedDefaults()
+        let selection = MockScenarioSelection(defaults: store.defaults)
+        selection.select(.quarantine)
+        let arguments = ["app", MockScenario.launchArgument, "typo"]
+        let model = AdvancedSettingsModel(
+            activeScenarioName: MockScenario.healthy.rawValue,
+            launchArguments: arguments,
+            selection: selection
+        )
+
+        #expect(model.launchArgumentNamesScenario)
+        #expect(!model.canChooseScenario)
+        #expect(model.pickedScenario == .healthy)
+        #expect(model.pickedScenario == MockScenario.resolve(fromArguments: arguments, persisted: selection.selected()))
+        #expect(!model.appliesOnNextLaunch)
     }
 
     @Test("choosing a different scenario records it and says it applies next launch")
@@ -315,18 +367,30 @@ struct AdvancedSettingsModelTests {
         #expect(MockScenario.resolve(fromArguments: ["app"], persisted: selection.selected()) == .healthy)
     }
 
-    @Test("clearing the override of a launch that names its world returns to that world")
+    /// An override an earlier argument-less launch recorded is still on the
+    /// device, but this launch's argument wins over it, and so will the next
+    /// launch's: the picker shows the argument's world and no relaunch notice,
+    /// both before and after the override is cleared.
+    @Test("an override recorded earlier yields to a launch that names its world")
     func clearingUnderALaunchArgumentKeepsItsWorld() throws {
         let store = try IsolatedDefaults()
         let selection = MockScenarioSelection(defaults: store.defaults)
+        selection.select(.quarantine)
+        let arguments = ["app", MockScenario.launchArgument, MockScenario.offline.rawValue]
         let model = AdvancedSettingsModel(
             activeScenarioName: MockScenario.offline.rawValue,
-            launchArguments: ["app", MockScenario.launchArgument, MockScenario.offline.rawValue],
+            launchArguments: arguments,
             selection: selection
         )
-        model.choose(.quarantine)
+
+        #expect(model.nextLaunchScenario == .quarantine, "the recorded override is kept and can be cleared")
+        #expect(model.pickedScenario == .offline, "the argument wins over the recorded override")
+        #expect(model.pickedScenario == MockScenario.resolve(fromArguments: arguments, persisted: selection.selected()))
+        #expect(!model.appliesOnNextLaunch, "the next launch, with the same arguments, runs this world again")
 
         model.clearOverride()
+
+        #expect(selection.selected() == nil)
 
         #expect(model.launchDefaultScenario == .offline)
         #expect(model.pickedScenario == .offline)

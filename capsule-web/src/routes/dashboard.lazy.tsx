@@ -73,7 +73,7 @@ const Dashboard = () => {
                             </CardHeader>
                             <CardContent>
                                 <div className="text-2xl font-bold">
-                                    {stats.totalPhotos.toLocaleString()}
+                                    {intl.formatNumber(stats.totalPhotos)}
                                 </div>
                             </CardContent>
                         </Card>
@@ -89,7 +89,7 @@ const Dashboard = () => {
                             </CardHeader>
                             <CardContent>
                                 <div className="text-2xl font-bold">
-                                    {stats.totalAlbums.toLocaleString()}
+                                    {intl.formatNumber(stats.totalAlbums)}
                                 </div>
                             </CardContent>
                         </Card>

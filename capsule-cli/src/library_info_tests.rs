@@ -1,32 +1,32 @@
-use super::library_info_unmigrated;
+use super::library_info_unanchored;
 
-/// An up-to-date library still shows the row, with a zero, and no migrate pointer.
+/// A library with no debris still shows the row, with a zero, and no notice.
 #[test]
-fn a_fully_signed_library_shows_zero_and_no_hint() {
-    let (row, hint) = library_info_unmigrated(0);
-    assert_eq!(row, "Unmigrated sidecars: 0");
+fn a_library_without_debris_shows_zero_and_no_hint() {
+    let (row, hint) = library_info_unanchored(0);
+    assert_eq!(row, "Unanchored sidecars: 0");
     assert_eq!(hint, None);
 }
 
-/// One unsigned sidecar takes the singular hint, still carrying the count; the pointer
-/// names the verb verbatim.
+/// One unanchored sidecar takes the singular notice; it names no verb, since nothing
+/// rewrites such a file.
 #[test]
-fn one_unmigrated_sidecar_points_at_the_migrate_verb() {
-    let (row, hint) = library_info_unmigrated(1);
-    assert_eq!(row, "Unmigrated sidecars: 1");
+fn one_unanchored_sidecar_takes_the_singular_notice() {
+    let (row, hint) = library_info_unanchored(1);
+    assert_eq!(row, "Unanchored sidecars: 1");
     assert_eq!(
         hint.as_deref(),
-        Some("Run `capsule library migrate` to admit the 1 unsigned sidecar.")
+        Some("1 sidecar in this library has no provenance chain, so its asset is hidden.")
     );
 }
 
-/// Several take the plural hint, carrying the count.
+/// Several take the plural notice, carrying the count.
 #[test]
-fn several_unmigrated_sidecars_take_the_plural_hint() {
-    let (row, hint) = library_info_unmigrated(3);
-    assert_eq!(row, "Unmigrated sidecars: 3");
+fn several_unanchored_sidecars_take_the_plural_notice() {
+    let (row, hint) = library_info_unanchored(3);
+    assert_eq!(row, "Unanchored sidecars: 3");
     assert_eq!(
         hint.as_deref(),
-        Some("Run `capsule library migrate` to admit the 3 unsigned sidecars.")
+        Some("3 sidecars in this library have no provenance chain, so their assets are hidden.")
     );
 }

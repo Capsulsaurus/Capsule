@@ -13,35 +13,98 @@ import Foundation
 /// hard-wired: a build that links the Rust core passes an opener over
 /// `FFIAssetCatalog`, while the mock lane, previews, and unit tests pass an
 /// in-memory one. This module therefore compiles with no Rust core present.
+///
+/// The catalog only reads. Every write — an import, a delete, a restore, a
+/// purge — goes through ``workspace``: on the FFI lane that is the Rust
+/// workspace over the same root, whose signed records the catalog's rows
+/// project; elsewhere it is a ``LocalManagedWorkspace`` over an in-memory
+/// catalog.
 public actor ManagedLibrary {
     /// The library's on-disk layout.
     public let layout: ManagedLibraryLayout
+
+    /// The library's writes: sealing an import and every trash transition.
+    public nonisolated let workspace: any ManagedWorkspace
+
+    /// Where a purge's `delete` goes to reach the server: the FFI lane's
+    /// session over ``workspace``, once signed in. `nil` signed out and on the
+    /// mock lane, where a purge stays local and its records wait on the
+    /// workspace's kept chain.
+    public nonisolated let purgeDelivery: (any PurgeDelivering)?
+
+    /// Where a delete's or restore's signed record goes to reach the server:
+    /// the FFI lane's session over ``workspace``, once signed in. `nil` signed
+    /// out and on the mock lane, where the record stays on the asset's chain.
+    public nonisolated let lifecycleDelivery: (any LifecycleDelivering)?
 
     private let fileStore: any FileStore
     private let catalogOpener: any CatalogOpening
     private var openedCatalog: (any AssetCatalog)?
 
+    /// A library whose catalog is opened lazily by `catalogOpener` and whose
+    /// writes go through `workspace` — the FFI lane, where both sit over the
+    /// same root — and whose purges, deletes and restores reach the server
+    /// through `purgeDelivery` and `lifecycleDelivery` when there is a session
+    /// to send them on.
     public init(
         layout: ManagedLibraryLayout,
         fileStore: any FileStore = SystemFileStore(),
-        catalogOpener: any CatalogOpening
+        catalogOpener: any CatalogOpening,
+        workspace: any ManagedWorkspace,
+        purgeDelivery: (any PurgeDelivering)? = nil,
+        lifecycleDelivery: (any LifecycleDelivering)? = nil
     ) {
         self.layout = layout
         self.fileStore = fileStore
         self.catalogOpener = catalogOpener
+        self.workspace = workspace
+        self.purgeDelivery = purgeDelivery
+        self.lifecycleDelivery = lifecycleDelivery
     }
 
-    /// Create a library over an already-open catalog, skipping the lazy open —
-    /// for tests and previews.
+    /// A library over an in-memory catalog, written through a
+    /// ``LocalManagedWorkspace`` built over the same catalog and file store —
+    /// the mock lane, previews and tests. The catalog is already open, so the
+    /// lazy open is skipped.
     public init(
         layout: ManagedLibraryLayout,
         fileStore: any FileStore,
-        catalog: any AssetCatalog
+        catalog: InMemoryAssetCatalog,
+        hasher: any ContentHasher = CryptoKitHasher(),
+        metadataExtractor: any MediaMetadataExtracting = ImageIOMetadataExtractor(),
+        sidecarCoder: any SidecarCoding = JSONSidecarCoder()
     ) {
         self.layout = layout
         self.fileStore = fileStore
         catalogOpener = PreopenedCatalogOpener(catalog: catalog)
         openedCatalog = catalog
+        purgeDelivery = nil
+        lifecycleDelivery = nil
+        workspace = LocalManagedWorkspace(
+            layout: layout,
+            fileStore: fileStore,
+            catalog: catalog,
+            hasher: hasher,
+            metadataExtractor: metadataExtractor,
+            sidecarCoder: sidecarCoder
+        )
+    }
+
+    /// A library over an already-open catalog and an injected workspace —
+    /// for tests that observe what reaches the workspace.
+    public init(
+        layout: ManagedLibraryLayout,
+        fileStore: any FileStore,
+        catalog: any AssetCatalog,
+        workspace: any ManagedWorkspace
+    ) {
+        self.layout = layout
+        self.fileStore = fileStore
+        catalogOpener = PreopenedCatalogOpener(catalog: catalog)
+        openedCatalog = catalog
+        self.workspace = workspace
+        purgeDelivery = nil
+        lifecycleDelivery = nil
     }
 
     /// The catalog, opening it (and creating the directory skeleton) on first
@@ -64,26 +127,64 @@ public actor ManagedLibrary {
         return catalog
     }
 
-    /// Remove an asset's bytes — its media file and paired sidecar — from the store.
+    /// The media file an asset's bytes live in, or `nil` when none is on disk.
     ///
-    /// Addressed by *stem* rather than by an exact path because the catalog does
-    /// not record a file extension: ``ImportService`` derives one from the source
-    /// filename, so `{uuid}.*` inside the capture-date partition is the only thing
-    /// both sides agree on. That also sweeps the `.cbor` sidecar without naming it.
+    /// Found by stem: the catalog does not record the extension the importer
+    /// derived. The paired `.cbor` sidecar shares the stem and is skipped, so the
+    /// answer is always the original, never its record.
     ///
-    /// A missing file is not an error. A purge that runs twice, or after a partial
-    /// import, must still converge on "the bytes are gone".
+    /// The stem is compared in ``fileStemKey(_:)`` form, so the lookup holds on
+    /// both lanes: the Rust workspace names an original `{uuid.simple()}.{ext}`
+    /// (lowercase, no hyphens) while the catalog hands back the hyphenated id,
+    /// and the local workspace names it with the id exactly as given.
     ///
-    /// - Parameter captureDate: the asset's capture instant, which is what decides
-    ///   its `media/{YYYY}/{YYYY-MM}` partition. Read it from the catalog row
-    ///   *before* deleting that row, or the directory is no longer derivable.
-    public func removeAssetFiles(uuid: String, captureDate: Date) async throws {
+    /// - Parameter captureDate: the asset's capture instant, which decides its
+    ///   `media/{YYYY}/{YYYY-MM}` partition.
+    public func mediaFile(uuid: String, captureDate: Date) async throws -> URL? {
         let directory = layout.mediaDirectory(forCaptureDate: captureDate)
-        guard await fileStore.fileExists(at: directory) else { return }
-        for entry in try await fileStore.contentsOfDirectory(at: directory)
-            where entry.deletingPathExtension().lastPathComponent == uuid {
-            try await fileStore.removeItem(at: entry)
-            CapsuleLog.managedStore.debug("purged \(entry.lastPathComponent, privacy: .public)")
+        guard await fileStore.fileExists(at: directory) else { return nil }
+        let key = Self.fileStemKey(uuid)
+        return try await fileStore.contentsOfDirectory(at: directory).first { entry in
+            Self.fileStemKey(entry.deletingPathExtension().lastPathComponent) == key
+                && entry.pathExtension.lowercased() != Self.sidecarExtension
         }
     }
+
+    /// An asset id or file stem reduced to the form the Rust workspace names
+    /// files with: lowercase, hyphens removed. A hyphenated UUID and its
+    /// `simple()` rendering reduce to the same key.
+    static func fileStemKey(_ id: String) -> String {
+        id.lowercased().replacingOccurrences(of: "-", with: "")
+    }
+
+    /// Rewrite an asset's sidecar: decode it through `coder`, apply `change`, and
+    /// write the result back in place.
+    ///
+    /// Read, change and write all happen here so the fields the change does not
+    /// touch — ``CatalogSidecar/unknownFieldsCBOR`` included — survive verbatim.
+    ///
+    /// - Parameter captureDate: the asset's capture instant, which decides its
+    ///   `media/{YYYY}/{YYYY-MM}` partition.
+    /// - Throws: ``CatalogError/sidecar(message:)`` when the asset has no sidecar
+    ///   on disk or it does not decode; the file store's error when the read or
+    ///   the write fails. Nothing is written unless the whole change is.
+    public func updateSidecar(
+        uuid: String,
+        captureDate: Date,
+        coder: any SidecarCoding,
+        _ change: @Sendable (inout CatalogSidecar) -> Void
+    ) async throws {
+        let url = layout.sidecarFile(uuid: uuid, captureDate: captureDate)
+        guard await fileStore.fileExists(at: url) else {
+            CapsuleLog.managedStore.error("sidecar update failed for \(uuid, privacy: .public): no sidecar on disk")
+            throw CatalogError.sidecar(message: "no sidecar for \(uuid)")
+        }
+        var sidecar = try await coder.decode(fileStore.read(at: url))
+        change(&sidecar)
+        try await fileStore.write(coder.encode(sidecar), to: url)
+        CapsuleLog.managedStore.debug("sidecar updated for \(uuid, privacy: .public)")
+    }
+
+    /// The extension every sidecar is written under; see ``ManagedLibraryLayout``.
+    private static let sidecarExtension = "cbor"
 }

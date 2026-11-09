@@ -29,7 +29,10 @@ extension CatalogAsset {
             rating: record.rating,
             isDeleted: record.isDeleted,
             deletedAt: record.deletedAt,
-            isHidden: record.isHidden
+            isHidden: record.isHidden,
+            caption: record.caption,
+            latitude: record.latitude,
+            longitude: record.longitude
         )
     }
 
@@ -53,7 +56,10 @@ extension CatalogAsset {
             rating: rating,
             isDeleted: isDeleted,
             deletedAt: deletedAt,
-            isHidden: isHidden
+            isHidden: isHidden,
+            caption: caption,
+            latitude: latitude,
+            longitude: longitude
         )
     }
 }

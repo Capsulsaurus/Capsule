@@ -34,6 +34,7 @@ use capsule_server::App;
 use capsule_server::app::Modules;
 use capsule_server::blob::{BlobStore, ContentAddress};
 use capsule_server::index::{AssetIndex, BlobRecord, PendingAsset};
+use capsule_server::quota::{QuotaContext, QuotaLimits};
 use capsule_server::store::{AssetId, BlobRole, Clock};
 use capsule_server::upload::{UploadContext, UploadPolicy};
 use jiff::Timestamp;
@@ -843,6 +844,49 @@ async fn a_token_the_server_stopped_honouring_is_refreshed_and_the_call_replayed
     );
 }
 
+/// The activity log the CLI's `capsule auth activity` reads, through the generated operation.
+///
+/// The sign-in the SDK just made is the newest event, its `limit` reaches the server as the
+/// query parameter, and the optional fields the server omits decode as absent.
+#[tokio::test]
+async fn the_sdk_reads_the_account_activity_log_over_a_socket() {
+    use capsule_sdk::client::AuthenticatedClient;
+    use capsule_sdk::rest::ListActivityParams;
+
+    let fixture = Fixture::working();
+    let base_url = serve(&fixture).await;
+    let _earlier = session(&base_url).await;
+    let client =
+        AuthenticatedClient::new(&base_url, session(&base_url).await).expect("an API root parses");
+
+    let all = client
+        .list_activity(capsule_core::crypto::primitives::PROTOCOL_VERSION, None)
+        .await
+        .expect("the owner reads their log")
+        .into_inner();
+    let kinds: Vec<&str> = all.events.iter().map(|event| event.kind.as_str()).collect();
+    assert_eq!(kinds, ["sign_in.password", "sign_in.password"]);
+    assert!(all.events[0].session_id.is_none());
+    assert!(all.events[0].subject.is_some());
+    assert!(all.events[0].request_id.is_some());
+
+    let one = client
+        .list_activity(
+            capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            ListActivityParams::default().limit(1),
+        )
+        .await
+        .expect("a limited read")
+        .into_inner();
+    let ids = |events: &[capsule_sdk::rest::types::ActivityEventView]| {
+        events
+            .iter()
+            .map(|event| event.event_id.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ids(&one.events), ids(&all.events[..1]));
+}
+
 /// The album-upgrade proposal, over a socket, against the server that verifies the signature.
 ///
 /// This one cannot be proven against a mock at all. The intent is signed with the proposing
@@ -971,6 +1015,11 @@ async fn an_escrow_write_outside_the_servers_window_is_a_426_the_sdk_reports_wit
             fixture.blobs.clone(),
             fixture.index.clone(),
             fixture.authority.clone(),
+            QuotaContext::new(
+                fixture.quotas.clone(),
+                fixture.clock.clone(),
+                QuotaLimits::unlimited(),
+            ),
             fixture.clock.clone(),
             UploadPolicy::default().with_protocol_window("2000-01-01", "2000-01-01"),
         ),
@@ -988,6 +1037,7 @@ async fn an_escrow_write_outside_the_servers_window_is_a_426_the_sdk_reports_wit
         share: app.provide(),
         drops: app.provide(),
         counters: app.provide(),
+        activity: app.provide(),
         // The three contexts that landed after this case was written (#405, #407, #406). They
         // are the fixture's own, exactly as every other context above is: the second `App`
         // exists to turn one knob on `upload`, and anything else it built for itself would be a
@@ -1331,6 +1381,19 @@ async fn rebuild_matches(fixture: &Fixture, owner: &capsule_server::store::UserI
     assert_eq!(rebuilt.state, original.state);
 }
 
+/// The peer server's operational key, as the SDK's puller signs with it.
+struct PeerKey(ring::signature::Ed25519KeyPair);
+
+impl capsule_sdk::federation::RequestSigner for PeerKey {
+    fn sign(&self, message: &[u8]) -> [u8; 64] {
+        self.0
+            .sign(message)
+            .as_ref()
+            .try_into()
+            .expect("an Ed25519 signature is sixty-four bytes")
+    }
+}
+
 /// E2E case 4 (server half, SDK client): a peer pulls a shared album over a socket.
 ///
 /// What only a socket can prove for the federated path: the capability is presentable under the
@@ -1355,6 +1418,14 @@ async fn e2e_case_4_a_peer_pulls_a_shared_album_through_the_sdk_over_a_socket() 
     use capsule_server::album::{AlbumRecord, AlbumStore as _};
 
     let fixture = Fixture::working();
+    // The SDK signs each request at the wall clock's now, so the home server's clock is moved
+    // there too: a signature is fresh only within minutes of the server's own time.
+    fixture
+        .clock
+        .advance(Timestamp::now().duration_since(fixture.clock.now()));
+    // The peer's operational key, pinned as an operator pins it: every request the SDK makes
+    // below is signed with it.
+    support::pin_request_key(&fixture, PEER).await;
     // The album row itself: a peer's page is bound to the album's *owner*, which is a fact of
     // the album store rather than of the index.
     fixture
@@ -1423,6 +1494,7 @@ async fn e2e_case_4_a_peer_pulls_a_shared_album_through_the_sdk_over_a_socket() 
         album().as_str(),
         minted.token.clone(),
         minted.grant.jti.clone(),
+        std::sync::Arc::new(PeerKey(support::request_keypair().0)),
     )
     .expect("the base url is a url");
 
@@ -1473,6 +1545,16 @@ async fn e2e_case_4_a_peer_pulls_a_shared_album_through_the_sdk_over_a_socket() 
         pull.blob(&address, manifest.len() as u64).await,
         Err(FederationError::Revoked)
     ));
+
+    // The refresh is signed too: the home server gets far enough to refuse the revoked grant
+    // with its code, which a refresh its peer did not sign never reaches (that is an uncoded
+    // `401`).
+    match pull.refresh().await {
+        Err(FederationError::Refused { code, .. }) => {
+            assert_eq!(code, "error.federation.capability_revoked");
+        }
+        other => panic!("a signed refresh of a revoked grant answered {other:?}"),
+    }
 }
 
 /// **The release gate's receipt fetch, against the real route** (issue #441).

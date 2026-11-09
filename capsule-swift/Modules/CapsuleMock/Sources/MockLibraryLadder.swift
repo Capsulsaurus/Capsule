@@ -15,7 +15,7 @@ public struct MockLadderState: Sendable, Equatable {
 }
 
 public extension MockLibrary {
-    /// The degrade ladder and the sync state for one asset.
+    /// The held representations and the sync state for one asset.
     ///
     /// The states are mutually exclusive and ordered by how much they override:
     /// a schema this build cannot read makes every other question moot, a
@@ -38,7 +38,7 @@ public extension MockLibrary {
     /// thumbnail is never a blank tile.
     private func heldTiers(for ref: MockAssetRef) -> Set<RepresentationTier> {
         let hash = MockHash.value(seed: profile.seed, index: ref.derivationIndex, salt: .representation)
-        var tiers: Set<RepresentationTier> = [.dominantColour, .lqip]
+        var tiers: Set<RepresentationTier> = [.lqip]
         if !MockHash.occurs(hash, perMille: 70) { tiers.insert(.thumbnail) }
         if MockHash.occurs(MockHash.mix(hash), perMille: 560) { tiers.insert(.preview) }
         if MockHash.occurs(MockHash.mix(hash &+ 7), perMille: 230) { tiers.insert(.original) }
@@ -135,13 +135,13 @@ public extension MockLibrary {
         var remaining = held.subtracting([.original])
         if MockHash.occurs(hash, perMille: 600) { remaining.remove(.preview) }
         if MockHash.occurs(MockHash.mix(hash), perMille: 120) { remaining.remove(.thumbnail) }
-        let ladder = LocalRepresentations(heldTiers: remaining)
+        let inHand = LocalRepresentations(heldTiers: remaining)
         guard !held.contains(.original) else {
             return MockLadderState(representations: LocalRepresentations(heldTiers: held), state: .durable)
         }
         return MockLadderState(
-            representations: ladder,
-            state: .fullResolutionUnavailable(bestAvailable: ladder.best)
+            representations: inHand,
+            state: .fullResolutionUnavailable(bestAvailable: MockRenderLadder.ladder.bestAvailable(inHand))
         )
     }
 }

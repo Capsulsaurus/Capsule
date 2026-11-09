@@ -47,6 +47,7 @@ use kynos::response::status::NoContent;
 use kynos::security::auth::Auth;
 use serde::{Deserialize, Serialize};
 
+use crate::activity::{ActivityContext, ActivityKind};
 use crate::auth::{
     AccessToken, AuthContext, Authentication, DirectoryError, MIN_PASSWORD_LENGTH,
     MalformedProfile, PasswordChanged, ProfileRecord, ProfileUpdate, admissible_display_name,
@@ -404,6 +405,7 @@ pub async fn update_profile(
 pub async fn change_password(
     Auth(credential): Auth<AccessToken>,
     Inject(auth): Inject<AuthContext>,
+    Inject(activity): Inject<ActivityContext>,
     Json(request): Json<ChangePasswordRequest>,
 ) -> Result<NoContent, ChangePasswordRejection> {
     let user = UserId::new(credential.user.as_str());
@@ -435,13 +437,13 @@ pub async fn change_password(
             }
         })? {
         Authentication::Granted(_) => {}
-        Authentication::Locked => {
+        Authentication::Locked(_) => {
             tracing::warn!(%user, "a password change was refused: the account is locked");
             return Err(ChangePasswordRejection::AccountLocked {
                 code: error_codes::AUTH_ACCOUNT_LOCKED,
             });
         }
-        Authentication::Refused => {
+        Authentication::Refused(_) => {
             tracing::info!(%user, "a password change was refused: the current password is wrong");
             return Err(ChangePasswordRejection::CurrentPasswordInvalid {
                 code: error_codes::AUTH_CURRENT_PASSWORD_INVALID,
@@ -485,7 +487,9 @@ pub async fn change_password(
                 // measures from.
                 record.authenticated_at = now;
                 record.last_active_at = now;
-                match auth.sessions().open_session(record).await {
+                // Restored, not re-opened: no token is issued here, so the window does not
+                // slide, and the record still dies with the refresh token it was minted with.
+                match auth.sessions().restore_session(record).await {
                     Ok(()) => restored = true,
                     Err(error) => tracing::error!(
                         %error,
@@ -513,6 +517,14 @@ pub async fn change_password(
         }
     }
 
+    activity
+        .record(
+            &user,
+            ActivityKind::PasswordChanged,
+            Some(&credential.session),
+            None,
+        )
+        .await;
     Ok(NoContent)
 }
 

@@ -174,8 +174,6 @@ public extension RecoveryAction {
 public extension RepresentationTier {
     var badge: TransferBadge {
         switch self {
-        case .dominantColour:
-            TransferBadge(titleKey: "app.storage.tier.dominant_colour", systemImage: "paintpalette", tint: .gray)
         case .lqip:
             TransferBadge(titleKey: "app.storage.tier.lqip", systemImage: "square.dashed", tint: .gray)
         case .thumbnail:
@@ -194,7 +192,10 @@ public extension RepresentationTier {
     /// Automatic cache management*), so an asset stays listable and previewable
     /// at LQIP fidelity after every heavier representation is gone.
     var isReclaimable: Bool {
-        self > .lqip
+        switch self {
+        case .lqip: false
+        case .thumbnail, .preview, .original: true
+        }
     }
 }
 

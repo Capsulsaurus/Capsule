@@ -79,9 +79,6 @@ fn a_staged_original_is_removed_unless_committed() {
     .unwrap();
     assert!(!tmp.exists());
     assert_eq!(fs::read(&target).unwrap(), b"plaintext");
-
-    // In place: nothing staged, nothing to commit.
-    StagedOriginal(None).commit().unwrap();
 }
 
 /// A JPEG holding only an EXIF APP1 segment whose IFD0 carries `Make = "Cap"`, inline.

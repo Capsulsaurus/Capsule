@@ -27,6 +27,12 @@
 //!
 //! Blob bytes never ride this surface; on-demand ranged blob fetch is [`crate::fetch`].
 //!
+//! The feed carries only an asset's latest provenance record. [`fetch_history`] walks the
+//! chain back from it to the asset's `create` through that blob fetch, for a device that first
+//! sees an asset past its create and adopts it from its whole chain; [`history_sources`] names
+//! the live metadata blob and the original that adoption fetches, which an album page's
+//! tombstone does not.
+//!
 //! [Download & Sync]: https://docs/design/sync/
 //! [Download & Sync — cursor authenticity]: https://docs/design/sync/#cursor-authenticity-and-anti-rewind
 
@@ -39,6 +45,7 @@ use capsule_i18n::error_codes;
 use tracing::instrument;
 
 use crate::auth::{AuthError, Session};
+use crate::federation::RequestSigner;
 use crate::net::{RetryClass, RetryDecision, RetryEngine, Sleeper, TokioSleeper};
 use crate::rest;
 
@@ -145,12 +152,15 @@ pub struct FeedEntry {
     /// (decoded and verified by core's `apply_remote_entry`). Never re-encoded here.
     pub manifest_cbor: Vec<u8>,
     /// The encrypted metadata blob's **content address**, as its UTF-8 bytes; empty when the
-    /// entry carries none (a tombstone).
+    /// entry carries none (a purged tombstone, or any tombstone from a server that predates
+    /// naming it). A tombstone in trash names the asset's live metadata blob, which a device
+    /// that first sees the asset at its delete opens the sidecar from to adopt and restore it.
     ///
     /// An address, not the bytes: blob bytes never ride the feed. The field name predates the
     /// REST port and the type is kept so a caller's storage does not move.
     pub metadata_blob: Vec<u8>,
-    /// Content addresses of the asset's blobs by role.
+    /// Content addresses of the asset's blobs by role. A tombstone in trash names only its
+    /// original, the blob a restore needs; a purged one names none.
     pub blobs: BlobManifest,
     /// The asset's signed derivative manifests, each the **exact** canonical CBOR of one
     /// `derivative_manifest` blob, served back unchanged (#556). Empty on a tombstone.
@@ -164,6 +174,13 @@ pub struct FeedEntry {
     /// Whether the original blob is finalized on the server (`awaiting-original`
     /// derived state when `false`; staged uploads).
     pub original_held: bool,
+    /// Whether the server has purged the asset (#885): its retention window closed and its
+    /// references are gone, so no `trash-restore` can bring it back. Only ever set on a
+    /// [`ChangeKind::Deleted`] entry, and `false` from a server that predates the signal.
+    ///
+    /// The positive evidence of a purge. An empty [`Self::manifest_cbor`] is not: the server
+    /// also serves none when it cannot produce the blob.
+    pub purged: bool,
     /// When the change happened, RFC 3339, on the server's clock.
     pub changed_at: String,
 }
@@ -459,7 +476,17 @@ enum SyncAuth {
     /// and what this arm decides is that a `401` is **final** — a static token cannot be
     /// refreshed, so retrying would only ask the same question twice.
     Static,
+    /// A federation capability, held by the client like [`Self::Static`], whose every request
+    /// also carries the puller's request signature. Its `401` is final for the same reason.
+    Signed {
+        token: Arc<str>,
+        signer: Arc<dyn RequestSigner>,
+    },
 }
+
+/// The path the feed is signed over: the operation's own, whatever prefix the base URL has,
+/// because the issuer verifies against the path it routes (design/federation.md, `path`).
+const FEED_PATH: &str = "/v1/sync";
 
 /// The sync consumer, over the **generated REST client**.
 ///
@@ -502,6 +529,27 @@ impl SyncConsumer {
         })
     }
 
+    /// A consumer presenting a federation capability `token`, each request signed by `signer` —
+    /// the puller's key, which the home server pinned for the peer the capability names.
+    ///
+    /// # Errors
+    ///
+    /// [`SyncError::Transport`] when `base_url` is not a URL the client can hang paths off.
+    pub fn with_signed_capability(
+        base_url: &str,
+        token: impl Into<String>,
+        signer: Arc<dyn RequestSigner>,
+    ) -> Result<Self, SyncError> {
+        let token: String = token.into();
+        Ok(Self {
+            client: build_client(base_url, rest::Credential::Bearer(token.clone().into()))?,
+            auth: SyncAuth::Signed {
+                token: token.into(),
+                signer,
+            },
+        })
+    }
+
     /// Pull one page after `cursor`.
     ///
     /// On a `401` under a session, refreshes once and retries — the reactive half of the session
@@ -522,18 +570,21 @@ impl SyncConsumer {
     ) -> Result<SyncPage, SyncError> {
         let mut engine: RetryEngine = RetryClass::Interactive.engine();
         let response = loop {
-            match self.call(cursor, page_size, album_id).await {
+            match self
+                .call(cursor, page_size, album_id, self.signature()?)
+                .await
+            {
                 Ok(page) => break page,
                 Err(error) if is_unauthenticated(&error) => match &self.auth {
                     SyncAuth::Session(session) => {
                         tracing::info!("the feed answered 401; refreshing once and retrying");
                         session.refresh().await?;
                         break self
-                            .call(cursor, page_size, album_id)
+                            .call(cursor, page_size, album_id, None)
                             .await
                             .map_err(map_error)?;
                     }
-                    SyncAuth::Static => return Err(map_error(error)),
+                    SyncAuth::Static | SyncAuth::Signed { .. } => return Err(map_error(error)),
                 },
                 Err(error) if is_transient(&error) => match engine.next_backoff(None) {
                     RetryDecision::GiveUp => {
@@ -551,6 +602,25 @@ impl SyncConsumer {
         let page = decode_page(response)?;
         tracing::Span::current().record("entries", page.entries.len());
         Ok(page)
+    }
+
+    /// The request signature for one attempt at the feed, when this consumer presents a
+    /// capability.
+    ///
+    /// Made per attempt, retries included, so each carries a fresh nonce: the home server
+    /// accepts each signature once.
+    fn signature(&self) -> Result<Option<String>, SyncError> {
+        match &self.auth {
+            SyncAuth::Signed { token, signer } => {
+                crate::federation::request_signature(signer.as_ref(), "GET", FEED_PATH, token)
+                    .map(Some)
+                    .map_err(|error| {
+                        tracing::error!(%error, "a federated feed request could not be signed");
+                        SyncError::Transport(error)
+                    })
+            }
+            SyncAuth::Session(_) | SyncAuth::Static => Ok(None),
+        }
     }
 
     /// Pull one page of **one album** after `cursor`.
@@ -594,8 +664,10 @@ impl SyncConsumer {
         cursor: &SyncCursor,
         page_size: u32,
         album_id: Option<&str>,
+        signature: Option<String>,
     ) -> Result<rest::types::SyncPageResponse, rest::Error<rest::SyncFeedError>> {
         let params = rest::SyncFeedParams {
+            x_capsule_request_signature: signature,
             // Absent is the caller's own feed; present is one album's page.
             album_id: album_id.map(str::to_owned),
             // The cursor is round-tripped verbatim. Empty means "from the beginning", which the
@@ -756,6 +828,9 @@ fn decode_entry(entry: rest::types::SyncEntry) -> Result<FeedEntry, SyncError> {
         blobs: decode_blobs(entry.blobs),
         derivative_manifests,
         original_held: entry.original_held,
+        // Optional on the wire: a server that predates the signal sends no key, and that is no
+        // purge. A signal on anything but a tombstone is not one either.
+        purged: kind == ChangeKind::Deleted && entry.purged.unwrap_or(false),
         changed_at: entry.changed_at,
     })
 }
@@ -794,6 +869,254 @@ fn role_str(role: &rest::types::WireBlobRole) -> &'static str {
         // arm exists and spells the token the server would.
         rest::types::WireBlobRole::DerivativeManifest => "derivative_manifest",
     }
+}
+
+// ─── Provenance history ──────────────────────────────────────────────────────
+
+/// The most records [`fetch_history`] walks back from a head: a chain longer than this is
+/// refused ([`HistoryError::TooLong`]) rather than held in memory without bound. Every record of
+/// a chain is one lifecycle write of one asset, so a real chain is far shorter.
+pub const MAX_HISTORY_RECORDS: usize = 4096;
+
+/// The largest provenance record [`fetch_history`] accepts (1 MiB). A record is a signed
+/// manifest and its chain link, a few KiB; anything past this is not one.
+pub const MAX_RECORD_BYTES: u64 = 1024 * 1024;
+
+/// Why an asset's earlier provenance records could not be fetched, or the blobs its adoption
+/// needs could not be named from them ([`history_sources`]). Nothing is verified here —
+/// [`Workspace::adopt_remote_history`](capsule_library::lifecycle::Workspace::adopt_remote_history)
+/// does that — so each variant is a fact about the walk, not a verdict on the chain.
+#[derive(Debug, thiserror::Error)]
+pub enum HistoryError {
+    /// A record does not decode, so the link to the record before it cannot be read. `hash` is
+    /// the record's address, or `head` for the record the walk started from.
+    #[error("the provenance record {hash} does not decode: {detail}")]
+    Malformed {
+        /// The record's content address, or `head`.
+        hash: String,
+        /// English detail (developer/log message).
+        detail: String,
+    },
+    /// The record a link names could not be fetched: the server refused it (an asset the caller
+    /// may not read, a deleted one past its retention window, or a purged one), it did not hash
+    /// to its address, or the transport failed.
+    #[error("fetching the provenance record {hash} failed: {source}")]
+    Fetch {
+        /// The content address the link names.
+        hash: String,
+        /// Why the fetch failed.
+        #[source]
+        source: crate::fetch::FetchError,
+    },
+    /// The chain is longer than [`MAX_HISTORY_RECORDS`].
+    #[error("the provenance chain is longer than {limit} records")]
+    TooLong {
+        /// The bound, [`MAX_HISTORY_RECORDS`].
+        limit: usize,
+    },
+    /// Neither the head nor any record of its history binds a metadata blob, so there is no live
+    /// metadata blob to name. A chain starts at a `create`, which binds one, so a history that
+    /// reaches its create never answers this.
+    #[error("no record of the chain binds a metadata blob")]
+    Unbound,
+}
+
+/// The blobs adopting an asset from its fetched history needs beyond its records, by content
+/// address: what [`history_sources`] reads off a head and the records before it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistorySources {
+    /// The asset's live metadata blob: the head's own when it binds one, else the newest record
+    /// of the history that binds one.
+    pub metadata_blob_hash: capsule_core::crypto::hash::Hash32,
+    /// The original the head commits to (its `ciphertext_hash`).
+    pub original_hash: capsule_core::crypto::hash::Hash32,
+    /// The original's exact ciphertext length, from the head's `plaintext_size`.
+    pub original_size: u64,
+}
+
+/// Name the live metadata blob and the original an asset's adoption needs, from its head record
+/// (a feed entry's `manifest_cbor`) and the records before it ([`fetch_history`]'s answer).
+///
+/// This is how a device that first sees an asset at its `delete` on an album page, which names
+/// no byte reference on a tombstone, finds what to fetch: the delete binds no metadata blob, so
+/// the live one is the newest record of the history that binds one, and the delete still commits
+/// to the asset's original. Both are served by the blob route to the asset's readers until its
+/// retention window closes. A head that binds a metadata blob names its own, so an entry that
+/// names one agrees with this.
+///
+/// Nothing is trusted for being read here: the adoption binds the metadata blob to the record
+/// that names it and the original to the head's content address, so a wrong answer is refused
+/// there, never adopted.
+///
+/// # Errors
+///
+/// [`HistoryError::Malformed`] when the head or a history record does not decode (`hash` is
+/// `head` or the record's position), and [`HistoryError::Unbound`] when no record binds a
+/// metadata blob.
+#[instrument(skip_all, fields(head_bytes = head_record.len(), records = history.len()))]
+pub fn history_sources(
+    head_record: &[u8],
+    history: &[Vec<u8>],
+) -> Result<HistorySources, HistoryError> {
+    use capsule_core::crypto::provenance::ProvenanceRecord;
+
+    let decode = |bytes: &[u8], at: String| {
+        ProvenanceRecord::decode(bytes).map_err(|error| HistoryError::Malformed {
+            hash: at,
+            detail: error.to_string(),
+        })
+    };
+    let head = decode(head_record, "head".to_owned())?;
+    let mut metadata_blob_hash = head.manifest.core.metadata_blob_hash;
+    for (position, bytes) in history.iter().enumerate().rev() {
+        if metadata_blob_hash.is_some() {
+            break;
+        }
+        let record = decode(bytes, format!("history[{position}]"))?;
+        if record.manifest.core.action.binds_metadata_blob() {
+            metadata_blob_hash = record.manifest.core.metadata_blob_hash;
+        }
+    }
+    let Some(metadata_blob_hash) = metadata_blob_hash else {
+        tracing::warn!(
+            records = history.len(),
+            "sync-history: no record of the chain binds a metadata blob"
+        );
+        return Err(HistoryError::Unbound);
+    };
+    let sources = HistorySources {
+        metadata_blob_hash,
+        original_hash: head.manifest.core.ciphertext_hash,
+        original_size: capsule_core::crypto::encryption::ciphertext_len(
+            head.manifest.core.plaintext_size,
+        ),
+    };
+    tracing::debug!(
+        metadata = %sources.metadata_blob_hash.to_hex(),
+        original = %sources.original_hash.to_hex(),
+        original_size = sources.original_size,
+        action = ?head.manifest.core.action,
+        "sync-history: the blobs an adoption needs were named from the chain"
+    );
+    Ok(sources)
+}
+
+/// Whether the retention window of the `delete` that is `head_record` (a feed entry's
+/// `manifest_cbor`) had closed at `at`: `at` is at or after the `retention_until` signed into
+/// it, the instant from which the server refuses a `trash-restore` and stops serving the asset's
+/// records and bytes to its readers.
+///
+/// A device that first sees an asset at an album page's tombstone reads this before it fetches
+/// the asset's history: a closed window means the fetch is refused, and there is nothing left to
+/// adopt or restore. A record that is not a `delete`, or a `delete` whose `retention_until` is
+/// absent or unreadable, has no closed window (`false`), as the trash judges one: a guessed
+/// deadline could only ever lose data.
+///
+/// # Errors
+///
+/// [`HistoryError::Malformed`] (`hash` is `head`) when `head_record` does not decode.
+#[instrument(skip_all, fields(head_bytes = head_record.len(), %at))]
+pub fn retention_closed(head_record: &[u8], at: jiff::Timestamp) -> Result<bool, HistoryError> {
+    use capsule_core::crypto::provenance::{Action, ProvenanceRecord};
+
+    let head = ProvenanceRecord::decode(head_record).map_err(|error| HistoryError::Malformed {
+        hash: "head".to_owned(),
+        detail: error.to_string(),
+    })?;
+    let core = &head.manifest.core;
+    if core.action != Action::Delete {
+        tracing::trace!(action = ?core.action, "sync-retention: not a delete; no window");
+        return Ok(false);
+    }
+    let Some(until) = core.retention_until.as_deref() else {
+        tracing::debug!(asset_id = %core.file_id, "sync-retention: the delete signs no retention_until; the window is open");
+        return Ok(false);
+    };
+    let until = match until.parse::<jiff::Timestamp>() {
+        Ok(until) => until,
+        Err(error) => {
+            tracing::warn!(asset_id = %core.file_id, retention_until = %until, %error, "sync-retention: unreadable retention_until; treating the window as open");
+            return Ok(false);
+        }
+    };
+    let closed = at >= until;
+    tracing::debug!(asset_id = %core.file_id, %until, closed, "sync-retention: the delete's window judged");
+    Ok(closed)
+}
+
+/// Walk an asset's provenance chain back from `head_record` (the `manifest_cbor` a feed entry
+/// carries) to its `create`, fetching each record the one after it names by
+/// `prior_provenance_hash` through `source` (`GET /v1/blob/{hash}`, where the server keeps an
+/// asset's superseded records under the live record's read authority).
+///
+/// Returns the records **before** the head, oldest first, each the exact bytes the server
+/// holds, verified against its content address by the fetch: what
+/// [`Workspace::adopt_remote_history`](capsule_library::lifecycle::Workspace::adopt_remote_history)
+/// takes. A head that is its asset's `create` has no history, and the walk fetches nothing.
+///
+/// Nothing is trusted for being fetched: the walk only follows links, and the chain is verified
+/// record by record when it is adopted.
+///
+/// # Errors
+///
+/// [`HistoryError`]; the walk stops at the first record it cannot fetch or decode.
+#[instrument(skip_all, fields(head_bytes = head_record.len()))]
+pub async fn fetch_history<B, S, C>(
+    fetcher: &crate::fetch::RangedFetcher<S, C>,
+    source: &B,
+    head_record: &[u8],
+) -> Result<Vec<Vec<u8>>, HistoryError>
+where
+    B: crate::fetch::BlobSource,
+    S: Sleeper,
+    C: crate::net::MonotonicClock,
+{
+    let mut prior = prior_of(head_record, "head")?;
+    let mut history = Vec::new();
+    while let Some(link) = prior {
+        if history.len() == MAX_HISTORY_RECORDS {
+            tracing::warn!(
+                limit = MAX_HISTORY_RECORDS,
+                "sync-history: the chain is longer than the walk's bound"
+            );
+            return Err(HistoryError::TooLong {
+                limit: MAX_HISTORY_RECORDS,
+            });
+        }
+        let hash = link.to_hex();
+        let record = fetcher
+            .fetch_unsized(source, &hash, MAX_RECORD_BYTES)
+            .await
+            .map_err(|source| {
+                tracing::warn!(%hash, error = %source, "sync-history: an earlier record could not be fetched");
+                HistoryError::Fetch {
+                    hash: hash.clone(),
+                    source,
+                }
+            })?;
+        prior = prior_of(&record, &hash)?;
+        tracing::debug!(%hash, bytes = record.len(), at_create = prior.is_none(), "sync-history: an earlier record fetched");
+        history.push(record);
+    }
+    history.reverse();
+    tracing::info!(
+        records = history.len(),
+        "sync-history: the chain was walked back to its create"
+    );
+    Ok(history)
+}
+
+/// The `prior_provenance_hash` of the record `bytes`, read off its decode.
+fn prior_of(
+    bytes: &[u8],
+    hash: &str,
+) -> Result<Option<capsule_core::crypto::hash::Hash32>, HistoryError> {
+    capsule_core::crypto::provenance::ProvenanceRecord::decode(bytes)
+        .map(|record| record.prior_provenance_hash)
+        .map_err(|error| HistoryError::Malformed {
+            hash: hash.to_owned(),
+            detail: error.to_string(),
+        })
 }
 
 /// Lossy UTF-8 of an id byte string, for error display only.

@@ -26,7 +26,6 @@ use capsule_core::sidecar::normalize_label;
 use capsule_core::sidecar::sidecar_v1::{
     Gps, GpsSource, SIDECAR_SCHEMA_V1, SidecarV1, StackMembership, StackRole,
 };
-use ciborium::value::Value;
 use jiff::Timestamp;
 use uuid::Uuid;
 
@@ -70,12 +69,6 @@ pub(super) fn with_write_fault<T>(point: WriteFault, skip: u32, body: impl FnOnc
     let out = body();
     WRITE_FAULT.with(|slot| slot.set(None));
     out
-}
-
-/// Run `body` with the first sidecar rename failing after the `.tmp` write.
-#[cfg(test)]
-pub(super) fn with_sidecar_rename_fault<T>(body: impl FnOnce() -> T) -> T {
-    with_write_fault(WriteFault::SidecarRename, 0, body)
 }
 
 /// Whether the armed fault fires at `point` now; counts down the renames it lets through.
@@ -199,10 +192,10 @@ pub(super) fn read_head(file: &mut fs::File) -> io::Result<Vec<u8>> {
     Ok(head)
 }
 
-/// The plaintext on its way into the encryptor: hashed as it passes and, unless the original
-/// already lies at its media path, copied into the staged library file — so one read of the
-/// source yields the signed `hash`, the ciphertext address and the library copy, and holds one
-/// STREAM chunk at a time.
+/// The plaintext on its way into the encryptor: hashed as it passes and, when the caller stages
+/// a copy, copied into the staged library file (reseal stages none, so `copy` is `None`) — so
+/// one read of the source yields the signed `hash`, the ciphertext address and any library copy,
+/// and holds one STREAM chunk at a time.
 pub(super) struct Tee<R> {
     pub(super) inner: R,
     pub(super) hasher: Sha256Hasher,
@@ -221,6 +214,21 @@ impl<R: Read> Read for Tee<R> {
     }
 }
 
+/// A writer that only hashes what it is given: the sink [`io::copy`] streams a file into to
+/// digest it one buffer at a time.
+struct HashSink<'a>(&'a mut Sha256Hasher);
+
+impl Write for HashSink<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.update(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 /// An import's library copy of its original, written to `{media}.tmp` while it is encrypted
 /// and renamed into place only once the asset has self-verified. Dropped uncommitted — the
 /// import failed after the copy began — it removes the `.tmp`, so a failed import leaves no
@@ -228,7 +236,7 @@ impl<R: Read> Read for Tee<R> {
 struct StagedOriginal(Option<Staged>);
 
 impl StagedOriginal {
-    /// Rename the copy into place; a no-op for an original already at its media path.
+    /// Rename the copy into place.
     fn commit(mut self) -> Result<()> {
         self.0.take().map_or(Ok(()), Staged::commit)
     }
@@ -431,6 +439,16 @@ fn asset_row_from_state(asset: &AssetState) -> AssetRow {
         // Projection of the sidecar `hidden` LWW register: a never-written register
         // means visible, the wire-absent default.
         is_hidden: asset.sidecar.hidden.get().copied().unwrap_or(false),
+        // Projections of the `caption` register and the effective location — the same rule
+        // `library::rebuild::signed_asset_row` applies, so a rebuild agrees with this row.
+        caption: asset
+            .sidecar
+            .caption
+            .get()
+            .filter(|c| !c.is_empty())
+            .cloned(),
+        latitude: asset.sidecar.effective_gps().map(|g| g.lat),
+        longitude: asset.sidecar.effective_gps().map(|g| g.lon),
     }
 }
 
@@ -443,25 +461,15 @@ fn is_same_file(a: &Path, b: &Path) -> bool {
 }
 
 /// One signed create, as [`Workspace::commit_signed_create`] takes it: everything a caller
-/// decides *before* the sealing order starts. A fresh import fills the defaults; the
-/// unsigned-sidecar migration is the one caller that pins an id, a bucket, an import
-/// time, and a fold.
+/// decides *before* the sealing order starts.
 pub(super) struct CreateRequest<'a> {
-    /// The asset id. An import mints `Uuid::now_v7()`; the migration keeps the legacy id.
+    /// The asset id. An import mints `Uuid::now_v7()`.
     pub asset_id: Uuid,
     /// The owning album; must be held with write capability.
     pub album_id: Uuid,
     /// The plaintext to admit. When this already *is* the asset's own media path, the bytes are
     /// left where they are rather than rewritten over themselves.
     pub src: &'a Path,
-    /// The sidecar's `import_timestamp`; `None` stamps now.
-    pub import_timestamp: Option<String>,
-    /// The `media/{YYYY}/{YYYY-MM}` bucket the asset's files live in, as UTC seconds. `None`
-    /// derives it from the resolved capture time (a fresh import); the migration pins the
-    /// bucket the files already sit in, so nothing moves.
-    pub media_bucket: Option<i64>,
-    /// `_unknown` entries the signed sidecar carries from birth — empty for an import.
-    pub extra_unknown: BTreeMap<String, Value>,
     /// Move-mode release, stack placement, and exporter enrichment.
     pub opts: &'a SignedImportOptions,
 }
@@ -506,6 +514,61 @@ impl Workspace {
         self.write_signed_artifacts(asset)
     }
 
+    /// Place the plaintext original at `src` as `asset`'s library original, durably, and only if
+    /// it hashes to `expected`. Returns its length.
+    ///
+    /// The file is copied to `{media}.tmp`, the staged copy is hashed, and it is renamed over
+    /// the media path only once its SHA-256 is `expected`, then fsynced with its directory.
+    /// Hashing the staged copy rather than `src` means the bytes checked are the bytes placed.
+    /// The copy is never a hard link: `src` stays where it is for the caller to keep, and a
+    /// linked original would share its inode, so a later in-place write to `src` would change
+    /// the library original unchecked. `fs::copy` clones the extents where the filesystem can
+    /// (`clonefile` on APFS, `copy_file_range` on Btrfs and XFS), which is copy-on-write and
+    /// so equally independent of `src`. On a mismatch the staged copy is removed and
+    /// [`LifecycleError::OriginalMismatch`] returned; nothing reaches the media path.
+    pub(super) fn place_original_from(
+        &self,
+        asset: &AssetState,
+        src: &Path,
+        expected: Hash32,
+    ) -> Result<u64> {
+        let dir = media_dir(&self.root, asset.capture_utc);
+        create_dir_durable(&dir)?;
+        let target = self.media_path(asset);
+        let tmp = tmp_path(&target);
+        let _ = fs::remove_file(&tmp);
+        fs::copy(src, &tmp).map_err(|e| {
+            LifecycleError::Io(format!("copy {} to {}: {e}", src.display(), tmp.display()))
+        })?;
+        let staged = StagedOriginal(Some(Staged {
+            tmp: tmp.clone(),
+            target: target.clone(),
+        }));
+        let mut file = fs::File::open(&tmp)
+            .map_err(|e| LifecycleError::Io(format!("open {}: {e}", tmp.display())))?;
+        let mut hasher = Sha256Hasher::new();
+        let len = io::copy(&mut file, &mut HashSink(&mut hasher))
+            .map_err(|e| LifecycleError::Io(format!("read {}: {e}", tmp.display())))?;
+        if hasher.finalize() != expected {
+            tracing::warn!(
+                asset_id = %asset.asset_id,
+                src = %src.display(),
+                "the original handed over does not hash to its signed digest; not placing it"
+            );
+            return Err(LifecycleError::OriginalMismatch(asset.asset_id));
+        }
+        file.sync_all()
+            .map_err(|e| LifecycleError::Io(format!("fsync {}: {e}", tmp.display())))?;
+        staged.commit()?;
+        sync_dir_entries(&dir)?;
+        tracing::debug!(
+            asset_id = %asset.asset_id,
+            bytes = len,
+            "verified original copied into the library"
+        );
+        Ok(len)
+    }
+
     /// The signed half of [`write_asset_files`](Self::write_asset_files): the sidecar, the
     /// provenance chain, and the sealed metadata blob — everything but the plaintext. The
     /// right call for a writer whose plaintext is already on disk and unchanged (a metadata
@@ -513,12 +576,11 @@ impl Workspace {
     ///
     /// Every file is staged to `{name}.tmp` and renamed into place (the single-file atomic
     /// write of the maintenance doc), so a crash mid-write leaves the previous file intact
-    /// rather than a torn one — for the migration, the previous sidecar is the legacy record
-    /// itself. All three are staged before any is renamed, and the renames run sidecar, then
-    /// sealed metadata blob, then provenance chain: the chain is what anchors an asset
-    /// ([`find_unanchored`](super::migrate_unsigned::find_unanchored)), so it lands last, and a
-    /// crash before it leaves a chainless signed sidecar the migration resumes from rather than
-    /// a torn chain that counts as anchored and hides the asset. A stale `.tmp` is the startup
+    /// rather than a torn one. All three are staged before any is renamed, and the renames run
+    /// sidecar, then sealed metadata blob, then provenance chain: the chain is what anchors an
+    /// asset ([`find_unanchored`](super::unanchored::find_unanchored)), so it lands last, and a
+    /// crash before it leaves a chainless signed sidecar that `open` reports rather than a torn
+    /// chain that counts as anchored and hides the asset. A stale `.tmp` is the startup
     /// scrub's to remove. The per-asset *bundle* (sidecar, chain, blob renamed as one unit)
     /// remains separate work.
     pub(super) fn write_signed_artifacts(&self, asset: &AssetState) -> Result<()> {
@@ -556,6 +618,27 @@ impl Workspace {
         tracing::trace!(
             asset_id = %asset.asset_id,
             "signed artifacts renamed into place and fsynced: sidecar, blob, chain"
+        );
+        Ok(())
+    }
+
+    /// Durably keep `blob`, the sealed metadata blob `asset`'s `create` binds, at
+    /// [`create_metadata_blob_path`](Self::create_metadata_blob_path): staged, renamed and
+    /// fsynced before the edit that supersedes it renames anything of its own, so a crash
+    /// between the two leaves the create's bytes on disk twice rather than nowhere.
+    pub(super) fn write_create_metadata_blob(&self, asset: &AssetState, blob: &[u8]) -> Result<()> {
+        let path = self.create_metadata_blob_path_of(asset);
+        let dir = path
+            .parent()
+            .expect("the create-metadata path has a shard directory")
+            .to_path_buf();
+        create_dir_durable(&dir)?;
+        stage(&path, blob)?.commit()?;
+        sync_dir_entries(&dir)?;
+        tracing::debug!(
+            asset_id = %asset.asset_id,
+            bytes = blob.len(),
+            "the metadata blob the create binds is kept before an edit replaces it"
         );
         Ok(())
     }
@@ -679,18 +762,13 @@ impl Workspace {
             asset_id: Uuid::now_v7(),
             album_id,
             src,
-            import_timestamp: None,
-            media_bucket: None,
-            extra_unknown: BTreeMap::new(),
             opts,
         })
     }
 
-    /// The signed create commit every import — and the unsigned-sidecar migration — goes
-    /// through: EXIF scan, encrypt, derivatives, author + sign the sidecar, seal it, build +
-    /// sign the create manifest, self-verify, write, index. The [`CreateRequest`] carries the
-    /// few things a caller decides beforehand; the sealing order and the self-checks are the
-    /// same for every caller, which is the point of there being one of these.
+    /// The signed create commit every import goes through: EXIF scan, encrypt, derivatives,
+    /// author + sign the sidecar, seal it, build + sign the create manifest, self-verify,
+    /// write, index. The [`CreateRequest`] carries the few things a caller decides beforehand.
     #[tracing::instrument(
         skip_all,
         fields(asset_id = %req.asset_id, album_id = %req.album_id, src = %req.src.display())
@@ -805,28 +883,21 @@ impl Workspace {
         let album = self.album(&album_id)?;
         let epoch = album.current_epoch;
         let amk = Amk::from_bytes(album.amks[&epoch]);
-        // The media bucket every file of this asset resolves to. A fresh import buckets by the
-        // resolved capture time; the migration pins the bucket the files already sit in, and
-        // the sidecar's `capture_timestamp` below still carries the resolved truth.
-        let bucket = req.media_bucket.unwrap_or(capture_utc);
+        // The media bucket every file of this asset resolves to: the resolved capture time.
+        let bucket = capture_utc;
         let media_path = media_file_path(&self.root, bucket, asset_id, &ext);
-        // Bytes already at their own media path (the migration) are signed where they lie:
-        // nothing is copied, and the Move-mode release below must not delete what is now the
-        // asset. Anything else is copied to `{media}.tmp` in the same pass that encrypts it.
-        let in_place = is_same_file(src, &media_path);
-        let (staged, copy) = if in_place {
-            (StagedOriginal(None), None)
-        } else {
-            create_dir_durable(&media_dir(&self.root, bucket))?;
-            let tmp = tmp_path(&media_path);
-            let staged = StagedOriginal(Some(Staged {
-                tmp: tmp.clone(),
-                target: media_path.clone(),
-            }));
-            let copy = fs::File::create(&tmp)
-                .map_err(|e| LifecycleError::Io(format!("stage {}: {e}", tmp.display())))?;
-            (staged, Some(copy))
-        };
+        // The original is copied to `{media}.tmp` in the same pass that encrypts it. The asset
+        // id is fresh, so its media path cannot already name the source.
+        create_dir_durable(&media_dir(&self.root, bucket))?;
+        let tmp = tmp_path(&media_path);
+        let staged = StagedOriginal(Some(Staged {
+            tmp: tmp.clone(),
+            target: media_path.clone(),
+        }));
+        let copy = Some(
+            fs::File::create(&tmp)
+                .map_err(|e| LifecycleError::Io(format!("stage {}: {e}", tmp.display())))?,
+        );
         let mut held_reader = held.as_deref().unwrap_or_default();
         let reader: &mut dyn Read = if held.is_some() {
             &mut held_reader
@@ -869,7 +940,6 @@ impl Workspace {
         tracing::debug!(
             asset_id = %asset_id,
             plaintext_size = enc.plaintext_size,
-            in_place,
             "import: original hashed, encrypted and staged in one pass"
         );
 
@@ -922,7 +992,7 @@ impl Workspace {
             capture_timestamp: capture_rfc3339(capture_utc),
             // An import records what the file says; a user correction is a later write.
             capture_timestamp_user: Lww::new(),
-            import_timestamp: req.import_timestamp.clone().unwrap_or_else(now_rfc3339),
+            import_timestamp: now_rfc3339(),
             content_type,
             dimensions,
             lqip,
@@ -948,7 +1018,7 @@ impl Workspace {
             gps,
             gps_user: Lww::new(),
             provenance_chain_hash: None,
-            unknown: req.extra_unknown.clone(),
+            unknown: BTreeMap::new(),
             signature: None,
         };
         sidecar.sign(&self.account.user_ik);
@@ -1044,7 +1114,7 @@ impl Workspace {
         // Move mode: release the source only after the durable, self-verified commit — unless
         // the caller defers release to its server-side verify-before-destroy gate,
         // where the source is the only copy until the *server* durably holds it.
-        if opts.move_source && !opts.defer_source_release && !in_place {
+        if opts.move_source && !opts.defer_source_release {
             let _ = fs::remove_file(src);
         }
 

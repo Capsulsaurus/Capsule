@@ -29,7 +29,7 @@ public final class SecureEnclaveKeyAgreement: FfiHardwareKeyAgreement, @unchecke
             return existing
         }
         guard SecureEnclave.isAvailable else {
-            throw FfiHardwareSignerError.Unavailable(message: "Secure Enclave unavailable")
+            throw FfiHardwareSignerError.Unavailable(detail: "Secure Enclave unavailable")
         }
         let key = try SecureEnclave.P256.KeyAgreement.PrivateKey()
         keys[keyAlias] = key

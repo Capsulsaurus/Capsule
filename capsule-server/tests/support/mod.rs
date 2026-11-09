@@ -32,6 +32,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use base64::Engine as _;
 use capsule_core::crypto::keys::HybridSigningKey;
 use capsule_server::App;
+use capsule_server::activity::{
+    ActivityContext, ActivityEvent, ActivityKind, ActivityStore, InMemoryActivity,
+};
 use capsule_server::album::{
     AlbumContext, AlbumRecord, AlbumStore, InMemoryAlbums, ProvisionOutcome,
 };
@@ -45,8 +48,8 @@ use capsule_server::auth::oidc::{
 use capsule_server::auth::{
     AccountDirectory, AccountProfiles, ActivateOutcome, AuthCollaborators, AuthContext,
     Authentication, BeginOutcome, ConsumeOutcome, DirectoryError, DirectoryFuture, EnrollmentState,
-    PasswordChange, PasswordChanged, ProfileRecord, ProfileUpdate, SessionTokens, TotpCodes,
-    TotpContext, TotpEnrollment, TotpSecret, TotpStore,
+    PasswordChange, PasswordChanged, PasswordSetting, ProfileRecord, ProfileUpdate, SessionTokens,
+    TotpCodes, TotpContext, TotpEnrollment, TotpSecret, TotpStore,
 };
 use capsule_server::blob::{
     BlobError, BlobFuture, BlobPage, BlobStat, BlobStore, ContentAddress, InMemoryBlobStore,
@@ -70,10 +73,12 @@ use capsule_server::escrow::{
     AlbumKeyRecord, AlbumKeysStored, EscrowContext, EscrowRecord, EscrowStore, InMemoryEscrow,
     Replaced,
 };
+use capsule_server::federation::pull::JobKey;
 use capsule_server::federation::{
     CapabilityCodec, CapabilityFilter, CapabilityRecord, CapabilityStore, FederationCollaborators,
-    FederationContext, FederationSetting, InMemoryCapabilities, InMemoryPeers, RefreshOutcome,
-    ReportClaim, RevokeOutcome,
+    FederationContext, FederationSetting, InMemoryCapabilities, InMemoryPeers,
+    InMemorySubscriptions, PeerId, PutOutcome, RefreshOutcome, ReportClaim, RevokeOutcome,
+    Subscription, SubscriptionStore,
 };
 use capsule_server::gc::memory::InMemoryCollection;
 use capsule_server::index::memory::InMemoryAssetIndex;
@@ -94,7 +99,8 @@ use capsule_server::moderation::{
     Standing,
 };
 use capsule_server::quota::{
-    ChargeOutcome, InMemoryQuota, QuotaContext, QuotaLimits, QuotaStore, StoredUsage,
+    ChargeOutcome, ExpiredReservation, InMemoryQuota, PulledDrift, QuotaContext, QuotaLimits,
+    QuotaStore, StoredUsage,
 };
 use capsule_server::serve::ServeContext;
 use capsule_server::share::{InMemoryShares, IssueOutcome, ShareContext, ShareRecord, ShareStore};
@@ -103,12 +109,13 @@ use capsule_server::store::memory::{
     InMemoryOidcAuthorizations, InMemoryUploadSessions, ManualClock,
 };
 use capsule_server::store::{
-    AcceptedChunk, AlbumId, AssetId, AuthStateStore, ChallengeStore, ChallengeToken, ChannelId,
-    ChannelStore, Clock, CohortRecord, CohortStore, Direction, DrainOutcome, ENROLLMENT_CODE_TTL,
-    EnrollmentCode, EnrollmentStore, FinalizeClaim, OidcAuthorizationStore, OidcState, OwnerId,
-    PendingAuthorization, PendingEnrollment, RELAY_CHANNEL_TTL, RelayChannel, RelayOutcome,
-    RelayPayload, RevokeAllChallenge, SessionId, SessionRecord, StoreError, StoreFuture, UploadId,
-    UploadSessionRecord, UploadSessionStatus, UploadSessionStore, UserId,
+    AlbumId, AssetId, AuthStateStore, ChallengeStore, ChallengeToken, ChannelId, ChannelStore,
+    Clock, CohortRecord, CohortStore, CommittedRange, CommittedSet, Direction, DrainOutcome,
+    ENROLLMENT_CODE_TTL, EnrollmentCode, EnrollmentStore, FinalizeClaim, OidcAuthorizationStore,
+    OidcState, OwnerId, PendingAuthorization, PendingEnrollment, RELAY_CHANNEL_TTL, RelayChannel,
+    RelayOutcome, RelayPayload, RevokeAllChallenge, SessionId, SessionRecord, StoreError,
+    StoreFuture, UnclaimedDiscard, UploadId, UploadSessionRecord, UploadSessionStatus,
+    UploadSessionStore, UserId,
 };
 
 pub(crate) mod idp;
@@ -116,7 +123,7 @@ use capsule_server::sync::{CURSOR_KEY_LEN, CursorCodec, SyncContext};
 use capsule_server::upload::authority::{
     AlbumWriteAccess, AuthorityError, AuthorityFuture, WriteAuthority,
 };
-use capsule_server::upload::{ChunkReadDeadline, UploadContext, UploadPolicy, WriteRole};
+use capsule_server::upload::{ChunkPace, ChunkReadPace, UploadContext, UploadPolicy, WriteRole};
 use capsule_server::verify::VerifyContext;
 use jiff::{SignedDuration, Timestamp};
 use kynos::test::{TestClient, TestRequest};
@@ -128,6 +135,13 @@ use uuid::Uuid;
 /// exercises a realistic "the refresh token dies with its record" window rather than a shorter
 /// one that would hide the arrangement.
 pub(crate) const SESSION_TTL: SignedDuration = SignedDuration::from_hours(24 * 7);
+
+/// The hard cap the fixture's store is built with: a session lineage dies thirty days after its
+/// sign-in however often it refreshes.
+///
+/// Several sliding windows long, so a test can refresh a few times inside it and then watch the
+/// cap, rather than the window, end the session.
+pub(crate) const SESSION_HARD_CAP: SignedDuration = SignedDuration::from_hours(24 * 30);
 
 /// The asset the conformance suite's lifecycle ops act on.
 pub(crate) const OPS_ASSET: &str = "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e61";
@@ -893,15 +907,15 @@ impl AccountDirectory for InMemoryAccounts {
 
             let accounts = self.accounts();
             let Some(account) = accounts.get(email) else {
-                return Ok(Authentication::Refused);
+                return Ok(Authentication::Refused(None));
             };
             if account.locked {
-                return Ok(Authentication::Locked);
+                return Ok(Authentication::Locked(account.user_id.clone()));
             }
             if account.password == password {
                 Ok(Authentication::Granted(account.user_id.clone()))
             } else {
-                Ok(Authentication::Refused)
+                Ok(Authentication::Refused(Some(account.user_id.clone())))
             }
         })
     }
@@ -924,13 +938,13 @@ impl AccountDirectory for InMemoryAccounts {
                 .find(|held| &held.user_id == user)
                 .cloned()
             else {
-                return Ok(Authentication::Refused);
+                return Ok(Authentication::Refused(None));
             };
             if account.locked {
-                return Ok(Authentication::Locked);
+                return Ok(Authentication::Locked(account.user_id));
             }
             if account.password != password {
-                return Ok(Authentication::Refused);
+                return Ok(Authentication::Refused(Some(account.user_id)));
             }
             if self
                 .forget_after_authentication
@@ -1207,16 +1221,35 @@ pub(crate) struct SwitchableSessions {
     inner: InMemoryAuthState,
     unavailable: AtomicBool,
     unavailable_after_authentication: AtomicBool,
+    lowered: Mutex<Option<(SignedDuration, SignedDuration)>>,
 }
 
 impl SwitchableSessions {
-    /// A working store on `clock`, with [`SESSION_TTL`].
+    /// A working store on `clock`, with [`SESSION_TTL`] and [`SESSION_HARD_CAP`].
     pub(crate) fn new(clock: Arc<ManualClock>) -> Self {
         Self {
-            inner: InMemoryAuthState::new(clock, SESSION_TTL),
+            inner: InMemoryAuthState::new(clock, SESSION_TTL).with_hard_cap(SESSION_HARD_CAP),
             unavailable: AtomicBool::new(false),
             unavailable_after_authentication: AtomicBool::new(false),
+            lowered: Mutex::new(None),
         }
+    }
+
+    /// Report `ttl` and `hard_cap` from now on, while every record already stored keeps the
+    /// deadline it was opened under.
+    ///
+    /// The restart of a durable store under a lowered `SESSION_TTL_DAYS` or
+    /// `SESSION_HARD_CAP_DAYS`: the new process reads the new values, and the records the old
+    /// one wrote still expire on the old schedule.
+    pub(crate) fn lower_lifetimes(&self, ttl: SignedDuration, hard_cap: SignedDuration) {
+        *self.lowered.lock().unwrap_or_else(PoisonError::into_inner) = Some((ttl, hard_cap));
+    }
+
+    fn lifetimes(&self) -> (SignedDuration, SignedDuration) {
+        self.lowered
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .unwrap_or((self.inner.ttl(), self.inner.hard_cap()))
     }
 
     /// Make every subsequent operation fail, or stop.
@@ -1547,38 +1580,160 @@ impl FederationSetting for SwitchableFederation {
     }
 }
 
-/// The fixture server's chunk-body read deadline (#717), switchable per request.
+/// Whether the fixture server refuses password sign-in (`PASSWORD_AUTH_DISABLED`, #1004),
+/// switchable per request.
+///
+/// A switch for the reason [`SwitchableFederation`] is one: the `403` the password operations
+/// declare has to come from the same server that answers their `200`s. Production hands in a
+/// fixed `bool`.
+#[derive(Debug)]
+pub(crate) struct SwitchablePasswords {
+    disabled: AtomicBool,
+}
+
+impl SwitchablePasswords {
+    /// A switch starting in `disabled`.
+    pub(crate) fn new(disabled: bool) -> Self {
+        Self {
+            disabled: AtomicBool::new(disabled),
+        }
+    }
+
+    /// Refuse or accept password sign-in for every subsequent request.
+    pub(crate) fn set_disabled(&self, disabled: bool) {
+        self.disabled.store(disabled, Ordering::SeqCst);
+    }
+}
+
+impl PasswordSetting for SwitchablePasswords {
+    fn passwords_disabled(&self) -> bool {
+        self.disabled.load(Ordering::SeqCst)
+    }
+}
+
+/// The fixture server's chunk-body read pace (#717, #1041), switchable per request.
 ///
 /// A switch for the reason [`SwitchableFederation`] is one: the `408` both chunk routes declare
 /// has to come from the same server that answers their `204`s, and an in-process body is always
-/// whole, so the walk produces it by switching to a deadline that has already passed. Production
-/// hands in a fixed `Duration`.
+/// whole, so the walk produces it by switching to a zero stall bound, which cuts before the
+/// first byte. Production hands in a fixed `ChunkPace`.
 #[derive(Debug)]
-pub(crate) struct SwitchableChunkDeadline {
-    millis: AtomicU64,
+pub(crate) struct SwitchableChunkPace {
+    stall_millis: AtomicU64,
+    min_bytes_per_second: AtomicU64,
 }
 
-impl SwitchableChunkDeadline {
-    /// A switch starting at `timeout`.
-    pub(crate) fn new(timeout: std::time::Duration) -> Self {
+impl SwitchableChunkPace {
+    /// A switch starting at `pace`.
+    pub(crate) fn new(pace: ChunkPace) -> Self {
         let switch = Self {
-            millis: AtomicU64::new(0),
+            stall_millis: AtomicU64::new(0),
+            min_bytes_per_second: AtomicU64::new(0),
         };
-        switch.set(timeout);
+        switch.set(pace);
         switch
     }
 
-    /// Move the deadline for every subsequent chunk; [`Duration::ZERO`](std::time::Duration::ZERO)
-    /// refuses every one.
-    pub(crate) fn set(&self, timeout: std::time::Duration) {
-        let millis = u64::try_from(timeout.as_millis()).expect("a test deadline fits in u64 ms");
-        self.millis.store(millis, Ordering::SeqCst);
+    /// Move the pace for every subsequent chunk; a zero stall bound refuses every one.
+    pub(crate) fn set(&self, pace: ChunkPace) {
+        let millis = u64::try_from(pace.stall.as_millis()).expect("a test stall fits in u64 ms");
+        self.stall_millis.store(millis, Ordering::SeqCst);
+        self.min_bytes_per_second
+            .store(pace.min_bytes_per_second, Ordering::SeqCst);
+    }
+
+    /// The default pace with a zero stall bound: every subsequent chunk is cut before its first
+    /// byte.
+    pub(crate) fn cut_every_chunk(&self) {
+        self.set(ChunkPace::new(std::time::Duration::ZERO, 0));
+    }
+
+    /// Back to the default pace.
+    pub(crate) fn reset(&self) {
+        self.set(ChunkPace::default());
     }
 }
 
-impl ChunkReadDeadline for SwitchableChunkDeadline {
-    fn chunk_read_timeout(&self) -> std::time::Duration {
-        std::time::Duration::from_millis(self.millis.load(Ordering::SeqCst))
+impl ChunkReadPace for SwitchableChunkPace {
+    fn chunk_pace(&self) -> ChunkPace {
+        ChunkPace::new(
+            std::time::Duration::from_millis(self.stall_millis.load(Ordering::SeqCst)),
+            self.min_bytes_per_second.load(Ordering::SeqCst),
+        )
+    }
+}
+
+/// An activity log that can be made to fail, or to hang, on demand.
+#[derive(Debug, Default)]
+pub(crate) struct SwitchableActivity {
+    inner: InMemoryActivity,
+    unavailable: AtomicBool,
+    stalled: AtomicBool,
+}
+
+impl SwitchableActivity {
+    /// A working, empty log.
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Make every subsequent operation fail, or stop.
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    /// Make every subsequent write never finish, so a caller that awaits one never returns.
+    pub(crate) fn stall_writes(&self) {
+        self.stalled.store(true, Ordering::SeqCst);
+    }
+
+    fn refuse<T>() -> Result<T, StoreError> {
+        Err(StoreError::Unavailable {
+            store: "activity",
+            detail: REFUSAL.to_owned(),
+        })
+    }
+
+    fn is_down(&self) -> bool {
+        self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+impl ActivityStore for SwitchableActivity {
+    fn record(&self, event: ActivityEvent, retain_from: Timestamp) -> StoreFuture<'_, ()> {
+        if self.stalled.load(Ordering::SeqCst) {
+            return Box::pin(std::future::pending());
+        }
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.record(event, retain_from)
+    }
+
+    fn recent<'a>(
+        &'a self,
+        user: &'a UserId,
+        since: Timestamp,
+        limit: usize,
+    ) -> StoreFuture<'a, Vec<ActivityEvent>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.recent(user, since, limit)
+    }
+
+    fn count_expired(&self, before: Timestamp) -> StoreFuture<'_, u64> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.count_expired(before)
+    }
+
+    fn delete_expired(&self, before: Timestamp, limit: usize) -> StoreFuture<'_, u64> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.delete_expired(before, limit)
     }
 }
 
@@ -1646,6 +1801,96 @@ impl ModerationStore for SwitchableModeration {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.pending_reports()
+    }
+}
+
+/// A subscription store that can be made to fail on demand.
+#[derive(Debug, Default)]
+pub(crate) struct SwitchableSubscriptions {
+    inner: InMemorySubscriptions,
+    unavailable: AtomicBool,
+}
+
+impl SwitchableSubscriptions {
+    /// A working store holding no subscription.
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Make every subsequent operation fail, or stop.
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    fn refuse<T>() -> Result<T, StoreError> {
+        Err(StoreError::Unavailable {
+            store: "subscriptions",
+            detail: REFUSAL.to_owned(),
+        })
+    }
+
+    fn is_down(&self) -> bool {
+        self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+impl SubscriptionStore for SwitchableSubscriptions {
+    fn put(&self, subscription: Subscription) -> StoreFuture<'_, PutOutcome> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.put(subscription)
+    }
+
+    fn put_within(
+        &self,
+        subscription: Subscription,
+        limit: u32,
+    ) -> StoreFuture<'_, Option<PutOutcome>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.put_within(subscription, limit)
+    }
+
+    fn renew(&self, subscription: Subscription) -> StoreFuture<'_, Option<PutOutcome>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.renew(subscription)
+    }
+
+    fn of_subscriber<'a>(&'a self, subscriber: &'a UserId) -> StoreFuture<'a, Vec<Subscription>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.of_subscriber(subscriber)
+    }
+
+    fn remove<'a>(
+        &'a self,
+        subscriber: &'a UserId,
+        peer: &'a PeerId,
+        album: &'a AlbumId,
+    ) -> StoreFuture<'a, bool> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.remove(subscriber, peer, album)
+    }
+
+    fn of_job<'a>(&'a self, job: &'a JobKey) -> StoreFuture<'a, Vec<Subscription>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.of_job(job)
+    }
+
+    fn live_jobs(&self, now: Timestamp) -> StoreFuture<'_, Vec<JobKey>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.live_jobs(now)
     }
 }
 
@@ -1995,7 +2240,11 @@ impl ChallengeStore for SwitchableChallenges {
 
 impl AuthStateStore for SwitchableSessions {
     fn ttl(&self) -> SignedDuration {
-        self.inner.ttl()
+        self.lifetimes().0
+    }
+
+    fn hard_cap(&self) -> SignedDuration {
+        self.lifetimes().1
     }
 
     fn open_session(&self, record: SessionRecord) -> StoreFuture<'_, ()> {
@@ -2003,6 +2252,13 @@ impl AuthStateStore for SwitchableSessions {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.open_session(record)
+    }
+
+    fn restore_session(&self, record: SessionRecord) -> StoreFuture<'_, ()> {
+        if self.is_down_past_the_door() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.restore_session(record)
     }
 
     fn read_session<'a>(
@@ -2077,6 +2333,8 @@ pub(crate) struct SwitchableUploads {
     unavailable: AtomicBool,
     claim_after_progress: AtomicBool,
     status_writes_refused: AtomicBool,
+    /// How many status writes [`Self::refuse_status_writes`] has refused so far.
+    status_writes_refused_count: std::sync::atomic::AtomicUsize,
 }
 
 impl SwitchableUploads {
@@ -2087,7 +2345,29 @@ impl SwitchableUploads {
             unavailable: AtomicBool::new(false),
             claim_after_progress: AtomicBool::new(false),
             status_writes_refused: AtomicBool::new(false),
+            status_writes_refused_count: std::sync::atomic::AtomicUsize::new(0),
         }
+    }
+
+    /// How many status writes have been refused since the store was built.
+    ///
+    /// A finalization runs detached from the request that claimed it, so a case that refuses its
+    /// terminal write has nothing to await but this: the refused write is the last thing the
+    /// finalizer does.
+    pub(crate) fn refused_status_writes(&self) -> usize {
+        self.status_writes_refused_count.load(Ordering::SeqCst)
+    }
+
+    fn refuses_status_write(&self) -> bool {
+        if self.is_down() {
+            return true;
+        }
+        let refused = self.status_writes_refused.load(Ordering::SeqCst);
+        if refused {
+            self.status_writes_refused_count
+                .fetch_add(1, Ordering::SeqCst);
+        }
+        refused
     }
 
     /// Refuse every subsequent [`UploadSessionStore::set_status`], or stop.
@@ -2124,6 +2404,27 @@ impl SwitchableUploads {
             .read(&UploadId::new(id))
             .await
             .expect("the in-memory store answers")
+    }
+
+    /// Wait, boundedly, for `id`'s session to reach a terminal status, and return its record.
+    ///
+    /// No request waits on finalization, so a case that sent the completing chunk has nothing to
+    /// await but the store: the detached finalization writes the terminal status as it ends.
+    pub(crate) async fn terminal_for_test(&self, id: &str) -> UploadSessionRecord {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let record = self
+                    .read_for_test(id)
+                    .await
+                    .expect("the session survives as a receipt");
+                if record.status.is_terminal() {
+                    return record;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("a claimed session reaches a terminal status")
     }
 
     /// Let a concurrent finalizer win the claim in the window the racing request cannot see:
@@ -2172,9 +2473,11 @@ impl SwitchableUploads {
                     blob_role: capsule_server::store::BlobRole::Original,
                     intent_id: None,
                     manifest_envelope: "{}".to_owned(),
-                    received_bytes: 0,
+                    committed: CommittedSet::default(),
+                    in_flight_cap: 1,
                     total_size: 4096,
                     status: UploadSessionStatus::Pending,
+                    failure_code: None,
                     created_at: now,
                     last_progress_at: now,
                 })
@@ -2213,16 +2516,16 @@ impl UploadSessionStore for SwitchableUploads {
         self.inner.sessions_for_uploader(uploader)
     }
 
-    fn record_progress<'a>(
+    fn record_range<'a>(
         &'a self,
         upload: &'a UploadId,
-        chunk: AcceptedChunk,
+        range: CommittedRange,
     ) -> StoreFuture<'a, Option<UploadSessionRecord>> {
         if self.is_down() {
             return Box::pin(async { Self::refuse() });
         }
         Box::pin(async move {
-            let updated = self.inner.record_progress(upload, chunk).await?;
+            let updated = self.inner.record_range(upload, range).await?;
             if self.claim_after_progress.swap(false, Ordering::SeqCst) {
                 self.inner.claim_finalize(upload).await?;
             }
@@ -2230,37 +2533,27 @@ impl UploadSessionStore for SwitchableUploads {
         })
     }
 
-    fn chunk_at<'a>(
-        &'a self,
-        upload: &'a UploadId,
-        offset: u64,
-    ) -> StoreFuture<'a, Option<AcceptedChunk>> {
-        if self.is_down() {
-            return Box::pin(async { Self::refuse() });
-        }
-        self.inner.chunk_at(upload, offset)
-    }
-
-    fn reconcile_received_bytes<'a>(
-        &'a self,
-        upload: &'a UploadId,
-        on_disk: u64,
-    ) -> StoreFuture<'a, Option<UploadSessionRecord>> {
-        if self.is_down() {
-            return Box::pin(async { Self::refuse() });
-        }
-        self.inner.reconcile_received_bytes(upload, on_disk)
-    }
-
     fn set_status<'a>(
         &'a self,
         upload: &'a UploadId,
         status: UploadSessionStatus,
     ) -> StoreFuture<'a, Option<UploadSessionRecord>> {
-        if self.is_down() || self.status_writes_refused.load(Ordering::SeqCst) {
+        if self.refuses_status_write() {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.set_status(upload, status)
+    }
+
+    fn fail_processing<'a>(
+        &'a self,
+        upload: &'a UploadId,
+        failure_code: &'a str,
+    ) -> StoreFuture<'a, Option<UploadSessionRecord>> {
+        if self.refuses_status_write() {
+            return Box::pin(async { Self::refuse() });
+        }
+
+        self.inner.fail_processing(upload, failure_code)
     }
 
     fn claim_finalize<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, FinalizeClaim> {
@@ -2284,6 +2577,13 @@ impl UploadSessionStore for SwitchableUploads {
         self.inner.discard(upload)
     }
 
+    fn discard_unclaimed<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, UnclaimedDiscard> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.discard_unclaimed(upload)
+    }
+
     fn pending_for_address<'a>(
         &'a self,
         uploader: &'a UserId,
@@ -2293,6 +2593,13 @@ impl UploadSessionStore for SwitchableUploads {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.pending_for_address(uploader, expected_hash)
+    }
+
+    fn live_for_address<'a>(&'a self, expected_hash: &'a str) -> StoreFuture<'a, Vec<UploadId>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.live_for_address(expected_hash)
     }
 
     fn in_flight_for_album<'a>(&'a self, album: &'a AlbumId) -> StoreFuture<'a, u64> {
@@ -2319,15 +2626,13 @@ impl UploadSessionStore for SwitchableUploads {
 // Blob store double
 // ===========================================================================================
 
-/// The in-memory blob store, with one seam: it can **swallow** an append.
+/// The in-memory blob store, with one seam: it can **swallow** a staged write.
 ///
-/// The seam simulates the one failure the upload protocol's validation section calls out and
-/// that no in-process test could otherwise reach — a crash between a durable append and the
-/// counter that records it. With `swallow_next_append` armed, the store answers as though it
-/// wrote the bytes and writes nothing, so the session's counter runs ahead of the stage. The
-/// next append then meets the port's own offset cross-check and the divergence surfaces as
-/// `500 error.upload.storage_inconsistent` — which is exactly what it is: the server's
-/// inconsistency, never the client's fault.
+/// With `swallow_next_append` armed, the store answers as though it wrote the bytes and instead
+/// loses the whole stage, so the session records a range on a stage that no longer exists — the
+/// failure no in-process test could otherwise reach. The next write meets the missing stage of a
+/// live session and surfaces it as `500 error.upload.storage_inconsistent`, which is exactly what
+/// it is: the server's inconsistency, never the client's fault; a finalization meets it too.
 #[derive(Debug)]
 pub(crate) struct SwallowingBlobs {
     inner: InMemoryBlobStore,
@@ -2341,6 +2646,8 @@ pub(crate) struct SwallowingBlobs {
     held_appends: Mutex<Option<PutHold>>,
     /// Park every commit, *after* it has landed, until the test lets it go.
     held_commits: Mutex<Option<PutHold>>,
+    /// Park every read of a stage — the finalize re-hash's — until the test lets it go.
+    held_staged_reads: Mutex<Option<PutHold>>,
     /// Refuse every [`BlobStore::put`], as a full or read-only disk would.
     puts_unavailable: AtomicBool,
     /// Park every [`BlobStore::put`] until the test lets it go.
@@ -2369,6 +2676,7 @@ impl SwallowingBlobs {
             full_next_begin: AtomicBool::new(false),
             held_appends: Mutex::new(None),
             held_commits: Mutex::new(None),
+            held_staged_reads: Mutex::new(None),
             puts_unavailable: AtomicBool::new(false),
             held_puts: Mutex::new(None),
         }
@@ -2387,7 +2695,7 @@ impl SwallowingBlobs {
         hold
     }
 
-    /// Drop the next append on the floor while telling the caller it landed.
+    /// Lose the stage under the next staged write while telling the caller it landed.
     pub(crate) fn swallow_next_append(&self) {
         self.swallow.store(true, Ordering::SeqCst);
     }
@@ -2428,6 +2736,23 @@ impl SwallowingBlobs {
         };
         *self
             .held_commits
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(hold.clone());
+        hold
+    }
+
+    /// Park every subsequent read of a stage until the returned hold releases it.
+    ///
+    /// The finalize re-hash, and a drop deposit's, read the stage window by window, so a parked
+    /// read is a re-hash that never ends: the disk a 4 GiB blob sits on, as slow as a test needs
+    /// it to be. A request whose answer waited on the re-hash would never be answered.
+    pub(crate) fn hold_staged_reads(&self) -> PutHold {
+        let hold = PutHold {
+            entered: Arc::new(tokio::sync::Notify::new()),
+            release: Arc::new(tokio::sync::Semaphore::new(0)),
+        };
+        *self
+            .held_staged_reads
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(hold.clone());
         hold
@@ -2503,19 +2828,22 @@ impl BlobStore for SwallowingBlobs {
         self.inner.begin(upload)
     }
 
-    fn append<'a>(
+    fn write_staged<'a>(
         &'a self,
         upload: &'a UploadId,
         offset: u64,
         bytes: &'a [u8],
     ) -> BlobFuture<'a, u64> {
         if self.swallow.swap(false, Ordering::SeqCst) {
-            return Box::pin(async move { Ok(offset + bytes.len() as u64) });
+            return Box::pin(async move {
+                self.inner.abandon(upload).await?;
+                Ok(offset + bytes.len() as u64)
+            });
         }
         if self.full_next_append.swap(false, Ordering::SeqCst) {
             return Box::pin(async move {
                 Err(BlobError::StorageFull {
-                    operation: "append to a staging file",
+                    operation: "write to a staging file",
                 })
             });
         }
@@ -2533,16 +2861,8 @@ impl BlobStore for SwallowingBlobs {
                     .await
                     .expect("the hold is never closed");
             }
-            self.inner.append(upload, offset, bytes).await
+            self.inner.write_staged(upload, offset, bytes).await
         })
-    }
-
-    fn truncate_staged<'a>(
-        &'a self,
-        upload: &'a UploadId,
-        len: u64,
-    ) -> BlobFuture<'a, Option<u64>> {
-        self.inner.truncate_staged(upload, len)
     }
 
     fn staged_len<'a>(&'a self, upload: &'a UploadId) -> BlobFuture<'a, Option<u64>> {
@@ -2555,7 +2875,22 @@ impl BlobStore for SwallowingBlobs {
         offset: u64,
         len: usize,
     ) -> BlobFuture<'a, Option<Vec<u8>>> {
-        self.inner.read_staged_at(upload, offset, len)
+        let hold = self
+            .held_staged_reads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        Box::pin(async move {
+            if let Some(hold) = hold {
+                hold.entered.notify_one();
+                let _permit = hold
+                    .release
+                    .acquire()
+                    .await
+                    .expect("the hold is never closed");
+            }
+            self.inner.read_staged_at(upload, offset, len).await
+        })
     }
 
     fn abandon<'a>(&'a self, upload: &'a UploadId) -> BlobFuture<'a, bool> {
@@ -3124,6 +3459,11 @@ pub(crate) struct SwitchableQuota {
     unavailable: AtomicBool,
     /// Fail [`QuotaStore::charge`] alone, so a caller that reads usage first gets past the read.
     charges_unavailable: AtomicBool,
+    /// Fail [`QuotaStore::settle`] alone: a ledger that stops answering at a completion.
+    settles_unavailable: AtomicBool,
+    /// Release this account's attribution of the charged address once the next charge has
+    /// answered: another session ending between a create's charge and its open.
+    release_after_next_charge: std::sync::Mutex<Option<UserId>>,
 }
 
 impl SwitchableQuota {
@@ -3143,6 +3483,21 @@ impl SwitchableQuota {
             .store(unavailable, Ordering::SeqCst);
     }
 
+    /// Make every subsequent settle fail while the rest keeps answering, or stop.
+    pub(crate) fn set_settles_unavailable(&self, unavailable: bool) {
+        self.settles_unavailable
+            .store(unavailable, Ordering::SeqCst);
+    }
+
+    /// Release `holder`'s attribution of whatever the next charge names, right after it
+    /// answers — the window between a create's charge and its session becoming visible.
+    pub(crate) fn release_after_next_charge(&self, holder: UserId) {
+        *self
+            .release_after_next_charge
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(holder);
+    }
+
     fn refuse<T>() -> Result<T, StoreError> {
         Err(StoreError::Unavailable {
             store: "quota",
@@ -3152,6 +3507,40 @@ impl SwitchableQuota {
 
     fn is_down(&self) -> bool {
         self.unavailable.load(Ordering::SeqCst)
+    }
+
+    /// A charge or a reservation, with the switches both obey.
+    fn attribute<'a>(
+        &'a self,
+        user: &'a UserId,
+        address: &'a ContentAddress,
+        size: u64,
+        at: Timestamp,
+        until: Option<Timestamp>,
+        limits: QuotaLimits,
+    ) -> StoreFuture<'a, ChargeOutcome> {
+        if self.is_down() || self.charges_unavailable.load(Ordering::SeqCst) {
+            return Box::pin(async { Self::refuse() });
+        }
+        let holder = self
+            .release_after_next_charge
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        Box::pin(async move {
+            let outcome = match until {
+                Some(until) => {
+                    self.inner
+                        .reserve(user, address, size, at, until, limits)
+                        .await?
+                }
+                None => self.inner.charge(user, address, size, at, limits).await?,
+            };
+            if let Some(holder) = holder {
+                self.inner.release(&holder, address).await?;
+            }
+            Ok(outcome)
+        })
     }
 }
 
@@ -3171,10 +3560,60 @@ impl QuotaStore for SwitchableQuota {
         at: Timestamp,
         limits: QuotaLimits,
     ) -> StoreFuture<'a, ChargeOutcome> {
-        if self.is_down() || self.charges_unavailable.load(Ordering::SeqCst) {
+        self.attribute(user, address, size, at, None, limits)
+    }
+
+    fn reserve<'a>(
+        &'a self,
+        user: &'a UserId,
+        address: &'a ContentAddress,
+        size: u64,
+        at: Timestamp,
+        until: Timestamp,
+        limits: QuotaLimits,
+    ) -> StoreFuture<'a, ChargeOutcome> {
+        self.attribute(user, address, size, at, Some(until), limits)
+    }
+
+    fn settle<'a>(&'a self, address: &'a ContentAddress) -> StoreFuture<'a, bool> {
+        if self.is_down() || self.settles_unavailable.load(Ordering::SeqCst) {
             return Box::pin(async { Self::refuse() });
         }
-        self.inner.charge(user, address, size, at, limits)
+        self.inner.settle(address)
+    }
+
+    fn expired_reservations(
+        &self,
+        now: Timestamp,
+        limit: usize,
+    ) -> StoreFuture<'_, Vec<ExpiredReservation>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.expired_reservations(now, limit)
+    }
+
+    fn extend_reservation<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+        until: Timestamp,
+    ) -> StoreFuture<'a, bool> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.extend_reservation(address, until)
+    }
+
+    fn release_expired<'a>(
+        &'a self,
+        user: &'a UserId,
+        address: &'a ContentAddress,
+        now: Timestamp,
+    ) -> StoreFuture<'a, bool> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.release_expired(user, address, now)
     }
 
     fn release<'a>(
@@ -3210,6 +3649,20 @@ impl QuotaStore for SwitchableQuota {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.unsuspend(user)
+    }
+
+    fn pulled_drift(&self) -> StoreFuture<'_, Vec<PulledDrift>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.pulled_drift()
+    }
+
+    fn reconcile_pulled(&self) -> StoreFuture<'_, Vec<PulledDrift>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.reconcile_pulled()
     }
 }
 
@@ -3634,6 +4087,19 @@ impl AssetIndex for SwitchableIndex {
         self.inner.set_hold(asset, hold)
     }
 
+    fn repair_blob_size<'a>(
+        &'a self,
+        asset: &'a AssetId,
+        role: capsule_server::store::BlobRole,
+        address: &'a ContentAddress,
+        size: u64,
+    ) -> IndexFuture<'a, capsule_server::index::SizeRepair> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.repair_blob_size(asset, role, address, size)
+    }
+
     fn reference_count<'a>(&'a self, address: &'a ContentAddress) -> IndexFuture<'a, u64> {
         if self.is_down() {
             return Box::pin(async { Self::refuse() });
@@ -3908,9 +4374,19 @@ pub(crate) struct Fixture {
     pub(crate) revocations: Arc<SwitchableRevocations>,
     /// The peers this server has pinned or blocked.
     pub(crate) peers: Arc<InMemoryPeers>,
+    /// The albums this server pulls from peers for its own members.
+    pub(crate) subscriptions: Arc<SwitchableSubscriptions>,
+    /// What the pull worker committed for those members: the *same* store the subscription
+    /// routes read, so a case commits a page and reads it back through them.
+    pub(crate) pulled: Arc<capsule_server::federation::pull::InMemoryPulledAlbums>,
     /// Whether the server federates — the *same* switch it reads, so a case can turn the whole
     /// federation surface off for the requests it is about.
     pub(crate) federation: Arc<SwitchableFederation>,
+    /// What every verified pull hint is handed to, in place of the pull worker: the *same*
+    /// double the server holds, so a case reads which jobs it was hinted and sets the answer.
+    pub(crate) hints: Arc<capsule_server::federation::RecordingHints>,
+    /// Whether the server refuses password sign-in — the *same* switch it reads.
+    pub(crate) passwords: Arc<SwitchablePasswords>,
     /// The capability codec the server mints with — the *same* one, over the *same* key as
     /// `tokens`, so a test can mint a capability the server will accept, or one it must not.
     pub(crate) codec: Arc<CapabilityCodec>,
@@ -3943,8 +4419,12 @@ pub(crate) struct Fixture {
     pub(crate) oidc_authorizations: Arc<SwitchableOidcAuthorizations>,
     /// The pending OIDC device authorizations (issue #635).
     pub(crate) oidc_devices: Arc<SwitchableOidcDevices>,
-    /// The chunk-body read deadline both chunk routes read (#717).
-    pub(crate) chunk_deadline: Arc<SwitchableChunkDeadline>,
+    /// The chunk-body read pace both chunk routes read (#717, #1041).
+    pub(crate) chunk_pace: Arc<SwitchableChunkPace>,
+    /// The account activity log the server records to.
+    pub(crate) activity: Arc<SwitchableActivity>,
+    /// The activity module the server records through, for [`Self::activity_settled`].
+    activity_context: ActivityContext,
 }
 
 impl Fixture {
@@ -3958,13 +4438,13 @@ impl Fixture {
 
     /// The same server, with a deployment's quota thresholds.
     pub(crate) fn with_quota(quota_limits: QuotaLimits) -> Self {
-        Self::build(quota_limits, None, None, true)
+        Self::build(quota_limits, None, None, true, false)
     }
 
     /// The working server over a **real** identity provider adapter, for the cases that drive
     /// the wire against the mock provider in [`idp`]. `fixture.idp` is present but unused.
     pub(crate) fn with_identity_provider(provider: Arc<dyn IdentityProvider>) -> Self {
-        Self::build(QuotaLimits::unlimited(), Some(provider), None, true)
+        Self::build(QuotaLimits::unlimited(), Some(provider), None, true, false)
     }
 
     /// The working server whose rate-limit counters hold at most `ceiling` keys **per
@@ -3976,7 +4456,7 @@ impl Fixture {
     /// at-capacity code rather than a `500` that impersonates an outage — does not depend on how
     /// wide it is, so the tests that assert it shrink the partitions and spend two requests.
     pub(crate) fn with_counter_ceiling(ceiling: usize) -> Self {
-        Self::build(QuotaLimits::unlimited(), None, Some(ceiling), true)
+        Self::build(QuotaLimits::unlimited(), None, Some(ceiling), true, false)
     }
 
     /// The same server on a deployment that does **not** federate: `FEDERATION_ENABLED` off,
@@ -3986,7 +4466,16 @@ impl Fixture {
     /// observes the server federating. [`Fixture::federation`] still turns it on, which is how
     /// a case mints a grant "while federation was on" and then asks what off does to it.
     pub(crate) fn without_federation() -> Self {
-        Self::build(QuotaLimits::unlimited(), None, None, false)
+        Self::build(QuotaLimits::unlimited(), None, None, false, false)
+    }
+
+    /// The same server on an OIDC-only deployment: `PASSWORD_AUTH_DISABLED` on (#1004).
+    ///
+    /// Built off rather than switched off, so `server-info` publishes the refusal too.
+    /// [`Fixture::passwords`] still switches it, which is how a case opens a session while
+    /// passwords were accepted and then asks what the switch does to it.
+    pub(crate) fn without_passwords() -> Self {
+        Self::build(QuotaLimits::unlimited(), None, None, true, true)
     }
 
     fn build(
@@ -3994,6 +4483,7 @@ impl Fixture {
         provider: Option<Arc<dyn IdentityProvider>>,
         counter_ceiling: Option<usize>,
         federating: bool,
+        passwords_disabled: bool,
     ) -> Self {
         let clock = Arc::new(ManualClock::default());
         let sessions = Arc::new(SwitchableSessions::new(clock.clone()));
@@ -4039,10 +4529,12 @@ impl Fixture {
         let ledger = Arc::new(SwitchableLedger::default());
         let revocations = Arc::new(SwitchableRevocations::new(clock.clone()));
         let peers = Arc::new(InMemoryPeers::new());
+        let subscriptions = Arc::new(SwitchableSubscriptions::new());
         let federation = Arc::new(SwitchableFederation::new(federating));
-        let chunk_deadline = Arc::new(SwitchableChunkDeadline::new(
-            capsule_server::upload::policy::DEFAULT_CHUNK_READ_TIMEOUT,
-        ));
+        let hints = Arc::new(capsule_server::federation::RecordingHints::new());
+        let pulled = Arc::new(capsule_server::federation::pull::InMemoryPulledAlbums::new());
+        let passwords = Arc::new(SwitchablePasswords::new(passwords_disabled));
+        let chunk_pace = Arc::new(SwitchableChunkPace::new(ChunkPace::default()));
         let challenges = Arc::new(SwitchableChallenges::new(clock.clone()));
         let escrows = Arc::new(SwitchableEscrow::new());
         let cohorts = Arc::new(SwitchableCohorts::new());
@@ -4061,6 +4553,8 @@ impl Fixture {
         let oidc_authorizations = Arc::new(SwitchableOidcAuthorizations::new(clock.clone()));
         let oidc_devices = Arc::new(SwitchableOidcDevices::new(clock.clone()));
         let provider: Arc<dyn IdentityProvider> = provider.unwrap_or_else(|| idp.clone());
+        let activity = Arc::new(SwitchableActivity::new());
+        let activity_context = ActivityContext::new(activity.clone(), clock.clone());
 
         // One index behind both modules, which is what makes "upload it, then read it back off
         // the feed" a test of the server rather than of two disconnected doubles.
@@ -4075,7 +4569,8 @@ impl Fixture {
                 cohorts: cohorts.clone(),
                 tokens: tokens.clone(),
                 clock: clock.clone(),
-            }),
+            })
+            .with_password_setting(passwords.clone()),
             // Every module reads the index **through** the crash seam, so an armed fault is a
             // property of the server rather than of one module's wiring — and a disarmed one is
             // a delegating pass-through, which is what every other case sees.
@@ -4084,8 +4579,9 @@ impl Fixture {
                 blobs.clone(),
                 index_fault.clone(),
                 authority.clone(),
+                QuotaContext::new(quotas.clone(), clock.clone(), quota_limits),
                 clock.clone(),
-                UploadPolicy::default().with_chunk_read_deadline(chunk_deadline.clone()),
+                UploadPolicy::default().with_chunk_pace(chunk_pace.clone()),
             ),
             sync: SyncContext::new(
                 index_fault.clone(),
@@ -4100,6 +4596,7 @@ impl Fixture {
                 marks.clone(),
                 uploads.clone(),
                 capsule_server::serve::membership_reads(members.clone()),
+                clock.clone(),
             ),
             verify: VerifyContext::new(
                 index_fault.clone(),
@@ -4121,16 +4618,26 @@ impl Fixture {
                 ledger.clone(),
                 index.clone(),
             ))),
-            discovery: DiscoveryContext::new(Arc::new(server_info(&tokens)), revocations.clone()),
+            discovery: DiscoveryContext::new(
+                Arc::new(if passwords_disabled {
+                    server_info(&tokens).without_passwords()
+                } else {
+                    server_info(&tokens)
+                }),
+                revocations.clone(),
+            ),
             escrow: EscrowContext::new(escrows.clone(), clock.clone()),
             // On unless the case asked otherwise ([`Fixture::without_federation`]).
             federation: FederationContext::new(FederationCollaborators {
                 codec: codec.clone(),
                 capabilities: revocations.clone(),
                 peers: peers.clone(),
+                subscriptions: subscriptions.clone(),
+                pulled: pulled.clone(),
                 clock: clock.clone(),
                 enabled: federation.clone(),
-            }),
+            })
+            .with_hints(hints.clone()),
             enrollment: EnrollmentContext::new(
                 enrollments.clone(),
                 channels.clone(),
@@ -4145,6 +4652,7 @@ impl Fixture {
                 clock.clone(),
             ),
             counters: CounterContext::new(counters.clone(), clock.clone()),
+            activity: activity_context.clone(),
             totp: TotpContext::new(totp.clone(), codes.clone()),
             oidc: OidcContext::new(OidcCollaborators {
                 provider,
@@ -4180,7 +4688,11 @@ impl Fixture {
             ledger,
             revocations,
             peers,
+            subscriptions,
+            pulled,
             federation,
+            hints,
+            passwords,
             codec,
             challenges,
             escrows,
@@ -4196,8 +4708,16 @@ impl Fixture {
             idp,
             oidc_authorizations,
             oidc_devices,
-            chunk_deadline,
+            chunk_pace,
+            activity,
+            activity_context,
         }
+    }
+
+    /// Wait for every activity write the server took off a response path to land, so a case
+    /// can read the log after a refused sign-in.
+    pub(crate) async fn activity_settled(&self) {
+        self.activity_context.settled().await;
     }
 
     /// Just the application context, for a test that needs no handles on what is behind it.
@@ -4233,6 +4753,7 @@ impl Fixture {
         let der = signing_key_der();
         let tokens = Arc::new(signer_from(&der, clock.clone()));
         let issued = Arc::new(SwitchableRevocations::new(clock.clone()));
+        let quotas = Arc::new(SwitchableQuota::new());
         let app = App::new(Modules {
             auth: AuthContext::new(AuthCollaborators {
                 sessions: Arc::new(SwitchableSessions::new(clock.clone())),
@@ -4250,6 +4771,7 @@ impl Fixture {
                 blobs.clone(),
                 index.clone(),
                 authority,
+                QuotaContext::new(quotas.clone(), clock.clone(), QuotaLimits::unlimited()),
                 clock.clone(),
                 UploadPolicy::default(),
             ),
@@ -4266,6 +4788,7 @@ impl Fixture {
                 Arc::new(InMemoryCollection::new()),
                 Arc::new(SwitchableUploads::new(clock.clone())),
                 capsule_server::serve::membership_reads(members.clone()),
+                clock.clone(),
             ),
             verify: VerifyContext::new(
                 index,
@@ -4279,11 +4802,7 @@ impl Fixture {
             ),
             albums: AlbumContext::new(albums.clone(), clock.clone()),
             membership: MembershipContext::new(members, clock.clone()),
-            quota: QuotaContext::new(
-                Arc::new(SwitchableQuota::new()),
-                clock.clone(),
-                QuotaLimits::unlimited(),
-            ),
+            quota: QuotaContext::new(quotas, clock.clone(), QuotaLimits::unlimited()),
             attestation: AttestationContext::new(
                 receipts,
                 Arc::new(LocalAttestationKey::new(
@@ -4301,6 +4820,8 @@ impl Fixture {
                 ),
                 capabilities: issued,
                 peers: Arc::new(InMemoryPeers::new()),
+                subscriptions: Arc::new(InMemorySubscriptions::new()),
+                pulled: Arc::new(capsule_server::federation::pull::InMemoryPulledAlbums::new()),
                 clock: clock.clone(),
                 enabled: Arc::new(true),
             }),
@@ -4322,6 +4843,7 @@ impl Fixture {
                 clock.clone(),
             ),
             counters: CounterContext::new(Arc::new(InMemoryCounters::new()), clock.clone()),
+            activity: ActivityContext::new(Arc::new(InMemoryActivity::new()), clock.clone()),
             totp: TotpContext::new(
                 Arc::new(InMemoryTotp::new()),
                 Arc::new(TotpCodes::new("Capsule")),
@@ -4329,6 +4851,17 @@ impl Fixture {
             oidc: OidcContext::disabled(clock.clone()),
         });
         (app, clock)
+    }
+
+    /// The kinds of `account`'s activity events, newest first, read past the HTTP surface.
+    pub(crate) async fn activity_kinds(&self, account: &UserId) -> Vec<ActivityKind> {
+        self.activity
+            .recent(account, Timestamp::MIN, 1_000)
+            .await
+            .expect("the in-memory activity log reads")
+            .into_iter()
+            .map(|event| event.kind)
+            .collect()
     }
 
     /// Sign in with the seeded account and return the pair.
@@ -4392,6 +4925,7 @@ impl Fixture {
                 user_id: UserId::new(user_id),
                 created_at: now,
                 authenticated_at: now,
+                signed_in_at: now,
                 last_active_at: now,
                 user_agent: None,
                 ip_address: None,
@@ -4506,17 +5040,36 @@ pub(crate) fn signed_report(
     reason: Option<&str>,
     reported_at: &str,
 ) -> serde_json::Value {
-    let claim = ReportClaim {
-        reporting_server: reporting_server.to_owned(),
-        reported_user: reported_user.to_owned(),
-        asset_hash: asset_hash.to_owned(),
-        album_id: album.as_str().to_owned(),
-        reason: reason.map(str::to_owned),
-        reported_at: reported_at.to_owned(),
-    };
+    sign_report(
+        pair,
+        &ReportClaim {
+            reporting_server: reporting_server.to_owned(),
+            recipient_server: SERVER_ORIGIN.to_owned(),
+            // A fresh nonce per report, as a peer mints one: the server accepts each once.
+            nonce: uuid::Uuid::now_v7().to_string(),
+            reported_user: reported_user.to_owned(),
+            asset_hash: asset_hash.to_owned(),
+            album_id: album.as_str().to_owned(),
+            reason: reason.map(str::to_owned),
+            reported_at: reported_at.to_owned(),
+        },
+    )
+}
+
+/// The instant the suite's reports are signed at: the fixture clock's own start, so a report is
+/// inside the server's freshness window until a case moves the clock.
+pub(crate) const REPORTED_AT: &str = "1970-01-01T00:00:00Z";
+
+/// `claim` as the body a peer sends, signed by `pair`.
+pub(crate) fn sign_report(
+    pair: &ring::signature::Ed25519KeyPair,
+    claim: &ReportClaim,
+) -> serde_json::Value {
     let signature = pair.sign(&claim.signing_bytes().expect("a claim encodes"));
     serde_json::json!({
         "reporting_server": claim.reporting_server,
+        "recipient_server": claim.recipient_server,
+        "nonce": claim.nonce,
         "reported_user": claim.reported_user,
         "asset_hash": claim.asset_hash,
         "album_id": claim.album_id,
@@ -4524,6 +5077,140 @@ pub(crate) fn signed_report(
         "reported_at": claim.reported_at,
         "signature": base64::engine::general_purpose::STANDARD.encode(signature.as_ref()),
     })
+}
+
+/// A pull hint body, signed by `pair` exactly as a home server signs one, with a fresh nonce.
+///
+/// Built through [`HintClaim::signing_bytes`](capsule_server::federation::HintClaim::signing_bytes)
+/// for the reason [`signed_report`] is built through the report's.
+pub(crate) fn signed_hint(
+    pair: &ring::signature::Ed25519KeyPair,
+    home_server: &str,
+    album_id: &str,
+    sent_at: &str,
+) -> serde_json::Value {
+    sign_hint(
+        pair,
+        &capsule_server::federation::HintClaim {
+            home_server: home_server.to_owned(),
+            recipient_server: SERVER_ORIGIN.to_owned(),
+            nonce: uuid::Uuid::now_v7().to_string(),
+            album_id: album_id.to_owned(),
+            sent_at: sent_at.to_owned(),
+        },
+    )
+}
+
+/// `claim` as the body a home server sends, signed by `pair`.
+pub(crate) fn sign_hint(
+    pair: &ring::signature::Ed25519KeyPair,
+    claim: &capsule_server::federation::HintClaim,
+) -> serde_json::Value {
+    let signature = pair.sign(&claim.signing_bytes().expect("a claim encodes"));
+    serde_json::json!({
+        "home_server": claim.home_server,
+        "recipient_server": claim.recipient_server,
+        "nonce": claim.nonce,
+        "album_id": claim.album_id,
+        "sent_at": claim.sent_at,
+        "signature": base64::engine::general_purpose::STANDARD.encode(signature.as_ref()),
+    })
+}
+
+/// The key the suite's peers sign their capability presentations with.
+///
+/// One fixed pair for every peer the suite names: what a case under test is the binding of a
+/// presentation to *a* pinned key, and a case that means "some other key" asks
+/// [`peer_keypair`] for one.
+pub(crate) fn request_keypair() -> (ring::signature::Ed25519KeyPair, [u8; 32]) {
+    use ring::signature::KeyPair as _;
+
+    let pair = ring::signature::Ed25519KeyPair::from_seed_unchecked(&[0x5e; 32]).expect("a seed");
+    let public = pair
+        .public_key()
+        .as_ref()
+        .try_into()
+        .expect("an Ed25519 public key is thirty-two bytes");
+    (pair, public)
+}
+
+/// Pin [`request_keypair`] as `peer`'s operational key, as an operator would.
+///
+/// Pinned one probation period ago, so the peer is held to the established budgets the suite's
+/// budget cases spend: a case about probation pins a peer now with [`pin_request_key_now`].
+pub(crate) async fn pin_request_key(fixture: &Fixture, peer: &str) {
+    let established = fixture
+        .clock
+        .now()
+        .checked_sub(capsule_server::counter::budgets::PEER_PROBATION)
+        .expect("the fixture clock is a probation period past the minimum instant");
+    pin_request_key_at(fixture, peer, established).await;
+}
+
+/// Pin [`request_keypair`] as `peer`'s operational key now, so the peer is on probation.
+pub(crate) async fn pin_request_key_now(fixture: &Fixture, peer: &str) {
+    pin_request_key_at(fixture, peer, fixture.clock.now()).await;
+}
+
+async fn pin_request_key_at(fixture: &Fixture, peer: &str, at: jiff::Timestamp) {
+    use capsule_server::federation::PeerStore as _;
+
+    fixture
+        .peers
+        .pin(
+            &capsule_server::federation::PeerId::new(peer),
+            request_keypair().1,
+            at,
+        )
+        .await
+        .expect("the peer store pins");
+}
+
+/// The `X-Capsule-Request-Signature` a peer holding [`request_keypair`] sends with `bearer` on
+/// `method target`, signed now on the fixture's clock with a fresh nonce.
+///
+/// Built through the server's own `RequestClaim`, so the suite signs the bytes the server
+/// verifies and a change to the format fails as a refusal rather than as a different test.
+pub(crate) fn request_signature(
+    fixture: &Fixture,
+    method: &str,
+    target: &str,
+    bearer: &str,
+) -> String {
+    request_signature_by(
+        &request_keypair().0,
+        fixture.clock.now(),
+        method,
+        target,
+        bearer,
+    )
+}
+
+/// As [`request_signature`], by `pair` at `at`.
+pub(crate) fn request_signature_by(
+    pair: &ring::signature::Ed25519KeyPair,
+    at: jiff::Timestamp,
+    method: &str,
+    target: &str,
+    bearer: &str,
+) -> String {
+    use capsule_server::federation::scheme::{RequestClaim, RequestSignature};
+
+    let path = target.split_once('?').map_or(target, |(path, _)| path);
+    let token = bearer.strip_prefix("Bearer ").unwrap_or(bearer);
+    let nonce =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(uuid::Uuid::now_v7().as_bytes());
+    let claim = RequestClaim::new(method, path, token, at.as_second(), &nonce);
+    let signature = pair.sign(&claim.signing_bytes().expect("a claim encodes"));
+    RequestSignature {
+        signed_at: claim.signed_at,
+        nonce,
+        signature: signature
+            .as_ref()
+            .try_into()
+            .expect("an Ed25519 signature is sixty-four bytes"),
+    }
+    .to_header_value()
 }
 
 /// `hours` from the fixture's own clock, as an RFC 3339 instant.
@@ -4602,6 +5289,65 @@ pub(crate) fn payload(marker: u8, len: usize) -> Vec<u8> {
 /// The SHA-256 of `bytes`, spelled as the wire spells it.
 pub(crate) fn checksum(bytes: &[u8]) -> String {
     capsule_core::crypto::hash::hash_bytes(bytes).to_hex()
+}
+
+// ===========================================================================================
+// Request ids
+// ===========================================================================================
+
+/// The fixed string [`masked_request_id`] writes in place of a problem's request id.
+const MASKED_REQUEST_ID: &str = "00000000-0000-7000-8000-000000000000";
+
+/// A problem body with its `request_id` member removed, after asserting it carried one.
+///
+/// Every problem names the request that produced it, so two refusals that must be one answer
+/// differ in that member by construction — it is minted per request and says nothing about the
+/// account, the album or the address being probed. An indistinguishability assertion compares
+/// everything else.
+pub(crate) fn without_request_id(mut problem: serde_json::Value) -> serde_json::Value {
+    let removed = problem
+        .as_object_mut()
+        .expect("a problem is a JSON object")
+        .remove(capsule_server::problem::REQUEST_ID_MEMBER);
+    assert!(
+        removed.as_ref().is_some_and(serde_json::Value::is_string),
+        "every problem names its request: {problem}"
+    );
+    problem
+}
+
+/// A problem body's bytes with its request id overwritten by a fixed one of the same length.
+///
+/// The byte-for-byte form of [`without_request_id`]: everything around the id — member order,
+/// spacing, every other value — is still compared exactly. An empty body (a `HEAD`'s) has no
+/// member to mask and is returned as it is.
+pub(crate) fn masked_request_id(bytes: &[u8]) -> Vec<u8> {
+    if bytes.is_empty() {
+        return Vec::new();
+    }
+    let marker = format!("\"{}\":\"", capsule_server::problem::REQUEST_ID_MEMBER);
+    let marker = marker.as_bytes();
+    let start = bytes
+        .windows(marker.len())
+        .position(|window| window == marker)
+        .map_or_else(
+            || {
+                panic!(
+                    "every problem names its request: {}",
+                    String::from_utf8_lossy(bytes)
+                )
+            },
+            |at| at + marker.len(),
+        );
+    let end = start + MASKED_REQUEST_ID.len();
+    assert!(
+        bytes.get(end) == Some(&b'"'),
+        "a request id is a hyphenated UUID: {}",
+        String::from_utf8_lossy(bytes)
+    );
+    let mut masked = bytes.to_vec();
+    masked[start..end].copy_from_slice(MASKED_REQUEST_ID.as_bytes());
+    masked
 }
 
 /// A `POST /v1/upload` body for `bytes`, internally consistent in every field the gate compares.

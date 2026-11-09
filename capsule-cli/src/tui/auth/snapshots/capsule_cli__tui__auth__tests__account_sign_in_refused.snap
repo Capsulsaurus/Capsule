@@ -8,11 +8,11 @@ Capsule · Account · Signed out
 │                                                                              │
 │Sign-in failed: Invalid email or password.                                    │
 │                                                                              │
-│Identity provider: `capsule auth login --oidc` (add `--device` to approve on  │
-│another device). New account: `capsule auth register`. Scriptable: `capsule   │
-│auth status --json`.                                                          │
+│Identity provider: w signs in with a browser here, d on another device        │
+│(scriptable: `capsule auth login --oidc [--device] --json`). New account:     │
+│`capsule auth register`.                                                      │
 │                                                                              │
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-l Sign in  o Sign out  q Quit  ? Show the key bindings  Esc Back to the previous
+l Sign in  o Sign out  w Sign in with a browser  d Sign in on another device  x

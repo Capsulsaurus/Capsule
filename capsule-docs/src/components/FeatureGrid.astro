@@ -1,0 +1,14 @@
+---
+// Responsive grid for Feature.astro items on the front page.
+---
+
+<div class="feature-grid not-content"><slot /></div>
+
+<style>
+  .feature-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+    gap: 1rem;
+    margin-block: 1.5rem 0;
+  }
+</style>

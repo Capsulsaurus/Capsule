@@ -1,5 +1,5 @@
-//! Organization: trash (soft-delete / restore), the culling workflow (flag → filter → sweep),
-//! and stack membership + derived group cull state.
+//! Organization: the trash state machine ([`trash`]), the culling workflow
+//! (flag → filter → sweep), and stack membership + derived group cull state.
 
 use std::collections::BTreeSet;
 
@@ -12,28 +12,16 @@ use capsule_core::sidecar::{
     Region, RegionShape, Regions, STACK_DOC_SCHEMA_V1, StackDocV1, live_region, merge_regions,
     normalize_label, write_region,
 };
-use jiff::Timestamp;
 use uuid::Uuid;
 
 use super::album::{read_doc_file, remove_label, stack_doc_path, write_doc_file};
 use super::{AssetState, LifecycleError, Result, Workspace, asset_is_deleted, now_rfc3339};
 
+mod trash;
+
+pub use trash::{FeedDrain, PurgeOutcome, TrashEntry};
+
 impl Workspace {
-    /// Soft-delete: emit a `delete` record carrying a signed retention window.
-    pub fn soft_delete(&mut self, asset_id: &Uuid, retain_days: i64) -> Result<()> {
-        // Timestamp arithmetic is absolute, so a retention "day" is exactly 24 h — the
-        // correct semantic for a UTC retention window.
-        let until = (Timestamp::now()
-            + jiff::SignedDuration::from_hours(retain_days.saturating_mul(24)))
-        .to_string();
-        self.append_lifecycle(asset_id, Action::Delete, Some(until), |_, _| {})
-    }
-
-    /// Restore a soft-deleted asset: emit a `trash-restore` record.
-    pub fn restore(&mut self, asset_id: &Uuid) -> Result<()> {
-        self.append_lifecycle(asset_id, Action::TrashRestore, None, |_, _| {})
-    }
-
     // ── Culling workflow ────────────────────────────────────────────────
     //
     // The client review pass: flag → filter → act. Flagging writes the trinary `cull` LWW

@@ -281,7 +281,8 @@ fn issue_refusal(status: u16, error: rest::IssueShareError) -> ShareError {
         Refusal::Status401(problem) | Refusal::Status403(problem) => ShareError::Unauthorized {
             code: Some(problem.code.clone()),
         },
-        Refusal::Status500(problem) => ShareError::Unavailable {
+        // A `425` is a write that reached the server as TLS early data: re-sent later, it lands.
+        Refusal::Status425(problem) | Refusal::Status500(problem) => ShareError::Unavailable {
             code: Some(problem.code.clone()),
         },
         // `426` is unreachable: `refusal` takes every one as `UpgradeRequired` first.
@@ -302,7 +303,7 @@ fn revoke_refusal(status: u16, error: rest::RevokeShareError) -> ShareError {
         Refusal::Status401(problem) | Refusal::Status403(problem) => ShareError::Unauthorized {
             code: Some(problem.code.clone()),
         },
-        Refusal::Status500(problem) => ShareError::Unavailable {
+        Refusal::Status425(problem) | Refusal::Status500(problem) => ShareError::Unavailable {
             code: Some(problem.code.clone()),
         },
         // `426` is unreachable: `refusal` takes every one as `UpgradeRequired` first.

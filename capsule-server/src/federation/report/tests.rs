@@ -3,6 +3,8 @@ use super::*;
 fn claim() -> ReportClaim {
     ReportClaim {
         reporting_server: "other.test".to_owned(),
+        recipient_server: "capsule.test".to_owned(),
+        nonce: "0192f1a8-7c4e-4b6a-9d3e-5f7a8b9c0d1e".to_owned(),
         reported_user: "01937b7c-0000-7000-8000-0000000000b0".to_owned(),
         asset_hash: "a".repeat(64),
         album_id: "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e60".to_owned(),
@@ -46,8 +48,10 @@ fn every_field_is_covered_by_the_signature() {
     // Plain function pointers rather than boxed closures: none of them captures, and the
     // list is the point — one entry per field of the claim, so a field added without a
     // mutation here is a field this case silently stops covering.
-    let mutations: [fn(&mut ReportClaim); 7] = [
+    let mutations: [fn(&mut ReportClaim); 9] = [
         |claim| claim.reporting_server = "third.test".to_owned(),
+        |claim| claim.recipient_server = "third.test".to_owned(),
+        |claim| claim.nonce = "0192f1a8-7c4e-4b6a-9d3e-5f7a8b9c0dff".to_owned(),
         |claim| claim.reported_user = "01937b7c-0000-7000-8000-0000000000cc".to_owned(),
         |claim| claim.asset_hash = "b".repeat(64),
         |claim| claim.album_id = "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5eff".to_owned(),
@@ -74,9 +78,29 @@ fn the_signing_bytes_are_stable() {
     let bytes = claim().signing_bytes().expect("it encodes");
     assert_eq!(
         hex_of(&bytes),
-        "a666726561736f6e646373616d68616c62756d5f6964782430313866336631652d346237612d376339642d386532662d3161326233633464356536306a61737365745f686173687840616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616b7265706f727465645f617474323032362d30392d30325430303a30303a30305a6d7265706f727465645f75736572782430313933376237632d303030302d373030302d383030302d303030303030303030306230707265706f7274696e675f7365727665726a6f746865722e74657374",
+        "a8656e6f6e6365782430313932663161382d376334652d346236612d396433652d35663761386239633064316566726561736f6e646373616d68616c62756d5f6964782430313866336631652d346237612d376339642d386532662d3161326233633464356536306a61737365745f686173687840616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616b7265706f727465645f617474323032362d30392d30325430303a30303a30305a6d7265706f727465645f75736572782430313933376237632d303030302d373030302d383030302d30303030303030303030623070726563697069656e745f7365727665726c63617073756c652e74657374707265706f7274696e675f7365727665726a6f746865722e74657374",
         "if this changed, every peer's signature changed with it"
     );
+}
+
+#[test]
+fn freshness_is_symmetric_and_bounded() {
+    let now: Timestamp = "2026-09-02T00:00:00Z".parse().expect("an instant");
+    assert!(is_fresh(now, now));
+    assert!(is_fresh(now - REPORT_FRESHNESS, now), "the edge is inside");
+    assert!(
+        is_fresh(now + REPORT_FRESHNESS, now),
+        "a fast clock is tolerated"
+    );
+    let past = now - REPORT_FRESHNESS - SignedDuration::from_secs(1);
+    let future = now + REPORT_FRESHNESS + SignedDuration::from_secs(1);
+    assert!(!is_fresh(past, now), "a captured report goes stale");
+    assert!(
+        !is_fresh(future, now),
+        "a report cannot be pre-signed for later"
+    );
+    // The nonce must outlive every instant its report could still be fresh at.
+    assert!(REPORT_NONCE_WINDOW >= REPORT_FRESHNESS + REPORT_FRESHNESS);
 }
 
 fn hex_of(bytes: &[u8]) -> String {

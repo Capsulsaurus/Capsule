@@ -43,6 +43,19 @@ target is the same feed consumed through a Spargen-generated TypeScript client,
 which replaces the hand-written transport without changing `CapsuleGateway`.
 Until then this path works and is tested; it is not dead code.
 
+## Dependencies
+
+`package.json` cannot hold comments, so the rationale for its pins lives here.
+
+- **Framework:** React 19 + Rsbuild. **Routing / data:** TanStack Router and TanStack Query.
+- **Styling:** Tailwind v4, class-based dark mode. **Validation:** zod.
+- **Datetime:** none; native `Intl` / `Date`. Justify one here before adding it.
+- **LQIP decode:** none in JavaScript. Decoding goes through `capsule-wasm`; no `thumbhash`
+  package (`rg thumbhash capsule-web` stays empty).
+- **i18n runtime:** FormatJS over the generated catalogs.
+- **Guest share crypto:** `capsule-wasm` (`mise run build-wasm`), generated and never committed.
+- **Lint / format:** Biome. **Runtime, package manager and test runner:** bun.
+
 ## Development
 
 ### Prerequisites

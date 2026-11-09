@@ -339,3 +339,119 @@ fn nothing_prints_a_token_or_a_key() {
     assert!(!rendered.contains(&minted.token), "{rendered}");
     assert!(rendered.contains("<redacted>"), "{rendered}");
 }
+
+/// The issuer's key as `verify_received` takes it: the raw thirty-two bytes.
+fn issuer_key(codec: &CapabilityCodec) -> [u8; 32] {
+    codec
+        .public_key()
+        .try_into()
+        .expect("an Ed25519 public key is thirty-two bytes")
+}
+
+#[test]
+fn a_received_capability_verifies_under_its_issuers_pinned_key() {
+    let clock = Arc::new(ManualClock::default());
+    let issuer = codec(clock.clone());
+    let minted = issuer.mint(&request()).expect("it mints");
+
+    let grant = verify_received(
+        &minted.token,
+        &PeerId::new("HOME.test."),
+        &issuer_key(&issuer),
+        &PeerId::new("other.test"),
+        clock.now(),
+    )
+    .expect("the grant this server was issued verifies");
+    assert_eq!(grant, minted.grant, "the folded issuer and recipient match");
+}
+
+#[test]
+fn a_received_capability_is_refused_under_any_other_key_issuer_or_recipient() {
+    let clock = Arc::new(ManualClock::default());
+    let issuer = codec(clock.clone());
+    let minted = issuer.mint(&request()).expect("it mints");
+    let key = issuer_key(&issuer);
+    let home = PeerId::new(SERVER);
+    let here = PeerId::new("other.test");
+
+    let stranger = codec(clock.clone());
+    assert_eq!(
+        verify_received(
+            &minted.token,
+            &home,
+            &issuer_key(&stranger),
+            &here,
+            clock.now()
+        ),
+        Err(CapabilityError::Unreadable),
+        "a key that is not the issuer's verifies nothing"
+    );
+    assert_eq!(
+        verify_received(
+            &minted.token,
+            &PeerId::new("third.test"),
+            &key,
+            &here,
+            clock.now()
+        ),
+        Err(CapabilityError::WrongIssuer),
+        "the issuer named must be the one the token names"
+    );
+    assert_eq!(
+        verify_received(
+            &minted.token,
+            &home,
+            &key,
+            &PeerId::new("third.test"),
+            clock.now()
+        ),
+        Err(CapabilityError::WrongRecipient),
+        "a grant issued to another server is no use here"
+    );
+    assert_eq!(
+        verify_received(
+            &minted.token,
+            &home,
+            &key,
+            &here,
+            crate::store::deadline(clock.now(), SignedDuration::from_hours(7)),
+        ),
+        Err(CapabilityError::Expired),
+        "the window is read at the instant the caller names"
+    );
+}
+
+#[test]
+fn a_received_capability_is_held_to_the_same_claim_rules() {
+    let clock = Arc::new(ManualClock::default());
+    let key = der();
+    let issuer = CapabilityCodec::from_pkcs8(&key, SERVER, clock.clone()).expect("it parses");
+    let minted = issuer.mint(&request()).expect("it mints");
+    let pinned = issuer_key(&issuer);
+    let home = PeerId::new(SERVER);
+    let here = PeerId::new("other.test");
+
+    let wide = resigned(&minted.token, &key, |claims| {
+        claims["exp"] =
+            json!(crate::store::deadline(clock.now(), SignedDuration::from_hours(25)).to_string());
+    });
+    assert_eq!(
+        verify_received(&wide, &home, &pinned, &here, clock.now()),
+        Err(CapabilityError::BeyondTtlCeiling)
+    );
+    let v4 = resigned(&minted.token, &key, |claims| {
+        claims["jti"] = json!(uuid::Uuid::new_v4().to_string());
+    });
+    assert_eq!(
+        verify_received(&v4, &home, &pinned, &here, clock.now()),
+        Err(CapabilityError::Malformed { claim: "jti" })
+    );
+    let extra = resigned(&minted.token, &key, |claims| {
+        claims["kind"] = json!("access");
+    });
+    assert_eq!(
+        verify_received(&extra, &home, &pinned, &here, clock.now()),
+        Err(CapabilityError::Unreadable),
+        "the claim set is closed for a received grant too"
+    );
+}

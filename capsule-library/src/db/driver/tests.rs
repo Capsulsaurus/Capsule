@@ -1,3 +1,5 @@
+use rusqlite::OptionalExtension;
+
 use super::*;
 use crate::db::rows::{AlbumRow, AssetRow, AssetStackRow, CachedRepresentationRow, StackMemberRow};
 
@@ -22,6 +24,9 @@ fn make_asset(uuid: &str, hash: &str) -> AssetRow {
         is_deleted: false,
         deleted_at: None,
         is_hidden: false,
+        caption: None,
+        latitude: None,
+        longitude: None,
     }
 }
 
@@ -29,7 +34,54 @@ fn make_asset(uuid: &str, hash: &str) -> AssetRow {
 fn test_init_schema_idempotent() {
     let db = DatabaseDriver::open_in_memory().unwrap();
     db.init_schema().unwrap(); // second call — should not fail
-    assert_eq!(db.schema_version().unwrap(), 4);
+    assert_eq!(db.schema_version().unwrap(), 7);
+}
+
+/// The caption and location projections round-trip through insert, upsert and the row
+/// mapper, and an empty caption is stored as no caption.
+#[test]
+fn caption_and_location_round_trip_and_an_empty_caption_is_none() {
+    let db = DatabaseDriver::open_in_memory().unwrap();
+    let mut row = make_asset("uuid-1", &"a".repeat(64));
+    row.caption = Some("harbour at dusk".to_string());
+    row.latitude = Some(37.8199);
+    row.longitude = Some(-122.4783);
+    db.insert_asset(&row).unwrap();
+    assert_eq!(db.find_by_uuid("uuid-1").unwrap().unwrap(), row);
+
+    row.caption = Some(String::new());
+    row.latitude = None;
+    row.longitude = None;
+    db.upsert_asset(&row).unwrap();
+    let stored = db.find_by_uuid("uuid-1").unwrap().unwrap();
+    assert_eq!(stored.caption, None, "an empty caption is no caption");
+    assert_eq!((stored.latitude, stored.longitude), (None, None));
+}
+
+/// `update_asset_caption` sets and clears the projection, and reports an unknown uuid as
+/// `false` without writing anything.
+#[test]
+fn update_asset_caption_sets_clears_and_reports_a_missing_row() {
+    let db = DatabaseDriver::open_in_memory().unwrap();
+    db.insert_asset(&make_asset("uuid-1", &"a".repeat(64)))
+        .unwrap();
+
+    assert!(
+        db.update_asset_caption("uuid-1", Some("on the pier"))
+            .unwrap()
+    );
+    let caption = db.find_by_uuid("uuid-1").unwrap().unwrap().caption;
+    assert_eq!(caption.as_deref(), Some("on the pier"));
+
+    assert!(db.update_asset_caption("uuid-1", Some("")).unwrap());
+    assert_eq!(db.find_by_uuid("uuid-1").unwrap().unwrap().caption, None);
+
+    assert!(db.update_asset_caption("uuid-1", Some("again")).unwrap());
+    assert!(db.update_asset_caption("uuid-1", None).unwrap());
+    assert_eq!(db.find_by_uuid("uuid-1").unwrap().unwrap().caption, None);
+
+    assert!(!db.update_asset_caption("uuid-missing", Some("x")).unwrap());
+    assert!(db.find_by_uuid("uuid-missing").unwrap().is_none());
 }
 
 #[test]
@@ -153,17 +205,6 @@ fn test_soft_delete() {
     db.soft_delete("uuid-1", 1_720_000_100).unwrap();
     let timeline = db.query_timeline(0, 100).unwrap();
     assert!(timeline.is_empty());
-}
-
-#[test]
-fn test_query_expired_trash() {
-    let db = DatabaseDriver::open_in_memory().unwrap();
-    let asset = make_asset("uuid-1", &"a".repeat(64));
-    db.insert_asset(&asset).unwrap();
-    // Delete with a timestamp far in the past
-    db.soft_delete("uuid-1", 100).unwrap();
-    let expired = db.query_expired_trash(30 * 86400).unwrap();
-    assert_eq!(expired.len(), 1);
 }
 
 #[test]
@@ -296,6 +337,90 @@ fn test_album_crud() {
     assert!(db.find_album("album-1").unwrap().is_none());
 }
 
+fn album_row(id: &str, created_at: i64) -> AlbumRow {
+    AlbumRow {
+        id: id.to_string(),
+        name: id.to_string(),
+        created_at,
+        modified_at: created_at,
+        cover_asset_id: None,
+    }
+}
+
+fn v7_at(secs: u64) -> String {
+    uuid::Uuid::new_v7(uuid::Timestamp::from_unix(uuid::NoContext, secs, 0)).to_string()
+}
+
+/// `list_albums` is the album order: most recent visible, untrashed asset first; an empty
+/// album by its id's creation time, not the row's local `created_at`; ties by id.
+#[test]
+fn list_albums_orders_by_most_recent_visible_asset() {
+    let db = DatabaseDriver::open_in_memory().unwrap();
+    // Ids minted oldest → newest; local `created_at` deliberately disagrees with them.
+    let old = v7_at(1_000);
+    let mid = v7_at(2_000);
+    let empty = v7_at(3_000);
+    let new = v7_at(4_000);
+    for (id, created_at) in [(&old, 9), (&mid, 8), (&empty, 7), (&new, 6)] {
+        db.insert_album(&album_row(id, created_at)).unwrap();
+    }
+
+    let put = |uuid: &str, album: &str, at: Option<i64>, fallback: i64| {
+        let mut row = make_asset(uuid, &format!("{uuid:0>64}"));
+        row.album_id = Some(album.to_string());
+        row.capture_utc = at;
+        row.capture_timestamp = fallback;
+        db.insert_asset(&row).unwrap();
+    };
+    // `old` holds the most recent capture; `capture_utc` NULL falls back to the local stamp.
+    put("o-1", &old, None, 10_000);
+    put("m-1", &mid, Some(5_000), 0);
+    // `new`'s only assets are hidden or trashed, so it ranks by its creation time (4_000).
+    put("n-1", &new, Some(20_000), 0);
+    put("n-2", &new, Some(30_000), 0);
+    db.update_asset_hidden("n-1", true).unwrap();
+    db.soft_delete("n-2", 1).unwrap();
+
+    let order: Vec<String> = db
+        .list_albums()
+        .unwrap()
+        .into_iter()
+        .map(|a| a.id)
+        .collect();
+    assert_eq!(
+        order,
+        vec![old.clone(), mid.clone(), new.clone(), empty.clone()]
+    );
+
+    let recency = db.album_recency().unwrap();
+    assert_eq!(recency.latest_capture(&old), Some(10_000));
+    assert_eq!(recency.latest_capture(&new), None);
+
+    // Restoring the trashed asset moves its album to the front with no other write.
+    db.restore_asset("n-2").unwrap();
+    let first = db.list_albums().unwrap().remove(0).id;
+    assert_eq!(first, new);
+}
+
+/// The recency query is served by `idx_assets_album_recency`, not a table scan.
+#[test]
+fn album_recency_reads_the_recency_index() {
+    let db = DatabaseDriver::open_in_memory().unwrap();
+    let plan: Vec<String> = db
+        .connection()
+        .prepare(&format!("EXPLAIN QUERY PLAN {ALBUM_RECENCY_SQL}"))
+        .unwrap()
+        .query_map([], |r| r.get::<_, String>(3))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(
+        plan.iter()
+            .any(|step| step.contains("COVERING INDEX idx_assets_album_recency")),
+        "{plan:?}"
+    );
+}
+
 #[test]
 fn test_query_album_assets_and_detach_on_delete() {
     let db = DatabaseDriver::open_in_memory().unwrap();
@@ -332,6 +457,142 @@ fn rep(uuid: &str, tier: &str, bytes: i64, last: i64) -> CachedRepresentationRow
         pinned: false,
         is_owned_original: false,
     }
+}
+
+#[test]
+fn purge_asset_drops_the_row_its_tags_and_its_cache_rows_only() {
+    let db = DatabaseDriver::open_in_memory().unwrap();
+    for (uuid, hash) in [("gone", "a"), ("kept", "b")] {
+        db.insert_asset(&make_asset(uuid, &hash.repeat(64)))
+            .unwrap();
+        db.replace_asset_tags(uuid, &["beach".to_string()]).unwrap();
+        db.upsert_representation(&rep(uuid, "thumbnail", 100, 10))
+            .unwrap();
+    }
+
+    db.purge_asset("gone").unwrap();
+
+    assert!(db.find_by_uuid("gone").unwrap().is_none());
+    assert!(db.tags_for("gone").unwrap().is_empty());
+    assert!(db.representations_for("gone").unwrap().is_empty());
+    assert!(db.find_by_uuid("kept").unwrap().is_some());
+    assert_eq!(db.tags_for("kept").unwrap(), vec!["beach".to_string()]);
+    assert_eq!(db.representations_for("kept").unwrap().len(), 1);
+}
+
+fn stack(id: &str, primary: &str, cover: Option<&str>) -> AssetStackRow {
+    AssetStackRow {
+        id: id.to_string(),
+        stack_type: "burst".to_string(),
+        primary_asset_id: primary.to_string(),
+        cover_asset_id: cover.map(str::to_string),
+        is_collapsed: true,
+        is_auto_generated: true,
+        created_at: 1,
+        modified_at: 1,
+    }
+}
+
+fn member(stack_id: &str, asset_id: &str, order: i64) -> StackMemberRow {
+    StackMemberRow {
+        id: format!("{stack_id}#{asset_id}"),
+        stack_id: stack_id.to_string(),
+        asset_id: asset_id.to_string(),
+        sequence_order: order,
+        member_role: "member".to_string(),
+        created_at: 1,
+    }
+}
+
+/// `(primary_asset_id, cover_asset_id)` of stack `id`, or `None` when the row is gone.
+fn stack_roles(db: &DatabaseDriver, id: &str) -> Option<(String, Option<String>)> {
+    db.conn
+        .query_row(
+            "SELECT primary_asset_id, cover_asset_id FROM asset_stacks WHERE id = ?1",
+            params![id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .unwrap()
+}
+
+#[test]
+fn purge_asset_leaves_no_stack_or_cover_row_naming_it() {
+    let db = DatabaseDriver::open_in_memory().unwrap();
+    for (uuid, hash) in [("gone", "a"), ("next", "b"), ("last", "c"), ("solo", "d")] {
+        db.insert_asset(&make_asset(uuid, &hash.repeat(64)))
+            .unwrap();
+    }
+    // A stack the purged asset leads, a stack it is only the cover of, and one it is alone in.
+    db.insert_stack(&stack("led", "gone", Some("gone")))
+        .unwrap();
+    db.insert_stack(&stack("covered", "next", Some("gone")))
+        .unwrap();
+    db.insert_stack(&stack("alone", "gone", None)).unwrap();
+    db.insert_stack(&stack("other", "solo", Some("solo")))
+        .unwrap();
+    for (stack_id, asset, order) in [
+        ("led", "gone", 0),
+        ("led", "last", 2),
+        ("led", "next", 1),
+        ("covered", "next", 0),
+        ("covered", "gone", 1),
+        ("alone", "gone", 0),
+        ("other", "solo", 0),
+    ] {
+        db.insert_stack_member(&member(stack_id, asset, order))
+            .unwrap();
+    }
+    db.insert_album(&AlbumRow {
+        id: "album".to_string(),
+        name: "Trip".to_string(),
+        created_at: 1,
+        modified_at: 1,
+        cover_asset_id: Some("gone".to_string()),
+    })
+    .unwrap();
+
+    db.purge_asset("gone").unwrap();
+
+    let members: Vec<String> = db
+        .list_stack_members("led")
+        .unwrap()
+        .into_iter()
+        .map(|m| m.asset_id)
+        .collect();
+    assert_eq!(members, ["next", "last"]);
+    assert_eq!(
+        stack_roles(&db, "led"),
+        Some(("next".to_string(), Some("next".to_string()))),
+        "the first remaining member by sequence takes the primary and the cover"
+    );
+    assert_eq!(
+        stack_roles(&db, "covered"),
+        Some(("next".to_string(), Some("next".to_string())))
+    );
+    assert_eq!(
+        stack_roles(&db, "alone"),
+        None,
+        "an emptied stack is removed"
+    );
+    assert_eq!(
+        stack_roles(&db, "other"),
+        Some(("solo".to_string(), Some("solo".to_string()))),
+        "another asset's stack is left alone"
+    );
+    let named: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM stack_members WHERE asset_id = 'gone'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(named, 0);
+    assert_eq!(
+        db.find_album("album").unwrap().unwrap().cover_asset_id,
+        None
+    );
 }
 
 fn evicted_ids(rows: &[CachedRepresentationRow]) -> Vec<&str> {

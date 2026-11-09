@@ -92,32 +92,35 @@ fn legacy_sidecar_bytes(uuid: &str, hash_hex: &str) -> Vec<u8> {
     out
 }
 
-/// The two shapes are disjoint on the wire, so the probe cannot mis-route a file: a
-/// signed sidecar has integer field 0 and no `version` key, an unsigned one has `version`
-/// and no field 0. This is also *why* a rebuild that only knew the unsigned shape
-/// would lose the register state silently — it would not mis-read signed sidecars, it
-/// would skip every one of them, so a signed library rebuilt to nothing at all.
+/// The probe cannot mis-route a file: a signed sidecar has integer field 0, and the retired
+/// unsigned record has none, so it is `Unknown` and the signed reader rejects it. This is
+/// also *why* a rebuild that only knew the unsigned shape would lose the register state
+/// silently — it would not mis-read signed sidecars, it would skip every one of them, so a
+/// signed library rebuilt to nothing at all.
 #[test]
-fn the_two_sidecar_shapes_probe_disjointly() {
+fn a_retired_unsigned_sidecar_never_probes_as_signed() {
     let signed = signed_sidecar(Uuid::from_u128(0xD15), 0x66).to_canonical_vec();
-    assert_eq!(shape::probe(&signed), SidecarShape::Signed { schema: 1 });
+    assert_eq!(
+        shape::probe(&signed),
+        shape::SidecarShape::Signed { schema: 1 }
+    );
     assert!(SidecarV1::from_canonical_slice(&signed, SIDECAR_SCHEMA_V1).is_ok());
 
     let legacy = legacy_sidecar_bytes("eeee0000-0000-0000-0000-000000000005", &"e".repeat(64));
-    assert_eq!(shape::probe(&legacy), SidecarShape::LegacyUnsigned);
+    assert_eq!(shape::probe(&legacy), shape::SidecarShape::Unknown);
     assert!(
         SidecarV1::from_canonical_slice(&legacy, SIDECAR_SCHEMA_V1).is_err(),
         "the signed reader must reject a pre-signed-path sidecar"
     );
 }
 
-/// **Unsigned sidecars are reported, not indexed.** An unsigned pre-signed-path sidecar is
-/// reported and *not* indexed: a rebuild holds no keys and cannot admit it, and indexing
-/// it would show an asset the workspace cannot verify, export, or upload. The signed asset
-/// beside it rebuilds as before, and the run still succeeds — one legacy file must not
+/// **Unsigned sidecars are skipped, not indexed.** A retired unsigned pre-signed-path sidecar
+/// is warned about and *not* indexed: a rebuild holds no keys and cannot admit it, and
+/// indexing it would show an asset the workspace cannot verify, export, or upload. The signed
+/// asset beside it rebuilds as before, and the run still succeeds — one legacy file must not
 /// cost the library its index.
 #[test]
-fn an_unsigned_sidecar_is_reported_not_indexed() {
+fn an_unsigned_sidecar_is_skipped_not_indexed() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().join("lib");
     let lib = init_library(&root, "T").unwrap();

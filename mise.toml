@@ -104,13 +104,16 @@ run = [
   "mise run build-check-wasm",
   "mise run build-ffi",
   "mise run lint-check-ffi",
-  "mise run gen-bindings",
+  "mise run build-http3",
+  "mise run lint-check-http3",
+  "mise run doc-check-http3",
+  "mise run gen-bindings --check",
   "mise run verify-examples",
 ]
 
 [tasks.check-web]
 description = "Web CI gate"
-depends = ["format-check-web", "lint-check-web", "test-web", "build-web"]
+depends = ["format-check-web", "lint-check-web", "test-web", "build-web", "wasm-surface-check"]
 
 [tasks.check-docs]
 description = "Docs CI gate"
@@ -156,6 +159,18 @@ description = "Rustdoc gate for the whole workspace (intra-doc links, over all i
 env = { RUSTDOCFLAGS = "-D warnings" }
 run = "cargo doc --workspace --no-deps --document-private-items"
 
+# The rustdoc published to GitHub Pages from master (`.github/workflows/rustdoc-pages.yml`). Public items
+# only, which is what a reader building on the crates can call, and without the sea-orm
+# migration and entity crates, whose generated docs are a third of the gate's 730 MB render and
+# nothing a reader browses. The gate above still lints every item of every crate. The site root
+# redirects to `capsule-sdk`, the crate a client starts from.
+[tasks.doc-publish-rust]
+description = "Render the public workspace rustdoc published to GitHub Pages"
+run = [
+  "cargo doc --workspace --no-deps --exclude capsule-server-migration --exclude capsule-cli-migration --exclude capsule-cli-entity",
+  "printf '<!doctype html><meta http-equiv=\"refresh\" content=\"0; url=capsule_sdk/\"><link rel=\"canonical\" href=\"capsule_sdk/\">\\n' > target/doc/index.html",
+]
+
 # nextest: cross-binary parallel scheduling + process-per-test isolation. Two
 # invocations — the workspace (default features), then capsule-sdk's `ffi` surface (the
 # `capsule_sdk` uniffi namespace; capsule-core exports none). The workspace run includes `capsule-e2e`, the bounded E2E cases over the
@@ -168,6 +183,7 @@ run = "cargo doc --workspace --no-deps --document-private-items"
 run = [
   "cargo nextest run --workspace",
   "cargo nextest run -p capsule-sdk --features ffi",
+  "cargo nextest run -p capsule-sdk --features http3",
   "cargo test --doc -p capsule-i18n",
 ]
 
@@ -310,7 +326,7 @@ run = [
 # media stack). It rejects implicit workspace packages, retired dependencies, buildable
 # manifests under `legacy-review/`, and stale component references — and it holds the stateless
 # core: `capsule-core` names no `std::fs`, `std::env`, `rusqlite` or `sea_orm`, and depends on no
-# stateful crate (Module Map — Stateless Core).
+# stateful crate (see `capsule-core`'s crate docs).
 #
 # **In `check-rust`.** It was adopted as a report first, deliberately: the Salvo
 # server and the in-repo media stack were live and stayed that way until the Kynos rebuild reached
@@ -324,7 +340,7 @@ description = "Verify active-workspace, retired-component and stateless-core bou
 run = "cargo run -q -p xtask -- architecture-check"
 
 # Unit tests live in a sibling file: `foo.rs` ends with `#[cfg(test)] mod tests;` and the tests sit
-# in `foo/tests.rs` (CLAUDE.md, Rust Architecture Decisions). Rejects any inline module under a
+# in `foo/tests.rs` (.claude/rules/rust.md). Rejects any inline module under a
 # workspace member's `src/` that is named `tests` or gated on `cfg(test)`. See
 # xtask/src/test_layout.rs.
 [tasks.test-layout-check]
@@ -466,6 +482,22 @@ run = "cargo build -p capsule-sdk --features ffi"
 [tasks.lint-check-ffi]
 run = "cargo clippy -p capsule-sdk --features ffi --all-targets -- $CLIPPY_FLAGS"
 
+# ── HTTP/3: capsule-sdk's opt-in `http3` transport ───────────────────────────
+# Off by default, so the workspace rows never compile it; these rows are what fail CI when it stops
+# building, linting or documenting. Its tests run in `test-rust`. `http3-netem` (needs tc and
+# CAP_NET_ADMIN, and its test is `#[ignore]`d) is deliberately not built here.
+
+[tasks.build-http3]
+run = "cargo build -p capsule-sdk --features http3"
+
+[tasks.lint-check-http3]
+run = "cargo clippy -p capsule-sdk --features http3 --all-targets -- $CLIPPY_FLAGS"
+
+[tasks.doc-check-http3]
+description = "Rustdoc gate for capsule-sdk with the http3 feature"
+env = { RUSTDOCFLAGS = "-D warnings" }
+run = "cargo doc -p capsule-sdk --features http3 --no-deps --document-private-items"
+
 # gen-bindings, verify-examples → mise-tasks/ (shebang scripts).
 
 # ── Cross-compilation: FFI / mobile targets ──────────────────────────────────
@@ -538,6 +570,21 @@ run = [
   "cargo build -p capsule-wasm --target wasm32-unknown-unknown --release",
   "wasm-bindgen target/wasm32-unknown-unknown/release/capsule_wasm.wasm --out-dir capsule-web/src/generated/wasm --target web",
 ]
+
+# Digest the public half of the capsule_wasm.d.ts `build-wasm` emits into the committed
+# capsule-wasm/wasm-surface.d.ts that /reference/sdk/wasm/ is generated from. The check is in
+# `check-web`, not `check-rust`: producing the declaration file needs wasm-bindgen-cli, which
+# only the web CI job installs. Ordered behind `drop-kat` so it is the last cargo task in the
+# web graph and never contends for the `target/` lock (see the note on `share-kat`).
+[tasks.wasm-surface]
+description = "Digest capsule_wasm.d.ts into capsule-wasm/wasm-surface.d.ts"
+depends = ["build-wasm"]
+run = "cargo run -q -p xtask -- wasm-surface"
+
+[tasks.wasm-surface-check]
+description = "Fail if capsule-wasm/wasm-surface.d.ts is stale against the wasm build"
+depends = ["drop-kat"]
+run = "cargo run -q -p xtask -- wasm-surface --check"
 
 # Generate the deterministic cross-language share-link KAT fixture the bun test reopens (Rust
 # seals via the real issuer crypto; wasm reopens — proving byte-identical interop). Written to the

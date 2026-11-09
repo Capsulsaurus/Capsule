@@ -1,0 +1,10 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run(&scratch,\n&[\"camera\", \"import\", \"--address\", \" \", \"--library\", \"lib\",\n\"--passphrase-stdin\", \"--json\"],)"
+---
+status: 1
+--- stdout ---
+
+--- stderr ---
+Error: 
+   0: The camera address is empty.

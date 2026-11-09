@@ -20,8 +20,9 @@
 //! - [`form`] — the text forms the feature screens collect input with, with secrets kept out
 //!   of the log.
 //!
-//! The feature screens, one module each: [`auth`] (sign in and out), [`sync`], [`restore`] and
-//! [`share`] (issue and revoke share links).
+//! The feature screens, one module each: [`auth`] (sign in with a password or through the
+//! identity provider, in a browser or on another device, and sign out), [`sync`], [`restore`]
+//! and [`share`] (issue and revoke share links).
 //!
 //! [`import`] picks sources and imports them; [`push`] pushes a library and shows each asset's
 //! custody (uploaded, durable, receipted) as the run's event stream tells it, with the assets

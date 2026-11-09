@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+#MISE description="Run the apps' responsiveness parity benchmark on a physical device and gate it on that device's baseline"
+#USAGE arg "<platform>" help="android or apple"
+#USAGE arg "<device>" help="Stable device key, e.g. pixel-8-pro; names the baseline file"
+#USAGE flag "--record" help="Record this run as the device's baseline instead of comparing"
+#
+# Clients - Responsiveness: Capsule against the platform photo app, on the same device and the
+# same library. The harness's report is normalized and judged by `xtask bench-apps`:
+# regression past the device's committed baseline fails; parity with the platform app is
+# printed and does not gate.
+#
+# Bench runbook (device state no script can create for you):
+#   1. One physical device per baseline, plugged in, screen unlocked, battery above 50%, no
+#      other apps in the foreground. Emulators and simulators do not measure anything a user feels.
+#   2. The platform photo app (Google Photos or the OEM gallery on Android, Photos on Apple)
+#      holds the benchmark library: BENCH_LIBRARY_SIZE assets (default 100000), fully indexed.
+#      The size is recorded in the results, and a baseline refuses results of another size.
+#   3. Apple: Capsule measures its own `huge-library` mock scenario (250,000 synthetic assets)
+#      until the core-backed catalog can import the same library.
+#
+# Environment:
+#   BENCH_LIBRARY_SIZE            assets in the benchmark library (default 100000)
+#   ANDROID_SERIAL                which adb device (Android, when more than one is attached)
+#   BENCH_PLATFORM_PACKAGE        platform app package (Android; default Google Photos)
+#   BENCH_PLATFORM_THUMBNAIL_RES  platform app grid-thumbnail resource id (Android)
+#   BENCH_PLATFORM_VIEWER_RES     platform app viewer-image resource id (Android)
+#   BENCH_APPLE_DESTINATION       xcodebuild destination (Apple; e.g. "id=<udid>")
+#   BENCH_PLATFORM_VIEWER_ID      Photos' viewer element identifier (Apple)
+#
+# A platform measure whose selector is unset is skipped, and parity reports it as not compared.
+set -euo pipefail
+
+platform="${usage_platform:?platform is android or apple}"
+device="${usage_device:?device key is required}"
+record="${usage_record:-false}"
+library_size="${BENCH_LIBRARY_SIZE:-100000}"
+
+if [ "$platform" != android ] && [ "$platform" != apple ]; then
+    echo "bench-apps: platform must be android or apple, not '$platform'" >&2
+    exit 2
+fi
+if ! [[ "$device" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+    echo "bench-apps: device key '$device' must be lower-case words joined by '-'" >&2
+    exit 2
+fi
+
+root="$(git rev-parse --show-toplevel)"
+out="$root/target/bench-apps/$platform/$device"
+rm -rf "$out"
+mkdir -p "$out"
+
+case "$platform" in
+    android)
+        baseline="$root/capsule-android/benchmark/baselines/$device.json"
+        args=()
+        add_arg() { if [ -n "${2:-}" ]; then args+=("-Pandroid.testInstrumentationRunnerArguments.$1=$2"); fi; }
+        add_arg platformPackage "${BENCH_PLATFORM_PACKAGE:-}"
+        add_arg platformThumbnailRes "${BENCH_PLATFORM_THUMBNAIL_RES:-}"
+        add_arg platformViewerRes "${BENCH_PLATFORM_VIEWER_RES:-}"
+        echo "bench-apps: running the Macrobenchmark suite on ${ANDROID_SERIAL:-the attached device}" >&2
+        # `${args[@]+...}`: an empty array is "unbound" to macOS's bash 3.2 under `set -u`.
+        (cd "$root" && ./gradlew -Pcapsule.wireFfi ${args[@]+"${args[@]}"} :benchmark:connectedBenchmarkAndroidTest)
+        report="$(find "$root/capsule-android/benchmark/build/outputs" -name '*benchmarkData.json' -print -quit)"
+        if [ -z "$report" ]; then
+            echo "bench-apps: the suite wrote no benchmarkData.json" >&2
+            exit 1
+        fi
+        cp "$report" "$out/report.json"
+        format=macrobenchmark
+        ;;
+    apple)
+        if [ "$(uname)" != "Darwin" ]; then
+            echo "bench-apps: the Apple suite needs macOS and Xcode" >&2
+            exit 2
+        fi
+        baseline="$root/capsule-swift/UITests/Baselines/$device.json"
+        destination="${BENCH_APPLE_DESTINATION:?set BENCH_APPLE_DESTINATION, e.g. id=<device udid>}"
+        (cd "$root/capsule-swift" && mise exec -- tuist generate --no-open)
+        echo "bench-apps: running ParityBenchmarkTests on $destination" >&2
+        (
+            cd "$root/capsule-swift"
+            # Exported only when set, as the Android selectors are: the Photos viewer test
+            # skips without it rather than searching for an empty identifier.
+            if [ -n "${BENCH_PLATFORM_VIEWER_ID:-}" ]; then
+                export TEST_RUNNER_PLATFORM_VIEWER_ID="$BENCH_PLATFORM_VIEWER_ID"
+            fi
+            xcodebuild test \
+                -workspace Capsule.xcworkspace \
+                -scheme CapsuleParityBenchmark \
+                -destination "$destination" \
+                -only-testing:CapsuleAppUITests/ParityBenchmarkTests \
+                -resultBundlePath "$out/run.xcresult" \
+                | mise exec -- xcbeautify
+        )
+        xcrun xcresulttool get test-results metrics --path "$out/run.xcresult" > "$out/report.json"
+        format=xcresult
+        ;;
+esac
+
+xtask() { (cd "$root" && cargo run -q -p xtask -- bench-apps "$@"); }
+xtask import --format "$format" --input "$out/report.json" --device "$device" \
+    --library-size "$library_size" --out "$out/results.json"
+
+if [ "$record" = "true" ]; then
+    xtask record --results "$out/results.json" --baseline "$baseline"
+    echo "bench-apps: recorded $baseline; commit it so later runs are judged against it" >&2
+else
+    xtask compare --results "$out/results.json" --baseline "$baseline"
+fi

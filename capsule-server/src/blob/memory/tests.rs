@@ -21,10 +21,10 @@ macro_rules! conformance_cases {
 }
 
 conformance_cases! {
-    staging_appends_only_at_the_end_and_tracks_its_length,
-    an_append_at_the_wrong_offset_is_refused_and_names_the_resume_point,
-    truncating_a_stage_cuts_it_back_and_never_grows_it,
-    appending_to_an_upload_that_was_never_begun_is_not_staged,
+    staging_writes_positionally_and_tracks_its_length,
+    ranges_written_out_of_order_read_back_in_place,
+    a_rewritten_range_overwrites_what_a_failed_write_left,
+    writing_to_an_upload_that_was_never_begun_is_not_staged,
     abandoning_removes_the_staged_bytes_and_says_whether_there_were_any,
     the_staged_listing_is_ordered_and_holds_only_open_uploads,
     an_upload_id_that_cannot_name_a_file_is_refused_by_every_operation,
@@ -64,6 +64,9 @@ async fn a_stage_is_readable_before_it_is_committed() {
 
     assert_eq!(store.staged_bytes(&upload), None);
     store.begin(&upload).await.expect("begin");
-    store.append(&upload, 0, b"half").await.expect("append");
+    store
+        .write_staged(&upload, 0, b"half")
+        .await
+        .expect("write_staged");
     assert_eq!(store.staged_bytes(&upload), Some(b"half".to_vec()));
 }

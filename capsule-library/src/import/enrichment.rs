@@ -36,7 +36,7 @@
 //!   without re-encrypting or moving anything.
 //!
 //! [precedence rule]: https://docs/design/import/pipeline/#third-party-importers
-//! [Takeout mapping-table]: https://docs/design/import/pipeline/#validation
+//! [Takeout mapping-table]: https://docs/design/import/pipeline/#third-party-importers
 //! [Organization — Culling]: https://docs/design/organization/#culling
 //! [container album]: https://docs/design/organization/#container-albums
 //! [Organization — The Default Album]: https://docs/design/organization/#the-default-album

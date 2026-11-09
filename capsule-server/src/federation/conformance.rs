@@ -722,6 +722,65 @@ pub async fn revoking_a_refreshed_grant_by_its_original_jti_revokes_the_whole_ch
     assert_eq!(find(h, &third.jti).await, None);
 }
 
+/// An operator revoking a refreshed grant through the list ends every successor too.
+///
+/// The operator path ([`RevocationList::revoke`](crate::discovery::revocation::RevocationList::revoke))
+/// is handed the `jti` someone saw — in a peer's report, in an owner's complaint — and that is
+/// usually the one minted, which the first refresh already revoked. Publishing only that link
+/// would answer success and leave the grant live in its newest successor.
+pub async fn an_operator_revocation_follows_the_refresh_chain(h: &dyn Harness) {
+    let case = "opchain";
+    let now = h.clock().now();
+    let original = renewable_record(h, case, "original", 6, 48);
+    issue(h, original.clone()).await;
+    let first = renewable_record(h, case, "first", 6, 48);
+    let second = renewable_record(h, case, "second", 6, 48);
+    for (predecessor, successor) in [(&original, &first), (&first, &second)] {
+        assert_eq!(
+            ok(
+                h.capabilities()
+                    .refresh(&predecessor.jti, successor.clone(), now)
+                    .await,
+                "refresh a renewable grant",
+            ),
+            RefreshOutcome::Issued(successor.clone())
+        );
+    }
+
+    h.capabilities()
+        .revoke(RevokedToken {
+            jti: original.jti.clone(),
+            expires_at: original.expires_at,
+        })
+        .await
+        .expect("an operator revokes the minted jti");
+    let listed = published(h).await;
+    for link in [&original, &first, &second] {
+        assert!(
+            !find(h, &link.jti).await.expect("recorded").is_live(now),
+            "{} must be refused once an operator revokes the grant",
+            link.jti
+        );
+        assert!(listed.contains(&link.jti), "{} is published", link.jti);
+    }
+    // And a retry is not a new fact.
+    h.capabilities()
+        .revoke(RevokedToken {
+            jti: original.jti.clone(),
+            expires_at: original.expires_at,
+        })
+        .await
+        .expect("a retry is not a new fact");
+    assert_eq!(
+        published(h)
+            .await
+            .iter()
+            .filter(|jti| *jti == &second.jti)
+            .count(),
+        1
+    );
+}
+
 /// A revoked predecessor cannot be refreshed, and an unknown one is unknown.
 pub async fn a_revoked_or_unknown_predecessor_is_not_refreshed(h: &dyn Harness) {
     let case = "norefresh";
@@ -874,6 +933,7 @@ pub async fn run_all(h: &dyn Harness) {
     a_refresh_is_one_operation_and_a_replay_answers_the_same_successor(h).await;
     a_revoked_or_unknown_predecessor_is_not_refreshed(h).await;
     revoking_a_refreshed_grant_by_its_original_jti_revokes_the_whole_chain(h).await;
+    an_operator_revocation_follows_the_refresh_chain(h).await;
     a_pinned_peer_reads_back_and_an_unknown_one_is_none(h).await;
     a_block_needs_no_key_and_is_idempotent(h).await;
     a_pin_keeps_a_block_and_an_unblock_keeps_the_key(h).await;

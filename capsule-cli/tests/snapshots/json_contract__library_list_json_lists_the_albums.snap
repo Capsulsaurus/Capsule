@@ -1,0 +1,22 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "library_list(&scratch, &[\"--view\", \"albums\"])"
+---
+status: 0
+--- stdout ---
+{
+  "albums": [
+    {
+      "album_id": "[ALBUM_ID]",
+      "assets": [
+        "[ASSETS]",
+        "[ASSETS]"
+      ],
+      "labels": [],
+      "labels_error": null,
+      "name": "Imports"
+    }
+  ],
+  "view": "albums"
+}
+--- stderr ---

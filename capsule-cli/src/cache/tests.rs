@@ -260,9 +260,15 @@ fn a_push_defers_bulk_tiers_off_unmetered() {
     for class in ALL {
         let source = InMemoryConnectionClass::new(class);
         for staged in [false, true] {
-            let options = push_options(&transfer_plan(&source), true, false, staged);
+            let options = push_options(
+                &path_plan(&source, PathFlags::default()),
+                true,
+                false,
+                staged,
+            );
             assert_eq!(options.connection, class);
-            let scheduler = StagedScheduler::new(options.policy, options.connection);
+            let plan = options.path.expect("a CLI push plans from the path");
+            let scheduler = StagedScheduler::from_plan(&plan, options.policy);
             let bulk_opens = class == ConnectionClass::Unmetered;
             assert_eq!(
                 scheduler.tier_opens_now(UploadTier::Original),
@@ -286,7 +292,10 @@ fn a_push_defers_bulk_tiers_off_unmetered() {
 /// On `unmetered` the user's choice stands, and the flags pass through.
 #[test]
 fn an_unmetered_push_keeps_the_requested_policy() {
-    let plan = transfer_plan(&InMemoryConnectionClass::new(ConnectionClass::Unmetered));
+    let plan = path_plan(
+        &InMemoryConnectionClass::new(ConnectionClass::Unmetered),
+        PathFlags::default(),
+    );
     let full = push_options(&plan, true, true, false);
     assert_eq!(full.policy, UploadPolicy::Full);
     assert!(full.dry_run && full.force);
@@ -305,4 +314,108 @@ fn the_transfer_plan_follows_the_current_class() {
     let plan = transfer_plan(&source);
     assert_eq!(plan.class, ConnectionClass::Constrained);
     assert!(plan.defer_bulk);
+}
+
+/// Each path flag overrides the class source, and the push plans from the result: the CLI is
+/// where a path snapshot is supplied by hand.
+#[test]
+fn path_flags_override_the_class_source() {
+    use capsule_sdk::net::path::{Hold, TierAdmission};
+
+    let unmetered = InMemoryConnectionClass::new(ConnectionClass::Unmetered);
+    let cases = [
+        (
+            PathFlags {
+                cost: Some(PathCost::Metered),
+                ..PathFlags::default()
+            },
+            ConnectionClass::Metered,
+            TierAdmission::IndexOnly,
+            Some(Hold::Cost),
+        ),
+        (
+            PathFlags {
+                power: Some(PowerState::LowPower),
+                ..PathFlags::default()
+            },
+            ConnectionClass::Unmetered,
+            TierAdmission::IndexOnly,
+            Some(Hold::LowPower),
+        ),
+        (
+            PathFlags {
+                thermal: Some(ThermalState::Critical),
+                ..PathFlags::default()
+            },
+            ConnectionClass::Unmetered,
+            TierAdmission::Nothing,
+            Some(Hold::ThermalCritical),
+        ),
+        (
+            PathFlags {
+                background_deadline: Some(Duration::from_secs(10)),
+                ..PathFlags::default()
+            },
+            ConnectionClass::Unmetered,
+            TierAdmission::IndexOnly,
+            Some(Hold::Deadline),
+        ),
+        (
+            PathFlags {
+                interface: Some(PathInterface::Cellular),
+                ..PathFlags::default()
+            },
+            ConnectionClass::Unmetered,
+            TierAdmission::All,
+            None,
+        ),
+    ];
+    for (flags, class, admission, hold) in cases {
+        let plan = path_plan(&unmetered, flags);
+        assert_eq!(
+            (plan.class, plan.admission, plan.hold),
+            (class, admission, hold),
+            "{flags:?}"
+        );
+    }
+
+    // A flag also overrides what the source reports, in either direction.
+    let metered = InMemoryConnectionClass::new(ConnectionClass::Metered);
+    let plan = path_plan(
+        &metered,
+        PathFlags {
+            cost: Some(PathCost::Unmetered),
+            ..PathFlags::default()
+        },
+    );
+    assert_eq!(plan.admission, TierAdmission::All);
+}
+
+/// A source that reports `adverse` is an adverse link, so the plan holds bulk on it as the
+/// class gate always did.
+#[test]
+fn an_adverse_source_is_adverse_link_behaviour() {
+    let plan = path_plan(
+        &InMemoryConnectionClass::new(ConnectionClass::Adverse),
+        PathFlags::default(),
+    );
+    assert_eq!(plan.class, ConnectionClass::Adverse);
+    assert!(plan.defers_bulk());
+}
+
+/// A plan that holds bulk back for heat stages a full push, which the class alone never did.
+#[test]
+fn a_hot_device_stages_a_full_push() {
+    let plan = path_plan(
+        &InMemoryConnectionClass::new(ConnectionClass::Unmetered),
+        PathFlags {
+            thermal: Some(ThermalState::Serious),
+            ..PathFlags::default()
+        },
+    );
+    let options = push_options(&plan, false, false, false);
+    assert_eq!(options.policy, UploadPolicy::Staged);
+    let scheduler = StagedScheduler::from_plan(&plan, options.policy);
+    assert!(scheduler.tier_opens_now(UploadTier::Index));
+    assert!(!scheduler.tier_opens_now(UploadTier::Original));
 }

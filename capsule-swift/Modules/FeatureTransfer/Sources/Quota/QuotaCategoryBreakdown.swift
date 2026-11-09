@@ -78,7 +78,7 @@ public struct QuotaCategoryBreakdown: Sendable, Equatable {
         let remainder = quota.used - trash
         let originals = local.bytesByTier[.original] ?? 0
         let derivatives = (local.bytesByTier[.preview] ?? 0) + (local.bytesByTier[.thumbnail] ?? 0)
-        let metadata = (local.bytesByTier[.lqip] ?? 0) + (local.bytesByTier[.dominantColour] ?? 0)
+        let metadata = local.bytesByTier[.lqip] ?? 0
         let weightTotal = originals + derivatives + metadata
 
         var segments: [Segment] = []

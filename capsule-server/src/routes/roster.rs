@@ -30,7 +30,9 @@
 //! **Removal is a new roster that omits the member.** There is no delete; the epoch bump that
 //! accompanies an MLS `Remove` rides `amk_epoch`, and the store records the version and epoch at
 //! which the member vanished — the stored fact a former member's blob-route `403` is rendered
-//! from once that route consults membership.
+//! from once that route consults membership. A roster that omits a live member at the held
+//! `amk_epoch` is refused `400 error.album.roster_malformed`, its detail naming the epoch it must
+//! exceed: the removal must ride the rotation, not precede it.
 //!
 //! **Removal reclaims nothing, by design, and this call is where an operator would expect it
 //! to.** What a removed writer member uploaded stays in the owner's album and stays charged to
@@ -441,6 +443,27 @@ pub async fn publish_album_roster(
                 current_version,
                 code: error_codes::ALBUM_ROSTER_STALE,
             })
+        }
+        RosterOutcome::EpochNotAdvanced {
+            current_version,
+            stored,
+            removed,
+        } => {
+            tracing::info!(
+                %album,
+                current_version,
+                stored_epoch = stored,
+                submitted_epoch = signed.roster.amk_epoch.0,
+                removed,
+                "a roster was refused: it removes members without advancing the AMK epoch"
+            );
+            // The `400` the module docs give a document that does not follow from the held one:
+            // the owner's repair is the MLS commit the removal implies, re-signed at the epoch it
+            // produces, not a re-sync.
+            Err(RosterRejection::malformed(format!(
+                "a roster that removes a member must advance amk_epoch past {stored}, the epoch \
+                 of the held roster version {current_version}"
+            )))
         }
     }
 }

@@ -28,7 +28,7 @@ anticipated. Three facts in the tree say so:
   the emitted document rather than against a hand-kept table.
 - **The server owns the taxonomy now.** `capsule-server::problem`, `::limits` and `::body`
   carry coded-problem bodies, body-size limits and the header census on every route — the
-  Server Modules table in `design/module-map.md` lists them there.
+  server crate's module docs list them there.
 - **Nothing links it.** `capsule-server/Cargo.toml` declares `capsule-wire` as a path
   dependency, and the only occurrence of `capsule_wire` anywhere in the workspace outside
   the crate itself is one prose reference in `capsule-server/src/lib.rs`'s module comment.

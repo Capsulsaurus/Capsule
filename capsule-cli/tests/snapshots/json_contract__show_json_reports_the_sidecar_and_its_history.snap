@@ -1,0 +1,47 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run_document(&scratch,\n&[\"show\", &asset, \"--library\", path(&library), \"--passphrase-stdin\",\n\"--json\",],)"
+---
+status: 0
+--- stdout ---
+{
+  "album_id": "[ALBUM_ID]",
+  "asset_id": "[ASSET_ID]",
+  "caption": null,
+  "capture_timestamp": "[CAPTURE_TIMESTAMP]",
+  "capture_timestamp_imported": null,
+  "content_type": "image/jpeg",
+  "cull": "neutral",
+  "dimensions": null,
+  "hash": "47046e4c692dcbfb46cb078aede55bf8789242725cafb457cf916428cdedbdc7",
+  "hidden": false,
+  "history": [
+    {
+      "action": "create",
+      "client_version": "[CLIENT_VERSION]",
+      "device": "[DEVICE]",
+      "retention_until": null,
+      "timestamp": "[TIMESTAMP]"
+    },
+    {
+      "action": "metadata-update",
+      "client_version": "[CLIENT_VERSION]",
+      "device": "[DEVICE]",
+      "retention_until": null,
+      "timestamp": "[TIMESTAMP]"
+    }
+  ],
+  "import_timestamp": "[IMPORT_TIMESTAMP]",
+  "in_trash": false,
+  "location": null,
+  "location_edited": false,
+  "location_imported": null,
+  "lqip": false,
+  "rating": null,
+  "stack": null,
+  "tags_ai": [],
+  "tags_user": [
+    "beach"
+  ]
+}
+--- stderr ---

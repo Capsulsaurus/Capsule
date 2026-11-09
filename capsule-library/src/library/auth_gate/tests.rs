@@ -227,6 +227,9 @@ fn gated_trash_query_refuses_without_grant_and_serves_with_one() {
         is_deleted: true,
         deleted_at: Some(100),
         is_hidden: false,
+        caption: None,
+        latitude: None,
+        longitude: None,
     };
     db.insert_asset(&row).unwrap();
     row.uuid = "11110000-0000-0000-0000-000000000002".to_string();
@@ -285,6 +288,9 @@ fn gated_hidden_query_refuses_without_grant_and_serves_with_one() {
         is_deleted: false,
         deleted_at: None,
         is_hidden: true,
+        caption: None,
+        latitude: None,
+        longitude: None,
     };
     db.insert_asset(&row).unwrap();
     row.uuid = "22220000-0000-0000-0000-000000000002".to_string();

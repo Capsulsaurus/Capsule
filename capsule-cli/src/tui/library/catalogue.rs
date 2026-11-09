@@ -7,18 +7,24 @@
 //!
 //! The per-asset rows come from [`crate::show::rows`], so the detail pane and `capsule show`
 //! word every field the same way.
+//!
+//! `capsule library list` is the browser's scriptable twin: it takes the same snapshot and
+//! prints one of its views through [`listing`], so the subcommand and the screen list the same
+//! entries in the same order.
 
 use std::collections::{BTreeMap, HashMap};
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
-use capsule_core::crypto::provenance::Action as ProvenanceAction;
 use capsule_core::domain::GpsDatum;
 use capsule_core::sidecar::{GpsSource, RegionShape, StackRole};
 use capsule_library::lifecycle::Workspace;
 use jiff::Timestamp;
+use serde::Serialize;
 use uuid::Uuid;
 
-use crate::show::Fix;
+pub use crate::show::HistoryEntry;
+use crate::show::{Fix, StackReport, stack_role_name};
 
 /// One library as the browser shows it.
 ///
@@ -31,9 +37,10 @@ pub struct Catalogue {
     /// Every asset the workspace manages, newest capture first (ties by id), trashed and
     /// hidden ones included: each view decides what it leaves out.
     assets: Vec<AssetEntry>,
-    /// Every album the workspace holds keys for, by name then id.
+    /// Every album the workspace holds keys for, in the library's album order (most recent first).
     albums: Vec<AlbumEntry>,
-    /// Every stack an asset is a member of, newest first by its primary's capture.
+    /// Every stack an asset is a member of, newest first by its newest member's capture (where
+    /// that member falls in `assets`), whichever role that member holds.
     stacks: Vec<StackEntry>,
     /// The origin ledger's line for each asset handed to another device whose custody is not
     /// confirmed yet ([`crate::peer::delegation_lines`]); a released one has none.
@@ -184,21 +191,6 @@ impl AssetEntry {
     }
 }
 
-/// One signed record of an asset's provenance chain.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HistoryEntry {
-    /// The record's self-asserted write time, RFC 3339 as signed.
-    pub timestamp: String,
-    /// The lifecycle action, as the manifest spells it (`create`, `metadata-update`, …).
-    pub action: &'static str,
-    /// The device that signed the record.
-    pub device: Uuid,
-    /// The client that wrote it.
-    pub client_version: String,
-    /// The trash deadline a `delete` record sets.
-    pub retention_until: Option<String>,
-}
-
 /// One album.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AlbumEntry {
@@ -297,13 +289,14 @@ impl Catalogue {
         &self.assets
     }
 
-    /// Every album, by name then id.
+    /// Every album, in the library's album order.
     #[must_use]
     pub fn albums(&self) -> &[AlbumEntry] {
         &self.albums
     }
 
-    /// Every stack, newest first by its primary's capture.
+    /// Every stack, newest first by its newest member's capture (where that member falls in
+    /// [`assets`](Self::assets)), whichever role that member holds.
     #[must_use]
     pub fn stacks(&self) -> &[StackEntry] {
         &self.stacks
@@ -352,18 +345,223 @@ impl Catalogue {
     }
 }
 
-/// The manifest's spelling of a provenance action.
-#[must_use]
-pub const fn action_name(action: ProvenanceAction) -> &'static str {
-    match action {
-        ProvenanceAction::Create => "create",
-        ProvenanceAction::Replace => "replace",
-        ProvenanceAction::Delete => "delete",
-        ProvenanceAction::MetadataUpdate => "metadata-update",
-        ProvenanceAction::DerivativeAdd => "derivative-add",
-        ProvenanceAction::DerivativeReplace => "derivative-replace",
-        ProvenanceAction::TrashRestore => "trash-restore",
+/// Which of the browser's views `capsule library list` prints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ListView {
+    /// The timeline: [`Catalogue::timeline`]'s assets, newest first.
+    #[default]
+    Timeline,
+    /// Every album, with its labels and the assets it lists.
+    Albums,
+    /// Every stack, with its labels and its members.
+    Stacks,
+}
+
+/// One asset as `capsule library list` prints it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ListedAsset {
+    /// The asset id.
+    pub asset_id: Uuid,
+    /// The owning album.
+    pub album_id: Uuid,
+    /// The effective capture instant, RFC 3339 as signed.
+    pub capture_timestamp: String,
+    /// The original's file extension, lowercase.
+    pub ext: String,
+    /// The asset's user labels, sorted.
+    pub labels: Vec<String>,
+    /// The stack placement, when the asset is a stack member.
+    pub stack: Option<StackReport>,
+}
+
+/// One album as `capsule library list --view albums` prints it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ListedAlbum {
+    /// The album id.
+    pub album_id: Uuid,
+    /// Its name.
+    pub name: String,
+    /// Its labels, sorted; `null` when its label record could not be read.
+    pub labels: Option<Vec<String>>,
+    /// Why its label record could not be read, beside a `null` `labels` only.
+    pub labels_error: Option<String>,
+    /// Its assets not in trash, newest first.
+    pub assets: Vec<Uuid>,
+}
+
+/// One stack member: the asset and its role in the stack.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ListedMember {
+    /// The member asset.
+    pub asset_id: Uuid,
+    /// `primary`, `member` or `proxy`.
+    pub role: &'static str,
+}
+
+/// One stack as `capsule library list --view stacks` prints it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ListedStack {
+    /// The stack id.
+    pub stack_id: Uuid,
+    /// Its labels, sorted; `null` when its label record could not be read.
+    pub labels: Option<Vec<String>>,
+    /// Why its label record could not be read, beside a `null` `labels` only.
+    pub labels_error: Option<String>,
+    /// Its members: the primary first, then by capture, newest first.
+    pub members: Vec<ListedMember>,
+}
+
+/// What `capsule library list` prints: one of the browser's three views, tagged by `view`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "view", rename_all = "lowercase")]
+pub enum Listing {
+    /// The timeline.
+    Timeline {
+        /// The assets the timeline lists, newest first.
+        assets: Vec<ListedAsset>,
+    },
+    /// The albums.
+    Albums {
+        /// Every album, in the library's album order.
+        albums: Vec<ListedAlbum>,
+    },
+    /// The stacks.
+    Stacks {
+        /// Every stack, newest first by its newest member's capture (ties by that
+        /// member's id), whichever role that member holds.
+        stacks: Vec<ListedStack>,
+    },
+}
+
+/// A label record's outcome as the listing prints it: `(labels, error)`, one of them set.
+fn split_labels(labels: &Result<Vec<String>, String>) -> (Option<Vec<String>>, Option<String>) {
+    match labels {
+        Ok(labels) => (Some(labels.clone()), None),
+        Err(reason) => (None, Some(reason.clone())),
     }
+}
+
+/// Project `catalogue` onto `view`, exactly as the browser lists it.
+#[must_use]
+pub fn listing(catalogue: &Catalogue, view: ListView) -> Listing {
+    match view {
+        ListView::Timeline => Listing::Timeline {
+            assets: catalogue
+                .timeline()
+                .iter()
+                .filter_map(|&id| catalogue.asset(id))
+                .map(|asset| ListedAsset {
+                    asset_id: asset.asset_id,
+                    album_id: asset.album_id,
+                    capture_timestamp: asset.capture_text.clone(),
+                    ext: asset.ext.clone(),
+                    labels: asset.labels.clone(),
+                    stack: asset.stack.map(StackReport::from),
+                })
+                .collect(),
+        },
+        ListView::Albums => Listing::Albums {
+            albums: catalogue
+                .albums()
+                .iter()
+                .map(|album| {
+                    let (labels, labels_error) = split_labels(&album.labels);
+                    ListedAlbum {
+                        album_id: album.album_id,
+                        name: album.name.clone(),
+                        labels,
+                        labels_error,
+                        assets: catalogue.album_assets(album.album_id).to_vec(),
+                    }
+                })
+                .collect(),
+        },
+        ListView::Stacks => Listing::Stacks {
+            stacks: catalogue
+                .stacks()
+                .iter()
+                .map(|stack| {
+                    let (labels, labels_error) = split_labels(&stack.labels);
+                    ListedStack {
+                        stack_id: stack.stack_id,
+                        labels,
+                        labels_error,
+                        members: stack
+                            .members
+                            .iter()
+                            .map(|&(asset_id, role)| ListedMember {
+                                asset_id,
+                                role: stack_role_name(role),
+                            })
+                            .collect(),
+                    }
+                })
+                .collect(),
+        },
+    }
+}
+
+/// A listed label set as one text column: comma-separated, `-` when there are none, the
+/// reason when the record could not be read.
+fn labels_column(labels: Option<&[String]>, error: Option<&str>) -> String {
+    match (labels, error) {
+        (Some([]), _) | (None, None) => "-".to_owned(),
+        (Some(labels), _) => labels.join(", "),
+        (None, Some(reason)) => format!("labels unreadable: {reason}"),
+    }
+}
+
+/// Render `listing` as the lines `capsule library list` prints without `--json`: one line per
+/// entry, a stack's members indented under it, and one line saying so when the view is empty.
+#[must_use]
+pub fn render_listing(listing: &Listing) -> String {
+    let mut out = String::new();
+    match listing {
+        Listing::Timeline { assets } if assets.is_empty() => {
+            out.push_str("The timeline is empty.\n");
+        }
+        Listing::Timeline { assets } => {
+            for asset in assets {
+                let _ = writeln!(
+                    out,
+                    "{}  {}  {}  {}",
+                    asset.asset_id,
+                    asset.capture_timestamp,
+                    asset.ext,
+                    labels_column(Some(&asset.labels), None)
+                );
+            }
+        }
+        Listing::Albums { albums } if albums.is_empty() => out.push_str("No albums.\n"),
+        Listing::Albums { albums } => {
+            for album in albums {
+                let _ = writeln!(
+                    out,
+                    "{}  {}  {} asset(s)  {}",
+                    album.album_id,
+                    album.name,
+                    album.assets.len(),
+                    labels_column(album.labels.as_deref(), album.labels_error.as_deref())
+                );
+            }
+        }
+        Listing::Stacks { stacks } if stacks.is_empty() => out.push_str("No stacks.\n"),
+        Listing::Stacks { stacks } => {
+            for stack in stacks {
+                let _ = writeln!(
+                    out,
+                    "{}  {} member(s)  {}",
+                    stack.stack_id,
+                    stack.members.len(),
+                    labels_column(stack.labels.as_deref(), stack.labels_error.as_deref())
+                );
+                for member in &stack.members {
+                    let _ = writeln!(out, "  {} ({})", member.asset_id, member.role);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Take the snapshot of `ws` the browser shows. Reads the in-memory sidecars and chains, and
@@ -382,7 +580,8 @@ pub fn collect(ws: &Workspace) -> Catalogue {
             .then_with(|| a.asset_id.cmp(&b.asset_id))
     });
 
-    let mut albums: Vec<AlbumEntry> = ws
+    // Kept in `Workspace::albums()` order (most recent visible asset first): the library owns it.
+    let albums: Vec<AlbumEntry> = ws
         .albums()
         .into_iter()
         .map(|(album_id, name)| AlbumEntry {
@@ -394,11 +593,6 @@ pub fn collect(ws: &Workspace) -> Catalogue {
                 .map_err(|e| e.to_string()),
         })
         .collect();
-    albums.sort_by(|a, b| {
-        a.name
-            .cmp(&b.name)
-            .then_with(|| a.album_id.cmp(&b.album_id))
-    });
 
     // Stacks in the order their first member appears in the (newest-first) asset list, with
     // the primary moved to the front.
@@ -440,21 +634,7 @@ pub fn collect(ws: &Workspace) -> Catalogue {
 fn entry(ws: &Workspace, asset_id: Uuid) -> Option<AssetEntry> {
     let view = crate::show::collect(ws, &asset_id)?;
     let asset = ws.asset(&asset_id)?;
-    let history = asset
-        .chain
-        .records()
-        .iter()
-        .map(|record| {
-            let core = &record.manifest.core;
-            HistoryEntry {
-                timestamp: core.timestamp.clone(),
-                action: action_name(core.action),
-                device: core.created_by_device,
-                client_version: core.client_version.clone(),
-                retention_until: core.retention_until.clone(),
-            }
-        })
-        .collect();
+    let history = crate::show::history(asset);
     let mut regions: Vec<RegionEntry> = ws
         .regions(&asset_id)
         .into_iter()

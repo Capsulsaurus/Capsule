@@ -1,25 +1,93 @@
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { unified } from '@astrojs/markdown-remark';
 import starlight from '@astrojs/starlight';
 import tailwindcss from '@tailwindcss/vite';
 // @ts-check
 import { defineConfig } from 'astro/config';
+import starlightBlog from 'starlight-blog';
 import starlightLinksValidator from 'starlight-links-validator';
 import { referenceSidebar } from './scripts/reference-groups.mjs';
+import baseLinks from './src/lib/base-links.mjs';
+import { BLOG_AUTHORS, hasPublishedPost } from './src/lib/blog-posts.mjs';
+import { resolveBuildCommit } from './src/lib/build-commit.mjs';
+import { versionFromBranch } from './src/lib/docs-version.mjs';
 import rehypeNoTranslate from './src/lib/rehype-notranslate.mjs';
+import remarkLibraryLinks from './src/lib/remark-library-links.mjs';
+import remarkLinkTitles from './src/lib/remark-link-titles.mjs';
+import remarkMermaid from './src/lib/remark-mermaid.mjs';
+
+// A production build includes the blog (routes, header link, RSS, sitemap,
+// footer link) only once a post is published, so no reader lands on an empty
+// index. `astro dev` always includes it, so a draft previews in the blog
+// layout. Read once at startup: restart the dev server after publishing.
+const blogIsLive =
+    !process.argv.includes('build') ||
+    hasPublishedPost(
+        fileURLToPath(new URL('./src/content/docs/blog/', import.meta.url)),
+    );
+
+// The commit this build was made from, shown in the footer. `null` (and no
+// footer segment) when neither the host nor git names one.
+const buildCommit = resolveBuildCommit(process.env, () => {
+    try {
+        return execFileSync('git', ['rev-parse', 'HEAD'], {
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+        });
+    } catch {
+        return null;
+    }
+});
+
+// Which docs version this build is. Cloudflare Pages names the branch it
+// builds: `docs/vX.Y` is release X.Y, served under /v/X.Y/; every other branch
+// is the latest docs at /. See src/lib/docs-version.mjs.
+const docsVersion = versionFromBranch(process.env.CF_PAGES_BRANCH);
 
 // https://astro.build/config
 export default defineConfig({
     site: 'https://capsule.justinchung.net', // TODO: Get domain later
-    // Opt technical terms out of browser/machine auto-translation. See the plugin.
-    // Astro 7 deprecates the top-level `markdown.rehypePlugins` key; plugins are
-    // passed to the unified processor directly.
+    base: docsVersion.base,
+    // Retired pages; their content moved to the targets or into code docs.
+    redirects: {
+        '/design/module-map/': '/design/principles/',
+        '/design/dependencies/': '/design/licensing/',
+        '/design/cryptography/failure-modes/':
+            '/design/backup-recovery/#recovery-paths',
+        '/reference/crates/': '/reference/sdk/rust/',
+    },
+    // Astro 7 deprecates the top-level `markdown.*Plugins` keys; plugins are
+    // passed to the unified processor directly. See each plugin's header.
     markdown: {
-        processor: unified({ rehypePlugins: [rehypeNoTranslate] }),
+        processor: unified({
+            // An empty-text site link renders its target's title or heading.
+            remarkPlugins: [
+                // ```mermaid fences compile to themed inline SVG.
+                remarkMermaid,
+                [
+                    remarkLinkTitles,
+                    {
+                        contentDir: fileURLToPath(
+                            new URL('./src/content/docs/', import.meta.url),
+                        ),
+                    },
+                ],
+                // The first mention of each library links its source repo.
+                remarkLibraryLinks,
+            ],
+            // Opts technical terms out of browser/machine auto-translation.
+            rehypePlugins: [rehypeNoTranslate],
+        }),
     },
     integrations: [
+        // On a release build, keeps every built link inside its version.
+        baseLinks({ base: docsVersion.base }),
         starlight({
             title: 'Capsule',
-            description: 'Photo sharing for all!',
+            description:
+                'An open-source, end-to-end encrypted photo library: organization that runs on your devices, a server that holds no keys, and sharing designed to span servers.',
+            favicon: '/favicon.svg',
             social: [
                 {
                     icon: 'github',
@@ -34,7 +102,19 @@ export default defineConfig({
             components: {
                 // Renders the `status` frontmatter (draft/stable) as a title badge.
                 PageTitle: './src/components/PageTitle.astro',
+                // Appends the site footer (links, licence) to every page.
+                Footer: './src/components/Footer.astro',
+                // The header: wordmark, section links, GitHub button and the
+                // three-way theme toggle. See development/visual-language.md.
+                Header: './src/components/Header.astro',
+                SiteTitle: './src/components/SiteTitle.astro',
+                SocialIcons: './src/components/SocialIcons.astro',
+                ThemeSelect: './src/components/ThemeToggle.astro',
+                // Carries the section links on narrow screens.
+                MobileMenuFooter: './src/components/MobileMenuFooter.astro',
             },
+            // Badges every non-stable page in the sidebar. See src/route-data.ts.
+            routeMiddleware: './src/route-data.ts',
             sidebar: [
                 {
                     label: 'Guides',
@@ -61,11 +141,9 @@ export default defineConfig({
                             items: [
                                 { slug: 'design' },
                                 { slug: 'design/principles' },
-                                { slug: 'design/module-map' },
                                 { slug: 'design/api-surfaces' },
                                 { slug: 'design/developer-docs' },
                                 { slug: 'design/networking' },
-                                { slug: 'design/dependencies' },
                                 { slug: 'design/licensing' },
                             ],
                         },
@@ -78,7 +156,6 @@ export default defineConfig({
                                 { slug: 'design/cryptography/encryption' },
                                 { slug: 'design/cryptography/mls' },
                                 { slug: 'design/cryptography/provenance' },
-                                { slug: 'design/cryptography/failure-modes' },
                             ],
                         },
                         {
@@ -87,6 +164,7 @@ export default defineConfig({
                                 { slug: 'design/authentication' },
                                 { slug: 'design/authorization' },
                                 { slug: 'design/device-enrollment' },
+                                { slug: 'design/activity-log' },
                                 { slug: 'design/mls-resilience' },
                             ],
                         },
@@ -168,19 +246,45 @@ export default defineConfig({
             customCss: ['./src/styles/global.css'],
             // TODO: Add internationalization down the line: https://starlight.astro.build/guides/i18n/
             plugins: [
-                starlightLinksValidator(),
-                // starlightVersions({
-                // 	// current: {
-                // 	// 	label: 'master',
-                // 	// },
-                // 	versions: [
-                // 		{ slug: 'Latest' }
-                // 	],
-                // }), // TODO: Add versions later
+                ...(blogIsLive
+                    ? [
+                          starlightBlog({
+                              title: 'Blog',
+                              // The header's own section links carry Blog
+                              // (src/lib/site-nav.mjs), so the plugin adds none.
+                              navigation: 'none',
+                              metrics: { readingTime: true },
+                              postCount: 10,
+                              recentPostCount: 5,
+                              authors: BLOG_AUTHORS,
+                          }),
+                      ]
+                    : []),
+                // Feature cards on the front page link into the design docs.
+                // Only on the latest build. A release build is a frozen copy of
+                // a master commit whose CI build already validated it, and its
+                // links are rebased under /v/X.Y/ only after the build.
+                ...(docsVersion.version === null
+                    ? [
+                          starlightLinksValidator({
+                              components: [['Feature', 'href']],
+                              // Served by the Pages Functions (functions/).
+                              exclude: ['/rustdoc/**', '/v/**'],
+                          }),
+                      ]
+                    : []),
             ],
         }),
     ],
     vite: {
         plugins: [tailwindcss()],
+        // Read by SiteFooter.astro and HeaderNav.astro, so their Blog links
+        // follow the same rule, and the footer names the built commit.
+        define: {
+            __BLOG_IS_LIVE__: JSON.stringify(blogIsLive),
+            __BUILD_COMMIT__: JSON.stringify(buildCommit),
+            // The release this build is (`X.Y`), or null for the latest docs.
+            __DOCS_VERSION__: JSON.stringify(docsVersion.version),
+        },
     },
 });

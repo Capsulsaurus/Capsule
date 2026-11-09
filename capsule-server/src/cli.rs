@@ -35,9 +35,15 @@ use tracing_subscriber::{EnvFilter, fmt as log_fmt};
 
 use crate::boot::{self, Assembled, Maintenance};
 use crate::config::{Config, Demands, Environment, LogFormat, Overrides, ProcessEnvironment};
+use crate::federation::{
+    BlockOutcome, Blocked, PeerId, PeerRecord, PeerTier, PinOutcome, UnblockOutcome,
+    parse_signing_key,
+};
 use crate::gc::{CollectionReport, Mode, PurgeReport};
 use crate::ledger::ChainFault;
 use crate::ledger::rebuild::RebuildReport;
+use crate::ledger::rebuild::sizes::{Resized, SizeRepairReport, ZeroSized};
+use crate::moderation::FederatedReport;
 use crate::scrub::{Depth, ScrubReport};
 use crate::store::UserId;
 
@@ -121,13 +127,15 @@ pub enum Command {
         backend: BackendArgs,
     },
 
-    /// Sweep blobs nothing references any more.
+    /// Sweep blobs nothing references any more, and account activity past retention.
     ///
     /// Two passes, by design: a blob that reaches zero references is *marked*, and a later pass
     /// sweeps it once the grace window has passed and the count is still zero. That is what
-    /// gives an in-flight finalization retry time to re-reference it.
+    /// gives an in-flight finalization retry time to re-reference it. Every pass also deletes
+    /// the account activity events older than the 90-day retention window, which an account
+    /// that stopped recording would otherwise keep; a dry run counts them.
     Gc {
-        /// Carry it out. Without this nothing is marked, unmarked or swept.
+        /// Carry it out. Without this nothing is marked, unmarked, swept or deleted.
         ///
         /// Dry run is the default for the two subcommands that write, because the first thing an
         /// operator does with a collector is find out what it thinks.
@@ -208,6 +216,24 @@ pub enum Command {
         backend: BackendArgs,
     },
 
+    /// Record the real size of every blob reference the index holds at size 0.
+    ///
+    /// Lifecycle ops once re-pointed an asset's manifest, metadata and replaced original at size
+    /// 0, which the sync feed then served. Dry run by default: reports each reference it would
+    /// repair from the length the blob store holds it at, and writes nothing. With `--apply` it
+    /// records those sizes, changing only a reference still at size 0 with the same address.
+    /// A reference whose blob is missing or empty is reported and kept as it is, and the pass
+    /// exits non-zero for it. Running it again finds nothing to repair.
+    RepairSizes {
+        /// Carry it out. Without this nothing is written.
+        #[arg(long)]
+        apply: bool,
+
+        /// Where state lives.
+        #[command(flatten)]
+        backend: BackendArgs,
+    },
+
     /// Suspend an account's storage quota, or lift the suspension.
     ///
     /// An administrative or billing act (design/quota.md): while suspended, the account's growth
@@ -217,6 +243,24 @@ pub enum Command {
         /// Which act.
         #[command(subcommand)]
         action: QuotaAction,
+    },
+
+    /// Pin, block, unblock or show a federated peer server.
+    ///
+    /// Peer keys are operator-pinned (design/federation.md): a peer's capability presentations
+    /// and its federated reports verify only against a key pinned here. Blocking refuses every
+    /// federated request from the peer and revokes and publishes every live grant it holds.
+    Peer {
+        /// Which act.
+        #[command(subcommand)]
+        action: PeerAction,
+    },
+
+    /// Read the moderation queue.
+    Moderation {
+        /// Which read.
+        #[command(subcommand)]
+        action: ModerationCommand,
     },
 
     /// Emit the OpenAPI 3.2 document the SDK's client is generated from.
@@ -269,6 +313,108 @@ impl QuotaAction {
     }
 }
 
+/// The operator's acts on one federated peer (#476).
+#[derive(Debug, Subcommand)]
+pub enum PeerAction {
+    /// Pin a peer's operational signing key, replacing any key already pinned.
+    Pin {
+        /// The peer's origin, as its own `server-info` names it (`other.example`).
+        #[arg(value_name = "ORIGIN")]
+        peer: String,
+
+        /// The peer's `signing_key`, exactly as its `/.well-known/capsule/server-info` publishes
+        /// it: the raw Ed25519 public key, base64. Read it out of band; pinning is the decision
+        /// to trust it.
+        #[arg(value_name = "SIGNING_KEY")]
+        key: String,
+
+        /// Where state lives.
+        #[command(flatten)]
+        backend: BackendArgs,
+    },
+
+    /// Refuse every federated request from a peer, and revoke and publish its live grants.
+    ///
+    /// Repeating it is safe and finishes a revocation a failed run left part-way.
+    Block {
+        /// The peer's origin.
+        #[arg(value_name = "ORIGIN")]
+        peer: String,
+
+        /// A note for the operator's record of why.
+        #[arg(long, value_name = "TEXT")]
+        note: Option<String>,
+
+        /// Where state lives.
+        #[command(flatten)]
+        backend: BackendArgs,
+    },
+
+    /// Lift a block. The pinned key is kept; revoked grants stay revoked.
+    Unblock {
+        /// The peer's origin.
+        #[arg(value_name = "ORIGIN")]
+        peer: String,
+
+        /// Where state lives.
+        #[command(flatten)]
+        backend: BackendArgs,
+    },
+
+    /// Show what this server knows about a peer.
+    Show {
+        /// The peer's origin.
+        #[arg(value_name = "ORIGIN")]
+        peer: String,
+
+        /// Where state lives.
+        #[command(flatten)]
+        backend: BackendArgs,
+    },
+}
+
+impl PeerAction {
+    /// Where state lives, whichever act.
+    fn backend(&self) -> &BackendArgs {
+        match self {
+            Self::Pin { backend, .. }
+            | Self::Block { backend, .. }
+            | Self::Unblock { backend, .. }
+            | Self::Show { backend, .. } => backend,
+        }
+    }
+
+    /// The peer the act names, as typed.
+    fn peer(&self) -> &str {
+        match self {
+            Self::Pin { peer, .. }
+            | Self::Block { peer, .. }
+            | Self::Unblock { peer, .. }
+            | Self::Show { peer, .. } => peer,
+        }
+    }
+}
+
+/// The operator's reads of the moderation queue (#476).
+#[derive(Debug, Subcommand)]
+pub enum ModerationCommand {
+    /// List every federated report on file, oldest first.
+    Reports {
+        /// Where state lives.
+        #[command(flatten)]
+        backend: BackendArgs,
+    },
+}
+
+impl ModerationCommand {
+    /// Where state lives.
+    fn backend(&self) -> &BackendArgs {
+        match self {
+            Self::Reports { backend } => backend,
+        }
+    }
+}
+
 impl Command {
     /// What this subcommand needs from the configuration.
     fn demands(&self) -> Demands {
@@ -282,7 +428,10 @@ impl Command {
             | Self::Purge { .. }
             | Self::Scrub { .. }
             | Self::Rebuild { .. }
-            | Self::Quota { .. } => Demands::Maintenance,
+            | Self::RepairSizes { .. }
+            | Self::Quota { .. }
+            | Self::Peer { .. }
+            | Self::Moderation { .. } => Demands::Maintenance,
             Self::GenOpenapi { .. } => Demands::Nothing,
         }
     }
@@ -310,11 +459,22 @@ impl Command {
             }
             Self::Purge { backend, .. }
             | Self::Scrub { backend, .. }
-            | Self::Rebuild { backend, .. } => {
+            | Self::Rebuild { backend, .. }
+            | Self::RepairSizes { backend, .. } => {
                 overrides.blob_root.clone_from(&backend.blob_root);
                 overrides.memory = backend.memory;
             }
             Self::Quota { action } => {
+                let backend = action.backend();
+                overrides.blob_root.clone_from(&backend.blob_root);
+                overrides.memory = backend.memory;
+            }
+            Self::Peer { action } => {
+                let backend = action.backend();
+                overrides.blob_root.clone_from(&backend.blob_root);
+                overrides.memory = backend.memory;
+            }
+            Self::Moderation { action } => {
                 let backend = action.backend();
                 overrides.blob_root.clone_from(&backend.blob_root);
                 overrides.memory = backend.memory;
@@ -368,7 +528,10 @@ pub async fn run() -> Result<ExitCode> {
             accept_rewrites,
             ..
         } => rebuild(&config, mode(apply), accept_rewrites).await,
+        Command::RepairSizes { apply, .. } => repair_sizes(&config, mode(apply)).await,
         Command::Quota { action } => quota(&config, &action).await,
+        Command::Peer { action } => peer(&config, &action).await,
+        Command::Moderation { action } => moderation(&config, &action).await,
         // The document is a property of the router's types, so the configuration is loaded only
         // to refuse `--config` and is deliberately not logged: `mise run openapi-check-kynos` is
         // a check gate, and a settings dump on its stderr is noise in every CI log that runs it.
@@ -413,14 +576,18 @@ async fn maintenance(config: &Config) -> Result<Maintenance> {
 ///
 /// # No TLS
 ///
-/// `design/cryptography/failure-modes.md` is explicit that "application servers do not terminate
-/// TLS", and scopes in-code TLS to the SDK client, LAN peering and server-to-server egress —
+/// `design/networking.md#transport-security` is explicit that ingress, not the application
+/// server, terminates TLS, and scopes in-code TLS to the SDK client, LAN peering and server-to-server egress —
 /// none of which is this listener. Kynos's `tls` feature stays off, so a certificate cannot be
 /// configured by accident.
 async fn serve(config: &Config) -> Result<ExitCode> {
     let assembled = assemble(config).await?;
+    // Awaited, and before the recovery: the recovery reads the sessions this pairs with stages.
+    scrub_staged_uploads(&assembled.app).await;
     // Before the listener binds, so every claim listed belongs to a process that is gone.
     recover_stranded_claims(&assembled.app).await;
+    // Detached, like the recovery: only a federating deployment has a worker to start (#1117).
+    let _pull_worker = assembled.spawn_pull_worker();
     // The router is built here rather than through `Assembled::service` because the trusted-proxy
     // policy is a property of the listener's deployment, not of the assembled stores (#704).
     tracing::info!(
@@ -454,8 +621,47 @@ async fn serve(config: &Config) -> Result<ExitCode> {
         .serve()
         .await
         .map_err(|error| eyre!("serving: {error}"))?;
+    drain_activity(&assembled.app).await;
     tracing::info!("drained and stopped");
     Ok(ExitCode::SUCCESS)
+}
+
+/// How long a stopping server waits for the activity writes its last requests took off their
+/// response path.
+const ACTIVITY_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Wait, for at most [`ACTIVITY_DRAIN_TIMEOUT`], for the detached activity writes to land.
+///
+/// After the listener has drained, so no request can start another. A store that does not answer
+/// in time loses those events; each one's write is abandoned and this says so at `error`.
+async fn drain_activity(app: &crate::App) {
+    use kynos::di::Provides as _;
+
+    let activity: crate::activity::ActivityContext = app.provide();
+    tracing::debug!("waiting for detached account activity writes");
+    if tokio::time::timeout(ACTIVITY_DRAIN_TIMEOUT, activity.settled())
+        .await
+        .is_err()
+    {
+        tracing::error!(
+            timeout = ?ACTIVITY_DRAIN_TIMEOUT,
+            "detached account activity writes did not land before shutdown; their events are lost"
+        );
+    }
+}
+
+/// Pair every staged upload with its session before anything else reads either
+/// ([`crate::upload::scrub::startup`]).
+///
+/// Awaited rather than detached, unlike the recovery that follows: it must finish before the
+/// listener accepts a request, because a request could otherwise create a stage the scrub has
+/// not listed a session for, or write to a session it is about to discard.
+async fn scrub_staged_uploads(app: &crate::App) {
+    use kynos::di::Provides as _;
+
+    let upload: crate::upload::UploadContext = app.provide();
+    let drops: crate::drop::DropContext = app.provide();
+    crate::upload::scrub::startup(&upload, drops.drops()).await;
 }
 
 /// Re-drive the finalization claims a previous process died holding — album finalizations and
@@ -642,7 +848,7 @@ async fn scrub(config: &Config, depth: Depth) -> Result<ExitCode> {
 ///
 /// Exits [`EXIT_FINDINGS`] when the report holds a fault — a broken ledger, a row that disagrees
 /// with the index, a dangling entry, a quarantined manifest — and zero when the only news is rows
-/// to restore, which is what a rebuild is for.
+/// to restore or drifted pulled quota totals to rebuild (#1183), which is what a rebuild is for.
 async fn rebuild(config: &Config, mode: Mode, accept_rewrites: bool) -> Result<ExitCode> {
     let maintenance = maintenance(config).await?;
     let context = if accept_rewrites {
@@ -655,6 +861,23 @@ async fn rebuild(config: &Config, mode: Mode, accept_rewrites: bool) -> Result<E
         .map_err(|error| eyre!("the index rebuild could not finish: {error}"))?;
     print!("{}", render_rebuild(&report, mode));
     Ok(if report.has_faults() {
+        ExitCode::from(EXIT_FINDINGS)
+    } else {
+        ExitCode::SUCCESS
+    })
+}
+
+/// Record the real size of every blob reference the index holds at size `0` (#1128).
+///
+/// Exits [`EXIT_FINDINGS`] when a reference could not be repaired — its blob is missing or empty
+/// — and zero otherwise, including when there was nothing to repair.
+async fn repair_sizes(config: &Config, mode: Mode) -> Result<ExitCode> {
+    let maintenance = maintenance(config).await?;
+    let report = crate::ledger::rebuild::sizes::repair_sizes(&maintenance.rebuild, mode)
+        .await
+        .map_err(|error| eyre!("the size repair could not finish: {error}"))?;
+    print!("{}", render_size_repair(&report, mode));
+    Ok(if report.has_findings() {
         ExitCode::from(EXIT_FINDINGS)
     } else {
         ExitCode::SUCCESS
@@ -708,6 +931,199 @@ async fn quota(config: &Config, action: &QuotaAction) -> Result<ExitCode> {
     };
     println!("{report}");
     Ok(ExitCode::SUCCESS)
+}
+
+/// Pin, block, unblock or show a federated peer (#476).
+///
+/// Exits zero whether or not the act changed anything, and says which on stdout, for the reason
+/// [`quota`] does. A malformed origin or key is refused before anything is assembled, so a typo
+/// never reaches the store.
+async fn peer(config: &Config, action: &PeerAction) -> Result<ExitCode> {
+    let peer =
+        PeerId::parse(action.peer()).map_err(|error| eyre!("`{}`: {error}", action.peer()))?;
+    let key = match action {
+        PeerAction::Pin { key, .. } => {
+            Some(parse_signing_key(key).map_err(|error| eyre!("{error}"))?)
+        }
+        _ => None,
+    };
+    let maintenance = maintenance(config).await?;
+    let admin = &maintenance.peers;
+    let report = match action {
+        PeerAction::Pin { .. } => {
+            let key = key.ok_or_else(|| eyre!("a pin carries a key"))?;
+            let outcome = admin
+                .pin(&peer, key)
+                .await
+                .map_err(|error| eyre!("the peer store could not pin {peer}: {error}"))?;
+            render_pin(&peer, outcome)
+        }
+        PeerAction::Block { note, .. } => {
+            let blocked = admin.block(&peer, note.clone()).await.map_err(|error| {
+                eyre!(
+                    "blocking {peer} could not finish: {error}; if the block was written it \
+                         is in force, and running the command again finishes revoking its grants"
+                )
+            })?;
+            render_block(&peer, blocked)
+        }
+        PeerAction::Unblock { .. } => {
+            let outcome = admin
+                .unblock(&peer)
+                .await
+                .map_err(|error| eyre!("the peer store could not unblock {peer}: {error}"))?;
+            match outcome {
+                UnblockOutcome::Unblocked => format!("peer unblocked: {peer}"),
+                UnblockOutcome::NotBlocked => format!("peer was not blocked: {peer}"),
+            }
+        }
+        PeerAction::Show { .. } => {
+            let record = admin
+                .read(&peer)
+                .await
+                .map_err(|error| eyre!("the peer store could not read {peer}: {error}"))?;
+            render_peer(&peer, record.as_ref(), admin.clock().now()).to_string()
+        }
+    };
+    println!("{}", report.trim_end());
+    Ok(ExitCode::SUCCESS)
+}
+
+/// What a pin did, in one line.
+fn render_pin(peer: &PeerId, outcome: PinOutcome) -> String {
+    match outcome {
+        PinOutcome::Pinned => format!("peer key pinned: {peer}"),
+        PinOutcome::Rotated => format!("peer key replaced: {peer}"),
+        PinOutcome::Unchanged => format!("peer key already pinned: {peer}"),
+    }
+}
+
+/// What a block did, in one line, with the cascade's count.
+fn render_block(peer: &PeerId, blocked: Blocked) -> String {
+    let posture = match blocked.outcome {
+        BlockOutcome::Blocked => "peer blocked",
+        BlockOutcome::AlreadyBlocked => "peer already blocked",
+    };
+    format!(
+        "{posture}: {peer} ({} live grants revoked)",
+        blocked.revoked
+    )
+}
+
+/// One peer's record, rendered for a person: key, tier, block.
+fn render_peer<'a>(
+    peer: &'a PeerId,
+    record: Option<&'a PeerRecord>,
+    now: jiff::Timestamp,
+) -> RenderedPeer<'a> {
+    RenderedPeer { peer, record, now }
+}
+
+/// [`render_peer`]'s output.
+struct RenderedPeer<'a> {
+    peer: &'a PeerId,
+    record: Option<&'a PeerRecord>,
+    now: jiff::Timestamp,
+}
+
+impl std::fmt::Display for RenderedPeer<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use base64::Engine as _;
+
+        let Some(record) = self.record else {
+            return writeln!(f, "peer not recorded: {}", self.peer);
+        };
+        writeln!(f, "peer {}", self.peer)?;
+        match record.signing_key {
+            Some(key) => writeln!(
+                f,
+                "  signing key: {}",
+                base64::engine::general_purpose::STANDARD.encode(key)
+            )?,
+            None => writeln!(f, "  signing key: none pinned")?,
+        }
+        writeln!(f, "  first seen: {}", record.first_seen_at)?;
+        writeln!(
+            f,
+            "  tier: {}",
+            PeerTier::of(Some(record), self.now).as_str()
+        )?;
+        match record.blocked_at {
+            Some(at) => {
+                writeln!(f, "  blocked since: {at}")?;
+                if let Some(note) = &record.note {
+                    // Debug-quoted: the note is free text, and a control character in it should
+                    // reach the operator's terminal as an escape, not as a command.
+                    writeln!(f, "  note: {note:?}")?;
+                }
+            }
+            None => writeln!(f, "  blocked: no")?,
+        }
+        Ok(())
+    }
+}
+
+/// Read the moderation queue (#476).
+///
+/// design/moderation.md names an admin who works the queue and no way for one to authenticate
+/// over HTTP; the operator who runs this on the host is that admin, authenticated by holding the
+/// deployment's database credentials, exactly as for every other command here.
+async fn moderation(config: &Config, action: &ModerationCommand) -> Result<ExitCode> {
+    let maintenance = maintenance(config).await?;
+    match action {
+        ModerationCommand::Reports { .. } => {
+            let reports = maintenance
+                .moderation
+                .pending_reports()
+                .await
+                .map_err(|error| eyre!("the moderation store could not list reports: {error}"))?;
+            tracing::info!(
+                reports = reports.len(),
+                "an operator read the moderation queue"
+            );
+            print!("{}", render_reports(&reports));
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// The federated report queue, rendered for a person, oldest first.
+fn render_reports(reports: &[FederatedReport]) -> RenderedReports<'_> {
+    RenderedReports(reports)
+}
+
+/// [`render_reports`]'s output.
+struct RenderedReports<'a>(&'a [FederatedReport]);
+
+impl std::fmt::Display for RenderedReports<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self(reports) = self;
+        writeln!(f, "federated reports ({} on file)", reports.len())?;
+        for report in *reports {
+            writeln!(f, "  report {}", report.report_id)?;
+            writeln!(f, "    from: {}", report.reporting_server)?;
+            writeln!(f, "    against: {}", report.reported_user)?;
+            // Debug-quoted as the reason is: intake only trims and length-caps the asset hash
+            // and album id, so each is a peer's string, and a control character in either must
+            // reach the operator's terminal as an escape.
+            writeln!(
+                f,
+                "    asset: {:?} in album {:?}",
+                report.asset_hash,
+                report.album_id.as_str()
+            )?;
+            writeln!(
+                f,
+                "    reported at: {} (received {})",
+                report.reported_at, report.received_at
+            )?;
+            if let Some(reason) = &report.reason {
+                // Debug-quoted, as a peer note is: the reason is a peer's free text.
+                writeln!(f, "    reason: {reason:?}")?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// One pass's report, rendered for a person.
@@ -767,6 +1183,18 @@ impl std::fmt::Display for Rendered<'_, CollectionReport> {
                 writeln!(f, "    {user} {bytes}")?;
             }
         }
+        if report.expired_activity > 0 {
+            quiet = false;
+            let verb = match mode {
+                Mode::Apply => "deleted",
+                Mode::DryRun => "would delete",
+            };
+            writeln!(
+                f,
+                "  expired activity events ({verb} {})",
+                report.expired_activity
+            )?;
+        }
         if quiet {
             writeln!(f, "  nothing to do")?;
         }
@@ -800,6 +1228,62 @@ impl std::fmt::Display for Rendered<'_, PurgeReport> {
             writeln!(f, "  {class} ({})", assets.len())?;
             for asset in assets {
                 writeln!(f, "    {asset}")?;
+            }
+        }
+        if quiet {
+            writeln!(f, "  nothing to do")?;
+        }
+        Ok(())
+    }
+}
+
+/// Render a size repair pass.
+///
+/// Every reference is listed with its asset, role and address, so an operator can find the row
+/// a missing or empty blob belongs to without a second query.
+fn render_size_repair(report: &SizeRepairReport, mode: Mode) -> Rendered<'_, SizeRepairReport> {
+    Rendered(report, mode)
+}
+
+impl std::fmt::Display for Rendered<'_, SizeRepairReport> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self(report, mode) = *self;
+        writeln!(f, "size repair ({})", posture(mode))?;
+        let mut quiet = true;
+        for (class, resized) in [
+            ("repaired", &report.repaired),
+            ("moved before repair, left alone", &report.moved),
+        ] {
+            if resized.is_empty() {
+                continue;
+            }
+            quiet = false;
+            writeln!(f, "  {class} ({})", resized.len())?;
+            for Resized { reference, size } in resized {
+                let ZeroSized {
+                    asset,
+                    role,
+                    address,
+                } = reference;
+                writeln!(f, "    {asset} {} {address} -> {size} bytes", role.as_str())?;
+            }
+        }
+        for (class, references) in [
+            ("blob missing, kept", &report.missing),
+            ("blob empty, kept", &report.empty),
+        ] {
+            if references.is_empty() {
+                continue;
+            }
+            quiet = false;
+            writeln!(f, "  {class} ({})", references.len())?;
+            for ZeroSized {
+                asset,
+                role,
+                address,
+            } in references
+            {
+                writeln!(f, "    {asset} {} {address}", role.as_str())?;
             }
         }
         if quiet {
@@ -932,6 +1416,31 @@ impl std::fmt::Display for Rendered<'_, RebuildReport> {
             writeln!(f, "  orphans, left to gc ({})", report.orphans.len())?;
             for address in &report.orphans {
                 writeln!(f, "    {address}")?;
+            }
+        }
+        if !report.pulled_drift.is_empty() {
+            let rebuilt = match mode {
+                Mode::Apply => "rebuilt",
+                Mode::DryRun => "would rebuild",
+            };
+            writeln!(
+                f,
+                "  pulled quota totals that drifted, {rebuilt} ({})",
+                report.pulled_drift.len()
+            )?;
+            for drift in &report.pulled_drift {
+                writeln!(
+                    f,
+                    "    {}: stored {}, derived {}{}",
+                    drift.user,
+                    drift.stored,
+                    drift.derived,
+                    if drift.holdings {
+                        ", holdings differ"
+                    } else {
+                        ""
+                    }
+                )?;
             }
         }
         if report.owners.is_empty() {

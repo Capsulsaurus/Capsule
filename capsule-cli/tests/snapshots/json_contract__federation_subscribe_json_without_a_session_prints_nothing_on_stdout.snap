@@ -1,0 +1,10 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run(&scratch, &[\"federation\", \"subscribe\", \"--issuer\", \"home.test\", \"--json\"])"
+---
+status: 1
+--- stdout ---
+
+--- stderr ---
+Error: 
+   0: Subscription not recorded: not authenticated

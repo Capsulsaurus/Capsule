@@ -216,4 +216,69 @@ mod postgres_conformance {
             "the number the losing op minted is rolled back with it",
         );
     }
+
+    /// The serving path's holder lookup probes the two address indexes and never scans
+    /// `assets` (#1190).
+    ///
+    /// Every `GET /v1/blob` runs it for any authenticated caller, so a plan that reads the
+    /// whole table grows the cost of each fetch with the deployment. The tables are seeded past
+    /// the size at which a scan is the cheaper plan for a small table, analysed, and the
+    /// statement the adapter runs is explained with a real address bound.
+    #[tokio::test]
+    async fn find_references_probes_the_address_indexes() {
+        use sea_orm::{ConnectionTrait, DbBackend, Statement, Value};
+
+        use crate::index::AssetIndex;
+        use crate::store::BlobRole;
+
+        let Some(database) = testing::start("the Postgres holder-lookup plan").await else {
+            return;
+        };
+        let index = PostgresAssetIndex::new(database.connection().clone());
+        let case = "plan";
+        let (_, _) = conformance::publish(&index, case, 1).await;
+        let address = conformance::blob(BlobRole::Provenance, &format!("{case}p1")).address;
+
+        // Twenty thousand more holders, each cloned from the published row with its own id and
+        // addresses, and a superseded record each, so neither address table is trivially small.
+        for seed in [
+            "INSERT INTO assets SELECT (jsonb_populate_record(a, \
+                 jsonb_build_object('asset_id', 'seed-' || g))).* \
+             FROM assets a, generate_series(1, 20000) g",
+            "INSERT INTO asset_blobs SELECT (jsonb_populate_record(b, jsonb_build_object( \
+                 'asset_id', 'seed-' || g, 'address', 'seed-' || g || '-' || b.address))).* \
+             FROM asset_blobs b, generate_series(1, 20000) g",
+            "INSERT INTO asset_superseded (asset_id, position, address) \
+             SELECT 'seed-' || g, 0, 'seed-' || g || '-superseded' FROM generate_series(1, 20000) g",
+            "ANALYZE assets, asset_blobs, asset_superseded",
+        ] {
+            database
+                .connection()
+                .execute_unprepared(seed)
+                .await
+                .unwrap_or_else(|error| panic!("seed the plan case: {error}\n{seed}"));
+        }
+
+        let plan: Vec<String> = database
+            .connection()
+            .query_all_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                format!("EXPLAIN {}", super::super::FIND_REFERENCES_SQL),
+                [Value::from(address.as_str().to_owned())],
+            ))
+            .await
+            .expect("explain the holder lookup")
+            .iter()
+            .map(|row| row.try_get::<String>("", "QUERY PLAN"))
+            .collect::<Result<_, _>>()
+            .expect("read the plan");
+        let plan = plan.join("\n");
+        assert!(!plan.contains("Seq Scan on assets"), "{plan}");
+        assert!(plan.contains("idx_asset_blobs_address"), "{plan}");
+        assert!(plan.contains("idx_asset_superseded_address"), "{plan}");
+
+        // And the statement still finds the one holder among them.
+        let found = conformance::ok(index.find_references(&address).await, "find the holder");
+        assert_eq!(found.len(), 1, "{found:?}");
+    }
 }

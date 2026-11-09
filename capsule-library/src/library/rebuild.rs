@@ -6,14 +6,11 @@
 //! `stack_membership`, rating, tags), and it is the write path's own output, so a rebuild
 //! reconstructs exactly what the write path indexed.
 //!
-//! The unsigned pre-signed-path shape is **not** read any more. Its write path
-//! is gone, and its read path — the compatibility branch that let a pre-signed-path library
-//! still rebuild — was retired once
-//! [`Workspace::migrate_unsigned_sidecars`](crate::lifecycle::Workspace::migrate_unsigned_sidecars)
-//! existed to bring such a library forward. A rebuild holds no key material and cannot sign a
-//! sidecar, a manifest, or seal a blob, so it could never have *upgraded* one; what it does now
-//! is [probe](capsule_core::sidecar::shape) an unsigned file, count it, and name the verb in a `warn`,
-//! rather than index an asset the workspace cannot verify, export, or upload.
+//! The retired unsigned pre-signed-path shape is **not** read: no reader of it remains. A
+//! rebuild holds no key material and cannot sign a sidecar, a manifest, or seal a blob, so a
+//! file that does not decode as the signed shape — that record included — is
+//! [probed](capsule_core::sidecar::shape), warned about, and skipped, rather than indexed as an
+//! asset the workspace cannot verify, export, or upload.
 //!
 //! What the signed shape restores:
 //!
@@ -51,7 +48,7 @@ use std::path::{Path, PathBuf};
 use capsule_core::cbor;
 use capsule_core::crypto::provenance::{Action, ProvenanceRecord};
 use capsule_core::domain::StackType;
-use capsule_core::sidecar::shape::{self, SidecarShape};
+use capsule_core::sidecar::shape;
 use capsule_core::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1, StackMembership, StackRole};
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -85,11 +82,9 @@ struct ChainFacts {
 /// Every `{uuid}.cbor` under `media/` is decoded as the signed [`SidecarV1`] shape and upserted
 /// as an `assets` row; stacks are then reconstructed from the `stack_membership` registers.
 ///
-/// An unsigned pre-signed-path sidecar is **not** indexed: a rebuild holds no
-/// keys and cannot admit it, so it is counted and reported with a `warn` naming
-/// [`Workspace::migrate_unsigned_sidecars`](crate::lifecycle::Workspace::migrate_unsigned_sidecars).
-/// A sidecar that is neither shape is warned about and skipped: one unreadable file must not
-/// cost the whole library its index.
+/// A sidecar that does not decode as the signed shape — a torn or foreign file, or a retired
+/// unsigned pre-signed-path record — is warned about and skipped: a rebuild holds no keys and
+/// cannot admit it, and one unreadable file must not cost the whole library its index.
 #[tracing::instrument(skip_all, fields(root = %library.root.display()))]
 pub fn rebuild_index(library: &Library) -> Result<(), LibraryError> {
     let media_dir = library.root.join("media");
@@ -99,7 +94,6 @@ pub fn rebuild_index(library: &Library) -> Result<(), LibraryError> {
     }
 
     let mut signed: Vec<SignedOnDisk> = Vec::new();
-    let mut unsigned_pending = 0usize;
     let mut skipped = 0usize;
 
     for entry in WalkDir::new(&media_dir).into_iter().filter_map(Result::ok) {
@@ -142,28 +136,15 @@ pub fn rebuild_index(library: &Library) -> Result<(), LibraryError> {
                 );
                 signed.push(SignedOnDisk { dir, sidecar });
             }
-            Err(signed_err) => match shape::probe(&bytes) {
-                // A pre-signed-path library. Nothing here holds the keys to admit it,
-                // and indexing it would show an asset the workspace cannot verify, export, or
-                // upload — so it is counted and named, not indexed.
-                SidecarShape::LegacyUnsigned => {
-                    unsigned_pending += 1;
-                    tracing::warn!(
-                        sidecar = %path.display(),
-                        "rebuild_index: unsigned pre-signed-path sidecar; not indexed. Run \
-                         `Workspace::migrate_unsigned_sidecars` to admit it as a signed asset"
-                    );
-                }
-                other => {
-                    skipped += 1;
-                    tracing::warn!(
-                        sidecar = %path.display(),
-                        shape = ?other,
-                        error = %signed_err,
-                        "rebuild_index: sidecar does not decode as the signed shape; skipping"
-                    );
-                }
-            },
+            Err(signed_err) => {
+                skipped += 1;
+                tracing::warn!(
+                    sidecar = %path.display(),
+                    shape = ?shape::probe(&bytes),
+                    error = %signed_err,
+                    "rebuild_index: sidecar does not decode as the signed shape; skipping"
+                );
+            }
         }
     }
 
@@ -198,7 +179,6 @@ pub fn rebuild_index(library: &Library) -> Result<(), LibraryError> {
 
     tracing::info!(
         signed = signed.len(),
-        unsigned_pending,
         skipped,
         hidden,
         trashed,
@@ -345,6 +325,11 @@ fn signed_asset_row(s: &SidecarV1, facts: &ChainFacts, prior: Option<&AssetRow>)
         // The register this rebuild exists for: a never-written
         // register means visible, the wire-absent default.
         is_hidden: s.hidden.get().copied().unwrap_or(false),
+        // The caption register and the effective location (the user's edit over the
+        // as-imported fix), projected as the write path projects them.
+        caption: s.caption.get().filter(|c| !c.is_empty()).cloned(),
+        latitude: s.effective_gps().map(|g| g.lat),
+        longitude: s.effective_gps().map(|g| g.lon),
     }
 }
 

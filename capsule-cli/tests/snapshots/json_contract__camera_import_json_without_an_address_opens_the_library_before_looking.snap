@@ -1,0 +1,10 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run(&scratch,\n&[\"camera\", \"import\", \"--library\", \"lib\", \"--passphrase-stdin\", \"--json\"],)"
+---
+status: 1
+--- stdout ---
+
+--- stderr ---
+Error: 
+   0: Failed to open signed workspace: open library: corrupt or missing version file: No such file or directory (os error 2)

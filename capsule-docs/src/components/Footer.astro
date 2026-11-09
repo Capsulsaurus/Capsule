@@ -1,0 +1,9 @@
+---
+// Starlight Footer override: keeps the default page footer (edit link,
+// pagination) and appends the site footer to every page.
+import Default from '@astrojs/starlight/components/Footer.astro';
+import SiteFooter from './SiteFooter.astro';
+---
+
+<Default><slot /></Default>
+<SiteFooter />

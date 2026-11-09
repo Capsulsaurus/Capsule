@@ -6,13 +6,13 @@
         "ar": {
           "stringUnit": {
             "state": "translated",
-            "value": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos."
+            "value": "يستخدم Capsule بصمة الوجه Face ID لفتح صورك المخفية والمحذوفة مؤخرًا."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos."
+            "value": "Capsule verwendet Face ID, um deine ausgeblendeten und zuletzt gelöschten Fotos zu entsperren."
           }
         },
         "en": {
@@ -24,61 +24,61 @@
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos."
+            "value": "Capsule usa Face ID para desbloquear tus fotos ocultas y eliminadas recientemente."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos."
+            "value": "Capsule utilise Face ID pour déverrouiller vos photos masquées et supprimées récemment."
           }
         },
         "hi": {
           "stringUnit": {
             "state": "translated",
-            "value": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos."
+            "value": "Capsule आपकी छिपी हुई और हाल ही में हटाई गई फ़ोटो अनलॉक करने के लिए Face ID का उपयोग करता है।"
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos."
+            "value": "Capsule usa Face ID per sbloccare le foto nascoste ed eliminate di recente."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos."
+            "value": "Capsule は、非表示の写真と最近削除した写真のロックを解除するために Face ID を使用します。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos."
+            "value": "Capsule은 Face ID를 사용하여 가려진 항목 및 최근 삭제된 항목의 사진을 잠금 해제합니다."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos."
+            "value": "O Capsule usa o Face ID para desbloquear suas fotos Ocultas e Apagadas Recentemente."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos."
+            "value": "Capsule использует Face ID для разблокировки скрытых и недавно удалённых фото."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos."
+            "value": "Capsule 使用 Face ID 解锁您的“已隐藏”和“最近删除”照片。"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos."
+            "value": "Capsule 使用 Face ID 來解鎖您的「已隱藏」和「最近刪除」照片。"
           }
         }
       }
@@ -88,13 +88,13 @@
         "ar": {
           "stringUnit": {
             "state": "translated",
-            "value": "Capsule shows and organizes the photos and videos in your library."
+            "value": "يعرض Capsule الصور ومقاطع الفيديو في مكتبتك وينظّمها."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Capsule shows and organizes the photos and videos in your library."
+            "value": "Capsule zeigt und organisiert die Fotos und Videos in deiner Mediathek."
           }
         },
         "en": {
@@ -106,61 +106,61 @@
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Capsule shows and organizes the photos and videos in your library."
+            "value": "Capsule muestra y organiza las fotos y los vídeos de tu fototeca."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Capsule shows and organizes the photos and videos in your library."
+            "value": "Capsule affiche et organise les photos et vidéos de votre photothèque."
           }
         },
         "hi": {
           "stringUnit": {
             "state": "translated",
-            "value": "Capsule shows and organizes the photos and videos in your library."
+            "value": "Capsule आपकी लाइब्रेरी की फ़ोटो और वीडियो दिखाता और व्यवस्थित करता है।"
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Capsule shows and organizes the photos and videos in your library."
+            "value": "Capsule mostra e organizza le foto e i video nella tua libreria."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "Capsule shows and organizes the photos and videos in your library."
+            "value": "Capsule は、ライブラリ内の写真とビデオを表示・整理します。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "Capsule shows and organizes the photos and videos in your library."
+            "value": "Capsule은 보관함의 사진과 비디오를 표시하고 정리합니다."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Capsule shows and organizes the photos and videos in your library."
+            "value": "O Capsule mostra e organiza as fotos e os vídeos da sua biblioteca."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Capsule shows and organizes the photos and videos in your library."
+            "value": "Capsule показывает и упорядочивает фото и видео в вашей медиатеке."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Capsule shows and organizes the photos and videos in your library."
+            "value": "Capsule 会显示并整理您资料库中的照片和视频。"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "Capsule shows and organizes the photos and videos in your library."
+            "value": "Capsule 會顯示並整理您圖庫中的照片和影片。"
           }
         }
       }

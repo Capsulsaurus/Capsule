@@ -224,7 +224,7 @@ fn evidence_logs_ride_the_backup_and_restore_byte_for_byte() {
     drop(b);
     let b = Workspace::open(lib_b.path(), b"device b", FAST_PARAMS).unwrap();
     assert_eq!(b.read_plaintext(&asset).unwrap(), original);
-    assert!(b.unmigrated_sidecars().is_empty());
+    assert!(b.unanchored_sidecars().is_empty());
 }
 
 /// A library with one photo in one album, exported to `archive`, with `pins` pinned first.
@@ -787,4 +787,455 @@ fn a_failed_export_leaves_the_previous_backup_untouched() {
     );
     assert_eq!(fs::read(&archive).unwrap(), b"the previous backup");
     assert!(!crate::library::tmp_path(&archive).exists());
+}
+
+// ── Peer ingest ──────────────────────────────────────────────────────────────
+
+/// Two devices of one account: `a` with `count` photos in one album, and `b` restored from
+/// `a`'s backup, so it holds the album, its keys and those photos.
+fn paired(lib_a: &Path, lib_b: &Path, src: &Path, count: u8) -> (Workspace, Workspace, Uuid) {
+    let mut a = fast_workspace(lib_a);
+    let album = a.create_album("Trip").unwrap();
+    for n in 0..count {
+        let photo = src.join(format!("held-{n}.jpg"));
+        fs::write(
+            &photo,
+            [b"\xFF\xD8\xFF a held photo ".as_slice(), &[n]].concat(),
+        )
+        .unwrap();
+        a.import_asset(album, &photo).unwrap();
+    }
+    let archive = src.join("pairing.tar");
+    a.export_backup_with_params(&archive, b"pw", FAST_PARAMS)
+        .unwrap();
+    let mut b = Workspace::create_from_master(
+        lib_b,
+        b"device b",
+        FAST_PARAMS,
+        MasterKey::from_bytes(*a.account.master.as_bytes()),
+        a.user_id(),
+        &a.sealed_identity(),
+    )
+    .unwrap();
+    b.import_backup(&archive, b"pw", &a.exporter_verifying_key())
+        .unwrap();
+    (a, b, album)
+}
+
+/// What a restore of `a`'s whole library returns: the assets a peer ingest would hand over.
+fn restored_from(a: &Workspace, src: &Path) -> BTreeMap<Uuid, backup::RestoredAsset> {
+    let archive = src.join("peer.tar");
+    a.export_backup_with_params(&archive, b"pw", FAST_PARAMS)
+        .unwrap();
+    let bytes = fs::read(&archive).unwrap();
+    BackupArtifact::open(&bytes, b"pw", &a.exporter_verifying_key())
+        .unwrap()
+        .restore(RestoreMode::Commit, &BTreeMap::new())
+        .unwrap()
+        .applied
+        .into_iter()
+        .map(|asset| (asset.asset_id, asset))
+        .collect()
+}
+
+/// The peer export is every managed asset, each with the album key it is sealed under.
+#[test]
+fn the_peer_export_carries_every_asset_and_its_album_key() {
+    let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let mut a = fast_workspace(lib.path());
+    let ids = import_originals(&mut a, src.path(), 2, 64);
+    let export = a.peer_export().unwrap();
+    let exported: BTreeSet<Uuid> = export.assets.iter().map(|asset| asset.asset_id).collect();
+    assert_eq!(exported, ids.iter().copied().collect());
+    for asset in &export.assets {
+        let epoch = asset.provenance.last().unwrap().manifest.core.amk_version.0;
+        assert_eq!(
+            export.amks.get(&(asset.album_id, epoch)),
+            a.album(&asset.album_id).unwrap().amks.get(&epoch),
+            "asset {} is exported with its own album key",
+            asset.asset_id
+        );
+    }
+}
+
+/// An asset a peer delivers that this device lacks is written whole: held at the peer's head,
+/// its original on disk byte for byte, and still there after a reopen.
+#[test]
+fn a_new_peer_asset_is_written_and_survives_a_reopen() {
+    let (lib_a, lib_b, src) = (
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+    );
+    let (mut a, mut b, album) = paired(lib_a.path(), lib_b.path(), src.path(), 1);
+    let photo = src.path().join("new.jpg");
+    fs::write(&photo, b"\xFF\xD8\xFF taken after the pairing").unwrap();
+    let new = a.import_asset(album, &photo).unwrap();
+    assert!(b.asset(&new).is_none());
+
+    let restored = restored_from(&a, src.path());
+    b.apply_peer_restored(&restored[&new]).unwrap();
+
+    assert_eq!(b.local_heads().get(&new), a.local_heads().get(&new));
+    assert_eq!(
+        fs::read(b.media_path(&b.assets[&new])).unwrap(),
+        b"\xFF\xD8\xFF taken after the pairing"
+    );
+    drop(b);
+    let b = Workspace::open(lib_b.path(), b"device b", FAST_PARAMS).unwrap();
+    assert_eq!(b.local_heads().get(&new), a.local_heads().get(&new));
+}
+
+/// A forward update of an asset this device holds adopts the peer's head and rewrites the
+/// original where it already is: the held media path and date bucket are kept.
+#[test]
+fn a_forward_peer_update_keeps_the_held_media_path() {
+    let (lib_a, lib_b, src) = (
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+    );
+    let (mut a, mut b, _) = paired(lib_a.path(), lib_b.path(), src.path(), 1);
+    let held = *b.assets.keys().next().unwrap();
+    let path_before = b.media_path(&b.assets[&held]);
+    let capture_before = b.assets[&held].capture_utc;
+    a.tag_add(&held, "keeper").unwrap();
+    assert_ne!(b.local_heads().get(&held), a.local_heads().get(&held));
+
+    let restored = restored_from(&a, src.path());
+    b.apply_peer_restored(&restored[&held]).unwrap();
+
+    assert_eq!(b.local_heads().get(&held), a.local_heads().get(&held));
+    assert_eq!(b.media_path(&b.assets[&held]), path_before);
+    assert_eq!(b.assets[&held].capture_utc, capture_before);
+    assert_eq!(b.assets.len(), 1);
+    drop(b);
+    let b = Workspace::open(lib_b.path(), b"device b", FAST_PARAMS).unwrap();
+    assert_eq!(b.local_heads().get(&held), a.local_heads().get(&held));
+    assert_eq!(b.media_path(&b.assets[&held]), path_before);
+}
+
+/// An asset of an album this device does not hold is refused, and nothing of it is written.
+#[test]
+fn a_peer_asset_of_an_album_not_held_is_refused_unwritten() {
+    let (lib_a, lib_c, src) = (
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+    );
+    let mut a = fast_workspace(lib_a.path());
+    let id = import_originals(&mut a, src.path(), 1, 64)[0];
+    let restored = restored_from(&a, src.path());
+    let mut c = fast_workspace(lib_c.path());
+
+    let refused = c.apply_peer_restored(&restored[&id]).unwrap_err();
+    assert!(
+        matches!(refused, LifecycleError::NotFound(_)),
+        "{refused:?}"
+    );
+    assert!(c.asset(&id).is_none());
+    assert!(c.local_heads().is_empty());
+}
+
+/// A forward update carries the peer's metadata, opened from its sealed blob: the tag the peer
+/// added arrives, the caption both devices held before survives, and both are what a reopen
+/// reads back, so a later edit is sealed over them rather than over an empty stand-in.
+#[test]
+fn a_forward_peer_update_carries_the_peers_metadata_and_keeps_the_held() {
+    let (lib_a, lib_b, src) = (
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+    );
+    let (mut a, mut b, _) = paired(lib_a.path(), lib_b.path(), src.path(), 1);
+    let held = *b.assets.keys().next().unwrap();
+    a.set_caption(&held, "the harbour").unwrap();
+    let restored = restored_from(&a, src.path());
+    b.apply_peer_restored(&restored[&held]).unwrap();
+    assert_eq!(
+        b.assets[&held].sidecar.caption.get().map(String::as_str),
+        Some("the harbour")
+    );
+    let content_type = b.assets[&held].sidecar.content_type.clone();
+    assert_eq!(content_type, a.assets[&held].sidecar.content_type);
+    assert_ne!(content_type, "application/octet-stream");
+
+    a.tag_add(&held, "keeper").unwrap();
+    let restored = restored_from(&a, src.path());
+    b.apply_peer_restored(&restored[&held]).unwrap();
+
+    let sidecar = &b.assets[&held].sidecar;
+    assert!(sidecar.tags_user.value().contains("keeper"));
+    assert_eq!(sidecar.caption.get(), a.assets[&held].sidecar.caption.get());
+    assert_eq!(sidecar.content_type, content_type);
+    assert_eq!(b.assets[&held].metadata_blob, a.assets[&held].metadata_blob);
+
+    drop(b);
+    let b = Workspace::open(lib_b.path(), b"device b", FAST_PARAMS).unwrap();
+    let sidecar = &b.assets[&held].sidecar;
+    assert!(sidecar.tags_user.value().contains("keeper"));
+    assert_eq!(sidecar.caption.get(), a.assets[&held].sidecar.caption.get());
+    assert_eq!(sidecar.content_type, content_type);
+    assert_eq!(b.assets[&held].metadata_blob, a.assets[&held].metadata_blob);
+}
+
+/// A peer asset whose sealed metadata blob is not the one its chain commits to is refused, and
+/// the held asset is left exactly as it was.
+#[test]
+fn a_peer_update_whose_metadata_blob_does_not_bind_is_refused_unwritten() {
+    let (lib_a, lib_b, src) = (
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+    );
+    let (mut a, mut b, _) = paired(lib_a.path(), lib_b.path(), src.path(), 1);
+    let held = *b.assets.keys().next().unwrap();
+    let head_before = b.local_heads().get(&held).copied();
+    let blob_before = b.assets[&held].metadata_blob.clone();
+    a.tag_add(&held, "keeper").unwrap();
+    let mut restored = restored_from(&a, src.path()).remove(&held).unwrap();
+    let last = restored.metadata_blob.len() - 1;
+    restored.metadata_blob[last] ^= 0x01;
+
+    let refused = b.apply_peer_restored(&restored).unwrap_err();
+    assert!(
+        matches!(refused, LifecycleError::RestoredMetadata(_)),
+        "{refused:?}"
+    );
+    assert_eq!(b.local_heads().get(&held).copied(), head_before);
+    assert_eq!(b.assets[&held].metadata_blob, blob_before);
+    assert!(!b.assets[&held].sidecar.tags_user.value().contains("keeper"));
+}
+
+// ── The create's superseded metadata blob ─────────────────────────────────────
+
+/// The content address `asset_id`'s `create` binds for its metadata blob.
+fn create_binding(ws: &Workspace, asset_id: &Uuid) -> Hash32 {
+    ws.asset(asset_id).unwrap().chain.records()[0]
+        .manifest
+        .core
+        .metadata_blob_hash
+        .expect("a create binds a metadata blob")
+}
+
+/// An asset imported into `a` and tagged before any upload, so its first edit kept the blob
+/// its create binds.
+fn edited_before_upload(a: &mut Workspace, src: &Path) -> Uuid {
+    let album = a.create_album("Trip").unwrap();
+    let photo = src.join("edited.jpg");
+    fs::write(&photo, b"\xFF\xD8\xFF tagged before its first upload").unwrap();
+    let asset = a.import_asset(album, &photo).unwrap();
+    a.tag_add(&asset, "beach").unwrap();
+    assert!(a.create_metadata_blob_path(&asset).unwrap().exists());
+    asset
+}
+
+/// #1120: an asset edited and never uploaded, restored from a backup into a fresh library,
+/// still uploads its create: the artifact carried the blob the create binds beside the head's,
+/// and the restore kept it, across a reopen.
+#[test]
+fn a_restored_edited_asset_uploads_its_creates_own_metadata_blob() {
+    let (lib_a, lib_b, src) = (
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+    );
+    let mut a = fast_workspace(lib_a.path());
+    let asset = edited_before_upload(&mut a, src.path());
+    let expected = a.upload_bundle(&asset).unwrap().metadata_blob;
+
+    let export = a.peer_export().unwrap();
+    let carried = &export.assets[0];
+    assert_eq!(
+        carried.metadata_blob, a.assets[&asset].metadata_blob,
+        "the head's blob"
+    );
+    assert_eq!(
+        carried.create_metadata_blob, expected,
+        "beside the create's"
+    );
+
+    let archive = src.path().join("backup.tar");
+    a.export_backup_with_params(&archive, b"pw", FAST_PARAMS)
+        .unwrap();
+    let mut b = same_account_device(&a, lib_b.path());
+    b.import_backup(&archive, b"pw", &a.exporter_verifying_key())
+        .unwrap();
+
+    let bundle = b.upload_bundle(&asset).expect("the create uploads");
+    assert_eq!(bundle.metadata_blob, expected);
+    assert_eq!(
+        Some(blob_ciphertext_hash(&bundle.metadata_blob)),
+        Some(create_binding(&b, &asset))
+    );
+    drop(b);
+    let b = Workspace::open(lib_b.path(), b"device b", FAST_PARAMS).unwrap();
+    assert_eq!(b.upload_bundle(&asset).unwrap().metadata_blob, expected);
+}
+
+/// An asset never edited, or a create that binds its current blob, carries no create entry.
+#[test]
+fn an_unedited_asset_carries_no_create_metadata_blob() {
+    let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let mut a = fast_workspace(lib.path());
+    import_originals(&mut a, src.path(), 1, 64);
+    let export = a.peer_export().unwrap();
+    assert!(export.assets[0].create_metadata_blob.is_empty());
+}
+
+/// #1120 over peering: a new asset a peer delivers, edited there before any upload, is written
+/// with the create's kept blob, so this device can upload its create too.
+#[test]
+fn a_peer_asset_edited_before_upload_arrives_with_its_creates_blob() {
+    let (lib_a, lib_b, src) = (
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+    );
+    let (mut a, mut b, album) = paired(lib_a.path(), lib_b.path(), src.path(), 1);
+    let photo = src.path().join("new.jpg");
+    fs::write(&photo, b"\xFF\xD8\xFF taken and tagged after the pairing").unwrap();
+    let new = a.import_asset(album, &photo).unwrap();
+    a.tag_add(&new, "keeper").unwrap();
+    let expected = a.upload_bundle(&new).unwrap().metadata_blob;
+
+    let restored = restored_from(&a, src.path());
+    assert_eq!(restored[&new].create_metadata_blob, expected);
+    b.apply_peer_restored(&restored[&new]).unwrap();
+
+    assert_eq!(b.upload_bundle(&new).unwrap().metadata_blob, expected);
+}
+
+/// A library edited before it kept the create's blob exports the asset without one, and the
+/// restore still writes the asset: its create stays unuploadable, as it was on the exporter,
+/// and nothing else is lost.
+#[test]
+fn an_asset_with_no_kept_create_blob_still_round_trips() {
+    let (lib_a, lib_b, src) = (
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+    );
+    let mut a = fast_workspace(lib_a.path());
+    let asset = edited_before_upload(&mut a, src.path());
+    fs::remove_file(a.create_metadata_blob_path(&asset).unwrap()).unwrap();
+    assert!(
+        a.peer_export().unwrap().assets[0]
+            .create_metadata_blob
+            .is_empty()
+    );
+
+    let archive = src.path().join("backup.tar");
+    a.export_backup_with_params(&archive, b"pw", FAST_PARAMS)
+        .unwrap();
+    let mut b = same_account_device(&a, lib_b.path());
+    assert_eq!(
+        b.import_backup(&archive, b"pw", &a.exporter_verifying_key())
+            .unwrap(),
+        1
+    );
+    assert_eq!(b.local_heads().get(&asset), a.local_heads().get(&asset));
+    assert!(!b.create_metadata_blob_path(&asset).unwrap().exists());
+    assert!(matches!(
+        b.upload_bundle(&asset),
+        Err(LifecycleError::CreateMetadataSuperseded(id)) if id == asset
+    ));
+}
+
+/// A kept create blob that exists and cannot be read fails the export rather than leaving the
+/// artifact silently without the only bytes that upload the create.
+#[test]
+fn an_unreadable_kept_create_blob_fails_the_export() {
+    let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let mut a = fast_workspace(lib.path());
+    let asset = edited_before_upload(&mut a, src.path());
+    let kept = a.create_metadata_blob_path(&asset).unwrap();
+    fs::remove_file(&kept).unwrap();
+    fs::create_dir(&kept).unwrap();
+    assert!(matches!(a.peer_export(), Err(LifecycleError::Io(_))));
+}
+
+/// A restore keeps a create blob already on disk that answers the create, and replaces one
+/// that does not.
+#[test]
+fn restoring_a_create_blob_keeps_an_answering_copy_and_replaces_a_bad_one() {
+    let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let mut a = fast_workspace(lib.path());
+    let asset = edited_before_upload(&mut a, src.path());
+    let kept = a.create_metadata_blob_path(&asset).unwrap();
+    let good = fs::read(&kept).unwrap();
+    let state = &a.assets[&asset];
+
+    a.restore_create_metadata_blob(state, &[], None).unwrap();
+    assert_eq!(
+        fs::read(&kept).unwrap(),
+        good,
+        "nothing carried, nothing written"
+    );
+
+    fs::write(&kept, b"stray").unwrap();
+    a.restore_create_metadata_blob(state, &good, None).unwrap();
+    assert_eq!(fs::read(&kept).unwrap(), good, "a bad copy is replaced");
+
+    a.restore_create_metadata_blob(state, &good, None).unwrap();
+    assert_eq!(fs::read(&kept).unwrap(), good);
+}
+
+/// A forward peer update of a held, never-edited asset that carries no create blob (the peer
+/// edited it without keeping one: an older build, or an edit made before the blob was kept)
+/// keeps the held current blob, the last copy that answers the create, before the peer's head
+/// overwrites it, so this device still uploads the create, across a reopen.
+#[test]
+fn a_forward_peer_update_without_a_create_blob_keeps_the_held_one() {
+    let (lib_a, lib_b, src) = (
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+    );
+    let (mut a, mut b, _) = paired(lib_a.path(), lib_b.path(), src.path(), 1);
+    let held = *b.assets.keys().next().unwrap();
+    let expected = b.assets[&held].metadata_blob.clone();
+    assert_eq!(blob_ciphertext_hash(&expected), create_binding(&b, &held));
+    assert!(!b.create_metadata_blob_path(&held).unwrap().exists());
+
+    a.tag_add(&held, "keeper").unwrap();
+    fs::remove_file(a.create_metadata_blob_path(&held).unwrap()).unwrap();
+    let restored = restored_from(&a, src.path());
+    assert!(restored[&held].create_metadata_blob.is_empty());
+    b.apply_peer_restored(&restored[&held]).unwrap();
+
+    assert_eq!(b.assets[&held].metadata_blob, a.assets[&held].metadata_blob);
+    assert_eq!(b.upload_bundle(&held).unwrap().metadata_blob, expected);
+    drop(b);
+    let b = Workspace::open(lib_b.path(), b"device b", FAST_PARAMS).unwrap();
+    assert_eq!(b.upload_bundle(&held).unwrap().metadata_blob, expected);
+}
+
+/// With nothing carried, a held current blob is kept only when it answers the create and the
+/// restored head replaces it.
+#[test]
+fn restoring_keeps_a_held_blob_only_when_it_answers_the_create_and_is_replaced() {
+    let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let mut a = fast_workspace(lib.path());
+    let asset = import_originals(&mut a, src.path(), 1, 64)[0];
+    let kept = a.create_metadata_blob_path(&asset).unwrap();
+    let current = a.assets[&asset].metadata_blob.clone();
+
+    a.restore_create_metadata_blob(&a.assets[&asset], &[], Some(&current))
+        .unwrap();
+    assert!(!kept.exists(), "the head still is the create's blob");
+
+    // The restored head: the same create, a peer's blob in place of the held one.
+    a.assets.get_mut(&asset).unwrap().metadata_blob = b"the peer's head".to_vec();
+    let replaced = &a.assets[&asset];
+    a.restore_create_metadata_blob(replaced, &[], Some(b"not the create's"))
+        .unwrap();
+    assert!(
+        !kept.exists(),
+        "a held blob that does not answer is not kept"
+    );
+
+    a.restore_create_metadata_blob(replaced, &[], Some(&current))
+        .unwrap();
+    assert_eq!(fs::read(&kept).unwrap(), current);
 }

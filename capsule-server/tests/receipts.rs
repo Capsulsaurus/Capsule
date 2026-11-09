@@ -746,7 +746,8 @@ async fn retry(fixture: &Fixture, bearer: &str, first: &[u8], second: &[u8], who
         .read_for_test(&id)
         .await
         .expect("the session exists")
-        .received_bytes;
+        .committed
+        .prefix();
     for (offset, chunk) in [(0_u64, first), (4096, second)] {
         if offset < from {
             continue;
@@ -773,11 +774,24 @@ async fn fault_then_retry(fault: Fault) {
 
     fault.arm(&fixture);
     let finalizing = fixture.chunk(&id, 4096, &second, &bearer).send().await;
-    assert_ne!(
-        finalizing.status(),
-        StatusCode::NO_CONTENT,
-        "the {fault:?} fault never surfaced, so this case describes an ordinary upload"
-    );
+    if matches!(fault, Fault::SessionStore) {
+        // The store is down before the claim: the chunk itself is refused.
+        assert_ne!(
+            finalizing.status(),
+            StatusCode::NO_CONTENT,
+            "the {fault:?} fault never surfaced, so this case describes an ordinary upload"
+        );
+    } else {
+        // Every later fault is finalization's, which no chunk waits for: the chunk is accepted
+        // and the detached finalization fails the session after the answer.
+        finalizing.assert_status(StatusCode::NO_CONTENT);
+        assert_eq!(
+            fixture.uploads.terminal_for_test(&id).await.status.as_str(),
+            "failed_processing",
+            "the {fault:?} fault never surfaced, so this case describes an ordinary upload"
+        );
+    }
+
     if matches!(fault, Fault::BeforeCommit | Fault::AfterCommit) {
         assert_eq!(
             fixture.index_fault.fired(),

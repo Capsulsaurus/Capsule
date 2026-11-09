@@ -71,7 +71,8 @@ pub struct SessionSummary {
     pub blob_role: String,
     /// Where the session is in its state machine.
     pub status: String,
-    /// Bytes durably accepted so far — the offset a resume continues from.
+    /// The committed prefix — where a client sending in order resumes. One that sends out of
+    /// order reads the full committed set from `HEAD`'s `X-Capsule-Committed`.
     pub received_bytes: u64,
     /// The declared total.
     pub total_size: u64,
@@ -82,20 +83,26 @@ pub struct SessionSummary {
     /// What the survival floor is measured from, so a client can tell which of its stalled
     /// sessions is closest to being evicted.
     pub last_progress_at: String,
+    /// For a `failed_processing` session, the `error.*` code finalization failed with — the
+    /// same code `HEAD` carries in `X-Capsule-Upload-Error`. Absent for every other state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
 }
 
 impl From<UploadSessionRecord> for SessionSummary {
     fn from(record: UploadSessionRecord) -> Self {
+        let error_code = crate::routes::upload::failure_code_of(&record);
         Self {
             id: record.upload_id.as_str().to_owned(),
             asset_id: record.asset_id.as_str().to_owned(),
             album_id: record.album_id.map(|album| album.as_str().to_owned()),
             blob_role: record.blob_role.as_str().to_owned(),
             status: record.status.as_str().to_owned(),
-            received_bytes: record.received_bytes,
+            received_bytes: record.committed.prefix(),
             total_size: record.total_size,
             created_at: record.created_at.to_string(),
             last_progress_at: record.last_progress_at.to_string(),
+            error_code,
         }
     }
 }

@@ -21,7 +21,6 @@ struct EvictionPlanTests {
                 .preview: preview,
                 .thumbnail: thumbnail,
                 .lqip: lqip,
-                .dominantColour: 0,
             ],
             trashBytes: 0,
             unreleasedOriginalBytes: unreleased
@@ -51,7 +50,6 @@ struct EvictionPlanTests {
         let plan = EvictionPlan.preview(targetBytes: .max, breakdown: breakdown())
 
         #expect(!plan.steps.contains { $0.tier == .lqip })
-        #expect(!plan.steps.contains { $0.tier == .dominantColour })
         // An asset stays listable and previewable at LQIP fidelity after every
         // heavier representation is gone.
         #expect(plan.reclaimedBytes == 1250)

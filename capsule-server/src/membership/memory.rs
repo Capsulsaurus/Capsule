@@ -53,10 +53,16 @@ impl MembershipStore for InMemoryMembership {
     ) -> StoreFuture<'_, RosterOutcome> {
         Box::pin(async move {
             let mut inner = lock(&self.inner);
-            if let Some(outcome) = precheck(inner.rosters.get(&roster.album_id), &roster) {
+            let album = roster.album_id.clone();
+            let live: Vec<UserId> = inner
+                .members
+                .iter()
+                .filter(|((row_album, _), row)| row_album == &album && row.revoked.is_none())
+                .map(|((_, user), _)| user.clone())
+                .collect();
+            if let Some(outcome) = precheck(inner.rosters.get(&album), &live, &roster, &members) {
                 return Ok(outcome);
             }
-            let album = roster.album_id.clone();
             let listed: BTreeMap<UserId, MemberRole> = members.into_iter().collect();
 
             // Everyone live who is not on the new list vanished at this version and epoch.

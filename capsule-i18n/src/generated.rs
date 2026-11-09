@@ -116,6 +116,9 @@ pub mod error_codes {
     /// `error.auth.oidc_unavailable`
     pub const AUTH_OIDC_UNAVAILABLE: &str = "error.auth.oidc_unavailable";
 
+    /// `error.auth.password_disabled`
+    pub const AUTH_PASSWORD_DISABLED: &str = "error.auth.password_disabled";
+
     /// `error.auth.password_invalid`
     pub const AUTH_PASSWORD_INVALID: &str = "error.auth.password_invalid";
 
@@ -127,6 +130,9 @@ pub mod error_codes {
 
     /// `error.auth.rate_limited`
     pub const AUTH_RATE_LIMITED: &str = "error.auth.rate_limited";
+
+    /// `error.auth.registration_at_capacity`
+    pub const AUTH_REGISTRATION_AT_CAPACITY: &str = "error.auth.registration_at_capacity";
 
     /// `error.auth.registration_invalid`
     pub const AUTH_REGISTRATION_INVALID: &str = "error.auth.registration_invalid";
@@ -305,8 +311,23 @@ pub mod error_codes {
     /// `error.federation.circuit_open`
     pub const FEDERATION_CIRCUIT_OPEN: &str = "error.federation.circuit_open";
 
+    /// `error.federation.hint_at_capacity`
+    pub const FEDERATION_HINT_AT_CAPACITY: &str = "error.federation.hint_at_capacity";
+
+    /// `error.federation.hint_malformed`
+    pub const FEDERATION_HINT_MALFORMED: &str = "error.federation.hint_malformed";
+
+    /// `error.federation.hint_rate_limited`
+    pub const FEDERATION_HINT_RATE_LIMITED: &str = "error.federation.hint_rate_limited";
+
+    /// `error.federation.hint_unsigned`
+    pub const FEDERATION_HINT_UNSIGNED: &str = "error.federation.hint_unsigned";
+
     /// `error.federation.member_not_on_roster`
     pub const FEDERATION_MEMBER_NOT_ON_ROSTER: &str = "error.federation.member_not_on_roster";
+
+    /// `error.federation.mint_at_capacity`
+    pub const FEDERATION_MINT_AT_CAPACITY: &str = "error.federation.mint_at_capacity";
 
     /// `error.federation.not_configured`
     pub const FEDERATION_NOT_CONFIGURED: &str = "error.federation.not_configured";
@@ -323,11 +344,17 @@ pub mod error_codes {
     /// `error.federation.scope_insufficient`
     pub const FEDERATION_SCOPE_INSUFFICIENT: &str = "error.federation.scope_insufficient";
 
+    /// `error.federation.subscription_limit`
+    pub const FEDERATION_SUBSCRIPTION_LIMIT: &str = "error.federation.subscription_limit";
+
     /// `error.federation.unavailable`
     pub const FEDERATION_UNAVAILABLE: &str = "error.federation.unavailable";
 
     /// `error.moderation.account_suspended`
     pub const MODERATION_ACCOUNT_SUSPENDED: &str = "error.moderation.account_suspended";
+
+    /// `error.moderation.report_at_capacity`
+    pub const MODERATION_REPORT_AT_CAPACITY: &str = "error.moderation.report_at_capacity";
 
     /// `error.moderation.report_malformed`
     pub const MODERATION_REPORT_MALFORMED: &str = "error.moderation.report_malformed";
@@ -385,6 +412,9 @@ pub mod error_codes {
 
     /// `error.request.range_not_satisfiable`
     pub const REQUEST_RANGE_NOT_SATISFIABLE: &str = "error.request.range_not_satisfiable";
+
+    /// `error.request.too_early`
+    pub const REQUEST_TOO_EARLY: &str = "error.request.too_early";
 
     /// `error.request.too_large`
     pub const REQUEST_TOO_LARGE: &str = "error.request.too_large";
@@ -530,6 +560,9 @@ pub mod error_codes {
     /// `error.upload.owner_not_permitted`
     pub const UPLOAD_OWNER_NOT_PERMITTED: &str = "error.upload.owner_not_permitted";
 
+    /// `error.upload.range_conflict`
+    pub const UPLOAD_RANGE_CONFLICT: &str = "error.upload.range_conflict";
+
     /// `error.upload.rate_limited`
     pub const UPLOAD_RATE_LIMITED: &str = "error.upload.rate_limited";
 
@@ -551,6 +584,9 @@ pub mod error_codes {
     /// `error.upload.size_exceeded`
     pub const UPLOAD_SIZE_EXCEEDED: &str = "error.upload.size_exceeded";
 
+    /// `error.upload.source_changed`
+    pub const UPLOAD_SOURCE_CHANGED: &str = "error.upload.source_changed";
+
     /// `error.upload.stale_revival`
     pub const UPLOAD_STALE_REVIVAL: &str = "error.upload.stale_revival";
 
@@ -562,6 +598,12 @@ pub mod error_codes {
 
     /// `error.upload.timestamp_out_of_range`
     pub const UPLOAD_TIMESTAMP_OUT_OF_RANGE: &str = "error.upload.timestamp_out_of_range";
+
+    /// `error.upload.too_fragmented`
+    pub const UPLOAD_TOO_FRAGMENTED: &str = "error.upload.too_fragmented";
+
+    /// `error.upload.too_many_in_flight`
+    pub const UPLOAD_TOO_MANY_IN_FLIGHT: &str = "error.upload.too_many_in_flight";
 
     /// `error.upload.unavailable`
     pub const UPLOAD_UNAVAILABLE: &str = "error.upload.unavailable";

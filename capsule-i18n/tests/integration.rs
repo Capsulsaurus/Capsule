@@ -91,7 +91,7 @@ fn every_plural_renders_in_every_locale() {
         let bundle = Bundle::for_locale(locale);
         // A key the locale has not translated resolves through the source catalog, so the
         // reader still gets an English plural — under *their* language's rules. That path
-        // is live (`app.places.preview.accessibility` is `en`-only), so the matrix covers
+        // is live whenever a new key lands before its translations, so the matrix covers
         // the union rather than only what the locale itself carries.
         let mut messages = source_messages.clone();
         messages.extend(bundle_messages(locale));
@@ -141,12 +141,12 @@ fn every_plural_renders_in_every_locale() {
 /// had to close: `Bundle::format` used to drop `self.locale` on the floor.
 #[test]
 fn a_bundle_selects_the_arm_its_own_locale_asks_for() {
-    // French counts zero as singular, English does not — the same catalog message, two
-    // different arms, chosen only because the bundle knows which locale it is.
+    // French counts zero as singular, English does not — two different arms, chosen only
+    // because the bundle knows which locale it is.
     let count = [("count", Value::Int(0))];
     assert_eq!(
         Bundle::for_locale("fr").format("common.item_count", &count),
-        "0 item"
+        "0 élément"
     );
     assert_eq!(
         Bundle::for_locale("en").format("common.item_count", &count),

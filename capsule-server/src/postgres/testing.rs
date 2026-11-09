@@ -3,7 +3,7 @@
 //! # The gate is load-bearing, not decorative
 //!
 //! `cargo nextest run` must be green on a machine with no container runtime — that is the
-//! acceptance gap design/module-map.md sets for the framework, and it is what lets the rest of
+//! framework's acceptance gap, and it is what lets the rest of
 //! the rebuild be tested without live infrastructure. So every Postgres case asks [`start`]
 //! first, and [`start`] returns `None` — after printing why — unless `CAPSULE_TEST_POSTGRES=1`
 //! is set.

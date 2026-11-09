@@ -369,6 +369,68 @@ fn set_location_records_a_manual_fix_beside_the_imported_one() {
     ));
 }
 
+/// The caption and the effective location are projected onto the index row by the same signed
+/// write that records them, and a rebuild from the artifacts on disk projects the same values:
+/// `asset_row_from_state` and `rebuild::signed_asset_row` agree. An empty caption is no caption.
+#[test]
+fn caption_and_location_reach_the_index_row_and_a_rebuild_agrees() {
+    use crate::library::{open_library, rebuild_index};
+
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (mut ws, id) = workspace_with(&lib, &src, b"\xFF\xD8\xFF caption projection bytes");
+    let row = |ws: &Workspace| ws.db().find_by_uuid(&id.to_string()).unwrap().unwrap();
+    assert_eq!(row(&ws).caption, None, "a fresh import has no caption");
+    assert_eq!((row(&ws).latitude, row(&ws).longitude), (None, None));
+
+    ws.set_caption(&id, "").unwrap();
+    assert_eq!(row(&ws).caption, None, "an empty caption is no caption");
+
+    ws.set_caption(&id, "golden hour").unwrap();
+    ws.set_location(&id, 51.5007, -0.1246, GpsDatum::Wgs84)
+        .unwrap();
+    let live = row(&ws);
+    assert_eq!(live.caption.as_deref(), Some("golden hour"));
+    assert_eq!(live.latitude, Some(51.5007));
+    assert_eq!(live.longitude, Some(-0.1246));
+
+    let root = lib.path().to_path_buf();
+    drop(ws);
+    std::fs::remove_file(root.join("index/library.sqlite")).unwrap();
+    let library = open_library(&root).unwrap();
+    rebuild_index(&library).unwrap();
+    let rebuilt = library
+        .db
+        .find_by_uuid(&id.to_string())
+        .unwrap()
+        .expect("back in the rebuilt index");
+    assert_eq!(rebuilt.caption, live.caption);
+    assert_eq!(rebuilt.latitude, live.latitude);
+    assert_eq!(rebuilt.longitude, live.longitude);
+}
+
+/// Clearing the location clears both projected coordinates, even over an as-imported fix the
+/// sidecar keeps.
+#[test]
+fn clearing_the_location_clears_the_projected_coordinates() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (mut ws, id) = workspace_with(&lib, &src, b"\xFF\xD8\xFF cleared location bytes");
+    ws.assets.get_mut(&id).unwrap().sidecar.gps = Some(Gps {
+        lat: 10.0,
+        lon: 20.0,
+        source: GpsSource::Exif,
+        datum: GpsDatum::Wgs84,
+    });
+    ws.set_caption(&id, "re-indexes the imported fix").unwrap();
+    let row = ws.db().find_by_uuid(&id.to_string()).unwrap().unwrap();
+    assert_eq!((row.latitude, row.longitude), (Some(10.0), Some(20.0)));
+
+    ws.clear_location(&id).unwrap();
+    let row = ws.db().find_by_uuid(&id.to_string()).unwrap().unwrap();
+    assert_eq!((row.latitude, row.longitude), (None, None));
+}
+
 // ── The inference seam (`ml::AiTagSink` / `ml::AssetSource`) ─────────────────────────────
 
 /// The trait forwards must land in exactly the same place the inherent methods do. This is

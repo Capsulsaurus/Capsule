@@ -282,6 +282,11 @@ public struct Stack: Sendable, Equatable, Identifiable, Hashable {
 /// rejected by its own keyless worker) nor delay one past a user-issued
 /// restore. The countdown a user sees is therefore a cryptographic floor, not a
 /// promise.
+///
+/// The window is judged by the workspace, never here: ``isRestorable`` is the
+/// workspace's answer (`FfiTrashEntry.restorable`), computed against the same
+/// signed `retention_until` its restore verb refuses by, so no app carries a
+/// second copy of the rule that could disagree with it.
 public struct TrashEntry: Sendable, Equatable, Identifiable, Hashable {
     /// The default retention window, in days.
     public static let defaultRetentionDays = 30
@@ -291,29 +296,28 @@ public struct TrashEntry: Sendable, Equatable, Identifiable, Hashable {
     /// When it was soft-deleted.
     public var deletedAt: CapsuleTimestamp
     /// The signed retention deadline. After this, the purge worker may proceed;
-    /// before it, a purge is refused.
-    public var retentionUntil: CapsuleTimestamp
-
-    public var id: String { assetID }
-
-    public init(assetID: String, deletedAt: CapsuleTimestamp, retentionUntil: CapsuleTimestamp) {
-        self.assetID = assetID
-        self.deletedAt = deletedAt
-        self.retentionUntil = retentionUntil
-    }
-
-    /// Whether a `trash-restore` is still available at the given instant.
+    /// before it, a purge is refused. `nil` for a `delete` that carries no
+    /// readable window, which never expires.
+    public var retentionUntil: CapsuleTimestamp?
+    /// Whether a `trash-restore` is accepted now, as the workspace judged it
+    /// when it listed this entry.
     ///
     /// A restore appends a new provenance record and rewinds local lifecycle
     /// state; the original `delete` record is **not** removed — the chain keeps
     /// "deleted on X, restored on Y".
-    public func isRestorable(at now: CapsuleTimestamp) -> Bool {
-        now < retentionUntil
-    }
+    public var isRestorable: Bool
 
-    /// Whole days remaining before the purge window opens, floored at zero.
-    public func daysRemaining(at now: CapsuleTimestamp) -> Int {
-        let seconds = retentionUntil.epochSeconds - now.epochSeconds
-        return seconds <= 0 ? 0 : Int(seconds / 86400)
+    public var id: String { assetID }
+
+    public init(
+        assetID: String,
+        deletedAt: CapsuleTimestamp,
+        retentionUntil: CapsuleTimestamp?,
+        isRestorable: Bool
+    ) {
+        self.assetID = assetID
+        self.deletedAt = deletedAt
+        self.retentionUntil = retentionUntil
+        self.isRestorable = isRestorable
     }
 }

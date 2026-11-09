@@ -1,0 +1,44 @@
+---
+// Starlight SiteTitle override: the Capsule wordmark, the capsule mark beside
+// a heavy, tightly tracked name, so it reads as a logo rather than body text.
+// The mark is inline so it takes the accent of the theme the reader picked
+// (the favicon can only follow the system theme).
+const { siteTitle, siteTitleHref } = Astro.locals.starlightRoute;
+---
+
+<a href={siteTitleHref} class="site-title">
+  <svg class="mark" viewBox="0 0 128 128" aria-hidden="true">
+    <g transform="rotate(-45 64 64)">
+      <rect x="40" y="10" width="48" height="108" rx="24" fill="none" stroke="currentColor" stroke-width="11"></rect>
+      <path d="M40 64V34a24 24 0 0 1 48 0v30Z" fill="currentColor"></path>
+    </g>
+  </svg>
+  <span class="wordmark" translate="no">{siteTitle}</span>
+</a>
+
+<style>
+  .site-title {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 0;
+    color: var(--sl-color-white);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+
+  .mark {
+    flex: none;
+    width: 1.75rem;
+    height: 1.75rem;
+    color: var(--sl-color-text-accent);
+  }
+
+  .wordmark {
+    overflow: hidden;
+    font-size: 1.375rem;
+    font-weight: 700;
+    letter-spacing: -0.035em;
+    line-height: 1;
+  }
+</style>

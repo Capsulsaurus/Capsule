@@ -5,9 +5,10 @@
 // entirely client-side via the `capsule-wasm` module (fresh key `K`, STREAM-encrypted, `K`
 // encapsulated to the Drop Key) and streamed to the drop endpoints. This surface is strictly
 // contribute-only: it can add files to the owner's staging inbox and nothing more — it never lists
-// or reads anything back (SSoT: the Web Upload design doc — Contribute-only). A not-found /
-// revoked / expired link is one indistinguishable server `404`, surfaced as a single generic
-// message.
+// or reads anything back but its own drop's status (SSoT: the Web Upload design doc —
+// Contribute-only). A file is shown uploaded only once the server's deposit has filed it, and
+// failed with the deposit's reason once it was refused. A not-found / revoked / expired link is
+// one indistinguishable server `404`, surfaced as a single generic message.
 
 import { createFileRoute } from '@tanstack/react-router';
 import {

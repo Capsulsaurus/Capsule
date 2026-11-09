@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import Testing
 
+import CapsuleCatalog
 import CapsuleTestSupport
 import ManagedStore
 
@@ -33,7 +34,7 @@ struct ManagedLibraryLayoutTests {
         for directory in layout.skeletonDirectories {
             #expect(directory.path.hasPrefix(layout.root.path))
         }
-        #expect(layout.catalogFile.lastPathComponent == "catalog.sqlite")
+        #expect(layout.catalogFile.lastPathComponent == "library.sqlite")
         #expect(layout.catalogFile.deletingLastPathComponent() == layout.indexDirectory)
     }
 }
@@ -142,57 +143,56 @@ struct MockFileStoreTests {
     }
 }
 
-@Suite("ManagedLibrary.removeAssetFiles")
-struct ManagedLibraryPurgeTests {
+@Suite("ManagedLibrary.updateSidecar")
+struct ManagedLibrarySidecarTests {
     private let layout = ManagedLibraryLayout(root: URL(filePath: "/capsule/Library"))
-    // 1_720_000_000 → 2024-07-03 UTC, so the partition is media/2024/2024-07.
     private let captureDate = Date(timeIntervalSince1970: 1720000000)
+    private let coder = JSONSidecarCoder()
 
-    private func makeLibrary(_ fileStore: MockFileStore) -> ManagedLibrary {
-        ManagedLibrary(layout: layout, fileStore: fileStore, catalog: MockCatalog())
+    private func sidecar() -> CatalogSidecar {
+        CatalogSidecar(
+            version: 1,
+            uuid: "asset-1",
+            assetType: "photo",
+            originalFilename: "a.jpg",
+            importTimestamp: 1,
+            modifiedTimestamp: 1,
+            hashSHA256: String(repeating: "0", count: 64),
+            fileSize: 5,
+            importerVersion: "test",
+            rawshiftVersion: "0.0.0",
+            gpsLatitude: 48.8584,
+            unknownFieldsCBOR: Data([0xA1, 0x01, 0x02])
+        )
     }
 
-    @Test("removes the media file and its sidecar, whatever the extension")
-    func removesMediaAndSidecar() async throws {
+    @Test("applies the change and keeps every field it does not touch")
+    func appliesChangeAndKeepsTheRest() async throws {
         let store = MockFileStore()
-        let media = layout.mediaFile(uuid: "asset-1", fileExtension: "heic", captureDate: captureDate)
-        let sidecar = layout.sidecarFile(uuid: "asset-1", captureDate: captureDate)
-        try await store.write(Data("bytes".utf8), to: media)
-        try await store.write(Data("sidecar".utf8), to: sidecar)
+        let url = layout.sidecarFile(uuid: "asset-1", captureDate: captureDate)
+        try await store.write(coder.encode(sidecar()), to: url)
+        let library = ManagedLibrary(layout: layout, fileStore: store, catalog: MockCatalog())
 
-        try await makeLibrary(store).removeAssetFiles(uuid: "asset-1", captureDate: captureDate)
+        try await library.updateSidecar(uuid: "asset-1", captureDate: captureDate, coder: coder) {
+            $0.caption = "harbour"
+        }
 
-        #expect(await store.fileExists(at: media) == false)
-        #expect(await store.fileExists(at: sidecar) == false)
+        var expected = sidecar()
+        expected.caption = "harbour"
+        let written = try #require(await store.data(at: url))
+        #expect(try coder.decode(written) == expected)
     }
 
-    @Test("leaves every other asset in the same partition alone")
-    func sparesNeighbours() async throws {
+    @Test("an asset with no sidecar on disk is refused, and nothing is written")
+    func missingSidecarIsRefused() async {
         let store = MockFileStore()
-        let mine = layout.mediaFile(uuid: "asset-1", fileExtension: "jpg", captureDate: captureDate)
-        let theirs = layout.mediaFile(uuid: "asset-2", fileExtension: "jpg", captureDate: captureDate)
-        try await store.write(Data("mine".utf8), to: mine)
-        try await store.write(Data("theirs".utf8), to: theirs)
+        let library = ManagedLibrary(layout: layout, fileStore: store, catalog: MockCatalog())
 
-        try await makeLibrary(store).removeAssetFiles(uuid: "asset-1", captureDate: captureDate)
-
-        #expect(await store.fileExists(at: mine) == false)
-        #expect(await store.fileExists(at: theirs))
-    }
-
-    @Test("a second purge, and a purge of nothing, both succeed")
-    func idempotentAndTolerantOfAbsence() async throws {
-        let store = MockFileStore()
-        let library = makeLibrary(store)
-        let media = layout.mediaFile(uuid: "asset-1", fileExtension: "png", captureDate: captureDate)
-        try await store.write(Data("bytes".utf8), to: media)
-
-        try await library.removeAssetFiles(uuid: "asset-1", captureDate: captureDate)
-        // Converging on "the bytes are gone" must not depend on running once.
-        try await library.removeAssetFiles(uuid: "asset-1", captureDate: captureDate)
-        // A partition that was never written at all is not an error either.
-        try await library.removeAssetFiles(uuid: "never-imported", captureDate: Date(timeIntervalSince1970: 0))
-
+        await #expect(throws: CatalogError.sidecar(message: "no sidecar for asset-1")) {
+            try await library.updateSidecar(uuid: "asset-1", captureDate: captureDate, coder: coder) {
+                $0.caption = "harbour"
+            }
+        }
         #expect(await store.fileCount == 0)
     }
 }

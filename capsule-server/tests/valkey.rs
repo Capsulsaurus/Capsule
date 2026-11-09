@@ -181,6 +181,10 @@ impl Harness for ValkeyHarness {
     fn oidc_devices(&self) -> &dyn OidcDeviceStore {
         &*self.oidc_devices
     }
+
+    fn now(&self) -> Timestamp {
+        self.clock.now()
+    }
 }
 
 /// The whole store suite, in one pass on one server.
@@ -191,6 +195,187 @@ async fn the_store_suite_passes_against_valkey() {
     };
     let harness = ValkeyHarness::connect(&server.url).await;
     conformance::run_all(&harness).await;
+}
+
+/// A session re-opened near the end of its lineage lives only until the hard cap, not for a
+/// whole sliding window — the cap survives the rotation that re-opens it.
+#[tokio::test]
+async fn a_reopened_session_never_outlives_its_hard_cap() {
+    let Some(server) = server().await else {
+        return;
+    };
+    let harness = ValkeyHarness::connect(&server.url).await;
+    let session_id = SessionId::new("valkey-hard-cap");
+    let now = Timestamp::UNIX_EPOCH;
+    let left = SignedDuration::from_secs(30);
+    assert!(
+        left < harness.auth.ttl(),
+        "the cap must bite first for this case to mean anything"
+    );
+    let signed_in_at = now
+        .checked_sub(harness.auth.hard_cap() - left)
+        .expect("in range");
+    harness
+        .auth
+        .open_session(SessionRecord {
+            session_id: session_id.clone(),
+            user_id: UserId::new("valkey-hard-cap-user"),
+            created_at: now,
+            authenticated_at: signed_in_at,
+            signed_in_at,
+            last_active_at: now,
+            user_agent: None,
+            ip_address: None,
+            cohort_hash: None,
+            device_id: None,
+        })
+        .await
+        .expect("the session opens");
+
+    harness
+        .advance(left - SignedDuration::from_micros(1))
+        .await
+        .expect("advances");
+    assert!(
+        harness
+            .auth
+            .read_session(&session_id)
+            .await
+            .expect("answers")
+            .is_some(),
+        "just inside the cap the session is live"
+    );
+
+    harness
+        .advance(SignedDuration::from_micros(1))
+        .await
+        .expect("advances");
+    assert_eq!(
+        harness
+            .auth
+            .read_session(&session_id)
+            .await
+            .expect("answers"),
+        None,
+        "at the cap it is gone, though its sliding window has time left"
+    );
+}
+
+/// A near-cap rotation never shortens the per-user index under a younger lineage.
+///
+/// Two lineages of one user carry different caps: the first was signed in just now and lives a
+/// whole window, the second is seconds from its cap. Opening the second must leave the shared
+/// index's collector lifetime at least the first's, or the index expires under a live session
+/// and `sessions_for_user` / `close_all_for_user` (revoke-all, password change) miss it.
+#[tokio::test]
+async fn a_near_cap_rotation_never_shortens_the_user_index() {
+    let Some(server) = server().await else {
+        return;
+    };
+    let harness = ValkeyHarness::connect(&server.url).await;
+    let user_id = UserId::new("valkey-index-cap-user");
+    let index = format!("capsule:user_sessions:{user_id}");
+    let client = redis::Client::open(server.url.as_str()).expect("the URL opens");
+    let mut connection = client
+        .get_multiplexed_async_connection()
+        .await
+        .expect("a second connection");
+    let _: i64 = redis::cmd("DEL")
+        .arg(&index)
+        .query_async(&mut connection)
+        .await
+        .expect("DEL answers");
+
+    let now = Timestamp::UNIX_EPOCH;
+    let window = harness.auth.ttl();
+    let near_cap_left = SignedDuration::from_secs(5);
+    assert!(
+        near_cap_left < window,
+        "the second lineage's cap must bite before the first's window ends"
+    );
+    let record = |tag: &str, signed_in_at: Timestamp| SessionRecord {
+        session_id: SessionId::new(format!("valkey-index-cap-{tag}")),
+        user_id: user_id.clone(),
+        created_at: now,
+        authenticated_at: signed_in_at,
+        signed_in_at,
+        last_active_at: now,
+        user_agent: None,
+        ip_address: None,
+        cohort_hash: None,
+        device_id: None,
+    };
+    let fresh = record("fresh", now);
+    let near_cap = record(
+        "near-cap",
+        now.checked_sub(harness.auth.hard_cap() - near_cap_left)
+            .expect("in range"),
+    );
+    harness
+        .auth
+        .open_session(fresh.clone())
+        .await
+        .expect("the fresh lineage opens");
+    harness
+        .auth
+        .open_session(near_cap.clone())
+        .await
+        .expect("the near-cap lineage opens");
+
+    let pttl = |key: String| {
+        let mut connection = connection.clone();
+        async move {
+            let ttl: i64 = redis::cmd("PTTL")
+                .arg(key)
+                .query_async(&mut connection)
+                .await
+                .expect("PTTL answers");
+            ttl
+        }
+    };
+    let near_cap_ttl = pttl(format!("capsule:session:{}", near_cap.session_id)).await;
+    let index_ttl = pttl(index.clone()).await;
+    let near_cap_millis = i64::try_from(near_cap_left.as_millis()).expect("fits");
+    assert!(
+        near_cap_ttl <= near_cap_millis,
+        "the near-cap record is collected at its cap: {near_cap_ttl}"
+    );
+    assert!(
+        index_ttl > near_cap_millis,
+        "the index keeps the fresh lineage's lifetime, not the near-cap one's: {index_ttl}"
+    );
+
+    let mut listed = harness
+        .auth
+        .sessions_for_user(&user_id)
+        .await
+        .expect("answers")
+        .into_iter()
+        .map(|found| found.session_id)
+        .collect::<Vec<_>>();
+    listed.sort();
+    assert_eq!(
+        listed,
+        vec![fresh.session_id.clone(), near_cap.session_id.clone()],
+        "both lineages are listed"
+    );
+
+    harness
+        .advance(near_cap_left)
+        .await
+        .expect("advances past the near cap");
+    assert_eq!(
+        harness
+            .auth
+            .close_all_for_user(&user_id)
+            .await
+            .expect("answers")
+            .into_iter()
+            .map(|found| found.session_id)
+            .collect::<Vec<_>>(),
+        vec![fresh.session_id],
+        "revoke-all still finds the live lineage once the near-cap one is gone"
+    );
 }
 
 /// A record past its logical lifetime is reported dead and is **not** deleted by the reader.
@@ -212,6 +397,7 @@ async fn a_logically_expired_record_is_dead_but_left_for_the_collector() {
             user_id: UserId::new("valkey-logical-expiry-user"),
             created_at,
             authenticated_at: created_at,
+            signed_in_at: created_at,
             last_active_at: created_at,
             user_agent: None,
             ip_address: None,
@@ -287,9 +473,11 @@ async fn the_progress_sweep_drops_an_expired_session_from_the_view() {
             blob_role: BlobRole::Original,
             intent_id: None,
             manifest_envelope: "{}".to_owned(),
-            received_bytes: 0,
+            committed: capsule_server::store::CommittedSet::default(),
+            in_flight_cap: 1,
             total_size: 1,
             status: UploadSessionStatus::Pending,
+            failure_code: None,
             created_at: harness.clock.now(),
             last_progress_at: harness.clock.now(),
         })
@@ -329,6 +517,123 @@ async fn the_progress_sweep_drops_an_expired_session_from_the_view() {
     assert!(!indexed(after), "and the collector's sweep is that walk");
 }
 
+/// A session an append-only server wrote — a counter, no committed set, no cap — is served on
+/// after the upgrade: it reads as its counter's prefix under a one-range cap, and the next range
+/// recorded merges onto that prefix rather than replacing it.
+#[tokio::test]
+async fn a_session_written_before_the_committed_set_merges_onto_its_prefix() {
+    use capsule_server::store::CommittedRange;
+
+    let Some(server) = server().await else {
+        return;
+    };
+    let harness = ValkeyHarness::connect(&server.url).await;
+    let upload_id = UploadId::new("valkey-legacy-counter");
+    harness
+        .uploads
+        .open(UploadSessionRecord {
+            upload_id: upload_id.clone(),
+            asset_id: AssetId::new("valkey-legacy-counter-asset"),
+            owner_id: OwnerId::new("valkey-legacy-counter-owner"),
+            upload_user_id: UserId::new("valkey-legacy-counter-uploader"),
+            album_id: None,
+            content_type: None,
+            expected_hash: "e".repeat(64),
+            crypto_suite_id: 1,
+            protocol_version: "2026-08-29".to_owned(),
+            blob_role: BlobRole::Original,
+            intent_id: None,
+            manifest_envelope: "{}".to_owned(),
+            committed: capsule_server::store::CommittedSet::default(),
+            in_flight_cap: 4,
+            total_size: 12_288,
+            status: UploadSessionStatus::Uploading,
+            failure_code: None,
+            created_at: harness.clock.now(),
+            last_progress_at: harness.clock.now(),
+        })
+        .await
+        .expect("the session opens");
+
+    // Rewrite it as the old server left it: 4096 bytes received, and nothing else.
+    let client = redis::Client::open(server.url.as_str()).expect("the URL opens");
+    let mut connection = client
+        .get_multiplexed_async_connection()
+        .await
+        .expect("a second connection");
+    let key = format!("capsule:upload:session:{upload_id}");
+    let _: i64 = redis::cmd("HDEL")
+        .arg(&key)
+        .arg("committed")
+        .arg("in_flight_cap")
+        .query_async(&mut connection)
+        .await
+        .expect("HDEL answers");
+    let _: i64 = redis::cmd("HSET")
+        .arg(&key)
+        .arg("received_bytes")
+        .arg("4096")
+        .query_async(&mut connection)
+        .await
+        .expect("HSET answers");
+
+    let legacy = harness
+        .uploads
+        .read(&upload_id)
+        .await
+        .expect("the store answers")
+        .expect("the session is live");
+    assert_eq!(legacy.committed.ranges(), &[(0, 4096)]);
+    assert_eq!(
+        legacy.in_flight_cap, 1,
+        "served one range at a time, as it was"
+    );
+
+    let merged = harness
+        .uploads
+        .record_range(
+            &upload_id,
+            CommittedRange {
+                start: 8192,
+                end: 12_288,
+                accepted_at: harness.clock.now(),
+            },
+        )
+        .await
+        .expect("the store answers")
+        .expect("the session is live");
+    assert_eq!(
+        merged.committed.ranges(),
+        &[(0, 4096), (8192, 12_288)],
+        "the range lands beside the prefix it inherited"
+    );
+    let filled = harness
+        .uploads
+        .record_range(
+            &upload_id,
+            CommittedRange {
+                start: 4096,
+                end: 8192,
+                accepted_at: harness.clock.now(),
+            },
+        )
+        .await
+        .expect("the store answers")
+        .expect("the session is live");
+    assert!(filled.is_full(), "{:?}", filled.committed);
+
+    let counter: String = redis::cmd("HGET")
+        .arg(&key)
+        .arg("received_bytes")
+        .query_async(&mut connection)
+        .await
+        .expect("HGET answers");
+    assert_eq!(
+        counter, "12288",
+        "the prefix is kept beside the set, for a server that reads only the counter"
+    );
+}
+
 /// The claimed view heals a member its record no longer backs.
 ///
 /// `capsule:upload:claimed` has no lifetime of its own, and every script that writes a status
@@ -365,9 +670,11 @@ async fn the_claimed_view_heals_a_member_its_record_no_longer_backs() {
                 blob_role: BlobRole::Original,
                 intent_id: None,
                 manifest_envelope: "{}".to_owned(),
-                received_bytes: 0,
+                committed: capsule_server::store::CommittedSet::default(),
+                in_flight_cap: 1,
                 total_size: 1,
                 status: UploadSessionStatus::Pending,
+                failure_code: None,
                 created_at: harness.clock.now(),
                 last_progress_at: harness.clock.now(),
             })
@@ -471,9 +778,11 @@ async fn the_progress_sweep_pages_by_score_cursor_across_ties_and_drops() {
                 blob_role: BlobRole::Original,
                 intent_id: None,
                 manifest_envelope: "{}".to_owned(),
-                received_bytes: 0,
+                committed: capsule_server::store::CommittedSet::default(),
+                in_flight_cap: 1,
                 total_size: 1,
                 status: UploadSessionStatus::Pending,
+                failure_code: None,
                 created_at: harness.clock.now(),
                 last_progress_at: harness.clock.now(),
             })
@@ -557,6 +866,58 @@ async fn the_counter_suite_passes_against_valkey() {
     counters::run_all(store).await;
 }
 
+/// The pull worker's schedule, lease and circuit suite, against a real server (#964).
+#[tokio::test]
+async fn the_pull_job_suite_passes_against_valkey() {
+    let Some(server) = server().await else {
+        return;
+    };
+    let harness = ValkeyHarness::connect(&server.url).await;
+    let store = capsule_server::federation::pull::valkey::ValkeyPullJobs::new(
+        harness.stores.valkey().clone(),
+    );
+    capsule_server::federation::pull::conformance::run_all(&store).await;
+}
+
+/// Claims racing for one due job admit exactly one holder, decided on the server (#964).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pull_job_claims_race_to_one_holder() {
+    use capsule_server::federation::PeerId;
+    use capsule_server::federation::pull::valkey::ValkeyPullJobs;
+    use capsule_server::federation::pull::{JobKey, PULL_LEASE, PullJobs};
+    use capsule_server::store::AlbumId;
+
+    let Some(server) = server().await else {
+        return;
+    };
+    let harness = ValkeyHarness::connect(&server.url).await;
+    let store = Arc::new(ValkeyPullJobs::new(harness.stores.valkey().clone()));
+    let job = JobKey::new(
+        PeerId::new("race.pull.test"),
+        AlbumId::new(uuid::Uuid::now_v7().to_string()),
+    );
+    let now = Timestamp::now();
+    let mut tasks = Vec::new();
+    for replica in 0..24 {
+        let store = store.clone();
+        let job = job.clone();
+        tasks.push(tokio::spawn(async move {
+            store
+                .claim(&job, &format!("replica-{replica}"), now, PULL_LEASE)
+                .await
+                .expect("the claim is answered")
+                .is_some()
+        }));
+    }
+    let mut admitted = 0;
+    for task in tasks {
+        if task.await.expect("the task finishes") {
+            admitted += 1;
+        }
+    }
+    assert_eq!(admitted, 1, "two replicas never pull one job");
+}
+
 /// The partition ceiling, against a real server (#519).
 #[tokio::test]
 async fn a_full_counter_partition_refuses_a_new_key_against_valkey() {
@@ -567,6 +928,50 @@ async fn a_full_counter_partition_refuses_a_new_key_against_valkey() {
     let store =
         ValkeyCounters::new(harness.stores.valkey().clone()).with_ceiling(counters::CEILING);
     counters::a_full_partition_refuses_only_a_new_key_in_that_partition(&store).await;
+}
+
+/// The registration budget, on the key the register route charges, against a real server (#1001).
+///
+/// The limit admits, the next hit waits out one window, and a second source keeps its own budget.
+#[tokio::test]
+async fn the_registration_source_budget_holds_against_valkey() {
+    let Some(server) = server().await else {
+        return;
+    };
+    let harness = ValkeyHarness::connect(&server.url).await;
+    let store = ValkeyCounters::new(harness.stores.valkey().clone());
+    let budget = capsule_server::counter::budgets::REGISTRATION_SOURCE;
+    let source = CounterKey::RegistrationSource("valkey-registration-203.0.113.7".to_owned());
+    let other = CounterKey::RegistrationSource("valkey-registration-203.0.113.8".to_owned());
+    for key in [&source, &other] {
+        store.reset(key).await.expect("resets");
+    }
+    let at = Timestamp::UNIX_EPOCH;
+    for _ in 0..budget.limit {
+        assert!(
+            store
+                .hit(&source, budget, at)
+                .await
+                .expect("answers")
+                .admits()
+        );
+    }
+    assert_eq!(
+        store.hit(&source, budget, at).await.expect("answers"),
+        capsule_server::counter::Verdict::Limited {
+            retry_after: at.checked_add(budget.window).expect("in range"),
+        }
+    );
+    assert!(
+        store
+            .hit(&other, budget, at)
+            .await
+            .expect("answers")
+            .admits()
+    );
+    for key in [&source, &other] {
+        store.reset(key).await.expect("cleans up");
+    }
 }
 
 /// First hits racing into one partition admit exactly its ceiling of new keys.
@@ -643,9 +1048,11 @@ async fn finalization_claims_race_to_one_winner() {
             blob_role: BlobRole::Original,
             intent_id: None,
             manifest_envelope: "{}".to_owned(),
-            received_bytes: 0,
+            committed: capsule_server::store::CommittedSet::default(),
+            in_flight_cap: 1,
             total_size: 1,
             status: UploadSessionStatus::Pending,
+            failure_code: None,
             created_at,
             last_progress_at: created_at,
         })

@@ -14,6 +14,7 @@ fn reference(owner: &str) -> BlobReference {
         state: AssetState::Visible,
         original_held: true,
         hold: None,
+        retention_until: None,
     }
 }
 
@@ -112,6 +113,7 @@ fn capability(member: &str, granted_epoch: u64, scope: Scope) -> VerifiedCapabil
     VerifiedCapability {
         grant: record.grant(),
         record,
+        foreseen: None,
     }
 }
 

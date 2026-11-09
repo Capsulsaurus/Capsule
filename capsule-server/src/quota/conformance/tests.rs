@@ -1,15 +1,52 @@
-use super::{Harness, run_all};
-use crate::quota::{InMemoryQuota, QuotaStore};
+use std::sync::Arc;
 
-/// The deterministic ledger.
-#[derive(Debug, Default)]
+use super::{Harness, run_all};
+use crate::blob::ContentAddress;
+use crate::quota::{InMemoryPulledHoldings, InMemoryQuota, QuotaStore};
+use crate::store::{StoreFuture, UserId};
+
+/// The deterministic ledger, counting the pulled holdings beside it.
+#[derive(Debug)]
 struct MemoryHarness {
     quotas: InMemoryQuota,
+    pulled: Arc<InMemoryPulledHoldings>,
+}
+
+impl Default for MemoryHarness {
+    fn default() -> Self {
+        let pulled = Arc::new(InMemoryPulledHoldings::new());
+        Self {
+            quotas: InMemoryQuota::new().with_pulled(pulled.clone()),
+            pulled,
+        }
+    }
 }
 
 impl Harness for MemoryHarness {
     fn quotas(&self) -> &dyn QuotaStore {
         &self.quotas
+    }
+
+    fn hold_pulled<'a>(
+        &'a self,
+        user: &'a UserId,
+        peer: &'a str,
+        album: &'a str,
+        address: &'a ContentAddress,
+        size: u64,
+    ) -> StoreFuture<'a, ()> {
+        self.pulled.hold(user, peer, album, address, size);
+        Box::pin(async { Ok(()) })
+    }
+
+    fn unsubscribe<'a>(
+        &'a self,
+        user: &'a UserId,
+        peer: &'a str,
+        album: &'a str,
+    ) -> StoreFuture<'a, ()> {
+        self.pulled.unsubscribe(user, peer, album);
+        Box::pin(async { Ok(()) })
     }
 }
 
@@ -42,6 +79,16 @@ conformance_cases! {
     parallel_charges_cannot_overshoot_the_hard_limit,
     a_suspension_is_recorded_once_and_lifted,
     a_suspension_is_independent_of_the_usage,
+    a_reservation_lapses_only_past_its_deadline,
+    a_settled_reservation_is_never_released_as_expired,
+    an_extension_moves_the_deadline_and_never_shortens_it,
+    expired_reservations_are_listed_earliest_first_and_bounded,
+    a_pulled_blob_counts_in_full_against_each_subscriber,
+    a_pulled_blob_counts_once_across_a_subscribers_albums,
+    a_pulled_blob_the_subscriber_uploaded_counts_once,
+    a_pulled_blob_another_account_uploaded_still_counts_for_the_receiver,
+    pulled_bytes_count_toward_the_hard_limit,
+    a_pulled_blob_counts_once_across_a_subscribers_peers,
 }
 
 /// The whole suite, in one pass on one ledger.

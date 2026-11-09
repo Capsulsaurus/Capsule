@@ -93,6 +93,20 @@ impl RevocationList for InMemoryCapabilities {
                 }
                 .into());
             }
+            // An operator revoking a `jti` this server issued means the **grant**, exactly as an
+            // owner's revoke does: the peer may have refreshed it any number of times, and
+            // publishing only the named link would leave the grant live in its successor.
+            match self.revoke_issued(&token.jti, now).await? {
+                RevokeOutcome::Unknown => {}
+                outcome => {
+                    tracing::info!(
+                        jti = %token.jti,
+                        ?outcome,
+                        "an operator revocation of an issued capability followed its refresh chain"
+                    );
+                    return Ok(());
+                }
+            }
             let mut inner = lock(&self.inner);
             inner.revoke(&token.jti, token.expires_at, now);
             tracing::info!(

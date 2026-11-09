@@ -42,6 +42,7 @@ use capsule_library::import::{UploadPolicy, UploadTier};
 use tracing::instrument;
 
 use crate::net::ConnectionClass;
+use crate::net::path::{Hold, PathMonitor, TierAdmission, TransferPlan};
 use crate::sync::FeedEntry;
 use crate::upload::{CreateUploadRequest, UploadClient, UploadError, UploadOutcome};
 
@@ -156,26 +157,56 @@ pub fn remaining_tiers<H: std::hash::BuildHasher>(
 
 // ─── The scheduler ────────────────────────────────────────────────────────────
 
-/// The staged upload scheduler: given a [`UploadPolicy`], the detected
-/// [`ConnectionClass`], and an optional force-sync consent, it decides which of an
-/// asset's tier sessions open now and in what order.
+/// The staged upload scheduler: given a [`UploadPolicy`], the tiers the path admits, and an
+/// optional force-sync consent, it decides which of an asset's tier sessions open now and in
+/// what order.
 #[derive(Debug, Clone, Copy)]
 pub struct StagedScheduler {
     policy: UploadPolicy,
     class: ConnectionClass,
+    admission: TierAdmission,
+    hold: Option<Hold>,
     force_sync: bool,
 }
 
 impl StagedScheduler {
-    /// A scheduler for `policy` on the detected connection `class`, without
-    /// force-sync (the metered/Wi-Fi criteria apply).
+    /// A scheduler for `policy` on the detected connection `class` alone, without
+    /// force-sync (the metered/Wi-Fi criteria apply). A caller holding a whole
+    /// [`TransferPlan`] uses [`from_plan`](Self::from_plan), which also honours power, heat
+    /// and the background deadline.
     #[must_use]
     pub fn new(policy: UploadPolicy, class: ConnectionClass) -> Self {
+        let (admission, hold) = TierAdmission::for_class(class);
         Self {
             policy,
             class,
+            admission,
+            hold,
             force_sync: false,
         }
+    }
+
+    /// A scheduler for the policy the user `requested`, under `plan`: a plan that holds bulk
+    /// back stages the run ([`TransferPlan::upload_policy`]), and every tier is gated on what
+    /// the plan admits.
+    #[must_use]
+    pub fn from_plan(plan: &TransferPlan, requested: UploadPolicy) -> Self {
+        Self {
+            policy: plan.upload_policy(requested),
+            class: plan.class,
+            admission: plan.admission,
+            hold: plan.hold,
+            force_sync: false,
+        }
+    }
+
+    /// Whether `next` closes a tier this scheduler opens: the work running under this one
+    /// includes work `next` forbids.
+    #[must_use]
+    pub fn narrows_to(&self, next: &Self) -> bool {
+        [UploadTier::Index, UploadTier::Preview, UploadTier::Original]
+            .into_iter()
+            .any(|tier| self.tier_opens_now(tier) && !next.tier_opens_now(tier))
     }
 
     /// Set the user-consented **force-sync** flag (the two-week-staleness "sync
@@ -189,13 +220,13 @@ impl StagedScheduler {
 
     /// Whether a given tier's session opens right now under this scheduler.
     ///
-    /// `Full` opens every tier eagerly; `Staged` defers to the connection-class tier
-    /// gate ([`ConnectionClass::permits_tier`]).
+    /// `Full` opens every tier eagerly; `Staged` defers to the tier gate: the class's
+    /// ([`ConnectionClass::permits_tier`]), or the plan's ([`TransferPlan::permits_tier`]).
     #[must_use]
     pub fn tier_opens_now(&self, tier: UploadTier) -> bool {
         match self.policy {
             UploadPolicy::Full => true,
-            UploadPolicy::Staged => self.class.permits_tier(tier, self.force_sync),
+            UploadPolicy::Staged => self.admission.permits(self.hold, tier, self.force_sync),
         }
     }
 
@@ -243,6 +274,85 @@ impl StagedScheduler {
             "staged upload window complete"
         );
         Ok(report)
+    }
+}
+
+// ─── Running under a changing path ────────────────────────────────────────────
+
+/// Run `attempt` under the scheduler `monitor`'s current plan allows, and re-plan when the
+/// path changes under it.
+///
+/// `attempt` is handed a [`StagedScheduler`] for `requested` (with `force_sync`) and drives the
+/// work under it — normally one [`push_bundle`](crate::push::push_bundle). Every change of plan
+/// the monitor publishes wakes this run in the same scheduling tick: when the new plan closes a
+/// tier the running scheduler opens, the running attempt is dropped there — cancelling its
+/// in-flight requests — and `attempt` runs again under the new plan. A change that closes
+/// nothing lets the attempt run on. Cancelled work resumes from server truth (create-dedup and
+/// `HEAD` offsets), so a cancel costs at most the bytes in flight.
+///
+/// Each re-run follows a plan that narrowed, so the loop moves only as fast as the path
+/// changes; it never spins on its own.
+#[instrument(skip_all, fields(?requested, force_sync))]
+pub async fn run_under_path<T, F, Fut>(
+    monitor: &PathMonitor,
+    requested: UploadPolicy,
+    force_sync: bool,
+    mut attempt: F,
+) -> T
+where
+    F: FnMut(StagedScheduler) -> Fut,
+    Fut: std::future::Future<Output = T>,
+{
+    let mut plans = monitor.subscribe();
+    loop {
+        let plan = *plans.borrow_and_update();
+        let scheduler = StagedScheduler::from_plan(&plan, requested).with_force_sync(force_sync);
+        tracing::debug!(
+            generation = plan.generation.0,
+            class = ?plan.class,
+            admission = ?plan.admission,
+            "staged: running under the current path"
+        );
+        let mut run = std::pin::pin!(attempt(scheduler));
+        let narrowed = loop {
+            let changed = {
+                let mut changed = std::pin::pin!(plans.changed());
+                let step = std::future::poll_fn(|cx| {
+                    if let std::task::Poll::Ready(out) = run.as_mut().poll(cx) {
+                        return std::task::Poll::Ready(Ok(out));
+                    }
+                    changed.as_mut().poll(cx).map(Err)
+                })
+                .await;
+                match step {
+                    Ok(out) => return out,
+                    Err(changed) => changed,
+                }
+            };
+            if changed.is_err() {
+                // The monitor is borrowed for this whole call, so its sender cannot be gone;
+                // were it, no plan could change again and the attempt simply runs out.
+                return run.await;
+            }
+            let next = *plans.borrow_and_update();
+            let next_scheduler =
+                StagedScheduler::from_plan(&next, requested).with_force_sync(force_sync);
+            if scheduler.narrows_to(&next_scheduler) {
+                break next;
+            }
+            tracing::debug!(
+                generation = next.generation.0,
+                "staged: the plan changed without closing a running tier; running on"
+            );
+        };
+        tracing::info!(
+            from_generation = plan.generation.0,
+            to_generation = narrowed.generation.0,
+            class = ?narrowed.class,
+            admission = ?narrowed.admission,
+            hold = ?narrowed.hold,
+            "staged: the path now forbids running work; cancelling it and re-planning"
+        );
     }
 }
 

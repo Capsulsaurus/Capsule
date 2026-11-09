@@ -1,7 +1,10 @@
+import CapsuleAlerts
 import CapsuleDiagnostics
 import CapsuleFoundation
 import CapsuleNavigation
 import CapsuleUI
+import FeatureAuth
+import FeatureViewer
 import SwiftUI
 
 /// The app's root, and the only place that decides which shell the user sees.
@@ -31,6 +34,9 @@ struct RootShell: View {
     @State private var router = Router()
     @State private var crashReportOffered = false
     @State private var crashReport: DiagnosticsReport?
+    /// A tapped re-wrap alert opens the guided re-wrap directly — never the
+    /// routine verification prompt.
+    @State private var guidedRewrapPresented = false
 
     /// Regular width earns the split view; compact gets the tab bar.
     ///
@@ -50,6 +56,14 @@ struct RootShell: View {
             }
         }
         .environment(router)
+        // The label editor is reached from the viewer wherever it is presented
+        // (timeline, albums, search, places) and from album detail, so its ports
+        // ride the environment rather than every presenter's initializer.
+        .environment(\.labelEditing, environment.labelEditing)
+        // Every tap in the scene's window opens an `inputToFrame` signpost interval that closes
+        // once its answering frame is drawn; the parity benchmark reads it. Signposts cost
+        // nothing unless a trace is recording, so the probe is installed in every build.
+        .background { InputToFrameProbe().accessibilityHidden(true) }
         // One tint for the whole scene. Set here rather than per screen because
         // an accent is a property of the app, and thirty screens each choosing
         // their own is how an app ends up with three blues.
@@ -79,6 +93,9 @@ struct RootShell: View {
                 Task { await environment.diagnostics.noteEnteredBackground() }
             case .active:
                 Task { await environment.diagnostics.noteBecameActive() }
+                // Back in the foreground: pull what the server indexed while
+                // the app was away, so held records it releases go out now.
+                Task { await environment.syncManagedLane() }
             default:
                 break
             }
@@ -86,6 +103,26 @@ struct RootShell: View {
         .task {
             if await environment.diagnostics.shouldOfferCrashReport() {
                 crashReportOffered = true
+            }
+        }
+        // A launch syncs the managed lane once; a foreground transition that
+        // lands meanwhile joins the same drain.
+        .task { await environment.syncManagedLane() }
+        // The alert loop lives as long as the scene: a refresh now, then one
+        // after every change to a fact the alerts read.
+        .task { await environment.runAlertLoop() }
+        .task {
+            for await destination in environment.alertResponder.destinations {
+                switch destination.tapAction {
+                case let .navigate(route): router.select(route)
+                case .presentGuidedRewrap: guidedRewrapPresented = true
+                }
+            }
+        }
+        .sheet(isPresented: $guidedRewrapPresented) {
+            RecoveryPassphraseView(recovery: environment.recovery, source: .rotate) {
+                guidedRewrapPresented = false
+                Task { await environment.alerts.refresh() }
             }
         }
         .alert("app.diagnostics.crash_alert.title", isPresented: $crashReportOffered) {

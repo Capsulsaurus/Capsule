@@ -165,6 +165,16 @@ export async function login(
         },
         body: JSON.stringify(body),
     });
+    return readLoginReply(res);
+}
+
+/**
+ * What every door that opens a session answers — the password `login` and the OIDC callback
+ * alike: `200` with a token pair, or `202` with a second-factor challenge.
+ */
+async function readLoginReply(
+    res: Response,
+): Promise<TokenPair | LoginMfaRequiredResponse> {
     if (!res.ok) throw await parseError(res);
     // 202 Accepted: the credentials were accepted and the request is not complete.
     if (res.status === 202) {
@@ -257,6 +267,98 @@ export async function totpDisable(totpCode: string): Promise<void> {
         body: JSON.stringify({ totp_code: totpCode }),
     });
     if (!res.ok) throw await parseError(res);
+}
+
+// ── Server info ─────────────────────────────────────────────────────────────
+
+/**
+ * The part of `GET /.well-known/capsule/server-info` the login reads: whether this deployment
+ * signs in through an identity provider. `auth.oidc` is always present, `null` when there is
+ * none, so the login decides whether to offer the option from one field rather than by probing
+ * the authorize.
+ */
+export interface ServerInfoAuth {
+    auth: {
+        oidc?: { authorize: string; callback: string } | null;
+    };
+}
+
+/** Whether this deployment offers single sign-on through an identity provider. */
+export async function oidcAvailable(): Promise<boolean> {
+    const res = await fetch(`${API_BASE}/.well-known/capsule/server-info`, {
+        headers: {
+            Accept: 'application/json',
+            'X-Capsule-Protocol': PROTOCOL_VERSION,
+        },
+    });
+    if (!res.ok) throw await parseError(res);
+    const info: ServerInfoAuth = await res.json();
+    return info.auth?.oidc != null;
+}
+
+// ── OIDC endpoints ──────────────────────────────────────────────────────────
+
+/** The `POST /v1/auth/oidc/authorize` body. */
+export interface OidcAuthorizeRequest {
+    /** This client's callback; the deployment admits only its configured redirect exactly. */
+    redirect_uri: string;
+    /** The S256 hash of the binding secret this tab keeps until the callback. */
+    binding_challenge: string;
+}
+
+/** A begun ceremony: where to send the person, and the `state` the provider will echo. */
+export interface OidcAuthorizationResponse {
+    authorization_url: string;
+    state: string;
+    /** Absolute Unix seconds. */
+    expires_by: number;
+}
+
+/** Begin a sign-in through the identity provider. Unauthenticated. */
+export async function beginOidcLogin(
+    body: OidcAuthorizeRequest,
+): Promise<OidcAuthorizationResponse> {
+    const res = await fetch(`${AUTH_BASE}/oidc/authorize`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+            'X-Capsule-Protocol': PROTOCOL_VERSION,
+        },
+        body: JSON.stringify(body),
+    });
+    if (!res.ok) throw await parseError(res);
+    return res.json();
+}
+
+/**
+ * The `POST /v1/auth/oidc/callback` body. Strict on the server: the provider's other redirect
+ * parameters (`error`, `iss`, …) are not forwarded, or the request is a `422`.
+ */
+export interface OidcCallbackRequest {
+    state: string;
+    code: string;
+    /** The secret whose S256 hash the authorize carried. */
+    binding_verifier: string;
+}
+
+/**
+ * Finish a sign-in with what the provider's redirect carried. Answers exactly what `login` does:
+ * a token pair, or the same second-factor challenge, finished by {@link verifyTotpLogin}.
+ */
+export async function completeOidcLogin(
+    body: OidcCallbackRequest,
+): Promise<TokenPair | LoginMfaRequiredResponse> {
+    const res = await fetch(`${AUTH_BASE}/oidc/callback`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+            'X-Capsule-Protocol': PROTOCOL_VERSION,
+        },
+        body: JSON.stringify(body),
+    });
+    return readLoginReply(res);
 }
 
 // ── Profile endpoints ───────────────────────────────────────────────────────

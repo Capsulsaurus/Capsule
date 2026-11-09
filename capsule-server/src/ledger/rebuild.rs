@@ -21,6 +21,9 @@
 //!    a query over rows, so restoring the rows is recomputing them.
 //! 4. Report blobs nothing names, entries naming a missing blob, and provenance blobs that fail
 //!    structural validation (moved to `quarantine/` with their reason, never dropped).
+//! 5. Rebuild every account's stored pulled quota total that drifted from what its holdings
+//!    derive ([`QuotaStore::reconcile_pulled`], #1183): the drift `capsule-server scrub`
+//!    reports and does not repair.
 //!
 //! When the ledger cannot prove an owner's sequence — the chain breaks, a custody entry was
 //! never resolved because the process stopped between it and the index write, or a lifecycle
@@ -38,9 +41,9 @@
 //!
 //! # Dry run by default
 //!
-//! [`Mode::DryRun`] reads everything and writes nothing: no row, no quota charge, no epoch, no
-//! quarantine move. The report is the same shape either way, so an operator reads what a rebuild
-//! would do before doing it.
+//! [`Mode::DryRun`] reads everything and writes nothing: no row, no quota charge, no pulled
+//! total rebuilt, no epoch, no quarantine move. The report is the same shape either way, so an
+//! operator reads what a rebuild would do before doing it.
 //!
 //! # Idempotent
 //!
@@ -68,6 +71,8 @@
 //! [Server Filesystem § Rebuild]: https://github.com/Capsulsaurus/Capsule/blob/master/capsule-docs/src/content/docs/design/filesystem/server.md#rebuild
 //! [Server Filesystem § Sync Epoch and Client Re-Announce]: https://github.com/Capsulsaurus/Capsule/blob/master/capsule-docs/src/content/docs/design/filesystem/server.md#sync-epoch-and-client-re-announce
 
+pub mod sizes;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -83,7 +88,7 @@ use super::{ChainFault, LedgerError, OwnerLedger};
 use crate::blob::{BlobError, BlobStore, ContentAddress, QuarantineReason};
 use crate::gc::Mode;
 use crate::index::{AssetIndex, AssetRow, AssetState, BlobRef, OpAction, RestoreOutcome};
-use crate::quota::{QuotaLimits, QuotaStore};
+use crate::quota::{PulledDrift, QuotaLimits, QuotaStore};
 use crate::store::{AlbumId, AssetId, BlobRole, Clock, OwnerId, StoreError, UserId};
 
 /// Why a rebuild could not finish.
@@ -233,6 +238,10 @@ pub struct RebuildReport {
     pub owners: Vec<OwnerReport>,
     /// Blobs no verified ledger entry names and no index row references: left for GC.
     pub orphans: Vec<ContentAddress>,
+    /// Accounts whose stored pulled quota total drifted from what their holdings derive
+    /// (#1183): rebuilt under `--apply`, and what would be in a dry run. Not a fault: the
+    /// derivation is the authority, so rebuilding it is a repair, like restoring a row.
+    pub pulled_drift: Vec<PulledDrift>,
 }
 
 impl RebuildReport {
@@ -302,10 +311,17 @@ pub async fn rebuild(context: &RebuildContext, mode: Mode) -> Result<RebuildRepo
     }
 
     report.orphans = orphans(context, &named).await?;
+    // After every owner's replay: a restored row's re-charge moves the attributions the pulled
+    // total is derived against, so the audit reads the ledger the replay left.
+    report.pulled_drift = match mode {
+        Mode::Apply => context.quotas.reconcile_pulled().await?,
+        Mode::DryRun => context.quotas.pulled_drift().await?,
+    };
     tracing::info!(
         applied = report.applied,
         owners = report.owners.len(),
         orphans = report.orphans.len(),
+        pulled_drift = report.pulled_drift.len(),
         faults = report.has_faults(),
         "an index rebuild finished"
     );
@@ -706,18 +722,30 @@ fn supersede(facts: &mut Accumulated, address: &ContentAddress) {
     }
 }
 
-/// Point a singular `role` at `address`, as a lifecycle op does: with no size, because the op
-/// path never learns one ([`crate::index`]'s `set_singular`).
-fn repoint(facts: &mut Accumulated, role: BlobRole, address: &ContentAddress) {
+/// Point a singular `role` at `address`, as a lifecycle op does, at the size the store holds it
+/// at (#1128).
+///
+/// A lifecycle op's ledger entry carries no size, so the store is the replay's witness: the op
+/// stored these bytes before it was applied, and their length is what the index recorded. A
+/// blob the store does not hold is still pointed at — the row the index held did — at size `0`,
+/// and the caller reports it as dangling rather than dropping the reference.
+async fn repoint(
+    context: &RebuildContext,
+    facts: &mut Accumulated,
+    role: BlobRole,
+    address: &ContentAddress,
+) -> Result<bool, RebuildError> {
+    let stat = context.blobs.stat(address).await?;
     facts.blobs.retain(|(held, _), _| *held != role);
     facts.blobs.insert(
         (role, address.as_str().to_owned()),
         BlobRef {
             role,
             address: address.clone(),
-            size: 0,
+            size: stat.as_ref().map_or(0, |stat| stat.size),
         },
     );
+    Ok(stat.is_some())
 }
 
 /// Fold one lifecycle op into its asset's facts.
@@ -834,7 +862,11 @@ async fn apply_lifecycle(
     }
 
     supersede(facts, &address);
-    repoint(facts, BlobRole::Provenance, &address);
+    // Read as a manifest above, so the store holds it; a blob gone between the two reads is
+    // dangling all the same.
+    if !repoint(context, facts, BlobRole::Provenance, &address).await? {
+        facts.dangling.push(address.clone());
+    }
     if let Ok(at) = op.recorded_at.parse::<Timestamp>() {
         facts.updated_at = Some(at);
     }
@@ -843,10 +875,9 @@ async fn apply_lifecycle(
         && let Ok(metadata) = ContentAddress::parse(&metadata.to_hex())
     {
         named.insert(metadata.clone());
-        if context.blobs.stat(&metadata).await?.is_none() {
-            facts.dangling.push(metadata.clone());
+        if !repoint(context, facts, BlobRole::Metadata, &metadata).await? {
+            facts.dangling.push(metadata);
         }
-        repoint(facts, BlobRole::Metadata, &metadata);
     }
     if op.action == OpAction::Delete.as_str() {
         facts.state = Some(AssetState::Tombstoned);
