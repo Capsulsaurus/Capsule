@@ -53,9 +53,9 @@ struct AlertAdapterCompositionTests {
     @Test("the system lane dates the world at launch and measures on the wall clock")
     func systemLane() {
         let adapters = AlertAdapters.system(policy: MockAlertPolicy())
-        let launchedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let launchedAt = Date(timeIntervalSince1970: 1800000000)
         #expect(adapters.armsWithSystem)
-        #expect(adapters.worldClock(launchedAt: launchedAt).now == CapsuleTimestamp(epochSeconds: 1_800_000_000))
+        #expect(adapters.worldClock(launchedAt: launchedAt).now == CapsuleTimestamp(epochSeconds: 1800000000))
 
         let wall = Int64(Date().timeIntervalSince1970)
         let measured = adapters.alertClock(world: MockEnvironment(scenario: .healthy)).now().epochSeconds

@@ -12,7 +12,7 @@ import Testing
 @Suite("FFIAlertPolicy — the core's predicate over uniffi")
 struct FFIAlertPolicyTests {
     private let policy = FFIAlertPolicy()
-    private static let base: Int64 = 1_700_000_000
+    private static let base: Int64 = 1700000000
     private static let day: Int64 = 86400
     private static let syncStale: Int64 = 14 * day
 

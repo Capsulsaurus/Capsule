@@ -114,6 +114,17 @@ extension AppEnvironment {
         )
     }
 
+    /// The notification-center delegate for `adapters`, installed at once on
+    /// the lane that arms with the OS so a tap that launched the app reaches
+    /// the router, and never installed on the mock lane.
+    static func makeAlertResponder(adapters: AlertAdapters) -> AlertNotificationResponder {
+        let responder = AlertNotificationResponder()
+        if adapters.armsWithSystem {
+            responder.install()
+        }
+        return responder
+    }
+
     /// Refresh the alerts now and again after every change to a fact they
     /// read, for as long as the calling task lives.
     ///

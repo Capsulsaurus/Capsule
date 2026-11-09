@@ -23,7 +23,7 @@ public struct FFIAlertPolicy: AlertPolicyPort {
         let alerts = try call { try evaluateAlerts(input: Self.ffi(input), now: now.rfc3339) }
         return try alerts.map { alert in
             try Alert(
-                alertClass: Self.alertClass(alert.`class`),
+                alertClass: Self.alertClass(alert.class),
                 deadline: alert.deadline.map { try Self.instant($0, field: "deadline") },
                 params: alert.params
             )
@@ -33,7 +33,7 @@ public struct FFIAlertPolicy: AlertPolicyPort {
     public func preArmDeadlines(_ input: NotifyInput, at now: CapsuleTimestamp) throws -> [ClassDeadline] {
         let deadlines = try call { try CapsuleCatalogFFI.preArmDeadlines(input: Self.ffi(input), now: now.rfc3339) }
         return try deadlines.map {
-            try ClassDeadline(alertClass: Self.alertClass($0.`class`), deadline: Self.instant($0.deadline, field: "deadline"))
+            try ClassDeadline(alertClass: Self.alertClass($0.class), deadline: Self.instant($0.deadline, field: "deadline"))
         }
     }
 

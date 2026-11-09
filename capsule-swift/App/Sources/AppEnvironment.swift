@@ -308,11 +308,7 @@ struct AppEnvironment {
 
         alerts = Self.makeAlerts(mock: mock, adapters: alertAdapters)
         self.alertAdapters = alertAdapters
-        let responder = AlertNotificationResponder()
-        if alertAdapters.armsWithSystem {
-            responder.install()
-        }
-        alertResponder = responder
+        alertResponder = Self.makeAlertResponder(adapters: alertAdapters)
     }
 
     /// The on-disk managed store's faces: the provider the timeline and the
