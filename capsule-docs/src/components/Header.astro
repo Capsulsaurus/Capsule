@@ -11,6 +11,7 @@ import SocialIcons from 'virtual:starlight/components/SocialIcons';
 import ThemeSelect from 'virtual:starlight/components/ThemeSelect';
 import config from 'virtual:starlight/user-config';
 import HeaderNav from './HeaderNav.astro';
+import VersionSelect from './VersionSelect.astro';
 
 // Mirrors Starlight's own Header: search renders when Pagefind is on or the
 // Search component is overridden.
@@ -29,6 +30,7 @@ const shouldRenderSearch =
   <div class="right-group print:hidden">
     {shouldRenderSearch && <div class="search"><Search /></div>}
     <div class="actions">
+      <VersionSelect />
       <SocialIcons />
       <ThemeSelect />
       <LanguageSelect />

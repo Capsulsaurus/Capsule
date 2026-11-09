@@ -3,3 +3,7 @@
 # browsers may keep it for a year.
 /_astro/*
   Cache-Control: public, max-age=31536000, immutable
+# Every docs version reads the released-version list from production at runtime, so a
+# new release reaches old versions' switchers within minutes.
+/versions.json
+  Cache-Control: public, max-age=300

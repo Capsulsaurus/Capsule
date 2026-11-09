@@ -8,8 +8,10 @@ import { defineConfig } from 'astro/config';
 import starlightBlog from 'starlight-blog';
 import starlightLinksValidator from 'starlight-links-validator';
 import { referenceSidebar } from './scripts/reference-groups.mjs';
+import baseLinks from './src/lib/base-links.mjs';
 import { BLOG_AUTHORS, hasPublishedPost } from './src/lib/blog-posts.mjs';
 import { resolveBuildCommit } from './src/lib/build-commit.mjs';
+import { versionFromBranch } from './src/lib/docs-version.mjs';
 import rehypeNoTranslate from './src/lib/rehype-notranslate.mjs';
 import remarkLibraryLinks from './src/lib/remark-library-links.mjs';
 import remarkLinkTitles from './src/lib/remark-link-titles.mjs';
@@ -38,9 +40,15 @@ const buildCommit = resolveBuildCommit(process.env, () => {
     }
 });
 
+// Which docs version this build is. Cloudflare Pages names the branch it
+// builds: `docs/vX.Y` is release X.Y, served under /v/X.Y/; every other branch
+// is the latest docs at /. See src/lib/docs-version.mjs.
+const docsVersion = versionFromBranch(process.env.CF_PAGES_BRANCH);
+
 // https://astro.build/config
 export default defineConfig({
     site: 'https://capsule.justinchung.net', // TODO: Get domain later
+    base: docsVersion.base,
     // Retired pages; their content moved to the targets or into code docs.
     redirects: {
         '/design/module-map/': '/design/principles/',
@@ -73,6 +81,8 @@ export default defineConfig({
         }),
     },
     integrations: [
+        // On a release build, keeps every built link inside its version.
+        baseLinks({ base: docsVersion.base }),
         starlight({
             title: 'Capsule',
             description:
@@ -251,15 +261,18 @@ export default defineConfig({
                       ]
                     : []),
                 // Feature cards on the front page link into the design docs.
-                starlightLinksValidator({ components: [['Feature', 'href']] }),
-                // starlightVersions({
-                // 	// current: {
-                // 	// 	label: 'master',
-                // 	// },
-                // 	versions: [
-                // 		{ slug: 'Latest' }
-                // 	],
-                // }), // TODO: Add versions later
+                // Only on the latest build. A release build is a frozen copy of
+                // a master commit whose CI build already validated it, and its
+                // links are rebased under /v/X.Y/ only after the build.
+                ...(docsVersion.version === null
+                    ? [
+                          starlightLinksValidator({
+                              components: [['Feature', 'href']],
+                              // Served by the Pages Functions (functions/).
+                              exclude: ['/rustdoc/**', '/v/**'],
+                          }),
+                      ]
+                    : []),
             ],
         }),
     ],
@@ -270,6 +283,8 @@ export default defineConfig({
         define: {
             __BLOG_IS_LIVE__: JSON.stringify(blogIsLive),
             __BUILD_COMMIT__: JSON.stringify(buildCommit),
+            // The release this build is (`X.Y`), or null for the latest docs.
+            __DOCS_VERSION__: JSON.stringify(docsVersion.version),
         },
     },
 });

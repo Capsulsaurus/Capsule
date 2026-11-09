@@ -2,6 +2,7 @@
 // The section links (Guides, Design, Reference and, once live, Blog). Rendered
 // in the header on wide screens and in the mobile menu on narrow ones. The
 // list itself is src/lib/site-nav.mjs.
+import { normalizeBase, stripBase } from '../lib/docs-version.mjs';
 import { ariaCurrent, headerLinks } from '../lib/site-nav.mjs';
 
 // Set in astro.config.mjs from src/lib/blog-posts.mjs.
@@ -14,7 +15,11 @@ interface Props {
 
 const { variant } = Astro.props;
 const links = headerLinks({ blogIsLive: __BLOG_IS_LIVE__ });
-const { pathname } = Astro.url;
+// A release build lives under /v/X.Y/, so the current section is matched on
+// the path without it. (Its links are rebased with the rest of the built
+// HTML: src/lib/base-links.mjs.)
+const base = normalizeBase(import.meta.env.BASE_URL);
+const pathname = stripBase(Astro.url.pathname, base);
 ---
 
 <nav class:list={['site-nav', variant]} aria-label="Sections">

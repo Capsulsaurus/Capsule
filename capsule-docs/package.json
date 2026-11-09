@@ -9,7 +9,6 @@
         "build": "bun scripts/gen-reference.mjs && bunx --bun astro build",
         "preview": "bun run build && wrangler pages dev ./dist",
         "astro": "bunx --bun astro",
-        "deploy": "bun run build && wrangler pages deploy ./dist",
         "test": "bunx --bun vitest run"
     },
     "dependencies": {
@@ -22,16 +21,15 @@
         "github-slugger": "^2.0.0",
         "mdast-util-from-markdown": "^2.0.2",
         "mdast-util-to-string": "^4.0.0",
+        "rehype": "^13.0.2",
         "sharp": "^0.35.5",
         "starlight-blog": "^0.30.2",
         "starlight-links-validator": "^0.27.0",
-        "starlight-versions": "^0.10.1",
         "tailwindcss": "^4.3.0",
         "unist-util-visit": "^5.1.0"
     },
     "devDependencies": {
         "@biomejs/biome": "^2.5.1",
-        "rehype": "^13.0.2",
         "vitest": "^4.1.11",
         "wrangler": "^4.151.1"
     }

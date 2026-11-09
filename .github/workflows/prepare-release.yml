@@ -51,6 +51,8 @@ jobs:
           set -euo pipefail
           mise run set-version "${{ steps.v.outputs.version }}"
           mise run changelog "${{ steps.v.outputs.version }}"
+          # The docs version switcher lists this release (capsule-docs/public/versions.json).
+          node capsule-docs/scripts/add-release.mjs "${{ steps.v.outputs.version }}"
       - name: Open release PR
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PAT }}

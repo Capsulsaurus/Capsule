@@ -167,3 +167,28 @@ jobs:
             --title "v${version}" \
             --notes-file NOTES.md \
             dist/*
+
+  # Freezes this release's docs: `docs/vX.Y` is fast-forwarded to the release commit, and
+  # Cloudflare Pages builds that branch as its own deployment, which production serves under
+  # /v/X.Y/ (capsule-docs/src/lib/docs-version.mjs). A patch release moves the same branch
+  # forward. A push that is not a fast-forward fails here rather than rewriting a version.
+  # Only after the release is published, so no version appears for a release that failed.
+  #
+  # Pushed with RELEASE_PAT, not GITHUB_TOKEN: moving the branch over commits that touched
+  # .github/workflows/ needs the `workflow` scope, which GITHUB_TOKEN can never have.
+  docs-version:
+    name: Freeze the docs for this version
+    needs: [detect, publish]
+    if: ${{ needs.detect.outputs.release == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PAT }}
+      - name: Push docs/vX.Y
+        run: |
+          set -euo pipefail
+          version="${{ needs.detect.outputs.version }}"
+          minor="$(echo "$version" | cut -d. -f1,2)"
+          git push origin "${{ github.sha }}:refs/heads/docs/v${minor}"
