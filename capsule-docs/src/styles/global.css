@@ -170,36 +170,36 @@
 /*
  * Sticky footer. The site footer (src/components/SiteFooter.astro) closes the
  * last content panel, so on a page shorter than the window it would stop
- * mid-screen. Every box from Starlight's page frame down to that panel grows
- * to fill the window instead, and the footer takes the panel's spare height
- * above it, so it rests on the window's bottom edge; on a long page there is
- * no spare height and it follows the content. The boxes are Starlight's own
- * (Page.astro, PageFrame.astro, TwoColumnContent.astro, ContentPanel.astro):
+ * mid-screen. Instead `main` is at least the window's height below the
+ * header, its last panel takes the spare height, and the footer takes the
+ * spare height inside that panel, so it rests on the window's bottom edge; on
+ * a long page there is no spare height and it follows the content. Only the
+ * boxes' heights change: the widths Starlight lays out (sidebar, content,
+ * table of contents) are untouched. The boxes are Starlight's own (Page.astro,
+ * PageFrame.astro, ContentPanel.astro):
  *
- *   .page > .main-frame > div.lg:sl-flex > .main-pane > main
- *     > .content-panel:last-child > .sl-container > … .site-footer
+ *   main > .content-panel:last-child > .sl-container > … .site-footer
  */
-.main-frame,
-.main-frame > .lg\:sl-flex,
-.main-pane,
-.main-pane > main,
-.main-pane > main > .content-panel:last-child,
-.main-pane > main > .content-panel:last-child > .sl-container {
+.main-pane > main {
+    display: flex;
+    flex-direction: column;
+    /* .main-frame's top padding is the header and the mobile contents bar. */
+    min-height: calc(
+        100dvh - var(--sl-nav-height) - var(--sl-mobile-toc-height, 0rem)
+    );
+}
+
+.main-pane > main > .content-panel:last-child {
     display: flex;
     flex-direction: column;
     flex-grow: 1;
 }
 
-/* Wide screens lay the table of contents beside the content; that row
-   stretches the content to its full height without growing its width. */
-@media (min-width: 72rem) {
-    .main-frame > .lg\:sl-flex {
-        flex-direction: row;
-    }
-
-    .main-frame > .lg\:sl-flex > .main-pane {
-        flex-grow: 0;
-    }
+.main-pane > main > .content-panel:last-child > .sl-container {
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+    width: 100%;
 }
 
 /* The footer's spare-height margin; what precedes it keeps the footer's
