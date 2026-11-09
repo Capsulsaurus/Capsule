@@ -1211,7 +1211,7 @@ function shellQuote(value) {
  */
 export function curlExample({ path, method, operation }, document) {
     const parameters = operation.parameters ?? [];
-    const valueOf = (name) =>
+    const pathValue = (name) =>
         parameterValue(
             parameters.find((parameter) => parameter.name === name) ?? {
                 name,
@@ -1220,7 +1220,7 @@ export function curlExample({ path, method, operation }, document) {
         );
     // Every `{name}` filled in, so curl neither globs the braces nor sends them.
     const filled = path.replace(/\{([^}]+)\}/g, (_, name) =>
-        encodeURIComponent(valueOf(name)),
+        encodeURIComponent(pathValue(name)),
     );
     const query = parameters
         .filter((parameter) => parameter.in === 'query' && parameter.required)

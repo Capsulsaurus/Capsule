@@ -98,6 +98,23 @@ function prose(source) {
 }
 
 /**
+ * `text` with every HTML tag removed, repeated until none is left, so removing
+ * one tag can never splice the halves around it into another.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+function withoutTags(text) {
+    let previous;
+    let current = text;
+    do {
+        previous = current;
+        current = current.replace(/<[^<>]*>/g, '');
+    } while (current !== previous);
+    return current;
+}
+
+/**
  * GitHub's heading-anchor slug: strip inline markup and HTML tags, lowercase, drop every
  * character outside letters, numbers, marks, `_`, `-`, and space, then map each
  * remaining space to a hyphen. Runs are preserved, never collapsed.
@@ -109,9 +126,9 @@ export function slugify(heading) {
     return (
         heading
             // Tags go, but not inside a code span: `` `Vec<T>` `` keeps its `<T>`.
-            .replace(/`[^`]*`|<[^>]*>/g, (match) =>
-                match.startsWith('`') ? match : '',
-            )
+            .split(/(`[^`]*`)/)
+            .map((part, index) => (index % 2 ? part : withoutTags(part)))
+            .join('')
             .replace(/`/g, '')
             .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
             .replace(/\*/g, '')

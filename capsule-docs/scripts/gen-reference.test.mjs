@@ -1480,15 +1480,7 @@ describe('the schema appendix', () => {
             document,
         );
         expect(rendered).toContain('### WireBlobRole');
-        const headings = new Set(
-            [...rendered.matchAll(/^#{2,6} (.+)$/gm)].map((match) =>
-                match[1]
-                    .replace(/<[^>]*>/g, '')
-                    .toLowerCase()
-                    .replace(/[^a-z0-9 -]/g, '')
-                    .replace(/ /g, '-'),
-            ),
-        );
+        const headings = headingAnchors(rendered);
         for (const [, anchor] of rendered.matchAll(/\]\(#([^)]+)\)/g)) {
             expect(headings.has(anchor)).toBe(true);
         }

@@ -76,6 +76,56 @@ html:has(.api-op) {
     --api-status-color: var(--sl-color-red-high);
 }
 
+/* The operation index. */
+.sl-markdown-content .api-index ul {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
+    gap: 0.25rem 1.5rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--sl-color-hairline);
+    border-radius: var(--capsule-radius-card);
+    background: var(--sl-color-bg-nav);
+    list-style: none;
+}
+
+.sl-markdown-content .api-index li {
+    margin: 0;
+}
+
+.sl-markdown-content .api-index > p {
+    margin-top: 0.75rem;
+    color: var(--sl-color-gray-2);
+    font-size: var(--sl-text-sm);
+    line-height: 1.9;
+}
+
+.sl-markdown-content .api-index a {
+    color: var(--sl-color-white);
+    text-decoration: none;
+}
+
+.sl-markdown-content .api-index code {
+    background: none;
+    padding: 0;
+    font-size: var(--sl-text-sm);
+}
+
+.sl-markdown-content .api-index a:hover code {
+    color: var(--sl-color-text-accent);
+}
+
+.api-meta {
+    margin-inline-start: 0.5em;
+    color: var(--sl-color-gray-3);
+    font-size: var(--sl-text-sm);
+}
+
+.sl-markdown-content .api-meta code {
+    background: none;
+    padding: 0;
+    color: inherit;
+}
+
 /* Parameters and responses: name, muted facts, a required marker, then the
    description beneath, in a hairline-ruled list. */
 .sl-markdown-content .api-fields ul {
@@ -107,18 +157,6 @@ html:has(.api-op) {
     font-weight: 600;
 }
 
-.api-meta {
-    margin-inline-start: 0.5em;
-    color: var(--sl-color-gray-3);
-    font-size: var(--sl-text-sm);
-}
-
-.sl-markdown-content .api-meta code {
-    background: none;
-    padding: 0;
-    color: inherit;
-}
-
 .api-required {
     margin-inline-start: 0.5em;
     color: var(--sl-color-orange-high);
@@ -126,44 +164,6 @@ html:has(.api-op) {
     font-weight: 600;
     letter-spacing: 0.02em;
     text-transform: uppercase;
-}
-
-/* The operation index. */
-.sl-markdown-content .api-index ul {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
-    gap: 0.25rem 1.5rem;
-    padding: 0.75rem 1rem;
-    border: 1px solid var(--sl-color-hairline);
-    border-radius: var(--capsule-radius-card);
-    background: var(--sl-color-bg-nav);
-    list-style: none;
-}
-
-.sl-markdown-content .api-index li {
-    margin: 0;
-}
-
-.sl-markdown-content .api-index > p {
-    margin-top: 0.75rem;
-    color: var(--sl-color-gray-2);
-    font-size: var(--sl-text-sm);
-    line-height: 1.9;
-}
-
-.sl-markdown-content .api-index a {
-    color: var(--sl-color-white);
-    text-decoration: none;
-}
-
-.sl-markdown-content .api-index a:hover code {
-    color: var(--sl-color-text-accent);
-}
-
-.sl-markdown-content .api-index code {
-    background: none;
-    padding: 0;
-    font-size: var(--sl-text-sm);
 }
 
 /* One operation. */
