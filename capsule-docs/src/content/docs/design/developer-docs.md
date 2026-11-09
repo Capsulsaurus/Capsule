@@ -38,7 +38,7 @@ maintained by hand.
 | CLI | `capsule-cli/cli-surface.json` | `cli-surface-check` | [](/reference/cli/) |
 | Swift and Kotlin | `capsule-sdk/bindings-surface.json` | `gen-bindings --check` (Rust gate) | [](/reference/sdk/swift/), [](/reference/sdk/kotlin/) |
 | Browser | `capsule-wasm/wasm-surface.d.ts` | `wasm-surface-check` (web gate) | [](/reference/sdk/wasm/) |
-| Rust crates | rustdoc, rendered from master, not committed | `doc-check-rust` | [GitHub Pages](https://capsulsaurus.github.io/Capsule/), mapped by [](/reference/sdk/rust/) |
+| Rust crates | rustdoc, rendered from master, not committed | `doc-check-rust` | [rustdoc](/rustdoc/), mapped by [](/reference/sdk/rust/) |
 
 - **Binding dump.** uniffi offers no stable machine-readable description of a namespace, so the
   dump is this repository's format: the declarations the native clients consume, as the generated
@@ -62,6 +62,22 @@ maintained by hand.
 - `/reference/sdk/`: the Rust page (hand-written, linking into rustdoc), then the generated Swift,
   Kotlin and browser pages.
 
+## Hosting and Versions
+
+- **One domain.** Cloudflare Pages builds every push through its Git integration, so no deploy
+  credential lives in the repository. `master` is production, served at `/` as "Latest".
+- **Rustdoc** is too large for Pages (22k files, one over 25 MiB), so GitHub Pages hosts it,
+  latest only. Production serves it under `/rustdoc/` through a Pages Function.
+- **One deployment per release.** A release freezes its docs as the branch `docs/vX.Y`, built
+  once with base `/v/X.Y/` and served by production under that path. A patch release moves the
+  same branch forward; nothing older is rebuilt, so each build is one version's size.
+- **The switcher** reads `/versions.json` from production at runtime, so an old version lists
+  the releases after it. Switching keeps the page when it exists in the target version.
+- **What is published is verified.** Production builds only `master`, which takes only commits
+  whose `CI / required` passed, so every artifact a published page reads has passed its gate.
+
+The URL layout and the proxy mapping are `capsule-docs/src/lib/docs-version.mjs`.
+
 ## No Playground
 
 The server is key-free: writes are sealed on the client and the sync feed returns opaque
@@ -71,9 +87,7 @@ where sealing happens: SDK doctests and CLI transcripts.
 ## Deferred
 
 - Per-endpoint lifecycle metadata (stability, permission, changelog) as spec vendor extensions.
-- Versioned docs (`starlight-versions` is installed but off) until the REST contract stabilizes.
 - Reference internationalization ([](/design/i18n/)).
-- Deploying the docs site automatically; it is published with `bun run deploy`.
 
 ## Validation
 
