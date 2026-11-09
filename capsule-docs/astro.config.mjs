@@ -11,6 +11,7 @@ import { referenceSidebar } from './scripts/reference-groups.mjs';
 import { BLOG_AUTHORS, hasPublishedPost } from './src/lib/blog-posts.mjs';
 import { resolveBuildCommit } from './src/lib/build-commit.mjs';
 import rehypeNoTranslate from './src/lib/rehype-notranslate.mjs';
+import remarkLibraryLinks from './src/lib/remark-library-links.mjs';
 import remarkLinkTitles from './src/lib/remark-link-titles.mjs';
 
 // A production build includes the blog (routes, header link, RSS, sitemap,
@@ -53,6 +54,8 @@ export default defineConfig({
                         ),
                     },
                 ],
+                // The first mention of each library links its source repo.
+                remarkLibraryLinks,
             ],
             // Opts technical terms out of browser/machine auto-translation.
             rehypePlugins: [rehypeNoTranslate],
