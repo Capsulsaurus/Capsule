@@ -204,11 +204,11 @@ struct CullingView: View {
 
     private var controls: some View {
         HStack(spacing: 8) {
-            control(.previous, titleKey: "app.culling.action.previous", systemImage: "chevron.left")
+            control(.previous, titleKey: "app.culling.action.previous", systemImage: "chevron.backward")
             control(.reject, titleKey: "app.culling.action.reject", systemImage: "xmark.circle")
             control(.neutral, titleKey: "app.culling.action.unflag", systemImage: "flag.slash")
             control(.pick, titleKey: "app.culling.action.pick", systemImage: "flag")
-            control(.next, titleKey: "app.culling.action.next", systemImage: "chevron.right")
+            control(.next, titleKey: "app.culling.action.next", systemImage: "chevron.forward")
             if pass.accepts(.collapseStack) {
                 control(
                     .collapseStack,
