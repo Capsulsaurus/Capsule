@@ -4,7 +4,7 @@ description: The Kynos REST/OpenAPI server and generated client architecture
 status: draft
 ---
 
-Capsule exposes one REST/OpenAPI contract ([API Surfaces](/design/api-surfaces/)).
+Capsule exposes one REST/OpenAPI contract ([](/design/api-surfaces/)).
 
 ## Data Flow
 
@@ -33,26 +33,26 @@ flowchart TB
   sdk -- ciphertext only --> api
 ```
 
-Timeline, search, tag, face, and memory queries run against the client's local SQLite catalog. The
+Timeline, search, tag, face and memory queries run against the client's local SQLite catalog. The
 server stores opaque ciphertext plus the minimum key-free index needed for authorization, ordering,
-quota, lifecycle, and retrieval.
+quota, lifecycle and retrieval.
 
 ## Clients
 
-- [Android](https://github.com/Capsulsaurus/Capsule/tree/master/capsule-android) — Jetpack Compose over `capsule-core-kotlin`
-- [iOS/iPadOS/macOS](https://github.com/Capsulsaurus/Capsule/tree/master/capsule-swift) — SwiftUI over `capsule-core-swift`
-- [Web](https://github.com/Capsulsaurus/Capsule/tree/master/capsule-web) — read-only: authenticated viewing, share links, guest upload
-- [CLI](https://github.com/Capsulsaurus/Capsule/tree/master/capsule-cli) — development and advanced users
+- [Android](https://github.com/Capsulsaurus/Capsule/tree/master/capsule-android): Jetpack Compose over `capsule-core-kotlin`.
+- [iOS/iPadOS/macOS](https://github.com/Capsulsaurus/Capsule/tree/master/capsule-swift): SwiftUI over `capsule-core-swift`.
+- [Web](https://github.com/Capsulsaurus/Capsule/tree/master/capsule-web): read-only, for authenticated viewing, share links and guest upload.
+- [CLI](https://github.com/Capsulsaurus/Capsule/tree/master/capsule-cli): development and advanced users.
 
 Native apps and the CLI share client logic through `capsule-core` and `capsule-sdk`, exposed to Swift
-and Kotlin via uniffi. Per-platform contract: [Clients](/design/clients/).
+and Kotlin via uniffi. The per-platform contract is [](/design/clients/).
 
 ## Dependency Boundaries
 
-Kynos owns HTTP and the Tokio runtime; Spargen generates the client; Rawshift owns codecs and metadata
-extraction; Chromahash is called directly. Blob storage, resumable upload, provenance, crypto, CRDTs,
-asset lifecycle, and application-state ports stay in Capsule. Each pin carries its rationale as a
-comment beside it in the manifest that declares it.
+Kynos owns HTTP and the Tokio runtime, Spargen generates the client, Rawshift owns codecs and
+metadata extraction, and Chromahash is called directly. Blob storage, resumable upload, provenance,
+crypto, CRDTs, asset lifecycle and application-state ports stay in Capsule. Each pin carries its
+rationale as a comment beside it in the declaring manifest.
 
 No reusable infrastructure library is extracted until a stable product-neutral contract has at least
 two real consumers.
