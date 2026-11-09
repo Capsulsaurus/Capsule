@@ -385,16 +385,6 @@ function escapePipes(text) {
 }
 
 /**
- * Artifact prose, flattened and escaped, for a cell that carries nothing else.
- *
- * @param {string} text
- * @returns {string}
- */
-function cell(text) {
-    return escapeCell(prose(text));
-}
-
-/**
  * Escape a YAML double-quoted scalar, for frontmatter values that carry arbitrary prose.
  *
  * @param {string} text
@@ -520,7 +510,7 @@ function sentence(text) {
 }
 
 /**
- * One argument's description cell: whether it is required and repeatable, what it does,
+ * One argument's man-page entry: whether it is required and repeatable, what it does,
  * what it accepts, and what it defaults to.
  *
  * @param {Record<string, any>} arg
@@ -546,9 +536,9 @@ function describeArg(arg) {
             `Default: ${arg.default_values.map((value) => `\`${value}\``).join(', ')}.`,
         );
     }
-    // One pass, over the assembled cell: a `|` in a default or an enumerated value is as
-    // capable of opening a column as one in the help text.
-    return escapeCell(parts.join(' ')) || '—';
+    // One pass, over the assembled entry: a `<` in a default or an enumerated value is as
+    // capable of being read as a tag as one in the help text.
+    return inlineProse(parts.join(' ')) || '—';
 }
 
 /**
@@ -641,46 +631,55 @@ function renderCommand(command, path, level) {
     if (options.some((option) => !option.required)) usage.push('[OPTIONS]');
     if (subcommands.length > 0) usage.push('<COMMAND>');
 
+    // Laid out as a man page, the form a command-line user already reads: the command's own
+    // heading (so search and the table of contents still reach it), then SYNOPSIS,
+    // DESCRIPTION, ARGUMENTS, OPTIONS and COMMANDS, each option a hanging-indent entry.
     const sections = [
         `${'#'.repeat(level)} ${invocation}`,
-        '',
+        '<p class="man-label">Synopsis</p>',
         `\`\`\`text\n${usage.join(' ')}\n\`\`\``,
-        '',
     ];
 
     // Demoted relative to this command's own heading, so a doc comment that opens at `#`
     // nests under the command it describes instead of outranking it.
     const about = command.long_about ?? command.about;
     if (about) {
-        sections.push(demoteHeadings(rewriteLinks(about), level), '');
+        sections.push(
+            '<p class="man-label">Description</p>',
+            demoteHeadings(rewriteLinks(about), level),
+        );
     }
 
-    const positionalTable = table(
-        ['Argument', 'Description'],
-        positionals.map((arg) => [`\`${spell(arg)}\``, describeArg(arg)]),
-    );
-    if (positionalTable) sections.push(positionalTable);
-
-    const optionTable = table(
-        ['Option', 'Description'],
-        options.map((arg) => [`\`${spell(arg)}\``, describeArg(arg)]),
-    );
-    if (optionTable) sections.push(optionTable);
+    for (const [label, entries] of [
+        ['Arguments', positionals],
+        ['Options', options],
+    ]) {
+        if (entries.length === 0) continue;
+        sections.push(
+            `<p class="man-label">${label}</p>`,
+            `<div class="man-options">\n\n${entries
+                .map((arg) => `- \`${spell(arg)}\`\n\n  ${describeArg(arg)}`)
+                .join('\n\n')}\n\n</div>`,
+        );
+    }
 
     if (subcommands.length > 0) {
         sections.push(
-            table(
-                ['Command', 'Description'],
-                subcommands.map((subcommand) => [
-                    `[\`${[...path, subcommand.name].join(' ')}\`](#${[...path, subcommand.name].join('-')})`,
-                    subcommand.about ? cell(subcommand.about) : '—',
-                ]),
-            ),
+            '<p class="man-label">Commands</p>',
+            `<div class="man-options">\n\n${subcommands
+                .map((subcommand) => {
+                    const words = [...path, subcommand.name];
+                    const link = `[\`${words.join(' ')}\`](#${words.join('-')})`;
+                    return subcommand.about
+                        ? `- ${link}\n\n  ${inlineProse(prose(subcommand.about))}`
+                        : `- ${link}`;
+                })
+                .join('\n\n')}\n\n</div>`,
         );
     }
 
     return [
-        sections.filter((section) => section !== '').join('\n\n'),
+        `<section class="man-cmd">\n\n${sections.join('\n\n')}\n\n</section>`,
         ...subcommands.map((subcommand) =>
             renderCommand(
                 subcommand,
@@ -1607,7 +1606,7 @@ export function renderConventionsPage(document) {
             '---',
             `title: ${yamlString(API_CONVENTIONS.label)}`,
             `description: ${yamlString(API_CONVENTIONS.description)}`,
-                ...generatedFrontmatter(
+            ...generatedFrontmatter(
                 'REST API',
                 `OpenAPI ${document.openapi}`,
                 OPENAPI_DOWNLOAD,
@@ -1869,58 +1868,47 @@ export function readBindingsSurface(root) {
  * Prose from a generated binding's doc comment, ready for a page body.
  *
  * The comments are Rust doc comments carried through a binding generator, so they keep
- * rustdoc's link forms. The `[text](path)` form is handled by [`rewriteLinks`]; the shorthand
- * ``[`item`]``, which rustdoc resolves by name, is unwrapped to its code span here, because
- * Markdown would otherwise print its brackets.
+ * rustdoc's link forms. The `[text](path)` form is handled by [`rewriteLinks`]. The shorthand
+ * ``[`item`]``, which rustdoc resolves by name, links to the item's entry when this page
+ * documents it, and is unwrapped to its code span otherwise, because Markdown would print its
+ * brackets.
  *
  * @param {string} doc
  * @param {number} offset Heading levels to demote by.
+ * @param {ReadonlyMap<string, string>} [anchors] Symbol name to in-page anchor.
  * @returns {string}
  */
-function docProse(doc, offset) {
-    return demoteHeadings(
-        rewriteLinks(doc).replace(/\[(`[^`\]]+`)\](?![([])/g, '$1'),
-        offset,
+export function docProse(doc, offset, anchors = new Map()) {
+    return demoteHeadings(docLinks(rewriteLinks(doc), anchors), offset);
+}
+
+/**
+ * rustdoc's ``[`item`]`` shorthand, resolved: a link to the item's entry when the page
+ * documents it, its bare code span otherwise.
+ *
+ * @param {string} text
+ * @param {ReadonlyMap<string, string>} anchors
+ * @returns {string}
+ */
+function docLinks(text, anchors) {
+    return text.replace(/\[`([^`\]]+)`\](?![([])/g, (_, name) =>
+        anchors.has(name)
+            ? `[\`${name}\`](#${anchors.get(name)})`
+            : `\`${name}\``,
     );
 }
 
 /**
- * One declaration, with its members under it.
+ * A doc comment flattened for a list item or a table cell, its shorthand links resolved.
  *
- * @param {SurfaceDeclaration} declaration
- * @param {string} fence The code-fence language.
- * @param {number} level Heading level of the declaration.
+ * @param {string} doc
+ * @param {ReadonlyMap<string, string>} anchors
+ * @param {'list' | 'cell'} context
  * @returns {string}
  */
-function renderDeclaration(declaration, fence, level) {
-    const sections = [
-        `${'#'.repeat(level)} \`${declaration.name}\``,
-        `\`\`\`${fence}\n${declaration.signature}\n\`\`\``,
-    ];
-    if (declaration.doc) sections.push(docProse(declaration.doc, level));
-    // Fields, cases, and properties read as one table; something a caller calls gets a
-    // heading of its own, so it has an anchor and a place in the table of contents.
-    const values = declaration.members.filter(
-        (member) => !CALLABLE.has(member.kind),
-    );
-    if (values.length > 0) {
-        sections.push(
-            table(
-                ['Member', 'Declaration', 'Description'],
-                values.map((member) => [
-                    codeSpan(member.name),
-                    escapePipes(codeSpan(member.signature)),
-                    cell(member.doc) || '—',
-                ]),
-            ),
-        );
-    }
-    for (const member of declaration.members) {
-        if (CALLABLE.has(member.kind)) {
-            sections.push(renderDeclaration(member, fence, level + 1));
-        }
-    }
-    return sections.join('\n\n');
+function oneLine(doc, anchors, context) {
+    const flat = docLinks(prose(doc), anchors);
+    return context === 'cell' ? escapeCell(flat) : inlineProse(flat);
 }
 
 /**
@@ -1935,73 +1923,441 @@ function codeSpan(text) {
     return text.includes('`') ? `\`\` ${text} \`\`` : `\`${text}\``;
 }
 
-/** Member kinds a caller calls, across the three languages. */
-const CALLABLE = new Set([
-    'func',
-    'static func',
-    'init',
-    'fun',
-    'constructor',
-    'method',
-]);
-
 /**
- * Headings for each declaration kind, in the order a page lists them. A kind missing from
- * this table is fatal: it would otherwise be rendered under no heading or not at all.
+ * Each SDK language's page layout, after the documentation tool its developers already read:
+ * Apple's DocC for Swift, Dokka for Kotlin, TypeDoc for the browser module.
+ *
+ * - `sections`: the page's declaration groups, in order. A declaration kind missing from
+ *   every group is fatal, because it would otherwise be rendered under no heading or not at
+ *   all.
+ * - `kinds`: the label each declaration kind is shown with, in that tool's words.
+ * - `topics`: how a type's members are grouped, in that tool's order. A member kind no topic
+ *   lists is fatal for the same reason.
+ * - `callable`: member kinds a caller calls. DocC and TypeDoc give each its own heading;
+ *   Dokka lists them in a table, as it does on a class page.
  */
-const KIND_SECTIONS = {
-    swift: [
-        ['Functions', ['func']],
-        ['Classes', ['class']],
-        ['Protocols', ['protocol']],
-        ['Structs', ['struct']],
-        ['Enums', ['enum']],
-    ],
-    kotlin: [
-        ['Functions', ['fun']],
-        ['Classes', ['class']],
-        ['Interfaces', ['interface']],
-        ['Data classes', ['data class']],
-        ['Enums and sealed classes', ['enum class', 'sealed class']],
-    ],
-    ts: [
-        ['Functions', ['function']],
-        ['Classes', ['class']],
-        ['Interfaces', ['interface']],
-        ['Enums', ['enum']],
-    ],
+export const SDK_STYLES = {
+    swift: {
+        tool: 'docc',
+        fence: 'swift',
+        sections: [
+            ['Functions', ['func']],
+            ['Classes', ['class']],
+            ['Protocols', ['protocol']],
+            ['Structures', ['struct']],
+            ['Enumerations', ['enum']],
+        ],
+        kinds: {
+            func: 'Function',
+            class: 'Class',
+            protocol: 'Protocol',
+            struct: 'Structure',
+            enum: 'Enumeration',
+        },
+        topics: [
+            ['Initializers', ['init']],
+            ['Type Methods', ['static func']],
+            ['Instance Methods', ['func']],
+            ['Instance Properties', ['field']],
+            ['Enumeration Cases', ['case']],
+        ],
+        callable: new Set(['init', 'static func', 'func']),
+    },
+    kotlin: {
+        tool: 'dokka',
+        fence: 'kotlin',
+        sections: [
+            ['Functions', ['fun']],
+            ['Classes', ['class']],
+            ['Interfaces', ['interface']],
+            ['Data classes', ['data class']],
+            ['Enums and sealed classes', ['enum class', 'sealed class']],
+        ],
+        kinds: {
+            fun: 'fun',
+            class: 'class',
+            interface: 'interface',
+            'data class': 'data class',
+            'enum class': 'enum',
+            'sealed class': 'sealed',
+        },
+        topics: [
+            ['Constructors', ['constructor']],
+            ['Functions', ['fun']],
+            ['Properties', ['field']],
+            ['Entries', ['entry']],
+            ['Inheritors', ['variant']],
+        ],
+        callable: new Set(),
+    },
+    ts: {
+        tool: 'typedoc',
+        fence: 'ts',
+        sections: [
+            ['Functions', ['function']],
+            ['Classes', ['class']],
+            ['Interfaces', ['interface']],
+            ['Enumerations', ['enum']],
+        ],
+        kinds: {
+            function: 'Function',
+            class: 'Class',
+            interface: 'Interface',
+            enum: 'Enumeration',
+        },
+        topics: [
+            ['Properties', ['property']],
+            ['Methods', ['method']],
+        ],
+        callable: new Set(['method']),
+    },
 };
 
 /**
- * The body of an SDK page: one section per declaration kind, in [`KIND_SECTIONS`] order.
+ * The first sentence of a doc comment: the one-line abstract DocC and Dokka show in a symbol
+ * list. Code spans are kept whole, so a `.` inside one does not end the sentence.
  *
- * @param {SurfaceDeclaration[]} declarations
- * @param {'swift' | 'kotlin' | 'ts'} fence
+ * @param {string} doc
+ * @returns {string}
+ */
+export function abstractOf(doc) {
+    const paragraph = doc
+        .trim()
+        .split(/\n\s*\n/)[0]
+        .replace(/\s*\n\s*/g, ' ');
+    let inCode = false;
+    for (let i = 0; i < paragraph.length; i += 1) {
+        if (paragraph[i] === '`') inCode = !inCode;
+        if (
+            !inCode &&
+            paragraph[i] === '.' &&
+            (i + 1 === paragraph.length || paragraph[i + 1] === ' ')
+        ) {
+            return paragraph.slice(0, i + 1);
+        }
+    }
+    return paragraph;
+}
+
+/**
+ * A TypeScript function or method signature, split the way TypeDoc shows it: each parameter
+ * with its type and whether it is optional, and the return type. `null` for a signature that
+ * is not a call (a property).
+ *
+ * @param {string} signature One line of the digest.
+ * @returns {{ parameters: Array<{ name: string, optional: boolean, type: string }>, returns: string } | null}
+ */
+export function tsSignature(signature) {
+    const open = signature.indexOf('(');
+    if (open === -1) return null;
+    let depth = 0;
+    let close = -1;
+    const cuts = [];
+    for (let i = open; i < signature.length; i += 1) {
+        const c = signature[i];
+        if ('(<[{'.includes(c)) depth += 1;
+        else if (')>]}'.includes(c)) {
+            depth -= 1;
+            if (depth === 0) {
+                close = i;
+                break;
+            }
+        } else if (c === ',' && depth === 1) cuts.push(i);
+    }
+    if (close === -1) return null;
+    const inner = signature.slice(open + 1, close);
+    const parameters = [];
+    if (inner.trim() !== '') {
+        let start = 0;
+        for (const cut of [...cuts.map((c) => c - open - 1), inner.length]) {
+            const part = inner.slice(start, cut).trim();
+            start = cut + 1;
+            const match = /^([\w$]+)(\??):\s*(.+)$/.exec(part);
+            if (!match) return null;
+            parameters.push({
+                name: match[1],
+                optional: match[2] === '?',
+                type: match[3],
+            });
+        }
+    }
+    const returns = /^\s*:\s*(.+?);?\s*$/.exec(signature.slice(close + 1));
+    return { parameters, returns: returns ? returns[1] : 'void' };
+}
+
+/**
+ * TypeDoc's Parameters and Returns blocks for a call signature, or `''` when the signature is
+ * not one.
+ *
+ * @param {string} signature
+ * @returns {string}
+ */
+function tsCallParts(signature) {
+    const parts = tsSignature(signature);
+    if (parts === null) return '';
+    const blocks = [];
+    if (parts.parameters.length > 0) {
+        blocks.push(
+            '<p class="sdk-label">Parameters</p>',
+            parts.parameters
+                .map(
+                    ({ name, optional, type }) =>
+                        `- \`${name}${optional ? '?' : ''}\`: ${codeSpan(type)}`,
+                )
+                .join('\n'),
+        );
+    }
+    blocks.push('<p class="sdk-label">Returns</p>', codeSpan(parts.returns));
+    return blocks.join('\n\n');
+}
+
+/**
+ * The kind label a declaration is shown with, as the small eyebrow or chip above its name.
+ *
+ * @param {object} style One of [`SDK_STYLES`].
+ * @param {string} kind
+ * @returns {string}
+ */
+function kindChip(style, kind) {
+    return `<p class="sdk-kind" data-kind="${kind.replace(/\s+/g, '-')}">${style.kinds[kind] ?? kind}</p>`;
+}
+
+/**
+ * A type's members, grouped by `style.topics`: callables as headings of their own (DocC,
+ * TypeDoc), values as a list, and in Dokka every member as a table row.
+ *
+ * @param {SurfaceDeclaration} declaration
+ * @param {object} style
+ * @param {number} level Heading level of the declaration.
+ * @param {ReadonlyMap<string, string>} anchors
  * @param {string} source The artifact, for error messages.
  * @returns {string}
  */
-function renderDeclarations(declarations, fence, source) {
-    const sections = KIND_SECTIONS[fence];
-    const known = new Set(sections.flatMap(([, kinds]) => kinds));
+function renderMembers(declaration, style, level, anchors, source) {
+    const known = new Set(style.topics.flatMap(([, kinds]) => kinds));
+    for (const member of declaration.members) {
+        if (!known.has(member.kind)) {
+            throw new Error(
+                `${source}: ${declaration.name}.${member.name} is a ${member.kind}, which no ` +
+                    `topic of the ${style.fence} page lists. Add it to SDK_STYLES in ${GENERATED_BY}.`,
+            );
+        }
+    }
+    const blocks = [];
+    for (const [topic, kinds] of style.topics) {
+        const members = declaration.members.filter((m) =>
+            kinds.includes(m.kind),
+        );
+        if (members.length === 0) continue;
+        blocks.push(`<p class="sdk-label">${topic}</p>`);
+        if (
+            style.tool !== 'dokka' &&
+            kinds.some((kind) => style.callable.has(kind))
+        ) {
+            for (const member of members) {
+                const sections = [
+                    `${'#'.repeat(level + 1)} \`${member.name}\``,
+                    `\`\`\`${style.fence} wrap\n${member.signature}\n\`\`\``,
+                ];
+                if (member.doc) {
+                    sections.push(docProse(member.doc, level + 1, anchors));
+                }
+                if (style.tool === 'typedoc') {
+                    const call = tsCallParts(member.signature);
+                    if (call) sections.push(call);
+                }
+                blocks.push(sections.join('\n\n'));
+            }
+            continue;
+        }
+        // Values (and, in Dokka, every member): one row each. Dokka sets the name beside
+        // the signature and its full KDoc; DocC and TypeDoc list the declaration and its
+        // description. The description keeps its paragraphs and lists, nested in the item.
+        const items = members.map((member) => {
+            const lines =
+                style.tool === 'dokka'
+                    ? [
+                          `- ${codeSpan(member.name)}`,
+                          `\`\`\`${style.fence} wrap\n${member.signature}\n\`\`\``,
+                      ]
+                    : [`- ${codeSpan(member.signature)}`];
+            if (member.doc) {
+                lines.push(docProse(member.doc, level + 2, anchors));
+            }
+            return [lines[0], ...lines.slice(1).map(indentItem)].join('\n\n');
+        });
+        blocks.push(
+            `<div class="sdk-members" data-tool="${style.tool}">\n\n${items.join('\n\n')}\n\n</div>`,
+        );
+    }
+    return blocks.join('\n\n');
+}
+
+/**
+ * `block` indented to continue a list item: every non-blank line by two spaces, so its
+ * paragraphs, lists and fences stay inside the item.
+ *
+ * @param {string} block
+ * @returns {string}
+ */
+function indentItem(block) {
+    return block
+        .split('\n')
+        .map((line) => (line.trim() === '' ? '' : `  ${line}`))
+        .join('\n');
+}
+
+/**
+ * One top-level declaration in its language's layout.
+ *
+ * - DocC: kind eyebrow, name, abstract, Declaration, Overview, then Topics.
+ * - Dokka: kind chip, name, signature, description, then member tables.
+ * - TypeDoc: kind chip, name, signature, description, Parameters and Returns, members, and
+ *   where it is defined.
+ *
+ * @param {SurfaceDeclaration} declaration
+ * @param {object} style
+ * @param {ReadonlyMap<string, string>} anchors
+ * @param {string} source
+ * @returns {string}
+ */
+function renderSymbol(declaration, style, anchors, source) {
+    const level = 3;
+    const signature = `\`\`\`${style.fence} wrap\n${declaration.signature}\n\`\`\``;
+    const sections = [
+        `<section class="sdk-symbol" data-tool="${style.tool}">`,
+        kindChip(style, declaration.kind),
+        `${'#'.repeat(level)} \`${declaration.name}\``,
+    ];
+    if (style.tool === 'docc') {
+        const abstract = declaration.doc ? abstractOf(declaration.doc) : '';
+        const overview = declaration.doc
+            ? declaration.doc.trim().slice(abstract.length).trim()
+            : '';
+        if (abstract) {
+            sections.push(
+                `<div class="sdk-abstract">\n\n${docProse(abstract, level, anchors)}\n\n</div>`,
+            );
+        }
+        sections.push('<p class="sdk-label">Declaration</p>', signature);
+        if (overview) {
+            sections.push(
+                '<p class="sdk-label">Overview</p>',
+                docProse(overview, level, anchors),
+            );
+        }
+    } else {
+        sections.push(signature);
+        if (declaration.doc) {
+            sections.push(docProse(declaration.doc, level, anchors));
+        }
+        if (style.tool === 'typedoc' && declaration.kind === 'function') {
+            const call = tsCallParts(declaration.signature);
+            if (call) sections.push(call);
+        }
+    }
+    const members = renderMembers(declaration, style, level, anchors, source);
+    if (members) {
+        if (style.tool === 'docc') {
+            sections.push('<p class="sdk-label sdk-topics">Topics</p>');
+        }
+        sections.push(members);
+    }
+    if (style.tool === 'typedoc') {
+        sections.push(
+            `<p class="sdk-source">Defined in <code>${source.split('/').pop()}</code></p>`,
+        );
+    }
+    sections.push('</section>');
+    return sections.join('\n\n');
+}
+
+/**
+ * The page's symbol index, in the tool's own form: DocC's Topics (name and abstract), Dokka's
+ * package summary table, TypeDoc's Index of names grouped by kind.
+ *
+ * @param {Array<[string, SurfaceDeclaration[]]>} groups
+ * @param {object} style
+ * @param {ReadonlyMap<string, string>} anchors
+ * @returns {string}
+ */
+function renderSymbolIndex(groups, style, anchors) {
+    const link = (d) => `[\`${d.name}\`](#${anchors.get(d.name)})`;
+    const body = groups.map(([heading, declarations]) => {
+        const label = `<p class="sdk-label">${heading}</p>`;
+        if (style.tool === 'dokka') {
+            return [
+                label,
+                table(
+                    ['Name', 'Summary'],
+                    declarations.map((d) => [
+                        link(d),
+                        d.doc
+                            ? oneLine(abstractOf(d.doc), anchors, 'cell')
+                            : '—',
+                    ]),
+                ),
+            ].join('\n\n');
+        }
+        if (style.tool === 'docc') {
+            return [
+                label,
+                declarations
+                    .map((d) =>
+                        d.doc
+                            ? `- ${link(d)}\n\n  ${oneLine(abstractOf(d.doc), anchors, 'list')}`
+                            : `- ${link(d)}`,
+                    )
+                    .join('\n\n'),
+            ].join('\n\n');
+        }
+        return [label, declarations.map((d) => `- ${link(d)}`).join('\n')].join(
+            '\n\n',
+        );
+    });
+    return [
+        `<nav class="sdk-index" data-tool="${style.tool}" aria-label="On this page">`,
+        ...body,
+        '</nav>',
+    ].join('\n\n');
+}
+
+/**
+ * The body of an SDK page: the symbol index, then one section per declaration group, in
+ * [`SDK_STYLES`] order.
+ *
+ * @param {SurfaceDeclaration[]} declarations
+ * @param {'swift' | 'kotlin' | 'ts'} language
+ * @param {string} source The artifact, for error messages.
+ * @returns {string}
+ */
+export function renderDeclarations(declarations, language, source) {
+    const style = SDK_STYLES[language];
+    const known = new Set(style.sections.flatMap(([, kinds]) => kinds));
     for (const declaration of declarations) {
         if (!known.has(declaration.kind)) {
             throw new Error(
                 `${source}: ${declaration.name} is a ${declaration.kind}, which no section of ` +
-                    `the ${fence} page lists. Add the kind to KIND_SECTIONS in ${GENERATED_BY}.`,
+                    `the ${language} page lists. Add the kind to SDK_STYLES in ${GENERATED_BY}.`,
             );
         }
     }
-    return sections
-        .map(([heading, kinds]) => {
-            const matching = declarations.filter((d) => kinds.includes(d.kind));
-            if (matching.length === 0) return '';
-            return [
+    const anchors = new Map(declarations.map((d) => [d.name, slugify(d.name)]));
+    const groups = style.sections
+        .map(([heading, kinds]) => [
+            heading,
+            declarations.filter((d) => kinds.includes(d.kind)),
+        ])
+        .filter(([, matching]) => matching.length > 0);
+    return [
+        renderSymbolIndex(groups, style, anchors),
+        ...groups.map(([heading, matching]) =>
+            [
                 `## ${heading}`,
-                ...matching.map((d) => renderDeclaration(d, fence, 3)),
-            ].join('\n\n');
-        })
-        .filter(Boolean)
-        .join('\n\n');
+                ...matching.map((d) => renderSymbol(d, style, anchors, source)),
+            ].join('\n\n'),
+        ),
+    ].join('\n\n');
 }
 
 /**

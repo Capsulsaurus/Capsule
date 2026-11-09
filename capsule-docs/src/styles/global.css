@@ -7,6 +7,7 @@
  */
 @import "tailwindcss";
 @import "./api-reference.css";
+@import "./sdk-reference.css";
 
 /* Upstream Geist 1.9 variable cuts, vendored in src/assets/fonts (see its
    README). Vite fingerprints them into /_astro/, which public/_headers marks
@@ -337,7 +338,7 @@
     height: auto;
 }
 
-.sl-markdown-content .diagram figcaption {
+.sl-markdown-content figure.diagram figcaption {
     margin-top: 0.5rem;
     color: var(--sl-color-gray-3);
     font-size: var(--sl-text-sm);

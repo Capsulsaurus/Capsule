@@ -115,7 +115,11 @@ one is designed.
   document. A REST page opens with an index of its endpoints, each a method pill and path, and its schemas, and lays
   every operation out as the reference (parameters and responses as field lists) beside a sticky
   panel with an example `curl` request and example success bodies. Method pills are coloured by
-  method and status dots by class, from Starlight's semantic colours.
+  method and status dots by class, from Starlight's semantic colours. Every other generated page
+  is laid out the way its readers' own tool lays it out: DocC for Swift (kind eyebrow, abstract,
+  Declaration, Overview, Topics), Dokka for Kotlin (name beside signature and KDoc), TypeDoc for
+  the browser module (kind chips, Parameters, Returns, where it is defined) and a man page for the
+  CLI (Synopsis, Description, Options). A generated page carries no review status.
 - **The blog goes live with its first post.** Until a post is published the production site has no
   blog route, header link, RSS feed, sitemap entry or footer link, so no reader lands on an empty
   index.

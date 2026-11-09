@@ -12,11 +12,13 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+    abstractOf,
     BINDINGS_SURFACE,
     bucketOperations,
     CLI_SURFACE,
     curlExample,
     demoteHeadings,
+    docProse,
     exampleFor,
     generate,
     OPENAPI_DOCUMENT,
@@ -32,6 +34,7 @@ import {
     renderCliPage,
     renderConventionsPage,
     renderWasmPage,
+    tsSignature,
     WASM_SURFACE,
 } from './gen-reference.mjs';
 import { headingAnchors } from './lib/markdown.mjs';
@@ -552,27 +555,25 @@ describe('renderCliPage', () => {
         expect(page).not.toContain('pass a <token> here');
     });
 
-    // The defect a per-fragment escape reintroduces: the help text is escaped, the fragments
-    // appended after it are not, and a `|` in a default opens a column of its own.
-    it('escapes a pipe in a default value and in an enumerated value', () => {
+    // Options are a man-page list, not a table, so a `|` in a default or an enumerated value
+    // is shown as written rather than escaped for a column it is not in.
+    it('shows a pipe in a default value and in an enumerated value as written', () => {
         const surface = structuredClone(MINIMAL_CLI);
         surface.subcommands[0].args[1].possible_values = [{ name: 'x|y' }];
         surface.subcommands[0].args[1].default_values = ['a|b'];
         const page = renderCliPage(surface);
-        expect(page).toContain('Values: `x\\|y`.');
-        expect(page).toContain('Default: `a\\|b`.');
-        expect(page).not.toContain('`x|y`');
-        expect(page).not.toContain('`a|b`');
+        expect(page).toContain('Values: `x|y`.');
+        expect(page).toContain('Default: `a|b`.');
     });
 
-    it('keeps every table row at the width of its header', () => {
-        const surface = structuredClone(MINIMAL_CLI);
-        surface.subcommands[0].args[1].default_values = ['a|b'];
-        surface.subcommands[0].args[2].help = 'takes a | and a <tag>';
-        for (const line of renderCliPage(surface).split('\n')) {
-            if (!line.startsWith('|')) continue;
-            expect(columnsOf(line)).toBe(4);
+    it('lays each command out as a man page', () => {
+        const page = renderCliPage(MINIMAL_CLI);
+        expect(page).toContain('<section class="man-cmd">');
+        for (const label of ['Synopsis', 'Options', 'Commands']) {
+            expect(page).toContain(`<p class="man-label">${label}</p>`);
         }
+        expect(page).toContain('<div class="man-options">');
+        expect(page).toMatch(/^- \[`capsule import`\]\(#capsule-import\)$/m);
     });
 
     // A pipe the help text already escapes must not gain a second backslash: `a\\|b` is an
@@ -583,10 +584,6 @@ describe('renderCliPage', () => {
         const page = renderCliPage(surface);
         expect(page).toContain('matches a\\|b, or c \\ d');
         expect(page).not.toContain('a\\\\|b');
-        for (const line of page.split('\n')) {
-            if (!line.startsWith('|')) continue;
-            expect(columnsOf(line)).toBe(4);
-        }
     });
 
     it('does not append "Repeatable." when the help already says it', () => {
@@ -627,30 +624,6 @@ describe('renderCliPage', () => {
         expect(page).toContain(
             '**Required.** Source file or directory to import. Repeatable.',
         );
-    });
-
-    it('escapes a pipe so it cannot break out of a table cell', () => {
-        const page = renderCliPage({
-            schema: 1,
-            name: 'capsule',
-            subcommands: [
-                {
-                    name: 'x',
-                    args: [
-                        {
-                            id: 'p',
-                            long: 'p',
-                            positional: false,
-                            required: false,
-                            repeatable: false,
-                            takes_value: false,
-                            help: 'reads a | b',
-                        },
-                    ],
-                },
-            ],
-        });
-        expect(page).toContain('reads a \\| b');
     });
 });
 
@@ -805,7 +778,7 @@ describe('the SDK pages', () => {
         expect(page).toContain('## Functions');
         expect(page).toContain('### `shareIsPassphraseProtected`');
         expect(page).toContain(
-            '```ts\nexport function shareIsPassphraseProtected(wrapped_scope_b64: string): boolean;\n```',
+            '```ts wrap\nexport function shareIsPassphraseProtected(wrapped_scope_b64: string): boolean;\n```',
         );
         expect(page).toContain('## Classes');
         expect(page).toContain('#### `scopeKind`');
@@ -819,10 +792,10 @@ describe('the SDK pages', () => {
     it('renders each binding language from its own half of the dump', () => {
         const swiftPage = renderBindingsPage(swift, MINIMAL_BINDINGS);
         const kotlinPage = renderBindingsPage(kotlin, MINIMAL_BINDINGS);
-        expect(swiftPage).toContain('```swift\nopen class FfiWorkspace');
+        expect(swiftPage).toContain('```swift wrap\nopen class FfiWorkspace');
         expect(swiftPage).toContain('#### `sealAsset`');
         expect(swiftPage).not.toContain('```kotlin');
-        expect(kotlinPage).toContain('```kotlin\nfun `evaluateAlerts`');
+        expect(kotlinPage).toContain('```kotlin wrap\nfun `evaluateAlerts`');
         expect(kotlinPage).not.toContain('FfiWorkspace');
         // Functions are listed before classes, whatever order the dump holds them in.
         expect(swiftPage.indexOf('## Functions')).toBeLessThan(
@@ -886,6 +859,105 @@ describe('the SDK pages', () => {
             ...SDK_PAGES.map((page) => `reference/sdk/${page.slug}`),
         ]);
         expect(sidebar.at(-1)).toBe(sdk);
+    });
+});
+
+describe('the native SDK layouts', () => {
+    const swift = SDK_PAGES.find((page) => page.slug === 'swift');
+    const kotlin = SDK_PAGES.find((page) => page.slug === 'kotlin');
+    const wasm = SDK_PAGES.find((page) => page.slug === 'wasm');
+
+    it('lays Swift out as DocC: eyebrow, abstract, Declaration, Topics', () => {
+        const page = renderBindingsPage(swift, MINIMAL_BINDINGS);
+        expect(page).toContain('<nav class="sdk-index" data-tool="docc"');
+        expect(page).toContain('<section class="sdk-symbol" data-tool="docc">');
+        expect(page).toContain(
+            '<p class="sdk-kind" data-kind="class">Class</p>',
+        );
+        expect(page).toContain('<p class="sdk-label">Declaration</p>');
+        expect(page).toContain('<p class="sdk-label sdk-topics">Topics</p>');
+        expect(page).toContain('<p class="sdk-label">Instance Methods</p>');
+        expect(page).toMatch(/^#### `sealAsset`$/m);
+        // The abstract is the first sentence; the rest is the Overview.
+        expect(page).toMatch(
+            /<div class="sdk-abstract">\n\nA local workspace\.\n\n<\/div>/,
+        );
+        expect(page).toContain('<p class="sdk-label">Overview</p>');
+    });
+
+    it('lays Kotlin out as Dokka: kind chip, summary table', () => {
+        const page = renderBindingsPage(kotlin, MINIMAL_BINDINGS);
+        expect(page).toContain('<nav class="sdk-index" data-tool="dokka"');
+        expect(page).toContain('<p class="sdk-kind" data-kind="fun">fun</p>');
+        expect(page).toContain('| Name | Summary |');
+        expect(page).toContain(
+            '| [`evaluateAlerts`](#evaluatealerts) | Evaluate alerts. |',
+        );
+    });
+
+    it('lays the browser module out as TypeDoc: chips, Parameters, Returns, source', () => {
+        const page = renderWasmPage(wasm, parseWasmSurface(MINIMAL_WASM));
+        expect(page).toContain('<nav class="sdk-index" data-tool="typedoc"');
+        expect(page).toContain(
+            '<p class="sdk-kind" data-kind="function">Function</p>',
+        );
+        expect(page).toContain('<p class="sdk-label">Parameters</p>');
+        expect(page).toContain('- `wrapped_scope_b64`: `string`');
+        expect(page).toContain('<p class="sdk-label">Returns</p>');
+        expect(page).toContain('<p class="sdk-label">Methods</p>');
+        expect(page).toContain('<p class="sdk-label">Properties</p>');
+        expect(page).toContain(
+            '<p class="sdk-source">Defined in <code>wasm-surface.d.ts</code></p>',
+        );
+    });
+
+    it('refuses a member kind no topic lists', () => {
+        const bindings = structuredClone(MINIMAL_BINDINGS);
+        bindings.languages.swift.declarations[0].members[0].kind = 'subscript';
+        expect(() => renderBindingsPage(swift, bindings)).toThrow(
+            /subscript, which no topic/,
+        );
+    });
+
+    it('links a rustdoc shorthand to a symbol on the page, and unwraps one that is not', () => {
+        const anchors = new Map([['ShareScope', 'sharescope']]);
+        expect(docProse('See [`ShareScope`].', 0, anchors)).toBe(
+            'See [`ShareScope`](#sharescope).',
+        );
+        expect(docProse('See [`FfiSession`].', 0, anchors)).toBe(
+            'See `FfiSession`.',
+        );
+    });
+
+    it('takes the first sentence as the abstract, ignoring a full stop inside code', () => {
+        expect(abstractOf('Reads `a.b` first. Then more.')).toBe(
+            'Reads `a.b` first.',
+        );
+        expect(abstractOf('No full stop')).toBe('No full stop');
+        expect(abstractOf('One.\n\nTwo.')).toBe('One.');
+    });
+
+    it('splits a TypeScript signature into parameters and a return type', () => {
+        expect(
+            tsSignature(
+                'export function f(a: string, b?: Map<string, number> | null): Out;',
+            ),
+        ).toEqual({
+            parameters: [
+                { name: 'a', optional: false, type: 'string' },
+                {
+                    name: 'b',
+                    optional: true,
+                    type: 'Map<string, number> | null',
+                },
+            ],
+            returns: 'Out',
+        });
+        expect(tsSignature('free(): void;')).toEqual({
+            parameters: [],
+            returns: 'void',
+        });
+        expect(tsSignature('readonly size: number;')).toBeNull();
     });
 });
 
