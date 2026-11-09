@@ -11,7 +11,7 @@ generated from the code and verified in CI.
 
 | Page | Surface | Who uses it |
 | --- | --- | --- |
-| [](/reference/sdk/rust/) | the `capsule-sdk` crate ([rustdoc](https://capsulsaurus.github.io/Capsule/capsule_sdk/)) | the CLI and TUI, and every binding below |
+| [](/reference/sdk/rust/) | the `capsule-sdk` crate ([rustdoc](/rustdoc/capsule_sdk/)) | the CLI and TUI, and every binding below |
 | [](/reference/sdk/swift/) | the `capsule_sdk` uniffi namespace | the iOS, iPadOS and macOS apps |
 | [](/reference/sdk/kotlin/) | the `capsule_sdk` uniffi namespace | the Android app |
 | [](/reference/sdk/wasm/) | the `capsule-wasm` module | the web client's share viewer and guest uploader |

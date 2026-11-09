@@ -12,4 +12,4 @@ section's overview; how is [](/design/developer-docs/).
 | REST | [](/reference/api/) |
 | Command line | [](/reference/cli/) |
 | Swift, Kotlin and browser | [](/reference/sdk/) |
-| Rust crates | [rustdoc on GitHub Pages](https://capsulsaurus.github.io/Capsule/), mapped by [](/reference/sdk/rust/) |
+| Rust crates | [rustdoc](/rustdoc/), mapped by [](/reference/sdk/rust/) |

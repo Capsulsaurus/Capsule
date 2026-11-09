@@ -33,3 +33,6 @@ pnpm-debug.log*
 
 # macOS-specific files
 .DS_Store
+
+# wrangler pages dev state (bun run preview)
+.wrangler/
