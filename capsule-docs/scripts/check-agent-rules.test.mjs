@@ -1,8 +1,13 @@
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { checkAgentRules, parseRulePaths } from './check-agent-rules.mjs';
+import {
+    checkAgentRules,
+    parseRulePaths,
+    trackedFiles,
+} from './check-agent-rules.mjs';
 
 let root;
 
@@ -72,6 +77,29 @@ describe('parseRulePaths', () => {
         expect(
             parseRulePaths('﻿---\r\npaths:\r\n  - "a/**"\r\n---\r\n'),
         ).toEqual(['a/**']);
+    });
+
+    it('keeps a brace glob whole inside an inline list', () => {
+        expect(
+            parseRulePaths('---\npaths: ["a/{x,y}/**", \'b,c/*\']\n---\n'),
+        ).toEqual(['a/{x,y}/**', 'b,c/*']);
+    });
+});
+
+describe('trackedFiles', () => {
+    it('lists the git index, not untracked files, inside a work tree', () => {
+        const r = repo({
+            'capsule-core/Cargo.toml': '',
+            'scratch/notes.md': '',
+        });
+        execFileSync('git', ['init', '-q'], { cwd: r });
+        execFileSync('git', ['add', 'capsule-core/Cargo.toml'], { cwd: r });
+        expect(trackedFiles(r)).toEqual(['capsule-core/Cargo.toml']);
+    });
+
+    it('walks the filesystem outside a work tree', () => {
+        const r = repo({ 'a/b.md': '' });
+        expect(trackedFiles(r)).toEqual(['a/b.md']);
     });
 });
 

@@ -65,6 +65,38 @@ function scalar(value) {
 }
 
 /**
+ * Split an inline YAML list body on the commas that separate items, not the
+ * ones inside a brace glob (`"a/{x,y}/**"`) or a quoted string.
+ *
+ * @param {string} body
+ * @returns {string[]}
+ */
+function splitInline(body) {
+    const items = [];
+    let depth = 0;
+    let quote = null;
+    let current = '';
+    for (const ch of body) {
+        if (quote) {
+            if (ch === quote) quote = null;
+        } else if (ch === '"' || ch === "'") {
+            quote = ch;
+        } else if (ch === '{') {
+            depth += 1;
+        } else if (ch === '}') {
+            depth -= 1;
+        } else if (ch === ',' && depth === 0) {
+            items.push(current);
+            current = '';
+            continue;
+        }
+        current += ch;
+    }
+    items.push(current);
+    return items;
+}
+
+/**
  * The `paths:` globs from a rule file's YAML front matter, or null when there
  * is no front matter or no `paths` key. Reads the block-list form (indented or
  * not, with blank and comment lines inside it) and the inline `[a, b]` form.
@@ -81,7 +113,7 @@ export function parseRulePaths(text) {
     if (start === -1) return null;
 
     const inline = /^paths:\s*\[(.*)\]\s*$/.exec(lines[start]);
-    if (inline) return inline[1].split(',').map(scalar).filter(Boolean);
+    if (inline) return splitInline(inline[1]).map(scalar).filter(Boolean);
 
     const globs = [];
     for (const line of lines.slice(start + 1)) {
@@ -96,24 +128,24 @@ export function parseRulePaths(text) {
 /**
  * Repo-relative paths of every tracked file that is still on disk, so a glob
  * that only matches build output or an uncommitted file fails here as it would
- * on a CI checkout. Falls back to a filesystem walk outside a git work tree,
- * which is where the unit tests' fixtures live.
+ * on a CI checkout.
+ *
+ * A filesystem walk stands in only when `root` is not a git work tree at all,
+ * which is where the unit tests' fixtures live. Inside one, a failing `git`
+ * (missing, or refusing a "dubious ownership" checkout) is an error: falling
+ * back there would quietly count untracked files and pass what CI fails.
  *
  * @param {string} root
  * @returns {string[]}
  */
 export function trackedFiles(root) {
-    let listed;
-    try {
-        listed = execFileSync('git', ['ls-files', '-z'], {
-            cwd: root,
-            encoding: 'utf8',
-            stdio: ['ignore', 'pipe', 'ignore'],
-            maxBuffer: 64 * 1024 * 1024,
-        });
-    } catch {
-        return walkFiles(root, () => true);
-    }
+    if (!existsSync(join(root, '.git'))) return walkFiles(root, () => true);
+    const listed = execFileSync('git', ['ls-files', '-z'], {
+        cwd: root,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'inherit'],
+        maxBuffer: 64 * 1024 * 1024,
+    });
     return listed
         .split('\0')
         .filter((rel) => rel !== '' && existsSync(join(root, rel)));
