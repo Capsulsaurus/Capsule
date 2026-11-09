@@ -814,9 +814,8 @@ describe('the SDK pages', () => {
             renderBindingsPage(swift, MINIMAL_BINDINGS),
             renderBindingsPage(kotlin, MINIMAL_BINDINGS),
         ]) {
-            expect(page).toMatch(
-                /^---\n[\s\S]*?^status: stable$[\s\S]*?^---$/m,
-            );
+            const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec(page);
+            expect(frontmatter?.[1]).toMatch(/^status: stable$/m);
         }
     });
 

@@ -9,6 +9,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { isDraftPost } from '../src/lib/blog-posts.mjs';
 import { frontmatterStatus } from './lib/markdown.mjs';
 
 const DOCS = join(
@@ -50,5 +51,17 @@ describe('docs pages', () => {
             return status !== 'draft' && status !== 'stable';
         });
         expect(unmarked).toEqual([]);
+    });
+
+    it('marks every published blog post stable', () => {
+        // A published post is reviewed: it must never show a Draft badge.
+        const unreviewed = pages.filter((rel) => {
+            if (!rel.startsWith('blog/')) return false;
+            const source = readFileSync(join(DOCS, rel), 'utf8');
+            return (
+                !isDraftPost(source) && frontmatterStatus(source) !== 'stable'
+            );
+        });
+        expect(unreviewed).toEqual([]);
     });
 });
