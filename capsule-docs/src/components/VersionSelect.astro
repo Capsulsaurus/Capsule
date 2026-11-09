@@ -1,8 +1,9 @@
 ---
 // The docs version switcher: Latest (master, at /) and every released
-// version (/v/X.Y/). The released list is /versions.json on production, read
-// at runtime, so an old version's switcher lists the releases after it
-// without being rebuilt. Hidden until there is a release to switch to. The
+// version (/v/X.Y/). Always shown, so a reader can see which version they are
+// reading; until a release exists it holds this build's version alone. The
+// released list is /versions.json on production, read at runtime, so an old
+// version's switcher lists the releases after it without being rebuilt. The
 // URL layout is src/lib/docs-version.mjs.
 
 // Set in astro.config.mjs: the release this build is, or null for Latest.
@@ -10,9 +11,9 @@ declare const __DOCS_VERSION__: string | null;
 const current = __DOCS_VERSION__;
 ---
 
-<capsule-version-select data-current={current ?? ''} hidden>
+<capsule-version-select data-current={current ?? ''}>
   <select aria-label="Docs version">
-    <option value="">{current ? `v${current}` : 'Latest'}</option>
+    <option value="" selected>{current ? `v${current}` : 'Latest'}</option>
   </select>
 </capsule-version-select>
 
@@ -33,6 +34,8 @@ const current = __DOCS_VERSION__;
         const response = await fetch('/versions.json', { cache: 'no-cache' });
         versions = releasedVersions(await response.json());
       } catch {
+        // No list (offline, or a preview without it): the switcher keeps
+        // naming this build's version and offers nothing to switch to.
         return;
       }
       if (versions.length === 0) return;
@@ -43,7 +46,6 @@ const current = __DOCS_VERSION__;
           (v) => new Option(`v${v}`, `/v/${v}/`, false, v === current),
         ),
       );
-      this.hidden = false;
       const fromBase = normalizeBase(import.meta.env.BASE_URL);
       select.addEventListener('change', async () => {
         const toBase = select.value;
@@ -60,10 +62,16 @@ const current = __DOCS_VERSION__;
 </script>
 
 <style>
+  capsule-version-select {
+    display: inline-flex;
+  }
+
+  /* A pill the height of the theme toggle beside it. */
   select {
-    padding: 0.25rem 1.75rem 0.25rem 0.625rem;
-    border: 1px solid var(--sl-color-gray-5);
-    border-radius: 999px;
+    height: var(--capsule-control-size);
+    padding-inline: 0.75rem 1.75rem;
+    border: 1px solid var(--capsule-control-border);
+    border-radius: var(--capsule-radius-pill);
     background-color: transparent;
     color: var(--sl-color-gray-2);
     font-size: var(--sl-text-xs);
@@ -71,8 +79,15 @@ const current = __DOCS_VERSION__;
     cursor: pointer;
   }
 
-  select:hover {
+  /* With nothing to switch to, it is a label, not a control. */
+  select:has(option:only-child) {
+    cursor: default;
+  }
+
+  select:hover,
+  select:focus-visible {
     color: var(--sl-color-white);
-    border-color: var(--sl-color-gray-3);
+    border-color: var(--capsule-control-border-hover);
+    background-color: var(--sl-color-gray-6);
   }
 </style>

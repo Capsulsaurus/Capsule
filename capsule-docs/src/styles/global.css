@@ -63,6 +63,14 @@
     --capsule-radius-card: 12px;
     --capsule-radius-md: 16px;
     --capsule-radius-lg: 22px;
+    /* Fully rounded ends, for pills: header links, controls, badges, tags. */
+    --capsule-radius-pill: 999px;
+
+    /* Header controls (version switcher, theme toggle): one height, and a
+       hairline border that firms up on hover. */
+    --capsule-control-size: 2.25rem;
+    --capsule-control-border: var(--sl-color-gray-5);
+    --capsule-control-border-hover: var(--sl-color-gray-3);
 
     --sl-font:
         "Geist", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji",
