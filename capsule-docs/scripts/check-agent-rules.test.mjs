@@ -1,0 +1,244 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { checkAgentRules, parseRulePaths } from './check-agent-rules.mjs';
+
+let root;
+
+/** Materialize a throwaway repository from a path -> contents map. */
+function repo(files) {
+    root = mkdtempSync(join(tmpdir(), 'capsule-agent-rules-'));
+    for (const [rel, contents] of Object.entries(files)) {
+        const abs = join(root, rel);
+        mkdirSync(dirname(abs), { recursive: true });
+        writeFileSync(abs, contents);
+    }
+    return root;
+}
+
+/** A rule file scoped to `globs`. */
+function rule(...globs) {
+    return `---\npaths:\n${globs.map((g) => `  - "${g}"`).join('\n')}\n---\n\n# Rule\n`;
+}
+
+/** An `AGENTS.md` whose index links every named rule file. */
+function index(...names) {
+    return `# Repo\n\n${names.map((n) => `- [${n}](.claude/rules/${n}.md)`).join('\n')}\n`;
+}
+
+afterEach(() => {
+    if (root) rmSync(root, { recursive: true, force: true });
+    root = undefined;
+});
+
+describe('parseRulePaths', () => {
+    it('reads a quoted and an unquoted block list', () => {
+        expect(
+            parseRulePaths(
+                '---\npaths:\n  - "a/**"\n  - b/*.rs\n  - \'c/{x,y}.md\'\n---\nbody\n',
+            ),
+        ).toEqual(['a/**', 'b/*.rs', 'c/{x,y}.md']);
+    });
+
+    it('returns null without front matter or without a paths key', () => {
+        expect(parseRulePaths('# Rule\n')).toBeNull();
+        expect(parseRulePaths('---\ndescription: x\n---\n')).toBeNull();
+    });
+
+    it('stops at the next key', () => {
+        expect(
+            parseRulePaths('---\npaths:\n  - "a/**"\nother: 1\n---\n'),
+        ).toEqual(['a/**']);
+    });
+
+    it('reads past blank and comment lines inside the list', () => {
+        // Ending the list early would leave the later globs unchecked.
+        expect(
+            parseRulePaths(
+                '---\npaths:\n  - "a/**"\n\n  # apps\n  - "b/**" # web\n---\n',
+            ),
+        ).toEqual(['a/**', 'b/**']);
+    });
+
+    it('reads an unindented list, an inline list, CRLF and a BOM', () => {
+        expect(parseRulePaths('---\npaths:\n- "a/**"\n---\n')).toEqual([
+            'a/**',
+        ]);
+        expect(parseRulePaths('---\npaths: ["a/**", b/*.rs]\n---\n')).toEqual([
+            'a/**',
+            'b/*.rs',
+        ]);
+        expect(
+            parseRulePaths('﻿---\r\npaths:\r\n  - "a/**"\r\n---\r\n'),
+        ).toEqual(['a/**']);
+    });
+});
+
+describe('checkAgentRules', () => {
+    it('passes a covered crate whose rule is indexed', () => {
+        const { findings, checked } = checkAgentRules(
+            repo({
+                'AGENTS.md': index('core'),
+                '.claude/rules/core.md': rule('capsule-core/**'),
+                'capsule-core/Cargo.toml': '',
+                'capsule-core/src/lib.rs': '',
+            }),
+        );
+        expect(findings).toEqual([]);
+        expect(checked).toBe(1);
+    });
+
+    it('reports a rule without paths front matter', () => {
+        const { findings } = checkAgentRules(
+            repo({
+                'AGENTS.md': index('loose'),
+                '.claude/rules/loose.md': '# Always on\n',
+            }),
+        );
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toContain('.claude/rules/loose.md');
+        expect(findings[0]).toContain('no `paths:`');
+    });
+
+    it('reports a glob that matches no file', () => {
+        // A renamed directory leaves its rule silently never loading.
+        const { findings } = checkAgentRules(
+            repo({
+                'AGENTS.md': index('core'),
+                '.claude/rules/core.md': rule(
+                    'capsule-core/**',
+                    'capsule-gone/**',
+                ),
+                'capsule-core/Cargo.toml': '',
+            }),
+        );
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toContain('capsule-gone/**');
+        expect(findings[0]).toContain('matches no tracked file');
+    });
+
+    it('reports a component directory no rule scopes to', () => {
+        // `**/*.rs` matches the crate, but a repo-wide glob is not coverage:
+        // the crate still has no rule naming its own docs.
+        const { findings } = checkAgentRules(
+            repo({
+                'AGENTS.md': index('rust'),
+                '.claude/rules/rust.md': rule('**/*.rs'),
+                'capsule-new/Cargo.toml': '',
+                'capsule-new/src/lib.rs': '',
+            }),
+        );
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toContain('capsule-new/');
+        expect(findings[0]).toContain('no rule');
+    });
+
+    it("does not count another area's partial glob as coverage", () => {
+        // Deleting the CLI's own rule must fail even though the i18n rule
+        // still scopes `capsule-cli/src/**/*.rs`.
+        const { findings } = checkAgentRules(
+            repo({
+                'AGENTS.md': index('i18n'),
+                '.claude/rules/i18n.md': rule('capsule-cli/src/**/*.rs'),
+                'capsule-cli/Cargo.toml': '',
+                'capsule-cli/src/main.rs': '',
+            }),
+        );
+        expect(findings).toEqual([
+            'capsule-cli/  no rule in .claude/rules/ is scoped to `capsule-cli/**`',
+        ]);
+    });
+
+    it('checks rule files in subdirectories of .claude/rules/', () => {
+        const { findings } = checkAgentRules(
+            repo({
+                'AGENTS.md': index('core'),
+                '.claude/rules/core.md': rule('capsule-core/**'),
+                '.claude/rules/nested/extra.md': '# No front matter\n',
+                'capsule-core/Cargo.toml': '',
+            }),
+        );
+        expect(findings).toHaveLength(2);
+        expect(findings.join('\n')).toContain(
+            '.claude/rules/nested/extra.md  no `paths:`',
+        );
+        expect(findings.join('\n')).toContain(
+            '.claude/rules/nested/extra.md  not linked',
+        );
+    });
+
+    it('counts only markdown links as index entries', () => {
+        const { findings } = checkAgentRules(
+            repo({
+                'AGENTS.md': 'See .claude/rules/core.md in prose.\n',
+                '.claude/rules/core.md': rule('capsule-core/**'),
+                'capsule-core/Cargo.toml': '',
+            }),
+        );
+        expect(findings).toEqual([
+            '.claude/rules/core.md  not linked from the AGENTS.md index',
+        ]);
+    });
+
+    it('checks globs against the file list it is given', () => {
+        // In a git work tree that list is `git ls-files`: a glob matching only
+        // an untracked or ignored file passes nowhere but the author's disk.
+        const r = repo({
+            'AGENTS.md': index('core'),
+            '.claude/rules/core.md': rule('capsule-core/**'),
+            'capsule-core/Cargo.toml': '',
+        });
+        const { findings } = checkAgentRules(r, [
+            'AGENTS.md',
+            '.claude/rules/core.md',
+        ]);
+        expect(findings).toEqual([
+            '.claude/rules/core.md  capsule-core/**  matches no tracked file; the rule never loads for it',
+        ]);
+    });
+
+    it('recognises every manifest kind and exempts legacy-review', () => {
+        const { findings } = checkAgentRules(
+            repo({
+                'AGENTS.md': index('apps'),
+                '.claude/rules/apps.md': rule('web/**'),
+                'web/package.json': '{}',
+                'android/build.gradle.kts': '',
+                'swift/Project.swift': '',
+                'pkg/Package.swift': '',
+                'legacy-review/Cargo.toml': '',
+            }),
+        );
+        expect(findings.map((f) => f.split('  ')[0]).sort()).toEqual([
+            'android/',
+            'pkg/',
+            'swift/',
+        ]);
+    });
+
+    it('reports a rule missing from the AGENTS.md index, and a stale entry', () => {
+        const { findings } = checkAgentRules(
+            repo({
+                'AGENTS.md': index('gone'),
+                '.claude/rules/core.md': rule('capsule-core/**'),
+                'capsule-core/Cargo.toml': '',
+            }),
+        );
+        expect(findings).toHaveLength(2);
+        expect(findings.join('\n')).toContain(
+            '.claude/rules/core.md  not linked from the AGENTS.md index',
+        );
+        expect(findings.join('\n')).toContain(
+            'AGENTS.md  indexes .claude/rules/gone.md, which does not exist',
+        );
+    });
+
+    it('is silent in a repository with no rules directory', () => {
+        const { findings, checked } = checkAgentRules(
+            repo({ 'README.md': '# x\n' }),
+        );
+        expect(findings).toEqual([]);
+        expect(checked).toBe(0);
+    });
+});

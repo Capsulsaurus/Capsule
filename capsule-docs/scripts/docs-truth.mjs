@@ -35,6 +35,7 @@
 
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { agentRulesCheck } from './check-agent-rules.mjs';
 import { crossLinksCheck } from './check-cross-links.mjs';
 import { endpointCensusCheck } from './check-endpoint-census.mjs';
 import { modulePathsCheck } from './check-module-paths.mjs';
@@ -42,6 +43,7 @@ import { sourceLinksCheck } from './check-source-links.mjs';
 
 /** Registered checks, run in order. Adding one is a single entry here. */
 const CHECKS = [
+    agentRulesCheck,
     crossLinksCheck,
     endpointCensusCheck,
     modulePathsCheck,
