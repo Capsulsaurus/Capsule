@@ -64,7 +64,9 @@ bottom; body text is the opposite end.
 
 Radii are 8, 12, 16 and 22 points (small, card, medium, large), continuous corners where the platform
 offers them. Spacing is a 4-point scale (2, 4, 8, 12, 16, 24, 32). Both match
-`capsule-swift/Modules/CapsuleUI/Sources/Glass/CapsuleTheme.swift`.
+`capsule-swift/Modules/CapsuleUI/Sources/Glass/CapsuleTheme.swift`. The docs site adds a pill
+radius (`--capsule-radius-pill`) for fully rounded ends: header links and controls, badges and
+tags.
 
 ## Adoption per Surface
 
@@ -94,11 +96,15 @@ one is designed.
 
 - **Header.** The wordmark (the capsule mark beside "Capsule" in heavy, tightly tracked Geist), then
   the section links centred in the free space: Guides, Design, Reference and, once the blog is live,
-  Blog. The current section is an accent-tinted pill. Then search, a version switcher (shown once a
-  release exists: Latest and each `vX.Y`), a labelled GitHub button and a theme toggle that cycles
-  Auto, Light and Dark. Narrow screens move the section links and the switcher into the menu;
-  splash pages such as the front page have no menu, so there they are reached through the page's
-  own links.
+  Blog. The current section is an accent-tinted pill. Then search, a version switcher (always
+  shown, naming the version being read: Latest, or `vX.Y`, with each released version once one
+  exists), a labelled GitHub button and a theme toggle that cycles Auto, Light and Dark. The bar
+  is laid out by the window's width alone, so it is identical on every page, the front page
+  included, and a navigation in a browser with view transitions keeps it in place. The section
+  links need a wide window (72rem, where the table of contents also appears); narrower, the sidebar
+  carries the sections, and below 50rem the menu carries the section links and the switcher.
+  Splash pages such as the front page have no menu, so there the sections are reached through the
+  page's own links.
 - **Status badges.** Every authored page carries a review `status`
   ([](/design/principles/#review-status)). The page title always shows
   it. The sidebar shows it only for a page that is not `stable`, so the navigation lists exactly what
@@ -110,7 +116,8 @@ one is designed.
   table-stakes tier, why Capsule is built this way, and where to start.
 - **Footer.** On every page, centred: links to the documentation, the blog (once it is live), the
   roadmap, discussions and the source, then the copyright holder, the licence line and the commit
-  the site was built from, linked to that commit.
+  the site was built from, linked to that commit. On a page shorter than the window it rests on
+  the window's bottom edge; on a longer one it follows the content.
 - **Generated reference.** A generated page says so under its title: the surface (REST API, CLI,
   an SDK), a dashed "Generated" tag and its source, and for REST a download of the OpenAPI
   document. A REST page opens with an index of its endpoints, each a method pill and path, and its schemas, and lays
@@ -141,11 +148,17 @@ one is designed.
   live in the code that emits the OpenAPI document; a design doc states why and links the
   generated page.
 - **Labels come from targets.** A link to a page or heading on this site is written with empty
-  text, `[](/design/metadata/#identifiers)`, and renders the target's title or heading
-  (`src/lib/remark-link-titles.mjs`), so a label cannot drift from what it names.
-- **Libraries are linked once per page.** The first mention of a library or tool links its source
-  repository from `src/lib/library-links.mjs`; add a library there, not a URL to a page. A name that
-  is also an ordinary word, or names two things (`gamut`), is linked by hand.
+  text, `[](/design/metadata/#identifiers)`, and renders the target's title, or for a heading
+  "Title — Heading" with the em dash muted (a heading on the same page renders alone)
+  (`src/lib/remark-link-titles.mjs`), so a label cannot drift from what it names. Write the
+  sentence around the label, typically as a parenthetical after the term it supports. The build
+  rejects such a link written with its own text; generated reference pages, and site paths that
+  are not docs pages (`/rustdoc/`, `/openapi.json`), are exempt.
+- **Libraries are badged once per page.** The first mention of a library or tool is followed by a
+  small "repo" badge linking its source repository from `src/lib/library-links.mjs`; the name
+  itself stays plain text, so an automatic substitution never looks like a link an author chose.
+  Add a library there, not a URL to a page. A name that is also an ordinary word, or names two
+  things (`gamut`), is linked by hand.
 - **Diagrams are Mermaid.** A graph, flow or state machine is a ```` ```mermaid title="…" ````
   fence, compiled at build time to SVG in the page's colours (`src/lib/remark-mermaid.mjs`); the
   title is its caption and accessible name. Flowchart nodes take the house classes `client`,
@@ -163,8 +176,9 @@ one is designed.
   `src/lib/build-commit.test.mjs` proves which commit the footer names.
 - `src/lib/sidebar-status.test.mjs` proves which sidebar entries carry a badge.
 - `src/lib/remark-link-titles.test.mjs`, `remark-library-links.test.mjs` and
-  `remark-mermaid.test.mjs` prove the link labels, the library links and the diagram compiler; the
-  build fails on an empty link whose target is missing and on a diagram that does not render.
+  `remark-mermaid.test.mjs` prove the link labels and their parts, the library badges and the
+  diagram compiler; the build fails on an empty link whose target is missing, on a link to a docs
+  page or heading written with its own text, and on a diagram that does not render.
 - `scripts/gen-reference.test.mjs` proves the REST layout, the endpoint index's anchors, the
   example bodies and requests, and the generated-page banner; `src/lib/fonts.test.mjs` proves every
   `@font-face` names a vendored file.
