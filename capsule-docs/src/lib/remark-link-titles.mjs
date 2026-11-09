@@ -143,10 +143,13 @@ export function isGeneratedPage(file) {
 /** @param {string} url */
 function splitUrl(url) {
     const hash = url.indexOf('#');
-    return {
-        route: hash === -1 ? url : url.slice(0, hash),
-        anchor: hash === -1 ? '' : decodeURIComponent(url.slice(hash + 1)),
-    };
+    if (hash === -1) return { route: url, anchor: '' };
+    const raw = url.slice(hash + 1);
+    try {
+        return { route: url.slice(0, hash), anchor: decodeURIComponent(raw) };
+    } catch {
+        throw new Error(`#${raw} is not a valid percent-encoded fragment`);
+    }
 }
 
 /** True for a link to this site: an in-page anchor or a site-absolute path. */
@@ -199,7 +202,8 @@ export default function remarkLinkTitles({ contentDir }) {
 
     /** True when a site link's target is a docs page (or this page). */
     const isDocsTarget = (url) => {
-        const { route } = splitUrl(url);
+        // The route alone: the fragment does not decide whether it is a page.
+        const [route] = url.split('#');
         return route === '' || outlineFor(route) !== null;
     };
 
@@ -236,7 +240,10 @@ export default function remarkLinkTitles({ contentDir }) {
                 ...node.data,
                 hProperties: {
                     ...node.data?.hProperties,
-                    className: ['xref'],
+                    className: [
+                        ...(node.data?.hProperties?.className ?? []),
+                        'xref',
+                    ],
                 },
             };
         });

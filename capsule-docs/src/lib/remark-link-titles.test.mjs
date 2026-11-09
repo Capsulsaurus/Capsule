@@ -200,6 +200,29 @@ describe('remarkLinkTitles', () => {
         expect(() => labels('[](/design/metadata/#nope)')).toThrow(
             /page\.md: empty link \[\]\(\/design\/metadata\/#nope\)/,
         );
+        expect(() => labels('[](/design/metadata/#100%)')).toThrow(
+            /page\.md: empty link .* #100% is not a valid percent-encoded fragment/,
+        );
+    });
+
+    it('keeps a link title and any class an earlier plugin set', () => {
+        const tree = fromMarkdown('[](/design/metadata/ "Hover")');
+        visit(tree, 'link', (node) => {
+            node.data = { hProperties: { className: ['earlier'] } };
+        });
+        remarkLinkTitles({ contentDir })(tree, {
+            path: 'page.md',
+            data: { astro: { frontmatter: { title: 'Page' } } },
+        });
+        const links = [];
+        visit(tree, 'link', (node) => {
+            links.push(node);
+        });
+        expect(links[0].title).toBe('Hover');
+        expect(links[0].data.hProperties.className).toEqual([
+            'earlier',
+            'xref',
+        ]);
     });
 
     it('rejects a hand-written label on a link to a docs page or heading', () => {
