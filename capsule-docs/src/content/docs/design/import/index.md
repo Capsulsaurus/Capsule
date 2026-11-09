@@ -4,7 +4,7 @@ description: How Capsule brings assets from external sources into a library
 status: draft
 ---
 
-**Import** brings assets from an external source (a filesystem directory, a camera, another photo service) under Capsule's management on one device. Bytes then reach the server through [](/design/transfer/), and other devices learn of them through the sync feed ([](/design/sync/)).
+**Import** brings assets from an external source (a filesystem directory, a camera, another photo service) under Capsule's management on one device. Bytes then reach the server through the transfer protocol ([](/design/transfer/)), and other devices learn of them through the sync feed ([](/design/sync/)).
 
 | Page | Covers |
 | --- | --- |
