@@ -103,8 +103,20 @@
     --sl-color-black: #ffffff;
 }
 
-/* Header: a translucent bar, the web's analogue of the apps' glass chrome. */
+/* Header: a translucent bar, the web's analogue of the apps' glass chrome.
+   Its layout is identical on every page (src/components/Header.astro), and a
+   cross-document view transition keeps it in place while the page below it
+   changes, so moving between pages never redraws the bar. Browsers without
+   view transitions, and readers who ask for reduced motion, navigate as
+   usual. */
+@media (prefers-reduced-motion: no-preference) {
+    @view-transition {
+        navigation: auto;
+    }
+}
+
 .header {
+    view-transition-name: site-header;
     background-color: color-mix(
         in srgb,
         var(--sl-color-black) 78%,
@@ -117,6 +129,14 @@
         var(--sl-color-gray-5) 60%,
         transparent
     );
+}
+
+/* The bar is the same on both sides of a navigation: swap it without the
+   default crossfade, so it holds still while the content fades. */
+::view-transition-group(site-header),
+::view-transition-old(site-header),
+::view-transition-new(site-header) {
+    animation: none;
 }
 
 /* Sidebar: the same surface as the page, divided by a hairline, so it reads

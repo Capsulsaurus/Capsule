@@ -76,18 +76,13 @@ const shouldRenderSearch =
   @media (min-width: 50rem) {
     .header {
       display: grid;
-      /* The title column runs to the sidebar's edge, as in Starlight's own
-         header, so the wordmark lines up with the navigation below it. */
+      /* The title column is always the sidebar's width, on pages with a
+         sidebar and without (the splash front page), so the wordmark, the
+         section links and the actions sit at the same place on every page
+         and the bar never shifts between them. Starlight's own header sizes
+         it from --sl-content-inline-start, which only sidebar pages set. */
       grid-template-columns:
-        minmax(
-          calc(
-            max(
-              0rem,
-              var(--sl-content-inline-start, 0rem) - var(--sl-nav-pad-x)
-            )
-          ),
-          auto
-        )
+        minmax(calc(var(--sl-sidebar-width) - var(--sl-nav-pad-x)), auto)
         1fr
         auto;
     }
