@@ -1,26 +1,32 @@
 ---
 // One differentiator on the front page: an icon, a heading, a short body
-// (the slot) and a link into the design doc that specifies it. Lay several out
-// with FeatureGrid.astro.
+// (the slot) and a link, named for its destination, into the doc that
+// specifies it. Lay several out with FeatureGrid.astro.
 import { Icon } from '@astrojs/starlight/components';
 import type { StarlightIcon } from '@astrojs/starlight/types';
 
 interface Props {
     icon: StarlightIcon;
     title: string;
-    /** The design doc that specifies this claim. */
+    /** The doc that specifies this claim. */
     href: string;
-    linkLabel?: string;
+    /** Names the destination, e.g. "Federation design", so the link says where it goes. */
+    linkLabel: string;
 }
 
-const { icon, title, href, linkLabel = 'How it works' } = Astro.props;
+const { icon, title, href, linkLabel } = Astro.props;
+// Astro does not type-check props in the build, so enforce the one that keeps
+// the link accessible: without a label its only text is a hidden arrow.
+if (!linkLabel?.trim()) {
+    throw new Error(`Feature "${title}" needs a linkLabel naming ${href}`);
+}
 ---
 
 <article class="feature">
   <span class="feature-icon" aria-hidden="true"><Icon name={icon} size="1.25rem" /></span>
   <h3>{title}</h3>
   <div class="feature-body"><slot /></div>
-  <a class="feature-link" href={href}>{linkLabel}<span class="sr-only">: {title}</span><span aria-hidden="true"> →</span></a>
+  <a class="feature-link" href={href}>{linkLabel}<span aria-hidden="true"> →</span></a>
 </article>
 
 <style>

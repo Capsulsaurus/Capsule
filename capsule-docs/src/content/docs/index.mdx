@@ -19,10 +19,6 @@ hero:
     - text: Read the design
       link: /design/
       variant: secondary
-    - text: Source on GitHub
-      link: https://github.com/Capsulsaurus/Capsule
-      icon: external
-      variant: minimal
 ---
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
@@ -39,29 +35,29 @@ import StatusStrip from '../../components/StatusStrip.astro';
 ## What sets Capsule apart
 
 <FeatureGrid>
-  <Feature icon="random" title="Organized at any scale" href="/features/smart-albums/">
+  <Feature icon="random" title="Organized at any scale" href="/features/smart-albums/" linkLabel="Smart albums">
     Search, smart albums and automatic tagging are designed to run on your devices, over
     a full local index, so a library of millions of photos stays navigable without
     anyone sorting it by hand.
   </Feature>
-  <Feature icon="padlock" title="A server with no keys" href="/design/cryptography/">
+  <Feature icon="padlock" title="A server with no keys" href="/design/cryptography/" linkLabel="Cryptography design">
     The server stores ciphertext and never holds a key. It cannot read a photo, a caption
     or an album title, yet it signs a custody receipt for every upload it accepts.
   </Feature>
-  <Feature icon="server" title="Sharing across servers" href="/design/federation/">
+  <Feature icon="server" title="Sharing across servers" href="/design/federation/" linkLabel="Federation design">
     Trust lives in the cryptography rather than the server, so people on different
     Capsule servers are meant to share albums with each other, with no central service
     in between.
   </Feature>
-  <Feature icon="laptop" title="Your whole library, offline" href="/features/offline-library/">
+  <Feature icon="laptop" title="Your whole library, offline" href="/features/offline-library/" linkLabel="Offline library">
     Every native app is built to hold a full index of every photo you have kept, so all
     of it can be browsed, searched and organized with no connection.
   </Feature>
-  <Feature icon="approve-check-circle" title="Verifiable history" href="/design/cryptography/provenance/">
+  <Feature icon="approve-check-circle" title="Verifiable history" href="/design/cryptography/provenance/" linkLabel="Provenance design">
     Every asset carries a signed, append-only provenance chain, so which person and
     device imported or edited it is verified, not taken on trust.
   </Feature>
-  <Feature icon="database" title="Recoverable by construction" href="/design/backup-recovery/">
+  <Feature icon="database" title="Recoverable by construction" href="/design/backup-recovery/" linkLabel="Backup and recovery">
     Each asset is paired with a signed metadata sidecar, so a library stays readable
     without a database and can be rebuilt from partial damage.
   </Feature>
