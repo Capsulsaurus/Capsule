@@ -207,10 +207,14 @@ Delete defaults to trash (a soft delete, synced as a signed `delete` lifecycle r
 
 Deletion is owned entirely by `capsule-library`'s `Workspace` and reaches the apps through the FFI as verbs: delete, restore, purge and list trash. An app holds no deletion or retention logic of its own, and never writes the index row directly. Live and Trashed are derived from the asset's signed chain, never stored on their own, so rebuilding the index reproduces them. Purged is recorded as a tombstone only on the evidence [Sync](/design/sync/#discovering-what-changed) names (the retention window seen closed, or a delete entry marked `purged`) or by this device's own purge. Missing bytes are never read as a purge, because a device whose scope is metadata-only holds no bytes for a Trashed asset either.
 
-```text
-Live ──delete──▶ Trashed ──restore (before retention_until)──▶ Live
-                    │
-                    └──purge (emptied, expired, or immediate)──▶ Purged
+```mermaid title="Deletion states"
+stateDiagram-v2
+  direction LR
+  [*] --> Live
+  Live --> Trashed: delete
+  Trashed --> Live: restore, before retention_until
+  Trashed --> Purged: purge (emptied, expired or immediate)
+  Purged --> [*]
 ```
 
 | From | Verb | To | Record | Refused when |

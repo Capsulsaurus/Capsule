@@ -318,3 +318,27 @@
 .sl-blog-preview-title {
     letter-spacing: -0.015em;
 }
+
+/* Diagrams: Mermaid compiled to inline SVG (src/lib/remark-mermaid.mjs),
+   centred on a hairline card. */
+.sl-markdown-content .diagram {
+    margin-block: 1.5rem;
+    padding: 1.25rem 1rem 0.75rem;
+    border: 1px solid var(--sl-color-hairline);
+    border-radius: var(--capsule-radius-card);
+    overflow-x: auto;
+    text-align: center;
+}
+
+/* Natural size, never scaled down: a diagram's text stays the size of the
+   page's small text, and a wide one scrolls inside its card. */
+.sl-markdown-content .diagram svg {
+    max-width: none;
+    height: auto;
+}
+
+.sl-markdown-content .diagram figcaption {
+    margin-top: 0.5rem;
+    color: var(--sl-color-gray-3);
+    font-size: var(--sl-text-sm);
+}

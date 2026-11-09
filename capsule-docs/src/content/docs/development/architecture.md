@@ -8,19 +8,29 @@ Capsule exposes one REST/OpenAPI contract ([API Surfaces](/design/api-surfaces/)
 
 ## Data Flow
 
-```text
-Native client
-  ├─ capsule-core: plaintext, keys, media policy, sidecars, provenance
-  ├─ Rawshift: media processing
-  ├─ Chromahash: encrypted LQIP input
-  └─ Spargen SDK: ciphertext REST transport
-                      ↓
-Kynos server
-  ├─ auth and structural validation
-  ├─ Capsule upload/sync state machines
-  ├─ Postgres key-free index
-  ├─ Valkey volatile state (required)
-  └─ Capsule-owned opaque blob store
+```mermaid title="Plaintext stays on the client; the server holds ciphertext and a key-free index"
+flowchart TB
+  subgraph client [Native client]
+    core[capsule-core<br/>plaintext, keys, media policy,<br/>sidecars, provenance]:::client
+    rawshift[Rawshift<br/>media processing]:::external
+    chromahash[Chromahash<br/>LQIP input]:::external
+    sdk[Spargen SDK<br/>ciphertext REST]:::client
+    core --> sdk
+    rawshift --> core
+    chromahash --> core
+  end
+  subgraph server [Kynos server]
+    api[Auth and structural validation]:::server
+    machines[Upload and sync<br/>state machines]:::server
+    pg[(Postgres<br/>key-free index)]:::store
+    valkey[(Valkey<br/>volatile state)]:::store
+    blobs[(Opaque blob store)]:::store
+    api --> machines
+    machines --> pg
+    machines --> valkey
+    machines --> blobs
+  end
+  sdk -- ciphertext only --> api
 ```
 
 Timeline, search, tag, face, and memory queries run against the client's local SQLite catalog. The

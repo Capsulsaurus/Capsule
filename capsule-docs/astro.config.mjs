@@ -13,6 +13,7 @@ import { resolveBuildCommit } from './src/lib/build-commit.mjs';
 import rehypeNoTranslate from './src/lib/rehype-notranslate.mjs';
 import remarkLibraryLinks from './src/lib/remark-library-links.mjs';
 import remarkLinkTitles from './src/lib/remark-link-titles.mjs';
+import remarkMermaid from './src/lib/remark-mermaid.mjs';
 
 // A production build includes the blog (routes, header link, RSS, sitemap,
 // footer link) only once a post is published, so no reader lands on an empty
@@ -46,6 +47,8 @@ export default defineConfig({
         processor: unified({
             // An empty-text site link renders its target's title or heading.
             remarkPlugins: [
+                // ```mermaid fences compile to themed inline SVG.
+                remarkMermaid,
                 [
                     remarkLinkTitles,
                     {
