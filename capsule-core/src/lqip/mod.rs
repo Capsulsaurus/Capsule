@@ -10,7 +10,7 @@
 //! implementation and it must be reachable from all three. That rules out
 //! `capsule_core::media`, the retired decode/encode stack that lives in `legacy-review/`
 //! and is `native`-only wherever it is restored. It equally rules out
-//! Rawshift, which `AGENTS.md` forbids from wrapping Chromahash — Capsule imports it directly.
+//! Rawshift, which `.claude/rules/capsule-core.md` forbids from wrapping Chromahash — Capsule imports it directly.
 //!
 //! This module is therefore **unconditional**: no feature gate, no `native`, and it compiles
 //! for `wasm32-unknown-unknown` (chromahash has zero runtime dependencies and ships a

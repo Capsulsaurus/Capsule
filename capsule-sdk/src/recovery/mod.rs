@@ -36,7 +36,7 @@
 //! `build.rs`. [`RecoveryClient`] therefore orchestrates
 //! [`AuthenticatedClient::fetch_escrow`](crate::rest::Client::fetch_escrow) and
 //! [`store_escrow`](crate::rest::Client::store_escrow) and hand-writes no request. That is
-//! not a preference: `AGENTS.md` requires that everything which parses or serializes is
+//! not a preference: `.claude/rules/capsule-sdk.md` requires that everything which parses or serializes is
 //! generated, *including* the byte-serving endpoints, and the reason is this module's own
 //! history. It used to build `{api_root}/backup/escrow` from a `const` — the Salvo document's
 //! path — and when the contract was re-sourced from Kynos to `/v1/auth/escrow` nothing

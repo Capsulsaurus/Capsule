@@ -43,22 +43,23 @@ const RETIRED_DEPENDENCIES: &[&str] = &[
 const PLANNED_WORKSPACE_DEPENDENCIES: &[(&str, &str)] = &[
     (
         "bb8",
-        "Valkey adapter pooling for the two typed state ports (AGENTS.md)",
+        "Valkey adapter pooling for the two typed state ports (.claude/rules/capsule-server.md)",
     ),
     (
         "bb8-redis",
-        "Valkey adapter pooling for the two typed state ports (AGENTS.md)",
+        "Valkey adapter pooling for the two typed state ports (.claude/rules/capsule-server.md)",
     ),
     (
         "redis",
-        "the `redis-rs` Valkey adapters AGENTS.md requires for AuthStateStore/UploadSessionStore",
+        "the `redis-rs` Valkey adapters .claude/rules/capsule-server.md requires for \
+         AuthStateStore/UploadSessionStore",
     ),
 ];
 
 // Lock-graph edges into a retired crate that are not the decision the retirement records, each
 // with its reason. `prost`/`tonic` are retired as **Capsule's public surface** (no gRPC; see
-// AGENTS.md), and these crates use them as an internal encoding or a container-runtime client,
-// which exposes no surface of Capsule's. An edge is sanctioned, not a crate: the same retired
+// .claude/rules/capsule-server.md), and these crates use them as an internal encoding or a
+// container-runtime client, which exposes no surface of Capsule's. An edge is sanctioned, not a crate: the same retired
 // crate arriving through anything else is still a violation.
 const SANCTIONED_TRANSITIVE_EDGES: &[(&str, &str, &str)] = &[
     (
