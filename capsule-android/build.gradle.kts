@@ -41,6 +41,11 @@ android {
         }
     }
     buildTypes {
+        // Android's development pseudo-locales: `en-XA` (accented, expanded) and
+        // `ar-XB` (right to left), selectable in system settings on a debug build only.
+        getByName("debug") {
+            isPseudoLocalesEnabled = true
+        }
         getByName("release") {
             isMinifyEnabled = false
         }
@@ -53,6 +58,11 @@ android {
             matchingFallbacks += listOf("release")
             isDebuggable = false
         }
+    }
+    // Physical-direction layout is a lint error, not a warning (i18n contract, Layout);
+    // `i18n-guard` covers the Compose source, lint covers resources and the manifest.
+    lint {
+        error += setOf("RtlEnabled", "RtlHardcoded", "RtlSymmetry", "RtlCompat")
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
