@@ -94,9 +94,9 @@ one is designed.
 
 - **Header.** The wordmark (the capsule mark beside "Capsule" in heavy, tightly tracked Geist), then
   the section links centred in the free space: Guides, Design, Reference and, once the blog is live,
-  Blog. The current section is an accent-tinted pill. Then search, a labelled GitHub button and a
-  theme toggle that cycles Auto, Light and Dark. Narrow screens move the section links into the
-  menu; splash pages such as the front page have no menu, so there they are reached through the
+  Blog. The current section is an accent-tinted pill. Then search, a version switcher (shown once a
+  release exists: Latest and each `vX.Y`), a labelled GitHub button and a theme toggle that cycles
+  Auto, Light and Dark. Narrow screens move the section links and the switcher into the menu; splash pages such as the front page have no menu, so there they are reached through the
   page's own links.
 - **Status badges.** Every authored page carries a review `status`
   ([Core Principles — Review Status](/design/principles/#review-status)). The page title always shows
