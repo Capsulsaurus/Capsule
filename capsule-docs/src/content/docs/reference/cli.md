@@ -78,4 +78,3 @@ flag for one.
   described in [](/design/i18n/), and the remaining locale negotiation is to be dropped. The command
   tree this reference is generated from is English, so the artifact cannot vary with the machine
   that emits it.
-

@@ -33,4 +33,3 @@ dump step fails on it.
 The browser module is not a binding of `capsule-sdk`. The web client is read-only, so
 `capsule-wasm` exports only what opening a share link and sealing a guest drop need, compiled
 from `capsule-core` for `wasm32`.
-

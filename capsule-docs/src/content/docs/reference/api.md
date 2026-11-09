@@ -21,4 +21,3 @@ verified against the code in CI; why the surface is shaped this way is [](/desig
 - **Do not hand-write a client.** `capsule-sdk` is generated from the same document; its request
   and response types are the only ones guaranteed to track it. Server code follows
   [](/development/api-practices/).
-
