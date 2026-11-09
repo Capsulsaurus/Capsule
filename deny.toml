@@ -128,6 +128,21 @@ ignore = [
     # latest release, still depends on it, so no uniffi upgrade drops it. It parses only
     # askama's build-time configuration. Remove when askama_derive replaces basic-toml, in #720.
     { id = "RUSTSEC-2026-0374", reason = "basic-toml (unmaintained) via askama_derive (latest 0.16.1) via uniffi_bindgen; compile-time only; tracked in #720" },
+
+    # Unmaintained, no vulnerability. astral-tokio-tar is reached only through testcontainers,
+    # a dev-dependency of capsule-server and capsule-e2e that builds test images; every
+    # testcontainers release through the latest, 0.28.0, requires `^0.6`, so no upgrade drops
+    # it and nothing Capsule ships links it. Remove when testcontainers replaces it.
+    { id = "RUSTSEC-2026-0440", reason = "astral-tokio-tar (unmaintained) via testcontainers 0.27 (latest 0.28.0 still requires it); dev-dependency only" },
+
+    # SQLite before 3.54.0 can return uninitialized page-cache memory when a database is opened
+    # with a `-wal` file of a different page size. The patched copy is libsqlite3-sys 0.39
+    # (rusqlite 0.41), but `links = "sqlite3"` admits one libsqlite3-sys in the graph and
+    # sqlx-sqlite 0.9.0, the latest release, reached through sea-orm's `sqlx-sqlite` feature in
+    # capsule-cli, requires `>=0.30.1, <0.38.0`. Exposure is local only: a crafted database and
+    # WAL pair placed where Capsule opens its own index. Remove when a sqlx-sqlite release
+    # admits libsqlite3-sys 0.39 and rusqlite moves to 0.41 with it.
+    { id = "RUSTSEC-2026-0459", reason = "libsqlite3-sys 0.30.1 (bundled SQLite < 3.54.0): sqlx-sqlite 0.9.0 (latest) caps libsqlite3-sys < 0.38, and links = sqlite3 forces one copy; local-only exposure" },
 ]
 
 [bans]
