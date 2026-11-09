@@ -191,7 +191,9 @@ header.header {
     flex-direction: column;
     /* .main-frame's top padding is the header and the mobile contents bar. */
     min-height: calc(
-        100dvh - var(--sl-nav-height) - var(--sl-mobile-toc-height, 0rem)
+        100dvh -
+        var(--sl-nav-height) -
+        var(--sl-mobile-toc-height, 0rem)
     );
 }
 
