@@ -6,7 +6,8 @@
  * the links that cross the site boundary, and those are the ones a docs
  * restructure breaks:
  *
- *   - `ROADMAP.md` and `AGENTS.md` reference design docs by repo-relative path,
+ *   - `ROADMAP.md`, `AGENTS.md` and `.claude/rules/` reference design docs by
+ *     relative path,
  *     sometimes with an anchor. Renaming a design doc breaks them silently.
  *   - The root READMEs link the published site by absolute URL. Moving a page
  *     breaks them silently.
