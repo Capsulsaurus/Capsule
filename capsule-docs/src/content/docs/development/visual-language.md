@@ -17,8 +17,8 @@ no third house style. The brand reaches a native client only through its accent 
   surface.
 - **Native material, shared identity.** Apple clients follow HIG and Android clients follow Material.
   The accent is the only brand token a native client adopts; type, controls, radius and spacing are
-  the platform's own. The radius and spacing scales below are the Apple client's, mirrored by the
-  web surfaces; Android keeps Material's shape and spacing scales.
+  the platform's own. The radius and spacing scales below are the Apple client's; the docs site
+  mirrors the radii, and Android keeps Material's shape and spacing scales.
 - **Nothing leaks.** A Capsule-served page (the docs site, the web client) MUST NOT request a
   third-party asset: fonts, images, scripts and analytics come from the same origin or are not used.
 - **Accessible by default.** Text and interactive accents meet WCAG AA (4.5:1) in both themes, motion
