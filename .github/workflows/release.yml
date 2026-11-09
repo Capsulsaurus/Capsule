@@ -168,14 +168,13 @@ jobs:
             --notes-file NOTES.md \
             dist/*
 
-  # Freezes this release's docs: `docs/vX.Y` is fast-forwarded to the release commit, and
-  # Cloudflare Pages builds that branch as its own deployment, which production serves under
-  # /v/X.Y/ (capsule-docs/src/lib/docs-version.mjs). A patch release moves the same branch
-  # forward. A push that is not a fast-forward fails here rather than rewriting a version.
-  # Only after the release is published, so no version appears for a release that failed.
-  #
-  # Pushed with RELEASE_PAT, not GITHUB_TOKEN: moving the branch over commits that touched
-  # .github/workflows/ needs the `workflow` scope, which GITHUB_TOKEN can never have.
+  # Freezes this release's docs as the branch `docs/vX.Y`, which Cloudflare Pages builds as its
+  # own deployment and production serves under /v/X.Y/ (capsule-docs/src/lib/docs-version.mjs).
+  # Each commit on it is the release commit's tree without .github/, so GITHUB_TOKEN can push it
+  # (a token without the `workflow` permission may not push a ref that changes workflow files),
+  # and the docs build reads nothing there. A patch release adds a commit to the same branch; a
+  # push that is not a fast-forward fails rather than rewriting a version. Runs only after the
+  # release is published, so no version appears for a release that failed.
   docs-version:
     name: Freeze the docs for this version
     needs: [detect, publish]
@@ -185,10 +184,26 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.RELEASE_PAT }}
       - name: Push docs/vX.Y
         run: |
           set -euo pipefail
           version="${{ needs.detect.outputs.version }}"
-          minor="$(echo "$version" | cut -d. -f1,2)"
-          git push origin "${{ github.sha }}:refs/heads/docs/v${minor}"
+          release="${{ github.sha }}"
+          ref="refs/heads/docs/v$(echo "$version" | cut -d. -f1,2)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          tree="$(export GIT_INDEX_FILE="$RUNNER_TEMP/docs-index" && git read-tree "$release" &&
+            git rm -r --cached --quiet --ignore-unmatch .github && git write-tree)"
+
+          parent=""
+          if git fetch --quiet origin "$ref"; then
+            if [ "$(git rev-parse 'FETCH_HEAD^{tree}')" = "$tree" ]; then
+              echo "$ref already holds v${version}'s docs"
+              exit 0
+            fi
+            parent="$(git rev-parse FETCH_HEAD)"
+          fi
+          commit="$(git commit-tree "$tree" ${parent:+-p "$parent"} -m "docs: v${version}" -m "Release commit: ${release}")"
+          git push origin "${commit}:${ref}"
+          echo "Pushed ${commit} to ${ref}"

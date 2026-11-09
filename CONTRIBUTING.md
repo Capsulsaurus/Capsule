@@ -123,12 +123,10 @@ package (`mise run set-version` / the `xtask` crate).
 1. **Prepare** — run the **Prepare release** workflow (`workflow_dispatch`). It computes the
    next version with `convco` (or takes an explicit one), writes it into every package,
    regenerates `CHANGELOG.md`, and opens a `release/vX.Y.Z` PR.
-2. **Review** — review/edit the CHANGELOG and version bumps on that PR. The full CI gate
-   runs on it ("all checks before release").
+2. **Review** — close and reopen that PR to run CI (a PR opened by GitHub Actions does not
+   trigger it), then review/edit the CHANGELOG and version bumps. The full CI gate must pass
+   ("all checks before release").
 3. **Merge** — merging the PR lands `chore(release): vX.Y.Z` on `master`, which triggers
    **release.yml**: it builds the `capsule` CLI binaries (Linux/macOS, Windows best-effort)
-   and publishes a GitHub Release (the tag is created as part of this).
-
-**One-time setup:** add a repo secret `RELEASE_PAT` (a PAT with `contents` + `pull-requests`
-write). It's used only to open the release PR — PRs opened with the default token don't
-trigger CI, so without it the release PR's checks wouldn't run.
+   and publishes a GitHub Release (the tag is created as part of this), then freezes that
+   release's docs as the `docs/vX.Y` branch.
