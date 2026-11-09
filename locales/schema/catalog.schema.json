@@ -2,7 +2,7 @@
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": "https://capsule.justinchung.net/schema/i18n-catalog.json",
     "title": "Capsule i18n message catalog",
-    "description": "A per-locale message catalog. Each property is a message key mapped to its ICU MessageFormat string plus optional translator context.",
+    "description": "A per-locale message catalog. Each property is a message key mapped to its ICU MessageFormat string; the source catalog adds translator context, a translation adds its provenance and source hash.",
     "type": "object",
     "additionalProperties": {
         "type": "object",
@@ -15,11 +15,16 @@
             },
             "context": {
                 "type": "string",
-                "description": "A note for translators describing where and how the message is used."
+                "description": "Source catalog only, where it is required: the string's UI role, the part of speech of any ambiguous word, and the screen it appears on."
             },
             "origin": {
                 "enum": ["machine", "human"],
                 "description": "Translation catalogs only, where it is required: who produced the message. `machine` is a machine translation no fluent reader has reviewed; `human` is one a fluent reader wrote or reviewed. The contributor and date are the git history of the entry. The source catalog never carries it."
+            },
+            "source": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$",
+                "description": "Translation catalogs only, where it is required: the first 16 hex digits of the SHA-256 of the source message this translation was made from. A mismatch with the current source message marks the translation stale. Written by `xtask i18n --stamp`."
             }
         }
     }

@@ -24,6 +24,7 @@
 
 - No hardcoded user-facing strings. Every translatable string is a key in the canonical catalogs under `locales/` (ICU MessageFormat). Add the key there, not inline in app code.
 - After editing `locales/`, run `mise run i18n` to regenerate the per-platform files (Rust bundle, web JSON, Android `strings.xml`, iOS `.xcstrings`). Generated files are committed and carry a "do not edit by hand" banner; `mise run i18n-check` (part of `check-rust`) fails on drift.
+- Adding or rewording an `en.json` message updates all twelve translation catalogs in the same change: `xtask i18n --todo <locale>` lists what to translate, `xtask i18n --stamp` records the source hash. The build fails on a missing or stale translation, a source entry without `context`, or a dropped `locales/glossary.json` verbatim term.
 - Keys use dotted namespaces (`area.subarea.name`). Server errors carry a stable `code` from the `error.*` namespace (referenced via `capsule_i18n::error_codes`); clients localize the code while the English detail message stays English.
 - Language and region are separate settings in every app: language picks the catalog, region drives date, number and unit formatting. Both default from the OS.
 - The CLI and TUI are English-only: their strings are inline English and the shared `error.*` codes render through the English catalog. The catalog rule above applies to the apps, the web client and the server.

@@ -6,9 +6,10 @@
 //!   package's source of truth so a release bump stays in sync across Rust, web,
 //!   docs, Android, and iOS. Each per-format editor is a pure
 //!   `&str -> Result<String>` function so it can be unit-tested without disk I/O.
-//! - `i18n [--check]` compiles the canonical `locales/` catalogs into each
-//!   platform's native localization format (see [`i18n`]). `--check` verifies the
-//!   committed files are up to date instead of writing them.
+//! - `i18n [--check | --todo <locale> | --stamp]` compiles the canonical `locales/`
+//!   catalogs into each platform's native localization format (see [`i18n`]). `--check`
+//!   verifies the committed files are up to date instead of writing them; `--todo` lists a
+//!   locale's missing and stale keys; `--stamp` records translations' source hashes.
 //! - `i18n-guard` scans the web/SwiftUI/Compose surfaces for hardcoded user-facing
 //!   string literals and fails on any that is not a catalog key or allowlisted (the
 //!   i18n regression gate; see [`i18n_guard`]).
@@ -55,7 +56,7 @@ use regex::{Captures, Regex};
 use semver::Version;
 use toml_edit::Item;
 
-const USAGE: &str = "usage: xtask <set-version <X.Y.Z> | i18n [--check] | i18n-guard | translate-readme [--check | --extract] | share-kat [<out-path>] | drop-kat [<out-path>] | wasm-surface [--check] | bindings-surface [--check] | architecture-check | test-layout-check | bench-apps <import | compare | record> | screenshot-seed [--anchor YYYY-MM-DD] | screenshot-compose --input <png> --output <png>>";
+const USAGE: &str = "usage: xtask <set-version <X.Y.Z> | i18n [--check | --todo <locale> | --stamp] | i18n-guard | translate-readme [--check | --extract] | share-kat [<out-path>] | drop-kat [<out-path>] | wasm-surface [--check] | bindings-surface [--check] | architecture-check | test-layout-check | bench-apps <import | compare | record> | screenshot-seed [--anchor YYYY-MM-DD] | screenshot-compose --input <png> --output <png>>";
 
 /// Default output path (repo-relative) for the share-link KAT fixture the bun test consumes.
 const SHARE_KAT_OUT: &str = "capsule-web/src/generated/share-kat.json";
@@ -79,10 +80,7 @@ fn main() -> Result<()> {
                 .with_context(|| format!("`{raw}` is not a valid semantic version"))?;
             set_version(&repo_root(), &version.to_string())
         }
-        Some("i18n") => {
-            let check = args.next().as_deref() == Some("--check");
-            i18n::run(&repo_root(), check)
-        }
+        Some("i18n") => i18n::run(&repo_root(), i18n::Mode::parse(args)?),
         Some("i18n-guard") => i18n_guard::run(&repo_root()),
         Some("architecture-check") => architecture::run(&repo_root()),
         Some("test-layout-check") => test_layout::run(&repo_root()),
