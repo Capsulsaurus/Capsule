@@ -5,8 +5,8 @@
 //!
 //! Only the cross-cutting machinery lives in this module. Each adapter lives beside the port it
 //! implements — `index/postgres.rs`, `auth/accounts_postgres.rs`, `store/cohorts_postgres.rs`,
-//! `quota/postgres.rs`, `membership/postgres.rs` — because design/module-map.md assigns
-//! contract ownership per *behaviour module* rather than per backend, and the tree already does it that way for the blob store
+//! `quota/postgres.rs`, `membership/postgres.rs` — because contract ownership is assigned
+//! per *behaviour module* rather than per backend, and the tree already does it that way for the blob store
 //! (`blob/fs.rs`, `blob/memory.rs`). A `postgres/` tree holding every adapter would make one
 //! directory the co-owner of every durable contract in the crate.
 //!

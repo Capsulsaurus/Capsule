@@ -4,18 +4,18 @@ description: The durable record of an account's security events, what it may hol
 status: draft
 ---
 
-The activity log is the account owner's record of what was done **to and with the account** on this server: sign-ins, sign-outs, revocations, credential changes, device enrollment and the links that open the account to someone else. It answers "was that me?" next to the [session list](/design/authentication/#explicit-revocation), and it is what an operator and a user reconstruct an incident from. Code: `capsule-server::activity`.
+The activity log is the account owner's record of what was done **to and with the account** on this server: sign-ins, sign-outs, revocations, credential changes, device enrollment and the links that open the account to someone else. It answers "was that me?" next to the [session list](/design/authentication/#explicit-revocation), and an operator and a user reconstruct an incident from it. Code: `capsule-server::activity`.
 
-It is not the [provenance](/design/cryptography/provenance/) chain, which signs changes to *library data*, and it is not the [moderation record](/design/moderation/), which records what an operator did to the account. The three are separate records with separate writers.
+It is neither the [provenance](/design/cryptography/provenance/) chain, which signs changes to *library data*, nor the [moderation record](/design/moderation/), which records what an operator did to the account. The three are separate records with separate writers.
 
 ## Invariants
 
-- **Owner-only.** An account reads its own log and nobody else's, over a route with no account parameter. There is no admin read over HTTP, for the reason [moderation](/design/moderation/) has no admin surface: no admin authentication model exists. The operator holding the database credentials can read the table, as they can read every table.
+- **Owner-only.** An account reads its own log and nobody else's, over a route with no account parameter. There is no admin read over HTTP for the same reason [moderation](/design/moderation/) has no admin surface: no admin authentication model exists. The operator holding the database credentials can read the table, as they can every table.
 - **Append-only.** An event is never updated. Rows leave the log only by the retention bound below, never by a user or a request.
-- **Identifiers, never content.** The server is end-to-end encrypted, so no field may carry what only clients can read: no asset content, no album names, no captions, no labels, no file names, and no key material. An event names *which* session, share link or drop link, by the identifier the server already holds.
-- **Recording never refuses the act.** An event is written after the action it describes has happened. A store that cannot record it is logged at `error` with the event's fields and the action stands: refusing a sign-out, a revocation or a password change because the log is down would turn an audit outage into a security outage.
-- **Recording never discloses an account.** `sign_in.password_refused` and `sign_in.locked` are written only for an address that has an account, so the sign-in's answer, its status and code included, is the one an unknown address gets, and the event is written off the response path: a write the response waited on would show in its timing which addresses exist.
-- **The event set is closed per server version.** Every event the server writes is a kind listed below. A new kind is an additive change: a client renders a kind it does not know as a generic entry with its time, and never refuses the listing.
+- **Identifiers, never content.** The server is end-to-end encrypted, so no field may carry what only clients can read: no asset content, album names, captions, labels, file names or key material. An event names *which* session, share link or drop link by the identifier the server already holds.
+- **Recording never refuses the act.** An event is written after the action it describes. A store that cannot record it is logged at `error` with the event's fields and the action stands, because refusing a sign-out, a revocation or a password change while the log is down would turn an audit outage into a security outage.
+- **Recording never discloses an account.** `sign_in.password_refused` and `sign_in.locked` are written only for an address that has an account, so the sign-in's answer, status and code included, is the one an unknown address gets. The event is written off the response path, since a write the response waited on would show in its timing which addresses exist.
+- **The event set is closed per server version.** Every event the server writes is a kind listed below. A new kind is an additive change: a client renders a kind it does not know as a generic entry with its time and never refuses the listing.
 
 ## Events
 
@@ -46,8 +46,8 @@ It is not the [provenance](/design/cryptography/provenance/) chain, which signs 
 Not recorded, each for a stated reason:
 
 - **A sign-in attempt against an address no account answers to**, including a federated account's address, which holds no password. There is no account whose log it belongs in.
-- **A refused re-authentication or password change.** Both are acted by a session the account already holds; their refusals are in the request log.
-- **Blob downloads by the account or by a member of its albums on this server.** One event per blob per request would grow with library size and record an access pattern over content addresses, and these readers hold a session the owner's roster admitted. Downloads through a share link or by a federated peer are the security-relevant subset, and are recorded aggregated (see [Serving](#serving)).
+- **A refused re-authentication or password change.** Both are acted by a session the account already holds, and their refusals are in the request log.
+- **Blob downloads by the account or by a member of its albums on this server.** One event per blob per request would grow with library size and record an access pattern over content addresses, and these readers hold a session the owner's roster admitted. Downloads through a share link or by a federated peer are the security-relevant subset and are recorded aggregated ([](#serving)).
 - **A first escrow, and the sealed identity and album-key slots beside it.** A first escrow invalidates no recovery secret, and the other slots are sealed under the master key, so replacing them changes nothing that opens the account. Only replacing the master-key escrow is a credential change.
 - **Token refresh.** It rotates a session that is already recorded, once per access-token lifetime, and would bury every other event.
 
@@ -58,13 +58,13 @@ Not recorded, each for a stated reason:
 | `event_id` | A UUIDv7 the server mints for the event |
 | `kind` | One of the kinds above |
 | `at` | The server's clock when the event was recorded |
-| `request_id` | The `X-Request-Id` of the request that caused it ([request ids](/design/api-surfaces/#negotiation-across-transports)); absent for an event no request caused |
+| `request_id` | The `X-Request-Id` of the request that caused it ([request ids](/reference/api/conventions/#protocol-negotiation)); absent for an event no request caused |
 | `session_id` | The session that acted, when one did; absent for an unauthenticated act such as a sign-in or a revoke-all |
 | `subject` | The identifier the event is about, per the table above |
 
-No client address and no user agent. An address is the most useful field for spotting a stranger's sign-in and the most sensitive one to keep: it is personal data, it outlives the session it describes, and it is the one field that cannot be withdrawn from a log once written. Adding it later is additive; removing it is not.
+There is no client address and no user agent. An address is the most useful field for spotting a stranger's sign-in and the most sensitive to keep: it is personal data, it outlives the session it describes, and it cannot be withdrawn from a log once written. Adding it later is additive; removing it is not.
 
-The `request_id` ties an event to the server's own log lines for the same request, which carry the method, route, client address and outcome for as long as the operator's log retention keeps them. The activity log is the durable half, the request log the detailed half.
+The `request_id` ties an event to the server's own log lines for the same request, which carry the method, route, client address and outcome for as long as the operator's log retention keeps them. The activity log is the durable half and the request log the detailed half.
 
 ## Retention
 
@@ -72,25 +72,31 @@ An account's log keeps events for **90 days** and at most **1,000 events**, whic
 
 - A read never returns an event older than 90 days, whether or not it has been deleted yet.
 - Recording an event deletes the same account's events beyond either bound, in the same operation, so the log of an active account never exceeds its bound.
-- An account that records nothing more keeps its expired rows, unread, until it next records or the operator's sweep deletes them. The sweep is part of `capsule-server gc`, not a request's work: an applied pass deletes every event older than 90 days, across accounts, in batches of at most 1,000 rows so it never holds a long lock on the table; a dry run, the default, reports how many it would delete and deletes nothing. It deletes only events past the retention window, never one inside it, and nothing but activity events.
-- The count bound is what keeps a burst of events (a scripted loop against the second factor) from growing the table without limit. The cost of the bound is that such a flood pushes the account's older events out of its log; the request log still holds them for as long as the operator keeps it.
-- `sign_in.password_refused` and `sign_in.locked` are caused by anyone who knows an address, and the password sign-in route charges no budget for them. So each is **coalesced**: one is written per account per hour, the attempts after it in that hour are counted into it, and the count goes to the operator's log (at `info`) when the next attempt of that kind for the account, or a sweep of expired windows (run when many accounts are tracked), closes the window after the hour is over; an account that goes quiet may never have its count logged above `debug`. Every attempt is still in the request log. A wrong-password flood therefore adds at most two events an hour to an account's log, and needs weeks of uninterrupted attempts to push out the events before it. Serving through links and to peers is bounded the same way, at ten events an hour (see [Serving](#serving)). Coalescing is per server process, and decides nothing about the sign-in's answer.
-- Those two events are written off the response path, at most 16 at a time per server process. One past that bound is not written and is logged at `error` with its fields. A server that is stopping waits a few seconds for the ones in flight; any still in flight after that are lost, and the stop logs it at `error`.
+- An account that records nothing more keeps its expired rows, unread, until it next records or the operator's sweep deletes them.
+- The sweep is part of `capsule-server gc`, not a request's work. An applied pass deletes every event older than 90 days, across accounts, in batches of at most 1,000 rows so it never holds a long lock on the table. A dry run, the default, reports how many it would delete and deletes nothing. It deletes only activity events past the retention window, never one inside it.
+- The count bound keeps a burst of events (a scripted loop against the second factor) from growing the table without limit. Its cost is that such a flood pushes the account's older events out of its log; the request log still holds them for as long as the operator keeps it.
+
+**Refused sign-ins are coalesced.** Anyone who knows an address can cause `sign_in.password_refused` and `sign_in.locked`, and the password sign-in route charges no budget for them.
+
+- One of each is written per account per hour, and the attempts after it in that hour are counted into it. The count goes to the operator's log (at `info`) when the window is closed after the hour, by the next attempt of that kind for the account or by a sweep of expired windows (run when many accounts are tracked). An account that goes quiet may never have its count logged above `debug`. Every attempt is still in the request log.
+- A wrong-password flood therefore adds at most two events an hour to an account's log and needs weeks of uninterrupted attempts to push out the events before it. Serving through links and to peers is bounded the same way, at ten events an hour ([](#serving)).
+- Coalescing is per server process and decides nothing about the sign-in's answer.
+- Both are written off the response path, at most 16 at a time per server process. One past that bound is not written and is logged at `error` with its fields. A stopping server waits a few seconds for the ones in flight; any still in flight after that are lost, and the stop logs it at `error`.
 
 ## Serving
 
 A blob served to somebody other than the account is one request per blob, so it is recorded **aggregated**: one event per account and link or peer per hour, never one per blob.
 
-- The first delivery that carries bytes (`200` or `206`) through a share link, or to a peer under a capability, in an hour writes one `share_link.served` or `peer.served` naming the link or the peer. Every later one in that hour is counted into it and not written; the count goes to the operator's log (at `info`) when the window closes, as for the coalesced sign-in events. A revalidation (`304`), a refused range and a refused fetch serve nothing and record nothing.
-- An account's serving names at most **8** links and peers an hour, together. Every further link or peer in that hour is counted into one `share_link.served` or `peer.served` with no `subject`, one of each kind, and not written again. Serving therefore adds at most ten events an hour to an account's log, 240 a day, however many links are viewed: it takes about four days of uninterrupted serving across more than eight links and peers to push an earlier event, a sign-in included, out through the 1,000-event bound. The request log still names every link.
-- The event carries the link's or the peer's id and nothing about what was read: no content address, no album id, no size, no client address. Which blobs a link serves is the owner's own record; which of them a viewer fetched is not the server's to keep.
-- The event is written when the window opens, so it says that serving started and when; how much was served is in the operator's log, not in the event, because an event is never updated. A count on the event would be an additive field.
+- **One event per window.** The first delivery in an hour that carries bytes (`200` or `206`), through a share link or to a peer under a capability, writes one `share_link.served` or `peer.served` naming the link or the peer. Every later one in that hour is counted into it and not written, and the count goes to the operator's log (at `info`) when the window closes, as for the coalesced sign-in events. A revalidation (`304`), a refused range and a refused fetch serve nothing and record nothing.
+- **At most 8 named an hour.** An account's serving names at most **8** links and peers an hour, together. Every further link or peer in that hour is counted into one `share_link.served` or `peer.served` with no `subject`, one of each kind, and not written again. Serving therefore adds at most ten events an hour, 240 a day, however many links are viewed. It takes about four days of uninterrupted serving across more than eight links and peers to push an earlier event, a sign-in included, out through the 1,000-event bound. The request log still names every link.
+- **Nothing about what was read.** The event carries the link's or the peer's id and no content address, album id, size or client address. Which blobs a link serves is the owner's own record; which of them a viewer fetched is not the server's to keep.
+- **Written when the window opens**, so it says that serving started and when. How much was served is in the operator's log, not the event, because an event is never updated; a count on the event would be an additive field.
 - An account's own downloads record nothing, and neither do a member's on this server.
-- The windows are kept in memory, per server process, in a set apart from the sign-in windows and under the same 16-write in-flight bound: no blob request makes a store write of its own, and none waits on one. Each set holds at most 65,536 open windows, so serving can never fill the sign-in windows; an event that would open one past its set's bound is not written and is logged at `error` with its fields. A full set is swept for closed windows only once the first of them can have closed, so refusing past the bound costs a request nothing. A restart forgets the open windows, so the first serve after it writes again.
+- **Windows live in memory**, per server process, in a set apart from the sign-in windows and under the same 16-write in-flight bound, so no blob request makes a store write of its own or waits on one. Each set holds at most 65,536 open windows, so serving can never fill the sign-in windows. An event that would open one past its set's bound is not written and is logged at `error` with its fields. A full set is swept for closed windows only once the first of them can have closed, so refusing past the bound costs a request nothing. A restart forgets the open windows, so the first serve after it writes again.
 
 ## The Port
 
-The log is a durable port in the PostgreSQL family, beside the asset index, accounts and moderation, with an in-memory adapter for tests and `--memory` deployments. Both adapters pass one conformance suite. It is not a generic event store: it records the closed set above and reads one account's events, newest first.
+The log is a durable port in the PostgreSQL family, beside the asset index, accounts and moderation, with an in-memory adapter for tests and `--memory` deployments; both pass one conformance suite. It is not a generic event store: it records the closed set above and reads one account's events, newest first.
 
 ## Reading It
 
@@ -98,4 +104,4 @@ The log is a durable port in the PostgreSQL family, beside the asset index, acco
 
 ## Rate Limits
 
-No event feeds a [counter budget](/design/authentication/#the-second-factor). Budgets are charged at the request edge, before the action and against a counter store built for that; the log is written after the action, to PostgreSQL. A budget fed from the log would make a log outage disable a limiter. Second-factor attempts and link creation are budgeted at the routes that cause them. A password sign-in is bounded by the account lockout, not by a budget, so its refusal events are coalesced instead (see [Retention](#retention)).
+No event feeds a [counter budget](/design/authentication/#the-second-factor). Budgets are charged at the request edge, before the action, against a counter store built for that, while the log is written to PostgreSQL after the action; a budget fed from the log would make a log outage disable a limiter. Second-factor attempts and link creation are budgeted at the routes that cause them. A password sign-in is bounded by the account lockout, not a budget, so its refusal events are coalesced instead ([](#retention)).

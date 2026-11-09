@@ -7,8 +7,8 @@
 //! record that rebinds a hardware-held device signing key on reopen ([`account`]) and
 //! the system clock and random source core's identifiers are minted from ([`ambient`]).
 //! Every cryptographic, codec and planning decision stays in `capsule-core`; the code here reads
-//! and writes the bytes those decisions are made over. See
-//! [Module Map — Stateless Core](https://docs/design/module-map/#stateless-core).
+//! and writes the bytes those decisions are made over. See [`capsule_core`] for the stateless
+//! core's rule.
 
 pub mod account;
 pub mod album_store;

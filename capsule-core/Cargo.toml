@@ -13,7 +13,7 @@ publish.workspace = true
 [features]
 # `native` (default) is the surface the on-device library (`capsule-library`) builds on: the
 # sidecar, CRDT, import, ML and notification logic, OpenMLS and the media stack. It holds no
-# local state — that is `capsule-library`'s (Module Map — Stateless Core). Turning it OFF
+# local state — that is `capsule-library`'s (see the crate docs). Turning it OFF
 # (`--no-default-features`) leaves only the WASM sealing surface (`cbor` + `crypto` + `drop`),
 # which targets `wasm32-unknown-unknown` for the guest web-upload client (see
 # `drop::seal_drop`). Build:
@@ -49,9 +49,9 @@ media = ["dep:rawshift-image"]
 # source-resolution still is only worth its bytes in a lossy codec.
 #
 # HEIC decode is **not** here and cannot be by policy rather than toolchain: libheif and its HEVC
-# decoder libde265 are both LGPL-3.0, which CLAUDE.md and `deny.toml` exclude outright (issue
-# #588; the decision is recorded in the Dependencies design doc). AVIF decode is its own feature,
-# `media-avif-decode`, below.
+# decoder libde265 are both LGPL-3.0, which .claude/rules/dependencies.md and `deny.toml` exclude
+# outright (issue #588; design/licensing.md). AVIF decode is
+# its own feature, `media-avif-decode`, below.
 media-linked-codecs = [
     "media",
     "rawshift-image/jxl-encode-libjxl-vendored",
@@ -118,10 +118,12 @@ globset = "0.4.18"
 # `default-features = false` drops `spec-vectors`, which only compiles the crate's own
 # integration test; `simd` is kept because every backend replays the scalar path op-for-op
 # and is byte-identical — it changes speed, never output. Imported **directly** rather than
-# through Rawshift, which AGENTS.md forbids from wrapping it.
+# through Rawshift, which .claude/rules/capsule-core.md forbids from wrapping it.
 chromahash = { version = "0.7.1", default-features = false, features = ["simd"] }
 indexmap = { workspace = true }
 jiff = { workspace = true }
+# EXIF reading, transitional: removed once Rawshift's metadata extraction covers capture time,
+# GPS and orientation (design/thumbnails.md, "Media Is Rawshift's").
 kamadak-exif = "0.5"
 # Still-image decode/encode for `capsule_core::media` (`media` feature). A **registry**
 # dependency, not the pinned `rawshift/` submodule, which is an uninitialised newer
@@ -164,7 +166,12 @@ kamadak-exif = "0.5"
 # other five RAW families (`raw-incomplete`: CR2, CR3, CRW, NEF, RAF; CR3 pixel decode is
 # unimplemented upstream). Each is a typed
 # `media::MediaError::UnsupportedFormat` today rather than a silent gap. MPL-2.0, already
-# allow-listed in `deny.toml`; see the Media row in design/dependencies.md.
+# allow-listed in `deny.toml`. Pure Rust by default; the linked codecs stay opt-in and never in
+# `default`. Absent from wasm32.
+#
+# Video is absent too. It waits on `rawshift-video`, which is still an unimplemented
+# placeholder at 0.1.1, and Capsule links no video codec of its own (design/licensing.md, "The
+# video transcoder seam").
 rawshift-image = { version = "0.1.1", default-features = false, features = [
     "jpeg-decode",
     "png-decode",
@@ -212,7 +219,7 @@ tar = "0.4"              # deterministic uncompressed POSIX tar backup container
 # polynomial coefficients (RUSTSEC-2024-0398 fix) and the same share encoding; `sharks` is retired.
 blahaj = "0.7"
 
-# Sole logging facade (the `log` crate is forbidden in new code; see the Dependencies doc).
+# Sole logging facade: the `log` crate is forbidden in new code.
 # Non-optional: the native library/import/lifecycle surface instruments hot-path spans and
 # events, and the WASM sealing build links only the facade (no subscriber), which is free.
 tracing = { workspace = true }
@@ -225,6 +232,7 @@ tracing = { workspace = true }
 # supplies the leaf `SignatureKeyPair`; `openmls_traits` exposes the `Ciphersuite` type. All four
 # are host-only (libcrux does not target `wasm32-unknown-unknown`), so they sit behind `mls`,
 # which `native` implies and the wasm sealing build excludes. See `crypto::authority::openmls`.
+# Not `mls-rs`.
 # From 0.9 the X-Wing suite sits behind `draft-ietf-mls-pq-ciphersuites`. It is enabled on the
 # four leaf crates, not on `openmls`: openmls's own feature names `openmls_sqlite_storage?/…`, and
 # Cargo's resolver then pulls that optional crate's rusqlite 0.37 into the `links = "sqlite3"`

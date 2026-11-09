@@ -4,7 +4,7 @@
 - **Date:** 2026-08-29
 - **Supersedes:** —
 - **Superseded by:** —
-- **Contract:** [API Surfaces — What Is Generated, and What Is Not](../capsule-docs/src/content/docs/design/api-surfaces.md#what-is-generated-and-what-is-not)
+- **Contract:** [API Surfaces — Key Design Decisions](../capsule-docs/src/content/docs/design/api-surfaces.md#key-design-decisions)
 - **Slices:** S-D1, S-D8
 
 ## Context

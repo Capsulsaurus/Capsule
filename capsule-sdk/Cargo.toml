@@ -43,7 +43,7 @@ http3-netem = ["http3"]
 
 [dependencies]
 # capsule-i18n gives the SDK the canonical `error.*` code constants it switches
-# on (clients localize codes, never bare HTTP statuses — see CLAUDE.md).
+# on (clients localize codes, never bare HTTP statuses — see .claude/rules/i18n.md).
 capsule-i18n = { path = "../capsule-i18n" }
 # The verify-before-destroy gate reuses the offline data plane's pure predicate
 # (`library::release_is_safe`), the `StorageVerdict` type, and custody-receipt verification
@@ -91,8 +91,8 @@ socket2 = { workspace = true }
 
 # ── LAN peering ───────────────────────────────────────────────────────
 # The peering channel is mutually-authenticated TLS 1.3 with no CA (the device keys
-# are the trust anchor, checked at the application layer). rustls is the sanctioned
-# TLS stack (Dependencies doc — "LAN-peering mutual TLS"); tokio-rustls is its async
+# are the trust anchor, checked at the application layer). rustls is the only TLS stack
+# (never native-tls or OpenSSL); tokio-rustls is its async
 # adapter and rcgen mints the per-connection self-signed leaf the handshake presents.
 # The `ring` provider is pinned across all three so the peering stack never depends on
 # an ambiguous process-default CryptoProvider (reqwest's rustls-tls uses aws-lc-rs).
@@ -110,7 +110,9 @@ bytes = { workspace = true }
 # (h3-quinn), adopted directly because reqwest 0.12's HTTP/3 needs `--cfg reqwest_unstable`. The
 # `ring` rustls provider is pinned, as for LAN peering, and quinn's default `platform-verifier`,
 # `log` and `bloom` are off: trust anchors are the same webpki roots reqwest's `rustls-tls` uses.
-# See the HTTP/3 row in design/dependencies.md.
+# TLS 1.3, no early data. Off by default, so no default build or shipped client links it (an
+# `--all-features` build would refuse reqwest's unstable cfg). Retire it for reqwest's own
+# HTTP/3 once that is stable.
 quinn = { version = "0.11.9", default-features = false, features = [
     "runtime-tokio",
     "rustls-ring",
@@ -132,7 +134,9 @@ uniffi = { version = "0.31", features = ["tokio"], optional = true }
 # (clap) and the `uuid`/`time` `format`-mapping features — the current schema emits neither,
 # and disabling them keeps the SDK's build graph minimal. spargen is a *build*-dependency
 # only: its embedded runtime is emitted into the generated module, so spargen never appears
-# in the SDK's runtime dependency tree.
+# in the SDK's runtime dependency tree. The generated runtime needs `secrecy` beside the
+# `bytes`/`reqwest`/`serde`/`serde_json` floors; bump those floors together with spargen.
+# Everything that parses is generated; only orchestration is hand-written. Not Progenitor.
 spargen = { version = "0.5.0", default-features = false }
 
 [dev-dependencies]

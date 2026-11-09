@@ -4,7 +4,7 @@ description: Tiered, ranged, on-demand blob fetch — access scoping, the fallba
 status: draft
 ---
 
-The server-to-client half of the [transfer protocol](/design/transfer/), bound by its [invariants](/design/transfer/#invariants). Where upload optimises for correctness under interruption, download optimises for **bandwidth and storage frugality**: a client fetches the smallest representation that serves the user's current intent. A client learns *what* to fetch from the [sync feed](/design/sync/). Server: `capsule-server::serve` behind `GET /v1/blob/{hash}`; client: `capsule-sdk::fetch`.
+The server-to-client half of the [transfer protocol](/design/transfer/), bound by its [invariants](/design/transfer/#invariants). Upload optimises for correctness under interruption; download optimises for **bandwidth and storage frugality**, fetching the smallest representation that serves the user's current intent. A client learns *what* to fetch from the [sync feed](/design/sync/). Server: `capsule-server::serve` behind `GET /v1/blob/{hash}` ([](/reference/api/sync/)); client: `capsule-sdk::fetch`.
 
 ## Tiered, On-Demand Fetch
 
@@ -15,18 +15,18 @@ Each asset has a ladder of representations, cheapest first:
 3. **Preview** — fetched when the asset is opened.
 4. **Original** — fetched only on explicit demand (full-fidelity view, export, share).
 
-The per-library [synchronization scope](/design/sync/#synchronization-scope) sets which tiers are fetched eagerly; anything above it is fetched lazily. The original is never fetched speculatively. The client looks up its cache by content hash before any request, so a representation shared between assets is fetched once.
+The per-library [synchronization scope](/design/sync/#synchronization-scope) sets which tiers are fetched eagerly; anything above it is fetched lazily, and the original never speculatively. The client looks up its cache by content hash before any request, so a representation shared between assets is fetched once.
 
 ### Render Ladder
 
-What a client *shows* follows the same ladder, extended with what is already on the device. The order is computed once, in Rust, and reaches every native app through the FFI (the keyless web client shows what the sync feed and its share paths serve); apps render the representation it names and keep no ladder of their own. From least to most faithful:
+What a client *shows* follows the same ladder, extended with what is already on the device. The order is computed once, in Rust, and reaches every native app through the FFI; apps render the representation it names and keep no ladder of their own. The keyless web client shows what the sync feed and its share paths serve. From least to most faithful:
 
 1. **LQIP** from the metadata blob, or its dominant colour when the LQIP cannot be decoded ([LQIP](/design/thumbnails/#lqip)).
 2. **Thumbnail**: the encoded tier, or, until it exists, an [embedded preview](/design/thumbnails/#embedded-previews) whose long edge reaches the Thumbnail tier's.
-3. **Preview**: the encoded tier, or, on the device that holds the original and until an encoded Preview is held on that device, an embedded preview that covers the surface showing it when the view opens. A view that later grows keeps the embedded preview rather than dropping a rung.
+3. **Preview**: the encoded tier, or, on the device holding the original until it holds an encoded Preview, an embedded preview that covers the surface showing it when the view opens. A view that later grows keeps the embedded preview rather than dropping a rung.
 4. **Original**, decoded.
 
-A surface asks for the rung its intent needs (the grid asks for Thumbnail, the single-asset view for Preview) and is shown the best rung held at or below it at once. The view then **upgrades in place** as a better rung arrives, whether it is generated on the device or fetched from the server, and never shows a blank while it waits. It never downgrades a rung it has already shown, except through the [fallback ladder](#fallback-ladder).
+A surface asks for the rung its intent needs (Thumbnail for the grid, Preview for the single-asset view) and at once shows the best rung held at or below it. The view then **upgrades in place** as a better rung arrives, generated on the device or fetched, and never shows a blank while it waits. It never downgrades a rung it has shown, except through the [](#fallback-ladder).
 
 ## Blob Access
 
@@ -40,18 +40,18 @@ A surface asks for the rung its intent needs (the grid asks for Thumbnail, the s
 
 ### Trash
 
-A `delete` moves an asset to trash, restorable by a `trash-restore` until the `retention_until` its signed record fixed ([Organization — Retention Window](/design/organization/#retention-window)). Until then the asset's blobs serve as the live asset's did: its provenance records (the ones the delete moved past included), its live metadata blob, its original and its derivatives. A device that first sees the asset at its `delete` fetches them to adopt the asset from its create and restore it.
+A `delete` moves an asset to trash, restorable by a `trash-restore` until the `retention_until` its signed record fixed ([](/design/organization/#retention-window)). Until then the asset's blobs serve as the live asset's did: its provenance records (including those the delete moved past), its live metadata blob, its original and its derivatives. A device that first sees the asset at its `delete` fetches them to adopt the asset from its create and restore it.
 
-- The window that serves the blobs is the window that admits the restore, judged on the server's clock. No instant serves a blob of an asset whose restore it would refuse. A delete that signed no `retention_until` never closes its window, as it never makes the asset purgeable.
+- The window that serves the blobs is the window that admits the restore, judged on the server's clock, so no instant serves a blob of an asset whose restore it would refuse. A delete that signed no `retention_until` never closes its window, as it never makes the asset purgeable.
 - Past the window the asset's blobs are `410`; after the purge drops their references they are `404`, as an address nothing references.
 - The authority is decided first in every state. A stranger gets `404` and a former member `403` whether the asset is live, in trash or past its window, and a serving hold is `410` inside the window too.
 
 ## Awaiting-Original
 
-An asset whose T0 tier has finalized but whose original has not (see [staged uploads](/design/transfer/upload/#upload-tiering-staged-uploads)) carries `original_held = false` on its feed entry. The state is **derived** from held blob roles, never stored.
+An asset whose T0 tier has finalized but whose original has not ([staged uploads](/design/transfer/upload/#upload-tiering-staged-uploads)) carries `original_held = false` on its feed entry. The state is **derived** from held blob roles, never stored.
 
 - Other devices list it immediately (LQIP, then T1 as it lands) with an "original still on device" badge.
-- Fetching its original returns the transient `409 error.blob.pending_upload`, distinct from `410`, **only** when the fetching account itself has an active upload session declaring those bytes. The open session is the promise, so the promise expires with the session. A sharee or federated peer gets `404` and waits for `original_held` to flip.
+- Fetching its original returns the transient `409 error.blob.pending_upload`, distinct from `410`, **only** when the fetching account itself has an active upload session declaring those bytes. The open session is the promise, so it expires with the session. A sharee or federated peer gets `404` and waits for `original_held` to flip.
 - GC and the index rebuild treat the missing original as expected state, not a dangling reference.
 
 ## Fallback Ladder
@@ -65,10 +65,10 @@ A missing representation MUST NOT remove the asset's metadata or index entry, an
 
 ## Resumption and Verification
 
-- Large blobs are fetched with HTTP `Range`; an interrupted download resumes from the last persisted byte. The resume position is the partial file's length after an fsync, never a separate counter that could run ahead of it, so a download also resumes across a process restart.
-- A download is written to a temporary file and becomes visible under its final name only by an atomic rename after its content address verifies. A partial or unverified file is never read as the blob. Because a blob's address is its content and its `ETag`, two ranges of one address can never splice two different objects.
+- Large blobs are fetched with HTTP `Range`, and an interrupted download resumes from the last persisted byte. The resume position is the partial file's length after an fsync, never a separate counter that could run ahead of it, so a download also resumes across a process restart.
+- A download is written to a temporary file and appears under its final name only by an atomic rename after its content address verifies, so a partial or unverified file is never read as the blob. A blob's address is its content and its `ETag`, so two ranges of one address can never splice two different objects.
 - The client recomputes the ciphertext content hash against the requested address. A mismatch discards the bytes and is retried as transient.
-- The client then decrypts, relying on STREAM's authentication tags to detect truncation, reordering or deletion. A derivative whose bytes match their address but fail authentication is discarded and **not** re-fetched (the manifest commits to that address); the client regenerates it from the original ([Thumbnails](/design/thumbnails/)).
+- The client then decrypts, relying on STREAM's authentication tags to detect truncation, reordering or deletion. A derivative whose bytes match their address but fail authentication is discarded and **not** re-fetched, since the manifest commits to that address; the client regenerates it from the original ([](/design/thumbnails/)).
 - Discarding the only local copy of a *local-origin* asset is gated by [Verify Before Destroy](/design/transfer/durability/#verify-before-destroy). Re-fetchable server-origin blobs are always safe to drop.
 
 ## Prefetch and Frugality

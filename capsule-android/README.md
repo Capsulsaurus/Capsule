@@ -33,7 +33,7 @@ Android-capable host (#634). So the app layer is placeholder scaffolding, and th
 library is unverified rather than known-good.
 
 The client contract this app must satisfy is [Clients](../capsule-docs/src/content/docs/design/clients.md);
-the shared-core boundary is [Module Map](../capsule-docs/src/content/docs/design/module-map.md).
+the shared-core boundary is the [`capsule-core-ffi` crate docs](../capsule-core-ffi/src/lib.rs).
 Work items are tracked as GitHub issues; see the repo-root `ROADMAP.md`.
 
 ## Build

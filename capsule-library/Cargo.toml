@@ -7,8 +7,8 @@ publish.workspace = true
 
 # All of a client's local state over the stateless `capsule-core`: the SQLite index, the on-disk
 # library and its lock, the `Workspace`, import scanning and execution, sidecar / album-store /
-# backup file I/O, file-path EXIF reading and the desktop TPM signers (Module Map — Stateless
-# Core). A plain rlib: the apps reach it through `capsule-sdk`'s `capsule_sdk` namespace, and it
+# backup file I/O, file-path EXIF reading and the desktop TPM signers (see `capsule-core`'s
+# crate docs, "stateless core"). A plain rlib: the apps reach it through `capsule-sdk`'s `capsule_sdk` namespace, and it
 # exports no uniffi namespace of its own (ADR-0005).
 
 [features]
@@ -40,17 +40,18 @@ jiff = { workspace = true }
 # The in-house PTP/IP initiator behind the camera import source adapter (`import::camera`).
 ptpip-rs = { path = "../ptpip-rs" }
 p256 = { version = "0.13", default-features = false, features = ["ecdsa", "ecdh", "arithmetic"] }
-# Bundled SQLite (C) — the on-device library index.
+# Bundled SQLite (C) — the on-device library index. Local state, so never a `capsule-core`
+# dependency.
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { workspace = true }
 serde_bytes = "0.11"
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 # The client-local embedding index: `sqlite-vec`'s `vec0` virtual tables over `library.sqlite`.
-# It registers as a SQLite auto-extension. See `db::vector`.
+# It registers as a SQLite auto-extension. See `db::vector`. Client-local only; not on wasm32.
 sqlite-vec = "0.1.9"
 thiserror = { workspace = true }
-# Sole logging facade (the `log` crate is forbidden in new code; see the Dependencies doc).
+# Sole logging facade: the `log` crate is forbidden in new code.
 tracing = { workspace = true }
 uuid = { workspace = true, features = ["v4", "v7", "serde"] }
 walkdir = "2"
@@ -65,7 +66,7 @@ tss-esapi = { version = "7", optional = true }
 # The streaming-import free-space probe (`library::available_bytes`) is a thin
 # `statvfs` / `GetDiskFreeSpaceEx` wrapper. rustix gives the pure-Rust POSIX `statvfs(2)` on Unix
 # (no libc link, aligned with the rustls/no-openssl ethos); windows-sys exposes the Win32
-# `GetDiskFreeSpaceExW`. See the Dependencies design doc.
+# `GetDiskFreeSpaceExW`.
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["fs"] }
 
@@ -74,7 +75,8 @@ rustix = { version = "1", features = ["fs"] }
 # the desktop TPM 2.0 `HardwareSigner` (`signers::tbs`). TBS is the raw TPM command
 # channel the tss-esapi reference (`signers::tpm`) wraps on Linux; on Windows the adapter
 # marshals the TPM 2.0 commands itself and submits them through `tbs.dll` (raw-dylib — no import
-# library, so the crate cross-`check`s for `x86_64-pc-windows-msvc` off-Windows).
+# library, so the crate cross-`check`s for `x86_64-pc-windows-msvc` off-Windows). Not tss-esapi
+# on Windows.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.60", features = [
     "Win32_Storage_FileSystem",

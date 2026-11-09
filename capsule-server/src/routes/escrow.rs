@@ -547,7 +547,8 @@ pub async fn store_album_keys(
 ///
 /// What `capsule auth recover` reads to give a library created from the master key the
 /// account's albums before anything creates one, and what a push compares its albums against
-/// to re-escrow only the ones that changed.
+/// to re-escrow only the ones that changed. An account that has escrowed no album gets an
+/// empty list, never a `404`.
 #[kynos::get(
     "/v1/auth/escrow/albums",
     operation_id = "list_album_keys",

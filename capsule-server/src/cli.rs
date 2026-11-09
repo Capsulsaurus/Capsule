@@ -576,8 +576,8 @@ async fn maintenance(config: &Config) -> Result<Maintenance> {
 ///
 /// # No TLS
 ///
-/// `design/cryptography/failure-modes.md` is explicit that "application servers do not terminate
-/// TLS", and scopes in-code TLS to the SDK client, LAN peering and server-to-server egress —
+/// `design/networking.md#transport-security` is explicit that ingress, not the application
+/// server, terminates TLS, and scopes in-code TLS to the SDK client, LAN peering and server-to-server egress —
 /// none of which is this listener. Kynos's `tls` feature stays off, so a certificate cannot be
 /// configured by accident.
 async fn serve(config: &Config) -> Result<ExitCode> {

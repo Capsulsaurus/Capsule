@@ -1,4 +1,4 @@
-//! **E2E case 4** — federation cross-server pull (design/module-map.md, "E2E Test Surface").
+//! **E2E case 4** — federation cross-server pull (the case index is in `src/lib.rs`).
 //!
 //! Two federating servers, `alice.test` and `bob.test`, each the real composition root under
 //! the memory profile with its own operational key. Each operator pins the other's key as
