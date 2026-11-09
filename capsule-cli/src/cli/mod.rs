@@ -115,6 +115,22 @@ where
 /// called, so no synthesized argument is described, and the reference page does not repeat
 /// `--help` under every command. Hidden commands and arguments are skipped for the same
 /// reason they are hidden.
+/// [`command_tree`] exactly as `capsule-cli/cli-surface.json` holds it: pretty-printed with a
+/// trailing newline, because the artifact is reviewed as a diff and a one-line blob would hide
+/// the change a reviewer is there to see. The `gen_cli_surface` binary writes this, and a unit
+/// test compares it with the committed file.
+///
+/// # Panics
+///
+/// Never in practice: the tree is a `serde_json::Value`, which always serializes.
+#[must_use]
+pub fn command_tree_json() -> String {
+    let mut json =
+        serde_json::to_string_pretty(&command_tree()).expect("a JSON value always serializes");
+    json.push('\n');
+    json
+}
+
 #[must_use]
 pub fn command_tree() -> Value {
     let mut root = describe_command(&Cli::command());
