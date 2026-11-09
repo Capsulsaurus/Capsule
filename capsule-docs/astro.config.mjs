@@ -1,11 +1,20 @@
+import { fileURLToPath } from 'node:url';
 import { unified } from '@astrojs/markdown-remark';
 import starlight from '@astrojs/starlight';
 import tailwindcss from '@tailwindcss/vite';
 // @ts-check
 import { defineConfig } from 'astro/config';
+import starlightBlog from 'starlight-blog';
 import starlightLinksValidator from 'starlight-links-validator';
 import { referenceSidebar } from './scripts/reference-groups.mjs';
+import { hasPublishedPost } from './src/lib/blog-posts.mjs';
 import rehypeNoTranslate from './src/lib/rehype-notranslate.mjs';
+
+// The blog's header link and RSS feed appear only once a post is published,
+// so no reader lands on an empty index. SiteFooter.astro applies the same rule.
+const blogIsLive = hasPublishedPost(
+    fileURLToPath(new URL('./src/content/docs/blog/', import.meta.url)),
+);
 
 // https://astro.build/config
 export default defineConfig({
@@ -175,6 +184,17 @@ export default defineConfig({
             customCss: ['./src/styles/global.css'],
             // TODO: Add internationalization down the line: https://starlight.astro.build/guides/i18n/
             plugins: [
+                starlightBlog({
+                    title: 'Blog',
+                    navigation: blogIsLive ? 'header-end' : 'none',
+                    rss: blogIsLive,
+                    authors: {
+                        justin: {
+                            name: 'Justin Chung',
+                            url: 'https://github.com/justin13888',
+                        },
+                    },
+                }),
                 // Feature cards on the front page link into the design docs.
                 starlightLinksValidator({ components: [['Feature', 'href']] }),
                 // starlightVersions({

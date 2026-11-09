@@ -79,6 +79,14 @@ export function stripFrontmatter(source) {
     return match ? blank(match[0]) + source.slice(match[0].length) : source;
 }
 
+/** The review `status` in a page's YAML frontmatter, or undefined. */
+export function frontmatterStatus(source) {
+    const block = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/.exec(source);
+    if (!block) return undefined;
+    const field = /^status:\s*['"]?([^'"\s#]+)['"]?\s*(#.*)?$/m.exec(block[1]);
+    return field?.[1];
+}
+
 /** Blank HTML comments — a link inside one is commented out, not published. */
 export function stripComments(source) {
     return source.replace(/<!--[\s\S]*?-->/g, blank);
