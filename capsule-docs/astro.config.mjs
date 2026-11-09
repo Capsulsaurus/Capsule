@@ -45,7 +45,8 @@ export default defineConfig({
     redirects: {
         '/design/module-map/': '/design/principles/',
         '/design/dependencies/': '/design/licensing/',
-        '/design/cryptography/failure-modes/': '/design/backup-recovery/#recovery-paths',
+        '/design/cryptography/failure-modes/':
+            '/design/backup-recovery/#recovery-paths',
         '/reference/crates/': '/reference/sdk/rust/',
     },
     // Astro 7 deprecates the top-level `markdown.*Plugins` keys; plugins are

@@ -867,7 +867,9 @@ describe('the SDK pages', () => {
     });
 
     it('puts the generated conventions page right after the REST overview', () => {
-        const rest = referenceSidebar().find((item) => item.label === 'REST API');
+        const rest = referenceSidebar().find(
+            (item) => item.label === 'REST API',
+        );
         expect(rest.items.slice(0, 2)).toEqual([
             { slug: 'reference/api' },
             { slug: 'reference/api/conventions' },
