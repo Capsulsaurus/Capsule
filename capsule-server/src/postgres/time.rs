@@ -3,15 +3,15 @@
 //! # Why an integer and not `TIMESTAMPTZ`
 //!
 //! Binding a `TIMESTAMPTZ` needs one of sea-orm's datetime features, and both are refused. With
-//! `with-chrono` the server joins the chrono path that design/dependencies.md makes a
-//! review-blocking gate; with `with-time` the workspace gains a third datetime crate with no row
-//! in that table. Without either there is no Rust type for the column at all, so the choice is
+//! `with-chrono` the server joins the chrono path that `cargo xtask architecture-check` makes a
+//! review-blocking gate; with `with-time` the workspace gains a third datetime crate beside
+//! `jiff` and the CLI entity's `chrono`. Without either there is no Rust type for the column at all, so the choice is
 //! an integer column or a banned dependency.
 //!
 //! This is the server's exact analogue of the CLI's "chrono only at the entity boundary" rule:
 //! the conversion happens here, at the adapter's edge, and every layer above speaks
-//! [`jiff::Timestamp`]. design/dependencies.md already blesses integer epochs as a serialized
-//! form.
+//! [`jiff::Timestamp`]. Wire formats already carry RFC 3339 or integer epochs, never a library
+//! type.
 //!
 //! # What it costs
 //!

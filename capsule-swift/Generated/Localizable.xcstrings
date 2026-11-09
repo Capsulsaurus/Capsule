@@ -12247,6 +12247,342 @@
         }
       }
     },
+    "app.culling.action.collapse_stack": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Collapse Stack"
+          }
+        }
+      }
+    },
+    "app.culling.action.expand_stack": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expand Stack"
+          }
+        }
+      }
+    },
+    "app.culling.action.next": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Next Photo"
+          }
+        }
+      }
+    },
+    "app.culling.action.pick": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pick"
+          }
+        }
+      }
+    },
+    "app.culling.action.previous": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Previous Photo"
+          }
+        }
+      }
+    },
+    "app.culling.action.reject": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reject"
+          }
+        }
+      }
+    },
+    "app.culling.action.shortcuts": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keyboard Shortcuts"
+          }
+        }
+      }
+    },
+    "app.culling.action.sweep": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move Rejects to Trash"
+          }
+        }
+      }
+    },
+    "app.culling.action.unflag": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unflag"
+          }
+        }
+      }
+    },
+    "app.culling.announcement": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@, %2$@"
+          }
+        }
+      }
+    },
+    "app.culling.empty.body": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Photos in this view appear here for review."
+          }
+        }
+      }
+    },
+    "app.culling.empty.title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nothing to Cull"
+          }
+        }
+      }
+    },
+    "app.culling.error.flag": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The flag could not be saved, so the photo keeps the flag it had."
+          }
+        }
+      }
+    },
+    "app.culling.error.load": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The photos could not be loaded."
+          }
+        }
+      }
+    },
+    "app.culling.error.sweep": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The rejected photos could not be moved to the Trash."
+          }
+        }
+      }
+    },
+    "app.culling.flag.pick": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Picked"
+          }
+        }
+      }
+    },
+    "app.culling.flag.reject": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rejected"
+          }
+        }
+      }
+    },
+    "app.culling.flag.unflagged": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unflagged"
+          }
+        }
+      }
+    },
+    "app.culling.open": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cull"
+          }
+        }
+      }
+    },
+    "app.culling.position": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ of %2$@"
+          }
+        }
+      }
+    },
+    "app.culling.stack.all_rejected": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stack, all rejected"
+          }
+        }
+      }
+    },
+    "app.culling.stack.any_pick": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stack with a pick"
+          }
+        }
+      }
+    },
+    "app.culling.stack.members": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld photo"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld photos"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "app.culling.stack.mixed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stack, undecided"
+          }
+        }
+      }
+    },
+    "app.culling.stack.summary": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@, %2$@"
+          }
+        }
+      }
+    },
+    "app.culling.sweep.confirm": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move to Trash"
+          }
+        }
+      }
+    },
+    "app.culling.sweep.done": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Moved %lld photo to the Trash"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Moved %lld photos to the Trash"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "app.culling.sweep.message": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You can restore them from Recently Deleted until their retention window closes."
+          }
+        }
+      }
+    },
+    "app.culling.sweep.title": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Move %lld rejected photo to the Trash?"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Move %lld rejected photos to the Trash?"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "app.culling.title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Culling"
+          }
+        }
+      }
+    },
     "app.custody.action.blocked.footer": {
       "localizations": {
         "ar": {
@@ -139737,6 +140073,76 @@
         }
       }
     },
+    "apple.menu.culling": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Culling"
+          }
+        }
+      }
+    },
+    "apple.menu.culling.collapse_stack": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Collapse Stack"
+          }
+        }
+      }
+    },
+    "apple.menu.culling.expand_stack": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expand Stack"
+          }
+        }
+      }
+    },
+    "apple.menu.culling.pick": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pick"
+          }
+        }
+      }
+    },
+    "apple.menu.culling.reject": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reject"
+          }
+        }
+      }
+    },
+    "apple.menu.culling.sweep": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move Rejects to Trash"
+          }
+        }
+      }
+    },
+    "apple.menu.culling.unflag": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unflag"
+          }
+        }
+      }
+    },
     "apple.menu.culling_review": {
       "localizations": {
         "ar": {
@@ -141951,6 +142357,16 @@
         }
       }
     },
+    "auth.login.or": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "or"
+          }
+        }
+      }
+    },
     "auth.login.title": {
       "localizations": {
         "ar": {
@@ -142193,6 +142609,46 @@
           "stringUnit": {
             "state": "translated",
             "value": "還沒有帳號？"
+          }
+        }
+      }
+    },
+    "auth.oidc.ceremony_lost": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This tab can no longer find this sign-in. Start again from the login page."
+          }
+        }
+      }
+    },
+    "auth.oidc.completing": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finishing sign-in…"
+          }
+        }
+      }
+    },
+    "auth.oidc.failed_title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign-in Not Completed"
+          }
+        }
+      }
+    },
+    "auth.oidc.not_completed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your identity provider did not complete the sign-in."
           }
         }
       }
@@ -150863,6 +151319,88 @@
         }
       }
     },
+    "error.auth.password_disabled": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "لا يقبل هذا الخادم تسجيل الدخول إلا عبر تسجيل الدخول الموحّد."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieser Server akzeptiert die Anmeldung nur über Single Sign-On."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This server only accepts sign-in through single sign-on."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este servidor solo admite el inicio de sesión mediante inicio de sesión único."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce serveur n'accepte la connexion que par authentification unique."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "यह सर्वर केवल सिंगल साइन-ऑन के ज़रिए साइन इन स्वीकार करता है।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questo server accetta l'accesso solo tramite Single Sign-On."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このサーバーではシングルサインオンによるサインインのみ利用できます。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 서버는 싱글 사인온을 통한 로그인만 허용합니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este servidor só aceita login por logon único."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Этот сервер принимает вход только через единый вход (SSO)."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此服务器仅接受通过单点登录进行登录。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此伺服器僅接受透過單一登入進行登入。"
+          }
+        }
+      }
+    },
     "error.auth.password_invalid": {
       "localizations": {
         "ar": {
@@ -151187,6 +151725,88 @@
           "stringUnit": {
             "state": "translated",
             "value": "嘗試次數過多。請稍候再試。"
+          }
+        }
+      }
+    },
+    "error.auth.registration_at_capacity": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "يتعامل هذا الخادم مع عدد كبير جدًا من عمليات التسجيل حاليًا. يُرجى المحاولة مرة أخرى بعد قليل."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieser Server verarbeitet gerade zu viele Registrierungen. Bitte versuche es in Kürze erneut."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This server is handling too many sign-ups right now. Please try again shortly."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este servidor está gestionando demasiados registros en este momento. Inténtalo de nuevo en breve."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce serveur gère trop d'inscriptions en ce moment. Veuillez réessayer sous peu."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "यह सर्वर अभी बहुत अधिक साइन-अप संभाल रहा है। कृपया थोड़ी देर बाद फिर से प्रयास करें।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Al momento questo server sta gestendo troppe registrazioni. Riprova tra poco."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このサーバーは現在、多数の新規登録を処理しています。しばらくしてからもう一度お試しください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "현재 이 서버가 처리 중인 가입 요청이 너무 많습니다. 잠시 후 다시 시도해 주세요."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este servidor está lidando com muitos cadastros no momento. Tente novamente em breve."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сейчас этот сервер обрабатывает слишком много регистраций. Повторите попытку чуть позже."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此服务器当前正在处理过多注册请求。请稍后再试。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此伺服器目前處理的註冊請求過多，請稍後再試。"
           }
         }
       }
@@ -156029,6 +156649,334 @@
         }
       }
     },
+    "error.federation.hint_at_capacity": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "يتعامل هذا الخادم مع عدد كبير جدًا من إشعارات التحديث حاليًا. يُرجى الانتظار ثم المحاولة مرة أخرى."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieser Server verarbeitet gerade zu viele Aktualisierungsmeldungen. Bitte warten Sie und versuchen Sie es erneut."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This server is handling too many update notices right now. Please wait and try again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este servidor está gestionando demasiados avisos de actualización en este momento. Espera e inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce serveur traite trop d'avis de mise à jour en ce moment. Veuillez patienter et réessayer."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "यह सर्वर अभी बहुत अधिक अपडेट सूचनाएँ संभाल रहा है। कृपया प्रतीक्षा करें और फिर से प्रयास करें।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questo server sta gestendo troppi avvisi di aggiornamento in questo momento. Attendi e riprova."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このサーバーは現在、処理中の更新通知が多すぎます。しばらくしてからもう一度お試しください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "현재 이 서버에서 처리 중인 업데이트 알림이 너무 많습니다. 잠시 후 다시 시도해 주세요."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este servidor está processando avisos de atualização demais no momento. Aguarde e tente novamente."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сейчас этот сервер обрабатывает слишком много уведомлений об обновлении. Подождите и повторите попытку."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此服务器当前正在处理的更新通知过多。请稍候再试。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此伺服器目前正在處理的更新通知過多。請稍候再試。"
+          }
+        }
+      }
+    },
+    "error.federation.hint_malformed": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "إشعار التحديث هذا غير صالح."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Aktualisierungsmeldung ist ungültig."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That update notice isn't valid."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ese aviso de actualización no es válido."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cet avis de mise à jour n'est pas valide."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "वह अपडेट सूचना मान्य नहीं है।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questo avviso di aggiornamento non è valido."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "その更新通知は無効です。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "해당 업데이트 알림이 올바르지 않습니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esse aviso de atualização não é válido."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Это уведомление об обновлении недействительно."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "该更新通知无效。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "該更新通知無效。"
+          }
+        }
+      }
+    },
+    "error.federation.hint_rate_limited": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "إشعارات تحديث كثيرة جدًا من هذا الخادم. يُرجى الانتظار ثم المحاولة مرة أخرى."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zu viele Aktualisierungsmeldungen von diesem Server. Bitte warten Sie und versuchen Sie es erneut."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too many update notices from this server. Please wait and try again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Demasiados avisos de actualización de este servidor. Espera e inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trop d'avis de mise à jour provenant de ce serveur. Veuillez patienter et réessayer."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "इस सर्वर से बहुत अधिक अपडेट सूचनाएँ। कृपया प्रतीक्षा करें और फिर से प्रयास करें।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Troppi avvisi di aggiornamento da questo server. Attendi e riprova."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このサーバーからの更新通知が多すぎます。しばらくしてからもう一度お試しください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 서버에서 보낸 업데이트 알림이 너무 많습니다. 잠시 후 다시 시도해 주세요."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Muitos avisos de atualização deste servidor. Aguarde e tente novamente."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Слишком много уведомлений об обновлении от этого сервера. Подождите и повторите попытку."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "来自此服务器的更新通知过多。请稍候再试。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "來自此伺服器的更新通知過多。請稍候再試。"
+          }
+        }
+      }
+    },
+    "error.federation.hint_unsigned": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تعذّر التحقق من إشعار التحديث."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Aktualisierungsmeldung konnte nicht verifiziert werden."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The update notice could not be verified."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo verificar el aviso de actualización."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'avis de mise à jour n'a pas pu être vérifié."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "अपडेट सूचना सत्यापित नहीं की जा सकी।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non è stato possibile verificare l'avviso di aggiornamento."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更新通知を検証できませんでした。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "업데이트 알림을 확인할 수 없습니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível verificar o aviso de atualização."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось проверить уведомление об обновлении."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法验证该更新通知。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法驗證該更新通知。"
+          }
+        }
+      }
+    },
     "error.federation.member_not_on_roster": {
       "localizations": {
         "ar": {
@@ -156107,6 +157055,88 @@
           "stringUnit": {
             "state": "translated",
             "value": "此人不在這本相簿的成員名單中。"
+          }
+        }
+      }
+    },
+    "error.federation.mint_at_capacity": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "يتعامل هذا الخادم مع عدد كبير جدًا من منح الوصول حاليًا. يُرجى المحاولة مرة أخرى بعد قليل."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieser Server verarbeitet gerade zu viele Zugriffsberechtigungen. Bitte versuche es in Kürze erneut."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This server is handling too many access grants right now. Please try again shortly."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este servidor está gestionando demasiadas concesiones de acceso en este momento. Inténtalo de nuevo en breve."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce serveur gère trop d'autorisations d'accès en ce moment. Veuillez réessayer sous peu."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "यह सर्वर अभी बहुत अधिक पहुँच अनुमतियाँ संभाल रहा है। कृपया थोड़ी देर बाद फिर से प्रयास करें।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Al momento questo server sta gestendo troppe autorizzazioni di accesso. Riprova tra poco."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このサーバーは現在、多数のアクセス許可を処理しています。しばらくしてからもう一度お試しください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "현재 이 서버가 처리 중인 접근 권한이 너무 많습니다. 잠시 후 다시 시도해 주세요."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este servidor está lidando com muitas concessões de acesso no momento. Tente novamente em breve."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сейчас этот сервер обрабатывает слишком много разрешений на доступ. Повторите попытку чуть позже."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此服务器当前正在处理过多访问授权。请稍后再试。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此伺服器目前處理的存取授權過多，請稍後再試。"
           }
         }
       }
@@ -156521,6 +157551,88 @@
         }
       }
     },
+    "error.federation.subscription_limit": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "لقد بلغت الحد الأقصى للألبومات المشتركة التي يمكنك متابعتها من خوادم أخرى. أزل ألبومًا لإضافة آخر."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Du hast die maximale Anzahl geteilter Alben von anderen Servern erreicht, denen du folgen kannst. Entferne eines, um ein weiteres hinzuzufügen."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You've reached the limit of shared albums you can follow from other servers. Remove one to add another."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Has alcanzado el límite de álbumes compartidos de otros servidores que puedes seguir. Quita uno para añadir otro."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vous avez atteint la limite d'albums partagés d'autres serveurs que vous pouvez suivre. Retirez-en un pour en ajouter un autre."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "आप अन्य सर्वरों के जितने साझा एल्बम फ़ॉलो कर सकते हैं, उस सीमा तक पहुँच गए हैं। दूसरा जोड़ने के लिए एक हटाएँ।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hai raggiunto il limite di album condivisi da altri server che puoi seguire. Rimuovine uno per aggiungerne un altro."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "他のサーバーからフォローできる共有アルバムの上限に達しました。別のアルバムを追加するには、いずれかを削除してください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다른 서버에서 팔로우할 수 있는 공유 앨범 수의 한도에 도달했습니다. 다른 앨범을 추가하려면 하나를 삭제하세요."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Você atingiu o limite de álbuns compartilhados de outros servidores que pode seguir. Remova um para adicionar outro."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вы достигли предела общих альбомов с других серверов, на которые можно подписаться. Удалите один, чтобы добавить другой."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你关注的其他服务器共享相册已达上限。请移除一个后再添加。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你追蹤的其他伺服器共享相簿已達上限。請移除一個後再新增。"
+          }
+        }
+      }
+    },
     "error.federation.unavailable": {
       "localizations": {
         "ar": {
@@ -156681,6 +157793,88 @@
           "stringUnit": {
             "state": "translated",
             "value": "您的帳戶已被停用。在恢復之前，您無法上傳或分享。"
+          }
+        }
+      }
+    },
+    "error.moderation.report_at_capacity": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "يتعامل هذا الخادم مع عدد كبير جدًا من البلاغات حاليًا. يُرجى الانتظار ثم المحاولة مرة أخرى."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieser Server verarbeitet gerade zu viele Meldungen. Bitte warten Sie und versuchen Sie es erneut."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This server is handling too many reports right now. Please wait and try again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este servidor está gestionando demasiados informes en este momento. Espera e inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce serveur gère trop de signalements en ce moment. Veuillez patienter et réessayer."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "यह सर्वर अभी बहुत अधिक रिपोर्ट संभाल रहा है। कृपया प्रतीक्षा करें और फिर से प्रयास करें।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Al momento questo server sta gestendo troppe segnalazioni. Attendi e riprova."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このサーバーは現在、多数の報告を処理しています。しばらくしてからもう一度お試しください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "현재 이 서버가 처리 중인 신고가 너무 많습니다. 잠시 후 다시 시도해 주세요."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este servidor está lidando com muitas denúncias no momento. Aguarde e tente novamente."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сейчас этот сервер обрабатывает слишком много жалоб. Подождите и повторите попытку."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此服务器当前正在处理过多举报。请稍候再试。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此伺服器目前處理的檢舉過多，請稍候再試。"
           }
         }
       }
@@ -158239,6 +159433,88 @@
           "stringUnit": {
             "state": "translated",
             "value": "Capsule 無法傳送檔案的該部分。"
+          }
+        }
+      }
+    },
+    "error.request.too_early": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "أُرسل هذا الطلب مبكرًا جدًا. يُرجى المحاولة مرة أخرى."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Anfrage wurde zu früh gesendet. Bitte versuche es erneut."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That request was sent too early. Please try again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esa solicitud se envió demasiado pronto. Inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cette requête a été envoyée trop tôt. Veuillez réessayer."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "वह अनुरोध बहुत जल्दी भेजा गया था। कृपया फिर से प्रयास करें।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La richiesta è stata inviata troppo presto. Riprova."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "そのリクエストは早すぎるタイミングで送信されました。もう一度お試しください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "요청이 너무 일찍 전송되었습니다. 다시 시도해 주세요."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Essa solicitação foi enviada cedo demais. Tente novamente."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Этот запрос отправлен слишком рано. Повторите попытку."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "该请求发送得过早，请重试。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "該請求傳送得過早，請重試。"
           }
         }
       }
@@ -162179,6 +163455,88 @@
         }
       }
     },
+    "error.upload.range_conflict": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "جزء من هذا الرفع قيد الإرسال بالفعل. جارٍ الاستئناف…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ein Teil dieses Uploads ist bereits unterwegs. Wird fortgesetzt…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Part of this upload is already on its way. Resuming…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Parte de esta subida ya está en camino. Reanudando…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Une partie de ce téléversement est déjà en cours d'envoi. Reprise…"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "इस अपलोड का एक हिस्सा पहले से भेजा जा रहा है। फिर से शुरू हो रहा है…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Parte di questo caricamento è già in corso. Ripresa in corso…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このアップロードの一部はすでに送信中です。再開しています…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 업로드의 일부가 이미 전송 중입니다. 재개하는 중…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Parte deste envio já está a caminho. Retomando…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Часть этой загрузки уже передаётся. Возобновление…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此上传的一部分已在发送中。正在继续…"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此上傳的一部分已在傳送中。正在繼續…"
+          }
+        }
+      }
+    },
     "error.upload.rate_limited": {
       "localizations": {
         "ar": {
@@ -162753,6 +164111,88 @@
         }
       }
     },
+    "error.upload.source_changed": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تغيّر هذا الملف أثناء رفعه، لذلك أُوقف رفعه."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Datei hat sich während des Uploads geändert, daher wurde der Upload angehalten."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This file changed while it was uploading, so its upload was stopped."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este archivo cambió mientras se subía, así que se detuvo su subida."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce fichier a changé pendant son téléversement, qui a donc été arrêté."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "अपलोड के दौरान यह फ़ाइल बदल गई, इसलिए इसका अपलोड रोक दिया गया।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questo file è cambiato durante il caricamento, quindi il caricamento è stato interrotto."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アップロード中にこのファイルが変更されたため、アップロードを停止しました。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "업로드 중에 이 파일이 변경되어 업로드를 중단했습니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este arquivo mudou enquanto era enviado, então o envio foi interrompido."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Этот файл изменился во время загрузки, поэтому загрузка остановлена."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此文件在上传过程中发生了变化，因此已停止上传。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此檔案在上傳過程中發生了變更，因此已停止上傳。"
+          }
+        }
+      }
+    },
     "error.upload.stale_revival": {
       "localizations": {
         "ar": {
@@ -163077,6 +164517,170 @@
           "stringUnit": {
             "state": "translated",
             "value": "您裝置的時鐘似乎不正確。請檢查其日期和時間。"
+          }
+        }
+      }
+    },
+    "error.upload.too_fragmented": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "يحتوي هذا الرفع على فجوات كثيرة جدًا. جارٍ ملؤها…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieser Upload hat zu viele Lücken. Sie werden gefüllt…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This upload has too many gaps. Filling them in…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esta subida tiene demasiados huecos. Completándolos…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce téléversement comporte trop de lacunes. Comblement en cours…"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "इस अपलोड में बहुत अधिक अंतराल हैं। उन्हें भरा जा रहा है…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questo caricamento ha troppe lacune. Completamento in corso…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このアップロードには欠けている部分が多すぎます。補っています…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 업로드에 빈 구간이 너무 많습니다. 채우는 중…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este envio tem lacunas demais. Preenchendo…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В этой загрузке слишком много пропусков. Заполняем их…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此上传的缺口过多。正在补齐…"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此上傳的缺口過多。正在補齊…"
+          }
+        }
+      }
+    },
+    "error.upload.too_many_in_flight": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "يُرسَل عدد كبير جدًا من أجزاء هذا الرفع في الوقت نفسه. جارٍ الإبطاء…"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zu viele Teile dieses Uploads werden gleichzeitig gesendet. Wird verlangsamt…"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too many parts of this upload are being sent at once. Slowing down…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se están enviando demasiadas partes de esta subida a la vez. Reduciendo el ritmo…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trop de parties de ce téléversement sont envoyées en même temps. Ralentissement…"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "इस अपलोड के बहुत सारे हिस्से एक साथ भेजे जा रहे हैं। गति धीमी की जा रही है…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Troppe parti di questo caricamento vengono inviate contemporaneamente. Rallentamento…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このアップロードの同時送信数が多すぎます。速度を落としています…"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 업로드의 너무 많은 부분이 동시에 전송되고 있습니다. 속도를 줄이는 중…"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Partes demais deste envio estão sendo enviadas ao mesmo tempo. Diminuindo o ritmo…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Слишком много частей этой загрузки отправляется одновременно. Замедляем…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此上传同时发送的部分过多。正在放慢速度…"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此上傳同時傳送的部分過多。正在放慢速度…"
           }
         }
       }

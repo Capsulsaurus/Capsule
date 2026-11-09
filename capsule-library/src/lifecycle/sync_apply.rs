@@ -14,7 +14,8 @@
 //!
 //! 1. decode the **provenance record** from the opaque canonical CBOR the feed carries
 //!    verbatim (never re-encoded — re-encoding would detach the manifest inside it from its
-//!    signatures), and check the record's `prior_provenance_hash` against the manifest's;
+//!    signatures), check the record's `prior_provenance_hash` against the manifest's, and
+//!    refuse an asset this workspace purged (its tombstone, [`Workspace::tombstones`]);
 //! 2. run [`verify_asset`] against this workspace's device directory, the album's attested
 //!    authority, and the caller's local provenance head;
 //! 3. bind the sealed metadata blob to the manifest (content address, then AEAD open under the
@@ -39,6 +40,26 @@
 //! over a digest. The digest is a claim until the bytes are read:
 //! [`Workspace::open_remote_original_from`] hashes the ciphertext it streams and opens nothing
 //! unless that hash is the one the chokepoint accepted.
+//!
+//! # Adopting what applied
+//!
+//! Applying is read-only: it says what is true and writes nothing. A client whose catalog *is*
+//! this workspace's library adopts the entry instead ([`Workspace::adopt_remote_head`],
+//! [`Workspace::adopt_remote_original`]): the same verdict, and then the verified record joins a
+//! chain this workspace holds — a `create` starts one, with its sidecar, sealed metadata blob and
+//! original written under `media/` and its row and user tags indexed, and a later record that
+//! chains onto the held head is appended. The chain held is the records the chokepoint accepted,
+//! byte for byte, so the asset's next signed record chains onto the head the server holds, and
+//! a reopen reads the asset back from its files like any other.
+//!
+//! A chain begins at its create and nowhere else, and the feed serves only an asset's latest
+//! record. An asset first seen at a later record is therefore not held from that record alone
+//! ([`Adoption::MissingHistory`]) — anchoring a chain at a non-create head would forge a chain
+//! that never verifies from its start — and a record that does not chain onto the held head is
+//! not appended ([`Adoption::Diverged`]). The server keeps serving an asset's superseded records
+//! by their address, so a caller walks each record's `prior_provenance_hash` back to the create
+//! and hands the records over ([`Workspace::adopt_remote_history`]): each is verified through the
+//! chokepoint in order, and the asset is held from its create.
 //!
 //! # Transport independence
 //!
@@ -87,23 +108,29 @@
 //! [`VerifyOutcome`]: capsule_core::crypto::verify_asset::VerifyOutcome
 
 use std::io::{Read, Write};
+use std::path::Path;
 
+use capsule_core::content_type::extension_for;
 use capsule_core::crypto::encryption::{
     CIPHERTEXT_CHUNK, StreamDecryptor, StreamError, blob_ciphertext_hash, blob_nonce, open_blob,
 };
 use capsule_core::crypto::hash::{Hash32, Sha256Hasher, hash_bytes};
 use capsule_core::crypto::keys::Amk;
 use capsule_core::crypto::provenance::{
-    Action, AssetManifest, ProvenanceRecord, RecordDecodeError,
+    Action, AssetManifest, ManifestCore, ProvenanceChain, ProvenanceRecord, RecordDecodeError,
 };
 use capsule_core::crypto::verify_asset::{
     BindingReject, PendingReason, RejectReason, VerifyOutcome, diagnose_misattributed_signer,
     verify_asset_hashed,
 };
 use capsule_core::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
+use jiff::Timestamp;
 use uuid::Uuid;
 
-use super::{LifecycleError, Result, Workspace};
+use super::open::original_extension;
+use super::{
+    AssetState, LifecycleError, Result, StackPlacement, Workspace, media_dir, media_file_path,
+};
 
 /// One remote feed entry, exactly as a sync feed delivers it: opaque bytes plus the album the
 /// entry claims and the head the receiving catalog already holds. Borrowed rather than owned so
@@ -263,6 +290,11 @@ pub enum QuarantineReason {
     /// identity key — the metadata was authored by something that does not hold this account's
     /// IK.
     SidecarSignature,
+    /// This workspace purged the asset: its tombstone ([`Workspace::tombstones`]) refuses every
+    /// later entry for it, whatever the entry says, so a feed cannot revive a purged asset. Not a
+    /// verdict on the entry's authenticity — nothing past the record's decode was checked. The
+    /// purge's own `delete` ([`Workspace::purge_record`]) is unaffected and can still be sent.
+    Purged(Uuid),
 }
 
 /// The verified facts one remote entry contributes to the receiving catalog.
@@ -337,7 +369,8 @@ impl Workspace {
     /// Read-only with respect to this workspace — it decides *what is true* and leaves *what to
     /// persist* to the caller's catalog. That split is deliberate: the same verdict feeds an
     /// iOS gallery upsert, a CLI `sync` report, and a quarantine surface, none of which want
-    /// this layer writing to their index.
+    /// this layer writing to their index. A client whose catalog is this workspace's own adopts
+    /// the entry instead ([`adopt_remote_head`](Self::adopt_remote_head)).
     ///
     /// `Err` is reserved for a failure of *this workspace* (an unreadable album keystore, say).
     /// A refused **entry** is never an `Err` — it is a [`SyncApplyOutcome::Quarantined`],
@@ -361,127 +394,17 @@ impl Workspace {
     /// As [`apply_remote_entry`](Self::apply_remote_entry).
     #[tracing::instrument(skip_all, fields(album_id = %entry.album_id))]
     pub fn apply_remote_head(&self, entry: RemoteHead<'_>) -> Result<SyncApplyOutcome> {
-        use QuarantineReason::{
-            Binding, LegacyInheritedDevice, MalformedManifest, MalformedSidecar, Rejected,
-            SidecarSignature, UnknownAlbum, UnsupportedRecordVersion,
-        };
-
-        // The feed serves the provenance blob's bytes, which are a *record* — see the module
-        // docs. Decoding them as a bare manifest is why a correctly pushed asset used to be
-        // quarantined by every receiving device.
-        let record = match ProvenanceRecord::decode(entry.manifest_cbor) {
+        let record = match self.check_record(
+            entry.album_id,
+            entry.manifest_cbor,
+            Some(entry.original_ciphertext_hash),
+            entry.local_chain_head,
+        )? {
             Ok(record) => record,
-            Err(RecordDecodeError::UnsupportedVersion { found, max_known }) => {
-                tracing::warn!(
-                    found,
-                    max_known,
-                    "sync-apply: provenance record from a newer writer; quarantined until update"
-                );
-                return Ok(SyncApplyOutcome::Quarantined(UnsupportedRecordVersion {
-                    found,
-                    max_known,
-                }));
-            }
-            Err(RecordDecodeError::Malformed(e)) => {
-                tracing::warn!(error = %e, "sync-apply: provenance record CBOR did not decode");
-                return Ok(SyncApplyOutcome::Quarantined(MalformedManifest(e)));
-            }
+            Err(refused) => return Ok(refused),
         };
-        // The two copies of the chain link, checked before either is used. A record that
-        // disagrees with the manifest it carries is malformed whichever copy is right, and the
-        // manifest's is the signed one — so preferring either would be trusting a value no
-        // signature covers.
-        if !record.mirrors_manifest() {
-            tracing::warn!(
-                asset_id = %record.asset_id,
-                "sync-apply: the record's prior_provenance_hash does not mirror the manifest's"
-            );
-            return Ok(SyncApplyOutcome::Quarantined(MalformedManifest(
-                "the record's prior_provenance_hash does not mirror the manifest's".to_owned(),
-            )));
-        }
-        // The record names its asset too; a record whose subject is not the manifest's `file_id`
-        // is a splice of two assets' history and never applies.
-        if record.asset_id != record.manifest.core.file_id {
-            tracing::warn!(
-                record_asset = %record.asset_id,
-                manifest_asset = %record.manifest.core.file_id,
-                "sync-apply: the record names a different asset than its manifest"
-            );
-            return Ok(SyncApplyOutcome::Quarantined(MalformedManifest(format!(
-                "record names asset {} but its manifest names {}",
-                record.asset_id, record.manifest.core.file_id
-            ))));
-        }
         let manifest: AssetManifest = record.manifest;
         let core = manifest.core.clone();
-        tracing::debug!(
-            asset_id = %core.file_id,
-            action = ?core.action,
-            amk_version = core.amk_version.0,
-            "sync-apply: manifest decoded"
-        );
-
-        // No keys, no authority, no verdict. Say so, rather than rejecting an entry this device
-        // simply cannot adjudicate.
-        if !self.has_album(&entry.album_id) {
-            tracing::info!("sync-apply: no local key material for the album");
-            return Ok(SyncApplyOutcome::Quarantined(UnknownAlbum(entry.album_id)));
-        }
-        let album = self.album(&entry.album_id)?;
-        let authority = self.authority(&entry.album_id)?;
-
-        // ── The chokepoint. Not re-implemented, not partially applied. ─────────────────
-        match verify_asset_hashed(
-            &manifest,
-            &entry.original_ciphertext_hash,
-            &self.directory,
-            authority,
-            entry.local_chain_head,
-        ) {
-            VerifyOutcome::Accept => {}
-            VerifyOutcome::Pending(reason) => {
-                tracing::info!(?reason, "sync-apply: held pending — AMK not yet local");
-                return Ok(SyncApplyOutcome::Pending(reason));
-            }
-            VerifyOutcome::TerminalReject(RejectReason::BadDeviceSig) => {
-                // Tell the pre-#475 continuation apart from a forgery. Either way it is refused.
-                if let Some(signing_device) = diagnose_misattributed_signer(
-                    &manifest,
-                    &entry.original_ciphertext_hash,
-                    &self.directory,
-                    authority,
-                    entry.local_chain_head,
-                ) {
-                    let record_hash =
-                        ProvenanceRecord::new(core.file_id, manifest, core.prior_provenance_hash)
-                            .record_hash();
-                    tracing::warn!(
-                        asset_id = %core.file_id,
-                        named_device = %core.created_by_device,
-                        %signing_device,
-                        %record_hash,
-                        "sync-apply: quarantined a legacy inherited-device record; the chain stalls here"
-                    );
-                    return Ok(SyncApplyOutcome::Quarantined(LegacyInheritedDevice {
-                        named_device: core.created_by_device,
-                        signing_device,
-                        record_hash,
-                    }));
-                }
-                tracing::warn!(
-                    reason = ?RejectReason::BadDeviceSig,
-                    "sync-apply: quarantined by verify_asset"
-                );
-                return Ok(SyncApplyOutcome::Quarantined(Rejected(
-                    RejectReason::BadDeviceSig,
-                )));
-            }
-            VerifyOutcome::TerminalReject(reason) => {
-                tracing::warn!(?reason, "sync-apply: quarantined by verify_asset");
-                return Ok(SyncApplyOutcome::Quarantined(Rejected(reason)));
-            }
-        }
 
         // ── Metadata: bind the blob to the manifest, then open it. ─────────────────────
         //
@@ -492,60 +415,10 @@ impl Workspace {
         // A tombstone is a fully-verified entry with no metadata; quarantining it for the
         // absence would drop every deletion the feed delivers.
         let sidecar = if core.action.binds_metadata_blob() {
-            let Some(committed) = core.metadata_blob_hash else {
-                return Ok(SyncApplyOutcome::Quarantined(Binding(
-                    BindingReject::NoManifestCommitment,
-                )));
-            };
-            if blob_ciphertext_hash(entry.metadata_blob) != committed {
-                tracing::warn!("sync-apply: metadata blob does not hash to the committed address");
-                return Ok(SyncApplyOutcome::Quarantined(Binding(
-                    BindingReject::BlobHashMismatch,
-                )));
+            match self.open_sidecar(&entry.album_id, &core, entry.metadata_blob)? {
+                Ok(sidecar) => Some(sidecar),
+                Err(refused) => return Ok(refused),
             }
-            // `verify_asset` accepted, so the authority attests this epoch's AMK is held; a
-            // missing entry here would be a keystore inconsistency — reported as pending,
-            // never panicked.
-            let Some(amk_bytes) = album.amks.get(&core.amk_version.0).copied() else {
-                tracing::warn!(
-                    epoch = core.amk_version.0,
-                    "sync-apply: authority attests the AMK but the keystore holds no bytes for it"
-                );
-                return Ok(SyncApplyOutcome::Pending(PendingReason::AmkNotYetLocal));
-            };
-            let Some(nonce) = blob_nonce(entry.metadata_blob) else {
-                return Ok(SyncApplyOutcome::Quarantined(Binding(
-                    BindingReject::Undecryptable,
-                )));
-            };
-            let blob_key = Amk::from_bytes(amk_bytes).derive_blob_key(&core.file_id, &nonce);
-            let Ok(plaintext) = open_blob(&blob_key, entry.metadata_blob) else {
-                tracing::warn!(
-                    "sync-apply: metadata blob failed to open under the derived blob key"
-                );
-                return Ok(SyncApplyOutcome::Quarantined(Binding(
-                    BindingReject::Undecryptable,
-                )));
-            };
-
-            // `from_canonical_slice` is also where the **forward-version refusal** lives: a
-            // sidecar whose `sidecar_schema` exceeds this build's max known is refused rather
-            // than strip-and-re-signed, which is a client validation duty in its own right.
-            let sidecar = match SidecarV1::from_canonical_slice(&plaintext, SIDECAR_SCHEMA_V1) {
-                Ok(sidecar) => sidecar,
-                Err(e) => {
-                    tracing::warn!(error = %e, "sync-apply: sidecar did not decode");
-                    return Ok(SyncApplyOutcome::Quarantined(MalformedSidecar(e)));
-                }
-            };
-            // The sidecar carries its own hybrid signature under the account's user IK (the key
-            // that also signs the device directory). Checking it here is what makes the
-            // decrypted metadata *facts* rather than merely plaintext.
-            if !sidecar.verify(&self.user_ik_public()) {
-                tracing::warn!("sync-apply: sidecar signature does not verify under the user IK");
-                return Ok(SyncApplyOutcome::Quarantined(SidecarSignature));
-            }
-            Some(sidecar)
         } else {
             tracing::debug!(
                 action = ?core.action,
@@ -575,6 +448,230 @@ impl Workspace {
             provenance_head,
             sidecar,
         })))
+    }
+
+    /// Decode one provenance record off the wire and run it through the chokepoint: steps 1
+    /// and 2 of the module docs, everything an entry's verdict needs but its metadata.
+    ///
+    /// `original_ciphertext_hash` is the digest the content-integrity step checks against the
+    /// manifest's `ciphertext_hash`. `None` checks the record against the address it commits
+    /// to itself, which is how a **superseded** record of a fetched chain is checked
+    /// ([`Workspace::adopt_remote_history`]): the original it named may have been replaced
+    /// since, and the held original is the head's, which the head's own check binds.
+    ///
+    /// `Ok(Err(verdict))` is a refused record; `Err` only a failure of this workspace.
+    fn check_record(
+        &self,
+        album_id: Uuid,
+        manifest_cbor: &[u8],
+        original_ciphertext_hash: Option<Hash32>,
+        local_chain_head: Option<Hash32>,
+    ) -> Result<std::result::Result<ProvenanceRecord, SyncApplyOutcome>> {
+        use QuarantineReason::{
+            LegacyInheritedDevice, MalformedManifest, Purged, Rejected, UnknownAlbum,
+            UnsupportedRecordVersion,
+        };
+
+        // The feed serves the provenance blob's bytes, which are a *record* — see the module
+        // docs. Decoding them as a bare manifest is why a correctly pushed asset used to be
+        // quarantined by every receiving device.
+        let record = match ProvenanceRecord::decode(manifest_cbor) {
+            Ok(record) => record,
+            Err(RecordDecodeError::UnsupportedVersion { found, max_known }) => {
+                tracing::warn!(
+                    found,
+                    max_known,
+                    "sync-apply: provenance record from a newer writer; quarantined until update"
+                );
+                return Ok(Err(SyncApplyOutcome::Quarantined(
+                    UnsupportedRecordVersion { found, max_known },
+                )));
+            }
+            Err(RecordDecodeError::Malformed(e)) => {
+                tracing::warn!(error = %e, "sync-apply: provenance record CBOR did not decode");
+                return Ok(Err(SyncApplyOutcome::Quarantined(MalformedManifest(e))));
+            }
+        };
+        // The two copies of the chain link, checked before either is used. A record that
+        // disagrees with the manifest it carries is malformed whichever copy is right, and the
+        // manifest's is the signed one — so preferring either would be trusting a value no
+        // signature covers.
+        if !record.mirrors_manifest() {
+            tracing::warn!(
+                asset_id = %record.asset_id,
+                "sync-apply: the record's prior_provenance_hash does not mirror the manifest's"
+            );
+            return Ok(Err(SyncApplyOutcome::Quarantined(MalformedManifest(
+                "the record's prior_provenance_hash does not mirror the manifest's".to_owned(),
+            ))));
+        }
+        // The record names its asset too; a record whose subject is not the manifest's `file_id`
+        // is a splice of two assets' history and never applies.
+        if record.asset_id != record.manifest.core.file_id {
+            tracing::warn!(
+                record_asset = %record.asset_id,
+                manifest_asset = %record.manifest.core.file_id,
+                "sync-apply: the record names a different asset than its manifest"
+            );
+            return Ok(Err(SyncApplyOutcome::Quarantined(MalformedManifest(
+                format!(
+                    "record names asset {} but its manifest names {}",
+                    record.asset_id, record.manifest.core.file_id
+                ),
+            ))));
+        }
+        // A purged asset's tombstone outranks anything a feed says about it: checked before the
+        // album or the chokepoint, so no later entry, however well signed, revives it.
+        if self.purged.contains_key(&record.asset_id) {
+            tracing::warn!(
+                asset_id = %record.asset_id,
+                action = ?record.manifest.core.action,
+                "sync-apply: the asset was purged here; its tombstone refuses the entry"
+            );
+            return Ok(Err(SyncApplyOutcome::Quarantined(Purged(record.asset_id))));
+        }
+        let core = &record.manifest.core;
+        tracing::debug!(
+            asset_id = %core.file_id,
+            action = ?core.action,
+            amk_version = core.amk_version.0,
+            "sync-apply: manifest decoded"
+        );
+
+        // No keys, no authority, no verdict. Say so, rather than rejecting an entry this device
+        // simply cannot adjudicate.
+        if !self.has_album(&album_id) {
+            tracing::info!("sync-apply: no local key material for the album");
+            return Ok(Err(SyncApplyOutcome::Quarantined(UnknownAlbum(album_id))));
+        }
+        let authority = self.authority(&album_id)?;
+        let original_ciphertext_hash = original_ciphertext_hash.unwrap_or(core.ciphertext_hash);
+
+        // ── The chokepoint. Not re-implemented, not partially applied. ─────────────────
+        match verify_asset_hashed(
+            &record.manifest,
+            &original_ciphertext_hash,
+            &self.directory,
+            authority,
+            local_chain_head,
+        ) {
+            VerifyOutcome::Accept => Ok(Ok(record)),
+            VerifyOutcome::Pending(reason) => {
+                tracing::info!(?reason, "sync-apply: held pending — AMK not yet local");
+                Ok(Err(SyncApplyOutcome::Pending(reason)))
+            }
+            VerifyOutcome::TerminalReject(RejectReason::BadDeviceSig) => {
+                // Tell the pre-#475 continuation apart from a forgery. Either way it is refused.
+                if let Some(signing_device) = diagnose_misattributed_signer(
+                    &record.manifest,
+                    &original_ciphertext_hash,
+                    &self.directory,
+                    authority,
+                    local_chain_head,
+                ) {
+                    let record_hash = ProvenanceRecord::new(
+                        core.file_id,
+                        record.manifest.clone(),
+                        core.prior_provenance_hash,
+                    )
+                    .record_hash();
+                    tracing::warn!(
+                        asset_id = %core.file_id,
+                        named_device = %core.created_by_device,
+                        %signing_device,
+                        %record_hash,
+                        "sync-apply: quarantined a legacy inherited-device record; the chain stalls here"
+                    );
+                    return Ok(Err(SyncApplyOutcome::Quarantined(LegacyInheritedDevice {
+                        named_device: core.created_by_device,
+                        signing_device,
+                        record_hash,
+                    })));
+                }
+                tracing::warn!(
+                    reason = ?RejectReason::BadDeviceSig,
+                    "sync-apply: quarantined by verify_asset"
+                );
+                Ok(Err(SyncApplyOutcome::Quarantined(Rejected(
+                    RejectReason::BadDeviceSig,
+                ))))
+            }
+            VerifyOutcome::TerminalReject(reason) => {
+                tracing::warn!(?reason, "sync-apply: quarantined by verify_asset");
+                Ok(Err(SyncApplyOutcome::Quarantined(Rejected(reason))))
+            }
+        }
+    }
+
+    /// Bind `metadata_blob` to the manifest `core` the chokepoint accepted, open it, and check
+    /// the signed [`SidecarV1`] inside: steps 3 and 4 of the module docs. `core` must bind a
+    /// metadata blob ([`Action::binds_metadata_blob`]).
+    ///
+    /// `Ok(Err(verdict))` is a blob that does not bind or open, or a sidecar that does not
+    /// decode or verify; `Err` only a failure of this workspace.
+    fn open_sidecar(
+        &self,
+        album_id: &Uuid,
+        core: &ManifestCore,
+        metadata_blob: &[u8],
+    ) -> Result<std::result::Result<SidecarV1, SyncApplyOutcome>> {
+        use QuarantineReason::{Binding, MalformedSidecar, SidecarSignature};
+
+        let Some(committed) = core.metadata_blob_hash else {
+            return Ok(Err(SyncApplyOutcome::Quarantined(Binding(
+                BindingReject::NoManifestCommitment,
+            ))));
+        };
+        if blob_ciphertext_hash(metadata_blob) != committed {
+            tracing::warn!("sync-apply: metadata blob does not hash to the committed address");
+            return Ok(Err(SyncApplyOutcome::Quarantined(Binding(
+                BindingReject::BlobHashMismatch,
+            ))));
+        }
+        let album = self.album(album_id)?;
+        // `verify_asset` accepted, so the authority attests this epoch's AMK is held; a
+        // missing entry here would be a keystore inconsistency — reported as pending,
+        // never panicked.
+        let Some(amk_bytes) = album.amks.get(&core.amk_version.0).copied() else {
+            tracing::warn!(
+                epoch = core.amk_version.0,
+                "sync-apply: authority attests the AMK but the keystore holds no bytes for it"
+            );
+            return Ok(Err(SyncApplyOutcome::Pending(
+                PendingReason::AmkNotYetLocal,
+            )));
+        };
+        let Some(nonce) = blob_nonce(metadata_blob) else {
+            return Ok(Err(SyncApplyOutcome::Quarantined(Binding(
+                BindingReject::Undecryptable,
+            ))));
+        };
+        let blob_key = Amk::from_bytes(amk_bytes).derive_blob_key(&core.file_id, &nonce);
+        let Ok(plaintext) = open_blob(&blob_key, metadata_blob) else {
+            tracing::warn!("sync-apply: metadata blob failed to open under the derived blob key");
+            return Ok(Err(SyncApplyOutcome::Quarantined(Binding(
+                BindingReject::Undecryptable,
+            ))));
+        };
+
+        // `from_canonical_slice` is also where the **forward-version refusal** lives: a
+        // sidecar whose `sidecar_schema` exceeds this build's max known is refused rather
+        // than strip-and-re-signed, which is a client validation duty in its own right.
+        let sidecar = match SidecarV1::from_canonical_slice(&plaintext, SIDECAR_SCHEMA_V1) {
+            Ok(sidecar) => sidecar,
+            Err(e) => {
+                tracing::warn!(error = %e, "sync-apply: sidecar did not decode");
+                return Ok(Err(SyncApplyOutcome::Quarantined(MalformedSidecar(e))));
+            }
+        };
+        // The sidecar carries its own hybrid signature under the account's user IK (the key
+        // that also signs the device directory). Checking it here is what makes the
+        // decrypted metadata *facts* rather than merely plaintext.
+        if !sidecar.verify(&self.user_ik_public()) {
+            tracing::warn!("sync-apply: sidecar signature does not verify under the user IK");
+            return Ok(Err(SyncApplyOutcome::Quarantined(SidecarSignature)));
+        }
+        Ok(Ok(sidecar))
     }
 
     /// Verify a remote entry and **open its original**: run it through
@@ -729,6 +826,456 @@ impl Workspace {
             "open-remote: original verified and decrypted"
         );
         Ok(RemoteOriginal::Opened { facts, plaintext })
+    }
+}
+
+/// What adopting one applied entry did to the assets this workspace holds
+/// ([`Workspace::adopt_remote_head`], [`Workspace::adopt_remote_original`]).
+///
+/// Adoption never decides whether an entry is true; the chokepoint did. It decides only
+/// whether the verified record can become part of a chain this workspace holds without
+/// breaking that chain's rules: a chain starts at its `create`
+/// ([`ProvenanceChain::append`]), and each later record names the head before it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Adoption {
+    /// A `create` of an asset this workspace did not hold. Its record, sidecar, sealed metadata
+    /// blob and original are written under `media/`, its row and user tags indexed, and the
+    /// asset is held: the trash verbs, tag edits and uploads work on it, and its next signed
+    /// record chains onto the create.
+    Adopted,
+    /// A record of a held asset that chains onto its head. It is appended; the sidecar and
+    /// sealed metadata blob follow it when it binds one, the original when it replaces it, and
+    /// the index row is rewritten.
+    Advanced,
+    /// The held chain already contains this record. Nothing was written.
+    AlreadyHeld,
+    /// An asset this workspace does not hold, whose record is not its `create`. A chain cannot
+    /// start anywhere but at its create, and the feed carries only an asset's latest record, so
+    /// the asset stays unheld until its earlier records are fetched and handed to
+    /// [`Workspace::adopt_remote_history`]. Nothing was written.
+    MissingHistory,
+    /// A record that needs the plaintext original — the `create` of an unheld asset, or one
+    /// that replaces a held original — applied without it. Nothing was written; adopt it
+    /// through [`Workspace::adopt_remote_original`].
+    NeedsOriginal,
+    /// A record of a held asset that does not chain onto its head: a fork, or a gap of records
+    /// this workspace has not seen. Nothing was written; the held chain stands.
+    Diverged,
+}
+
+impl Adoption {
+    /// Whether the workspace holds the asset at the entry's record afterwards, so its own index
+    /// row and user tags describe the asset and a catalog writer has nothing to add.
+    #[must_use]
+    pub fn holds(self) -> bool {
+        matches!(self, Self::Adopted | Self::Advanced | Self::AlreadyHeld)
+    }
+}
+
+impl Workspace {
+    /// [`apply_remote_head`](Self::apply_remote_head), then **adopt** what applied: a record
+    /// that chains onto an asset this workspace holds is appended to its chain, with the
+    /// sealed metadata it binds, and written under `media/` and indexed, so the asset's next
+    /// signed record chains onto the head the server holds.
+    ///
+    /// A record that needs the original's plaintext (a `create`, or a replace) is not adopted
+    /// here: it answers [`Adoption::NeedsOriginal`], and
+    /// [`adopt_remote_original`](Self::adopt_remote_original) adopts it. A record that does
+    /// not change the original needs none, because the held original is the one it commits to.
+    ///
+    /// The verdict is exactly [`apply_remote_head`](Self::apply_remote_head)'s, and the
+    /// [`Adoption`] is `Some` only for an `Applied` one.
+    ///
+    /// # Errors
+    ///
+    /// As [`apply_remote_head`](Self::apply_remote_head), plus the I/O or index failure that
+    /// stopped an adoption's write.
+    #[tracing::instrument(skip_all, fields(album_id = %entry.album_id))]
+    pub fn adopt_remote_head(
+        &mut self,
+        entry: RemoteHead<'_>,
+    ) -> Result<(SyncApplyOutcome, Option<Adoption>)> {
+        self.adopt_remote(entry, None)
+    }
+
+    /// [`adopt_remote_head`](Self::adopt_remote_head) for an entry whose original's verified
+    /// plaintext is the file at `plaintext` — the one an
+    /// [`open_remote_original_from`](Self::open_remote_original_from) of the same head answered
+    /// [`RemoteOriginal::Opened`] for. This is what adopts a `create`: the asset is held with
+    /// that original as its library copy.
+    ///
+    /// The file is not trusted for being handed over. It is placed only if it hashes to the
+    /// digest the entry's signed sidecar commits to, and is copied into `media/` (never
+    /// hard-linked), so `plaintext` is left in place for its owner to keep or remove, and
+    /// nothing later written to it reaches the library original.
+    /// An entry that does not need the original adopts as
+    /// [`adopt_remote_head`](Self::adopt_remote_head) would, without reading the file.
+    ///
+    /// # Errors
+    ///
+    /// As [`adopt_remote_head`](Self::adopt_remote_head), and
+    /// [`LifecycleError::OriginalMismatch`] when the file is not the signed original (nothing of
+    /// the asset is written).
+    #[tracing::instrument(skip_all, fields(album_id = %entry.album_id, plaintext = %plaintext.display()))]
+    pub fn adopt_remote_original(
+        &mut self,
+        entry: RemoteHead<'_>,
+        plaintext: &Path,
+    ) -> Result<(SyncApplyOutcome, Option<Adoption>)> {
+        self.adopt_remote(entry, Some(plaintext))
+    }
+
+    /// [`adopt_remote_original`](Self::adopt_remote_original) for an asset first seen **past its
+    /// create**: `history` is every record of its chain before the entry's, oldest first and
+    /// starting at its `create`, each the canonical CBOR the server stores (the provenance blob
+    /// a record's successor names by `prior_provenance_hash`). This is what adopts an asset
+    /// [`adopt_remote_head`](Self::adopt_remote_head) answers [`Adoption::MissingHistory`] for.
+    ///
+    /// Every record goes through the chokepoint in order, each against the hash of the one
+    /// before it and the create against no head, so the chain held is one that verifies from its
+    /// start; the entry's record is then applied against the last of them, whatever
+    /// [`RemoteHead::local_chain_head`] says. A superseded record's content-integrity step is
+    /// checked against the ciphertext it commits to itself: the original it named may have been
+    /// replaced since, and the original held is the entry's, which the entry's own check binds.
+    ///
+    /// A superseded record's sealed metadata is not on the server any more (a newer blob
+    /// replaced it and the collector reclaimed it), so the sidecar is opened from the entry's
+    /// `metadata_blob`, the asset's live one: bound to the entry's record when it binds one, and
+    /// otherwise to the newest record of `history` that does. The original at `plaintext` is
+    /// placed only if it hashes to that sidecar's digest.
+    ///
+    /// The verdict returned is the first one that is not `Applied`, in chain order: a record of
+    /// `history` that does not verify, a record naming another asset, or a live metadata blob
+    /// that does not bind, refuses the whole adoption and writes nothing. An empty `history`
+    /// adopts as [`adopt_remote_original`](Self::adopt_remote_original) would, and so does an
+    /// entry of an asset this workspace already holds: the history is not read, so none of its
+    /// records can refuse the entry, and the entry is checked against
+    /// [`RemoteHead::local_chain_head`].
+    ///
+    /// # Errors
+    ///
+    /// As [`adopt_remote_original`](Self::adopt_remote_original).
+    #[tracing::instrument(skip_all, fields(album_id = %entry.album_id, records = history.len(), plaintext = %plaintext.display()))]
+    pub fn adopt_remote_history(
+        &mut self,
+        entry: RemoteHead<'_>,
+        history: &[Vec<u8>],
+        plaintext: &Path,
+    ) -> Result<(SyncApplyOutcome, Option<Adoption>)> {
+        if history.is_empty() {
+            return self.adopt_remote(entry, Some(plaintext));
+        }
+        // An asset held here already extends its own chain, so the history is not read at all:
+        // the entry is adopted exactly as `adopt_remote_original` adopts it, against the
+        // caller's `local_chain_head`, and a history record that would not verify cannot
+        // refuse an advance that verb applies. Bytes that do not decode fall through to the
+        // checks below, which refuse them.
+        if let Ok(record) = ProvenanceRecord::decode(entry.manifest_cbor)
+            && self.assets.contains_key(&record.manifest.core.file_id)
+        {
+            tracing::info!(
+                asset_id = %record.manifest.core.file_id,
+                records = history.len(),
+                "sync-adopt: the asset is held already; adopting the entry with the history unread"
+            );
+            return self.adopt_remote(entry, Some(plaintext));
+        }
+        // The superseded records, in order, each against the one before it.
+        let mut records = Vec::with_capacity(history.len() + 1);
+        let mut head = None;
+        for (position, bytes) in history.iter().enumerate() {
+            let record = match self.check_record(entry.album_id, bytes, None, head)? {
+                Ok(record) => record,
+                Err(refused) => {
+                    tracing::warn!(
+                        position,
+                        ?refused,
+                        "sync-adopt: a record of the fetched history did not verify; nothing adopted"
+                    );
+                    return Ok((refused, None));
+                }
+            };
+            head = Some(record.record_hash());
+            records.push(record);
+        }
+        let entry = RemoteHead {
+            local_chain_head: head,
+            ..entry
+        };
+        let outcome = self.apply_remote_head(entry)?;
+        let SyncApplyOutcome::Applied(facts) = &outcome else {
+            return Ok((outcome, None));
+        };
+        let Ok(record) = ProvenanceRecord::decode(entry.manifest_cbor) else {
+            return Ok((outcome, None));
+        };
+        // A chain is one asset's. A record of another asset's history linked in by hash is a
+        // splice, however well each record verifies on its own.
+        if let Some(stray) = records.iter().find(|r| r.asset_id != facts.asset_id) {
+            tracing::warn!(
+                asset_id = %facts.asset_id,
+                stray = %stray.asset_id,
+                "sync-adopt: the fetched history names another asset; nothing adopted"
+            );
+            return Ok((
+                SyncApplyOutcome::Quarantined(QuarantineReason::MalformedManifest(format!(
+                    "the history of asset {} holds a record of asset {}",
+                    facts.asset_id, stray.asset_id
+                ))),
+                None,
+            ));
+        }
+        let sidecar = if let Some(sidecar) = facts.sidecar.clone() {
+            sidecar
+        } else {
+            // A create binds a metadata blob, so a verified history always holds one.
+            let Some(binding) = records
+                .iter()
+                .rev()
+                .find(|r| r.manifest.core.action.binds_metadata_blob())
+            else {
+                return Err(LifecycleError::RestoredMetadata(format!(
+                    "asset {}: a verified history binds no metadata blob",
+                    facts.asset_id
+                )));
+            };
+            match self.open_sidecar(&entry.album_id, &binding.manifest.core, entry.metadata_blob)? {
+                Ok(sidecar) => sidecar,
+                Err(refused) => {
+                    tracing::warn!(
+                        asset_id = %facts.asset_id,
+                        ?refused,
+                        "sync-adopt: the live metadata blob does not bind to the newest record that binds one"
+                    );
+                    return Ok((refused, None));
+                }
+            }
+        };
+        let mut chain = ProvenanceChain::new();
+        for held in records.into_iter().chain(std::iter::once(record)) {
+            chain
+                .append(held)
+                .map_err(|e| LifecycleError::Cbor(format!("adopted chain: {e}")))?;
+        }
+        let records = chain.records().len();
+        let adoption = self.hold_adopted(chain, facts, sidecar, entry.metadata_blob, plaintext)?;
+        tracing::info!(
+            asset_id = %facts.asset_id,
+            action = ?facts.action,
+            records,
+            ?adoption,
+            "sync-adopt: an asset first seen past its create adopted from its fetched history"
+        );
+        Ok((outcome, Some(adoption)))
+    }
+
+    fn adopt_remote(
+        &mut self,
+        entry: RemoteHead<'_>,
+        plaintext: Option<&Path>,
+    ) -> Result<(SyncApplyOutcome, Option<Adoption>)> {
+        let outcome = self.apply_remote_head(entry)?;
+        let SyncApplyOutcome::Applied(facts) = &outcome else {
+            return Ok((outcome, None));
+        };
+        // The apply decoded these exact bytes a moment ago, so this cannot fail; answered as
+        // "nothing adopted" rather than unwrapped all the same.
+        let Ok(record) = ProvenanceRecord::decode(entry.manifest_cbor) else {
+            return Ok((outcome, None));
+        };
+        let adoption = if self.assets.contains_key(&facts.asset_id) {
+            self.advance_held(record, facts, entry.metadata_blob, plaintext)?
+        } else {
+            self.adopt_unheld(record, facts, entry.metadata_blob, plaintext)?
+        };
+        tracing::info!(
+            asset_id = %facts.asset_id,
+            action = ?facts.action,
+            ?adoption,
+            "sync-adopt: applied entry adopted"
+        );
+        Ok((outcome, Some(adoption)))
+    }
+
+    /// Hold an asset from its verified `create`: the record, sidecar and sealed blob the entry
+    /// carried, and the original at `plaintext`.
+    fn adopt_unheld(
+        &mut self,
+        record: ProvenanceRecord,
+        facts: &RemoteAssetFacts,
+        metadata_blob: &[u8],
+        plaintext: Option<&Path>,
+    ) -> Result<Adoption> {
+        if record.manifest.core.action != Action::Create {
+            tracing::info!(
+                asset_id = %facts.asset_id,
+                action = ?facts.action,
+                "sync-adopt: an unheld asset's record is not its create; its earlier records are not here"
+            );
+            return Ok(Adoption::MissingHistory);
+        }
+        let Some(plaintext) = plaintext else {
+            tracing::debug!(asset_id = %facts.asset_id, "sync-adopt: a create needs its original");
+            return Ok(Adoption::NeedsOriginal);
+        };
+        // A create binds a metadata blob, so the apply opened and verified its sidecar.
+        let Some(sidecar) = facts.sidecar.clone() else {
+            return Err(LifecycleError::RestoredMetadata(format!(
+                "asset {}: an applied create carries no sidecar",
+                facts.asset_id
+            )));
+        };
+        let mut chain = ProvenanceChain::new();
+        chain
+            .append(record)
+            .map_err(|e| LifecycleError::Cbor(format!("adopted chain: {e}")))?;
+        self.hold_adopted(chain, facts, sidecar, metadata_blob, plaintext)
+    }
+
+    /// Hold a newly adopted asset: `chain` from its create, the verified `sidecar` and the
+    /// sealed `metadata_blob` it was opened from, and the original at `plaintext`.
+    fn hold_adopted(
+        &mut self,
+        chain: ProvenanceChain,
+        facts: &RemoteAssetFacts,
+        sidecar: SidecarV1,
+        metadata_blob: &[u8],
+        plaintext: &Path,
+    ) -> Result<Adoption> {
+        // Filed under the sidecar's capture time, as a reopen reads it back
+        // (`restore_one_asset` step 3) and as a restore files a new asset.
+        let capture_utc = sidecar
+            .capture_timestamp
+            .parse::<Timestamp>()
+            .or_else(|_| facts.timestamp.parse::<Timestamp>())
+            .map_or(0, Timestamp::as_second);
+        let stack = sidecar
+            .stack_membership
+            .get()
+            .and_then(|membership| membership.as_ref().map(StackPlacement::from_membership));
+        let mut asset = AssetState {
+            asset_id: facts.asset_id,
+            album_id: facts.album_id,
+            ext: extension_for(&sidecar.content_type).to_owned(),
+            capture_utc,
+            chain,
+            sidecar,
+            metadata_blob: metadata_blob.to_vec(),
+            stack,
+        };
+        let bytes = self.place_adopted_original(&mut asset, plaintext)?;
+        self.write_signed_artifacts(&asset)?;
+        self.index_asset_row(&asset)?;
+        self.index_original_representation(&asset, usize::try_from(bytes).unwrap_or(usize::MAX))?;
+        self.assets.insert(asset.asset_id, asset);
+        Ok(Adoption::Adopted)
+    }
+
+    /// The library original of a newly adopted asset, placed from `plaintext`. An original the
+    /// library already holds under the asset's name — one an app placed before the workspace
+    /// adopted synced assets — is kept when it is the signed original, under its own extension,
+    /// and removed when it is not.
+    fn place_adopted_original(&self, asset: &mut AssetState, plaintext: &Path) -> Result<u64> {
+        let dir = media_dir(&self.root, asset.capture_utc);
+        if let Some(found) = original_extension(&dir, &asset.asset_id) {
+            let held = media_file_path(&self.root, asset.capture_utc, asset.asset_id, &found);
+            let (digest, len) = std::fs::File::open(&held)
+                .map_err(|e| LifecycleError::Io(format!("open {}: {e}", held.display())))
+                .and_then(hash_ciphertext_from)?;
+            if digest == asset.sidecar.hash {
+                tracing::debug!(asset_id = %asset.asset_id, ext = %found, "sync-adopt: keeping the signed original already in the library");
+                asset.ext = found;
+                return Ok(len);
+            }
+            tracing::warn!(asset_id = %asset.asset_id, ext = %found, "sync-adopt: removing a file under the asset's name that is not its signed original");
+            std::fs::remove_file(&held)
+                .map_err(|e| LifecycleError::Io(format!("remove {}: {e}", held.display())))?;
+        }
+        self.place_original_from(asset, plaintext, asset.sidecar.hash)
+    }
+
+    /// Append a verified record onto the held chain it extends.
+    fn advance_held(
+        &mut self,
+        record: ProvenanceRecord,
+        facts: &RemoteAssetFacts,
+        metadata_blob: &[u8],
+        plaintext: Option<&Path>,
+    ) -> Result<Adoption> {
+        let asset_id = facts.asset_id;
+        let held = &self.assets[&asset_id];
+        if held
+            .chain
+            .records()
+            .iter()
+            .any(|held| held.record_hash() == facts.provenance_head)
+        {
+            tracing::debug!(%asset_id, "sync-adopt: the held chain already contains the record");
+            return Ok(Adoption::AlreadyHeld);
+        }
+        if record.prior_provenance_hash != held.chain.head() {
+            tracing::warn!(
+                %asset_id,
+                action = ?facts.action,
+                "sync-adopt: the record does not chain onto the held head; the held chain stands"
+            );
+            return Ok(Adoption::Diverged);
+        }
+        let mut chain = held.chain.clone();
+        chain
+            .append(record)
+            .map_err(|e| LifecycleError::Cbor(format!("adopted chain: {e}")))?;
+        let held_ciphertext = held
+            .chain
+            .records()
+            .last()
+            .expect("provenance chain is never empty")
+            .manifest
+            .core
+            .ciphertext_hash;
+        let replaces_original = facts.ciphertext_hash != held_ciphertext;
+        if replaces_original && plaintext.is_none() {
+            tracing::debug!(%asset_id, "sync-adopt: the record replaces the original; it needs the new one");
+            return Ok(Adoption::NeedsOriginal);
+        }
+        let binds = facts.action.binds_metadata_blob();
+        // A replaced original is placed before anything of the asset changes, so an original
+        // that is not the signed one leaves the held asset exactly as it was. It keeps the held
+        // original's name: its shard and extension.
+        let placed = match plaintext.filter(|_| replaces_original) {
+            Some(plaintext) => {
+                let expected = facts.sidecar.as_ref().map_or(held.sidecar.hash, |s| s.hash);
+                Some(self.place_original_from(held, plaintext, expected)?)
+            }
+            None => None,
+        };
+        // The record's sealed metadata replaces the held one, so the blob the create binds is
+        // kept first, as a local edit keeps it: an upload of the create needs those bytes.
+        if binds {
+            self.keep_create_metadata_blob(&asset_id)?;
+        }
+        let asset = self
+            .assets
+            .get_mut(&asset_id)
+            .expect("the asset is held: checked above");
+        if let Some(sidecar) = facts.sidecar.as_ref().filter(|_| binds) {
+            asset.sidecar = sidecar.clone();
+            asset.metadata_blob = metadata_blob.to_vec();
+            if let Some(membership) = asset.sidecar.stack_membership.get() {
+                asset.stack = membership.as_ref().map(StackPlacement::from_membership);
+            }
+        }
+        asset.chain = chain;
+        let asset = &self.assets[&asset_id];
+        if let Some(bytes) = placed {
+            self.index_original_representation(
+                asset,
+                usize::try_from(bytes).unwrap_or(usize::MAX),
+            )?;
+        }
+        self.write_signed_artifacts(asset)?;
+        self.index_asset_row(asset)?;
+        Ok(Adoption::Advanced)
     }
 }
 

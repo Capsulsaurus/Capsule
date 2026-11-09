@@ -25,6 +25,9 @@ public struct NoPlaceNameResolver: PlaceNameResolver {
 
 /// Resolves place names through CoreLocation, when the device is permitted to.
 ///
+/// `CLGeocoder` is the only geocoder: it sends coordinates to Apple, which is
+/// why it is opt-in. No third-party geocoder is linked.
+///
 /// The permission check is *inside* the resolver rather than at the call site,
 /// so a second caller cannot forget it. That is the difference between a policy
 /// and a convention.

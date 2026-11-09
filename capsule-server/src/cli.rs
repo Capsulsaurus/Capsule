@@ -42,6 +42,7 @@ use crate::federation::{
 use crate::gc::{CollectionReport, Mode, PurgeReport};
 use crate::ledger::ChainFault;
 use crate::ledger::rebuild::RebuildReport;
+use crate::ledger::rebuild::sizes::{Resized, SizeRepairReport, ZeroSized};
 use crate::moderation::FederatedReport;
 use crate::scrub::{Depth, ScrubReport};
 use crate::store::UserId;
@@ -126,13 +127,15 @@ pub enum Command {
         backend: BackendArgs,
     },
 
-    /// Sweep blobs nothing references any more.
+    /// Sweep blobs nothing references any more, and account activity past retention.
     ///
     /// Two passes, by design: a blob that reaches zero references is *marked*, and a later pass
     /// sweeps it once the grace window has passed and the count is still zero. That is what
-    /// gives an in-flight finalization retry time to re-reference it.
+    /// gives an in-flight finalization retry time to re-reference it. Every pass also deletes
+    /// the account activity events older than the 90-day retention window, which an account
+    /// that stopped recording would otherwise keep; a dry run counts them.
     Gc {
-        /// Carry it out. Without this nothing is marked, unmarked or swept.
+        /// Carry it out. Without this nothing is marked, unmarked, swept or deleted.
         ///
         /// Dry run is the default for the two subcommands that write, because the first thing an
         /// operator does with a collector is find out what it thinks.
@@ -207,6 +210,24 @@ pub enum Command {
         /// rewritten, accepting the ledger as it stands so the server writes to it again.
         #[arg(long, requires = "apply")]
         accept_rewrites: bool,
+
+        /// Where state lives.
+        #[command(flatten)]
+        backend: BackendArgs,
+    },
+
+    /// Record the real size of every blob reference the index holds at size 0.
+    ///
+    /// Lifecycle ops once re-pointed an asset's manifest, metadata and replaced original at size
+    /// 0, which the sync feed then served. Dry run by default: reports each reference it would
+    /// repair from the length the blob store holds it at, and writes nothing. With `--apply` it
+    /// records those sizes, changing only a reference still at size 0 with the same address.
+    /// A reference whose blob is missing or empty is reported and kept as it is, and the pass
+    /// exits non-zero for it. Running it again finds nothing to repair.
+    RepairSizes {
+        /// Carry it out. Without this nothing is written.
+        #[arg(long)]
+        apply: bool,
 
         /// Where state lives.
         #[command(flatten)]
@@ -407,6 +428,7 @@ impl Command {
             | Self::Purge { .. }
             | Self::Scrub { .. }
             | Self::Rebuild { .. }
+            | Self::RepairSizes { .. }
             | Self::Quota { .. }
             | Self::Peer { .. }
             | Self::Moderation { .. } => Demands::Maintenance,
@@ -437,7 +459,8 @@ impl Command {
             }
             Self::Purge { backend, .. }
             | Self::Scrub { backend, .. }
-            | Self::Rebuild { backend, .. } => {
+            | Self::Rebuild { backend, .. }
+            | Self::RepairSizes { backend, .. } => {
                 overrides.blob_root.clone_from(&backend.blob_root);
                 overrides.memory = backend.memory;
             }
@@ -505,6 +528,7 @@ pub async fn run() -> Result<ExitCode> {
             accept_rewrites,
             ..
         } => rebuild(&config, mode(apply), accept_rewrites).await,
+        Command::RepairSizes { apply, .. } => repair_sizes(&config, mode(apply)).await,
         Command::Quota { action } => quota(&config, &action).await,
         Command::Peer { action } => peer(&config, &action).await,
         Command::Moderation { action } => moderation(&config, &action).await,
@@ -552,14 +576,18 @@ async fn maintenance(config: &Config) -> Result<Maintenance> {
 ///
 /// # No TLS
 ///
-/// `design/cryptography/failure-modes.md` is explicit that "application servers do not terminate
-/// TLS", and scopes in-code TLS to the SDK client, LAN peering and server-to-server egress —
+/// `design/networking.md#transport-security` is explicit that ingress, not the application
+/// server, terminates TLS, and scopes in-code TLS to the SDK client, LAN peering and server-to-server egress —
 /// none of which is this listener. Kynos's `tls` feature stays off, so a certificate cannot be
 /// configured by accident.
 async fn serve(config: &Config) -> Result<ExitCode> {
     let assembled = assemble(config).await?;
+    // Awaited, and before the recovery: the recovery reads the sessions this pairs with stages.
+    scrub_staged_uploads(&assembled.app).await;
     // Before the listener binds, so every claim listed belongs to a process that is gone.
     recover_stranded_claims(&assembled.app).await;
+    // Detached, like the recovery: only a federating deployment has a worker to start (#1117).
+    let _pull_worker = assembled.spawn_pull_worker();
     // The router is built here rather than through `Assembled::service` because the trusted-proxy
     // policy is a property of the listener's deployment, not of the assembled stores (#704).
     tracing::info!(
@@ -593,8 +621,47 @@ async fn serve(config: &Config) -> Result<ExitCode> {
         .serve()
         .await
         .map_err(|error| eyre!("serving: {error}"))?;
+    drain_activity(&assembled.app).await;
     tracing::info!("drained and stopped");
     Ok(ExitCode::SUCCESS)
+}
+
+/// How long a stopping server waits for the activity writes its last requests took off their
+/// response path.
+const ACTIVITY_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Wait, for at most [`ACTIVITY_DRAIN_TIMEOUT`], for the detached activity writes to land.
+///
+/// After the listener has drained, so no request can start another. A store that does not answer
+/// in time loses those events; each one's write is abandoned and this says so at `error`.
+async fn drain_activity(app: &crate::App) {
+    use kynos::di::Provides as _;
+
+    let activity: crate::activity::ActivityContext = app.provide();
+    tracing::debug!("waiting for detached account activity writes");
+    if tokio::time::timeout(ACTIVITY_DRAIN_TIMEOUT, activity.settled())
+        .await
+        .is_err()
+    {
+        tracing::error!(
+            timeout = ?ACTIVITY_DRAIN_TIMEOUT,
+            "detached account activity writes did not land before shutdown; their events are lost"
+        );
+    }
+}
+
+/// Pair every staged upload with its session before anything else reads either
+/// ([`crate::upload::scrub::startup`]).
+///
+/// Awaited rather than detached, unlike the recovery that follows: it must finish before the
+/// listener accepts a request, because a request could otherwise create a stage the scrub has
+/// not listed a session for, or write to a session it is about to discard.
+async fn scrub_staged_uploads(app: &crate::App) {
+    use kynos::di::Provides as _;
+
+    let upload: crate::upload::UploadContext = app.provide();
+    let drops: crate::drop::DropContext = app.provide();
+    crate::upload::scrub::startup(&upload, drops.drops()).await;
 }
 
 /// Re-drive the finalization claims a previous process died holding — album finalizations and
@@ -781,7 +848,7 @@ async fn scrub(config: &Config, depth: Depth) -> Result<ExitCode> {
 ///
 /// Exits [`EXIT_FINDINGS`] when the report holds a fault — a broken ledger, a row that disagrees
 /// with the index, a dangling entry, a quarantined manifest — and zero when the only news is rows
-/// to restore, which is what a rebuild is for.
+/// to restore or drifted pulled quota totals to rebuild (#1183), which is what a rebuild is for.
 async fn rebuild(config: &Config, mode: Mode, accept_rewrites: bool) -> Result<ExitCode> {
     let maintenance = maintenance(config).await?;
     let context = if accept_rewrites {
@@ -794,6 +861,23 @@ async fn rebuild(config: &Config, mode: Mode, accept_rewrites: bool) -> Result<E
         .map_err(|error| eyre!("the index rebuild could not finish: {error}"))?;
     print!("{}", render_rebuild(&report, mode));
     Ok(if report.has_faults() {
+        ExitCode::from(EXIT_FINDINGS)
+    } else {
+        ExitCode::SUCCESS
+    })
+}
+
+/// Record the real size of every blob reference the index holds at size `0` (#1128).
+///
+/// Exits [`EXIT_FINDINGS`] when a reference could not be repaired — its blob is missing or empty
+/// — and zero otherwise, including when there was nothing to repair.
+async fn repair_sizes(config: &Config, mode: Mode) -> Result<ExitCode> {
+    let maintenance = maintenance(config).await?;
+    let report = crate::ledger::rebuild::sizes::repair_sizes(&maintenance.rebuild, mode)
+        .await
+        .map_err(|error| eyre!("the size repair could not finish: {error}"))?;
+    print!("{}", render_size_repair(&report, mode));
+    Ok(if report.has_findings() {
         ExitCode::from(EXIT_FINDINGS)
     } else {
         ExitCode::SUCCESS
@@ -1099,6 +1183,18 @@ impl std::fmt::Display for Rendered<'_, CollectionReport> {
                 writeln!(f, "    {user} {bytes}")?;
             }
         }
+        if report.expired_activity > 0 {
+            quiet = false;
+            let verb = match mode {
+                Mode::Apply => "deleted",
+                Mode::DryRun => "would delete",
+            };
+            writeln!(
+                f,
+                "  expired activity events ({verb} {})",
+                report.expired_activity
+            )?;
+        }
         if quiet {
             writeln!(f, "  nothing to do")?;
         }
@@ -1132,6 +1228,62 @@ impl std::fmt::Display for Rendered<'_, PurgeReport> {
             writeln!(f, "  {class} ({})", assets.len())?;
             for asset in assets {
                 writeln!(f, "    {asset}")?;
+            }
+        }
+        if quiet {
+            writeln!(f, "  nothing to do")?;
+        }
+        Ok(())
+    }
+}
+
+/// Render a size repair pass.
+///
+/// Every reference is listed with its asset, role and address, so an operator can find the row
+/// a missing or empty blob belongs to without a second query.
+fn render_size_repair(report: &SizeRepairReport, mode: Mode) -> Rendered<'_, SizeRepairReport> {
+    Rendered(report, mode)
+}
+
+impl std::fmt::Display for Rendered<'_, SizeRepairReport> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self(report, mode) = *self;
+        writeln!(f, "size repair ({})", posture(mode))?;
+        let mut quiet = true;
+        for (class, resized) in [
+            ("repaired", &report.repaired),
+            ("moved before repair, left alone", &report.moved),
+        ] {
+            if resized.is_empty() {
+                continue;
+            }
+            quiet = false;
+            writeln!(f, "  {class} ({})", resized.len())?;
+            for Resized { reference, size } in resized {
+                let ZeroSized {
+                    asset,
+                    role,
+                    address,
+                } = reference;
+                writeln!(f, "    {asset} {} {address} -> {size} bytes", role.as_str())?;
+            }
+        }
+        for (class, references) in [
+            ("blob missing, kept", &report.missing),
+            ("blob empty, kept", &report.empty),
+        ] {
+            if references.is_empty() {
+                continue;
+            }
+            quiet = false;
+            writeln!(f, "  {class} ({})", references.len())?;
+            for ZeroSized {
+                asset,
+                role,
+                address,
+            } in references
+            {
+                writeln!(f, "    {asset} {} {address}", role.as_str())?;
             }
         }
         if quiet {
@@ -1264,6 +1416,31 @@ impl std::fmt::Display for Rendered<'_, RebuildReport> {
             writeln!(f, "  orphans, left to gc ({})", report.orphans.len())?;
             for address in &report.orphans {
                 writeln!(f, "    {address}")?;
+            }
+        }
+        if !report.pulled_drift.is_empty() {
+            let rebuilt = match mode {
+                Mode::Apply => "rebuilt",
+                Mode::DryRun => "would rebuild",
+            };
+            writeln!(
+                f,
+                "  pulled quota totals that drifted, {rebuilt} ({})",
+                report.pulled_drift.len()
+            )?;
+            for drift in &report.pulled_drift {
+                writeln!(
+                    f,
+                    "    {}: stored {}, derived {}{}",
+                    drift.user,
+                    drift.stored,
+                    drift.derived,
+                    if drift.holdings {
+                        ", holdings differ"
+                    } else {
+                        ""
+                    }
+                )?;
             }
         }
         if report.owners.is_empty() {

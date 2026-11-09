@@ -93,6 +93,9 @@ struct RootShell: View {
                 Task { await environment.diagnostics.noteEnteredBackground() }
             case .active:
                 Task { await environment.diagnostics.noteBecameActive() }
+                // Back in the foreground: pull what the server indexed while
+                // the app was away, so held records it releases go out now.
+                Task { await environment.syncManagedLane() }
             default:
                 break
             }
@@ -102,6 +105,9 @@ struct RootShell: View {
                 crashReportOffered = true
             }
         }
+        // A launch syncs the managed lane once; a foreground transition that
+        // lands meanwhile joins the same drain.
+        .task { await environment.syncManagedLane() }
         // The alert loop lives as long as the scene: a refresh now, then one
         // after every change to a fact the alerts read.
         .task { await environment.runAlertLoop() }

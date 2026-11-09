@@ -29,8 +29,8 @@
 //! lifetime. For the direct-read scripts (`READ_RECORD`, `READ_UPLOAD`, `CHUNK_AT`,
 //! `IS_LIVE`, `LOOKUP_CHANNEL` and the mutations guarded by `live`) a false "not live" verdict
 //! costs that replica one early miss and nobody else anything. The index-listing scripts
-//! (`SESSIONS_FOR_USER`, `UPLOADS_FOR_UPLOADER`, `PENDING_FOR_ADDRESS`, `IN_FLIGHT_FOR_ALBUM`,
-//! `LEAST_RECENTLY_PROGRESSED`, `CLAIMED_UPLOADS`) are the residual: they `SREM`/`ZREM` a member whose record they
+//! (`SESSIONS_FOR_USER`, `UPLOADS_FOR_UPLOADER`, `PENDING_FOR_ADDRESS`, `LIVE_FOR_ADDRESS`,
+//! `IN_FLIGHT_FOR_ALBUM`, `LEAST_RECENTLY_PROGRESSED`, `CLAIMED_UPLOADS`) are the residual: they `SREM`/`ZREM` a member whose record they
 //! judge dead, and the index is **shared**, so a fast clock on one replica hides a still-live
 //! record from every replica's listings until a state change re-indexes it or the record
 //! expires for real. The record itself is untouched — a direct read on a well-clocked replica
@@ -46,9 +46,9 @@
 //!
 //! # Indexes are derived, and heal on read
 //!
-//! The per-user session set, the per-uploader set, the per-album set, the pending-address set
-//! and the global progress sorted-set are all derived from the record hashes. Every listing
-//! resolves each member through its record inside the script and drops — `SREM`/`ZREM` — any
+//! The per-user session set, the per-uploader set, the per-album set, the pending-address set,
+//! the live-address set and the global progress sorted-set are all derived from the record
+//! hashes. Every listing resolves each member through its record inside the script and drops — `SREM`/`ZREM` — any
 //! member whose record is gone or no longer matches. That is what makes
 //! `an_expired_session_leaves_no_listing_entry_behind` hold without a second lifetime on the
 //! index: the two independent TTLs the Salvo adapter kept were exactly what leaked. A heal is
@@ -63,10 +63,11 @@
 //! | `capsule:session:{sid}` | hash | session TTL |
 //! | `capsule:user_sessions:{uid}` | set | refreshed to the session TTL on every open |
 //! | `capsule:upload:session:{id}` | hash | lifetime cap |
-//! | `capsule:upload:chunks:{id}` | hash (`offset` → chunk) | the record's remaining TTL |
+//! | `capsule:upload:chunks:{id}` | hash (`offset` → chunk), written only by servers that predate the committed set; nothing writes it now, and a session's open and discard still delete it | the record's remaining TTL |
 //! | `capsule:upload:uploader:{uid}` | set | refreshed on open |
 //! | `capsule:upload:album:{album}` | set | refreshed on open |
 //! | `capsule:upload:pending:{uploader}:{hash}` | set | refreshed on open |
+//! | `capsule:upload:address:{hash}` | set | refreshed on open |
 //! | `capsule:upload:progress` | zset (score = `last_progress_at` µs) | none — heals when the pressure sweep (`least_recently_progressed`) walks it, which every `gc --apply` pass does over the whole set (#519) |
 //! | `capsule:upload:claimed` | set (`WaitingForProcessing` ids) | none — a member leaves on a terminal status or a discard, and a lapsed one heals when boot recovery (`claimed`) walks the set |
 //! | `capsule:counter:{kind}:{scope}` | hash (`hits`, `opened_at`) | the counter's window |
@@ -121,7 +122,10 @@ use redis::{
 };
 use uuid::Uuid;
 
-use super::auth::{AuthStateStore, CohortRecord, CohortStore, DEFAULT_SESSION_TTL, SessionRecord};
+use super::auth::{
+    AuthStateStore, CohortRecord, CohortStore, DEFAULT_SESSION_HARD_CAP, DEFAULT_SESSION_TTL,
+    SessionRecord,
+};
 use super::ceremony::{
     CHALLENGE_TTL, ChallengeStore, ChannelStore, DEVICE_SLOW_DOWN_STEP, DevicePollSlot, Direction,
     DrainOutcome, ENROLLMENT_CODE_TTL, EnrollmentStore, OIDC_AUTHORIZATION_TTL, OIDC_DEVICE_TTL,
@@ -134,8 +138,8 @@ use super::ids::{
     OidcNonce, OidcState, OwnerId, PkceVerifier, SessionId, UploadId, UserId,
 };
 use super::upload::{
-    AcceptedChunk, BlobRole, FinalizeClaim, LIFETIME_CAP, UploadSessionRecord, UploadSessionStatus,
-    UploadSessionStore,
+    BlobRole, CommittedRange, CommittedSet, FinalizeClaim, LIFETIME_CAP, UnclaimedDiscard,
+    UploadSessionRecord, UploadSessionStatus, UploadSessionStore,
 };
 use super::{Clock, StoreError, StoreFuture, deadline};
 
@@ -459,6 +463,7 @@ fn encode_session(record: &SessionRecord, expires_at: Timestamp) -> Vec<String> 
         .field("user_id", &record.user_id)
         .field("created_at", record.created_at)
         .field("authenticated_at", record.authenticated_at)
+        .field("signed_in_at", record.signed_in_at)
         .field("last_active_at", record.last_active_at)
         .optional("user_agent", record.user_agent.as_deref())
         .optional("ip_address", record.ip_address.as_deref())
@@ -477,11 +482,24 @@ fn decode_session(flat: Vec<String>) -> Result<SessionRecord, StoreError> {
         ),
         None => None,
     };
+    let created_at = fields.timestamp("created_at")?;
+    let authenticated_at = fields.timestamp("authenticated_at")?;
+    // A record written before `signed_in_at` existed has no such field, and must still decode:
+    // a deploy may not sign anyone out. Its own `created_at` stands in for the lineage's start,
+    // so the cap of a lineage that predates the field runs from its first rotation under this
+    // release. `authenticated_at` would be closer to the true sign-in, and is not used for
+    // exactly that reason: a lineage more than a cap old would then die at its first refresh
+    // after the deploy, which is a forced sign-out the deploy caused.
+    let signed_in_at = match fields.optional("signed_in_at") {
+        Some(_) => fields.timestamp("signed_in_at")?,
+        None => created_at,
+    };
     Ok(SessionRecord {
         session_id: SessionId::new(fields.required("session_id")?),
         user_id: UserId::new(fields.required("user_id")?),
-        created_at: fields.timestamp("created_at")?,
-        authenticated_at: fields.timestamp("authenticated_at")?,
+        created_at,
+        authenticated_at,
+        signed_in_at,
         last_active_at: fields.timestamp("last_active_at")?,
         user_agent: fields.optional("user_agent"),
         ip_address: fields.optional("ip_address"),
@@ -521,9 +539,14 @@ fn encode_upload(record: &UploadSessionRecord, expires_at: Timestamp) -> Vec<Str
         .field("blob_role", record.blob_role.as_str())
         .optional("intent_id", record.intent_id.as_deref())
         .field("manifest_envelope", &record.manifest_envelope)
-        .field("received_bytes", record.received_bytes)
+        .field("committed", record.committed.to_stored())
+        // The contiguous prefix, beside the set it derives from: the merge script keeps both, so
+        // a server that predates the committed set reads a counter it can resume from.
+        .field("received_bytes", record.committed.prefix())
+        .field("in_flight_cap", record.in_flight_cap)
         .field("total_size", record.total_size)
         .field("status", record.status.as_str())
+        .optional("failure_code", record.failure_code.as_deref())
         .field("created_at", record.created_at)
         .field("last_progress_at", record.last_progress_at)
         .field("progress_score", micros(record.last_progress_at))
@@ -537,6 +560,17 @@ fn decode_upload(flat: Vec<String>) -> Result<UploadSessionRecord, StoreError> {
         .ok_or_else(|| fields.corrupt("blob_role is not a known role".to_owned()))?;
     let status = parse_status(fields.required("status")?)
         .ok_or_else(|| fields.corrupt("status is not a known status".to_owned()))?;
+    // A session opened before the committed set holds only its append counter, which was a
+    // contiguous prefix; it reads back as that prefix, under the one-range cap it was served by.
+    let committed = match fields.optional("committed") {
+        Some(stored) => CommittedSet::from_stored(&stored)
+            .ok_or_else(|| fields.corrupt("committed is not a normal range set".to_owned()))?,
+        None => CommittedSet::prefix_of(fields.number("received_bytes")?),
+    };
+    let in_flight_cap = match fields.optional("in_flight_cap") {
+        Some(_) => fields.number("in_flight_cap")?,
+        None => 1,
+    };
     Ok(UploadSessionRecord {
         upload_id: UploadId::new(fields.required("upload_id")?),
         asset_id: AssetId::new(fields.required("asset_id")?),
@@ -550,48 +584,13 @@ fn decode_upload(flat: Vec<String>) -> Result<UploadSessionRecord, StoreError> {
         blob_role,
         intent_id: fields.optional("intent_id"),
         manifest_envelope: fields.required("manifest_envelope")?.to_owned(),
-        received_bytes: fields.number("received_bytes")?,
+        committed,
+        in_flight_cap,
         total_size: fields.number("total_size")?,
         status,
+        failure_code: fields.optional("failure_code"),
         created_at: fields.timestamp("created_at")?,
         last_progress_at: fields.timestamp("last_progress_at")?,
-    })
-}
-
-/// `chunk_hash \t next_offset \t accepted_at`: the hash is hex and a timestamp has no tab.
-fn encode_chunk(chunk: &AcceptedChunk) -> String {
-    format!(
-        "{}\t{}\t{}",
-        chunk.chunk_hash, chunk.next_offset, chunk.accepted_at
-    )
-}
-
-fn decode_chunk(offset: u64, packed: &str) -> Result<AcceptedChunk, StoreError> {
-    let corrupt = |detail: String| StoreError::Corrupt {
-        store: UPLOADS,
-        record: "AcceptedChunk",
-        detail,
-    };
-    let mut parts = packed.split('\t');
-    let chunk_hash = parts
-        .next()
-        .ok_or_else(|| corrupt("no chunk hash".to_owned()))?
-        .to_owned();
-    let next_offset = parts
-        .next()
-        .ok_or_else(|| corrupt("no next offset".to_owned()))?
-        .parse()
-        .map_err(|error| corrupt(format!("next offset is not a number: {error}")))?;
-    let accepted_at = parts
-        .next()
-        .ok_or_else(|| corrupt("no accepted_at".to_owned()))?
-        .parse()
-        .map_err(|error| corrupt(format!("accepted_at is not a timestamp: {error}")))?;
-    Ok(AcceptedChunk {
-        offset,
-        chunk_hash,
-        next_offset,
-        accepted_at,
     })
 }
 
@@ -655,6 +654,12 @@ fn pending_key(uploader: &UserId, expected_hash: &str) -> String {
         "a user id or a content hash must contain no `:`; it is a key segment"
     );
     format!("capsule:upload:pending:{uploader}:{expected_hash}")
+}
+
+/// Every active session declaring `expected_hash`, of any uploader — the index behind
+/// [`UploadSessionStore::live_for_address`], which only quota release reads.
+fn address_key(expected_hash: &str) -> String {
+    format!("capsule:upload:address:{expected_hash}")
 }
 
 fn challenge_key(token: &ChallengeToken) -> String {
@@ -746,6 +751,9 @@ macro_rules! script {
 // ---- sessions -----------------------------------------------------------------------------
 
 // KEYS: record, user index. ARGV: ttl_ms, session_id, user_id, fields…
+// `ttl_ms` is this record's remaining life, clipped to its lineage's hard cap, so it may be far
+// shorter than another member's: the shared index is only ever lengthened by it (`extend`),
+// or a near-cap rotation would expire the index under still-live sessions.
 script!(
     OPEN_SESSION,
     "local previous = redis.call('HGET', KEYS[1], 'user_id')
@@ -753,7 +761,7 @@ redis.call('DEL', KEYS[1])
 redis.call('HSET', KEYS[1], unpack(ARGV, 4))
 redis.call('PEXPIRE', KEYS[1], ARGV[1])
 redis.call('SADD', KEYS[2], ARGV[2])
-redis.call('PEXPIRE', KEYS[2], ARGV[1])
+extend(KEYS[2], tonumber(ARGV[1]))
 if previous and previous ~= ARGV[3] then
   redis.call('SREM', 'capsule:user_sessions:' .. previous, ARGV[2])
 end
@@ -815,9 +823,9 @@ return {gone, mismatched, found}"
 
 // ---- uploads ------------------------------------------------------------------------------
 
-// KEYS: record, chunks, uploader index, pending set, progress zset, claimed set, [album set].
-// ARGV: ttl_ms, upload_id, in_flight, evictable, score, fields… Re-opening an id under a
-// different uploader, owner, hash or album unindexes the previous record first, as
+// KEYS: record, chunks, uploader index, pending set, progress zset, claimed set, address set,
+// [album set]. ARGV: ttl_ms, upload_id, in_flight, evictable, score, fields… Re-opening an id
+// under a different uploader, owner, hash or album unindexes the previous record first, as
 // `OPEN_SESSION` does for a previous user. The claimed set follows the status just written.
 script!(
     OPEN_UPLOAD,
@@ -827,9 +835,12 @@ if previous[1] then
   if uploader ~= KEYS[3] then redis.call('SREM', uploader, ARGV[2]) end
   local pending = 'capsule:upload:pending:' .. previous[1] .. ':' .. previous[3]
   if pending ~= KEYS[4] then redis.call('SREM', pending, ARGV[2]) end
-  if previous[4] and ('capsule:upload:album:' .. previous[4]) ~= KEYS[7] then
+  if previous[4] and ('capsule:upload:album:' .. previous[4]) ~= KEYS[8] then
     redis.call('SREM', 'capsule:upload:album:' .. previous[4], ARGV[2])
   end
+end
+if previous[3] and ('capsule:upload:address:' .. previous[3]) ~= KEYS[7] then
+  redis.call('SREM', 'capsule:upload:address:' .. previous[3], ARGV[2])
 end
 redis.call('DEL', KEYS[1], KEYS[2])
 redis.call('HSET', KEYS[1], unpack(ARGV, 6))
@@ -839,13 +850,16 @@ redis.call('PEXPIRE', KEYS[3], ARGV[1])
 if ARGV[3] == '1' then
   redis.call('SADD', KEYS[4], ARGV[2])
   redis.call('PEXPIRE', KEYS[4], ARGV[1])
-  if KEYS[7] then
-    redis.call('SADD', KEYS[7], ARGV[2])
-    redis.call('PEXPIRE', KEYS[7], ARGV[1])
+  redis.call('SADD', KEYS[7], ARGV[2])
+  extend(KEYS[7], tonumber(ARGV[1]))
+  if KEYS[8] then
+    redis.call('SADD', KEYS[8], ARGV[2])
+    redis.call('PEXPIRE', KEYS[8], ARGV[1])
   end
 else
   redis.call('SREM', KEYS[4], ARGV[2])
-  if KEYS[7] then redis.call('SREM', KEYS[7], ARGV[2]) end
+  redis.call('SREM', KEYS[7], ARGV[2])
+  if KEYS[8] then redis.call('SREM', KEYS[8], ARGV[2]) end
 end
 if ARGV[4] == '1' then
   redis.call('ZADD', KEYS[5], ARGV[5], ARGV[2])
@@ -888,60 +902,81 @@ end
 return {gone, mismatched, found}"
 );
 
-// KEYS: record, chunks, progress zset. ARGV: now, offset, packed chunk, next_offset,
-// accepted_at, score, upload_id. The counter, the clock and the replay entry move together.
+// KEYS: record, chunks, progress zset. ARGV: now, start, end, accepted_at, score, upload_id.
+// Merges `[start, end)` into the stored committed set, `CommittedSet::with_range`'s rule, and
+// moves the prefix, the clock and the status with it — one step, so two ranges recorded at once
+// both land. A record that predates the set is read as its counter's prefix first. `%.0f`
+// because Lua numbers are doubles: exact for every size under 2^53 bytes.
 script!(
-    RECORD_PROGRESS,
+    RECORD_RANGE,
     "if not live(KEYS[1], ARGV[1], KEYS[2]) then return nil end
 local status = redis.call('HGET', KEYS[1], 'status')
 if status == 'completed' or status == 'failed_processing' then return nil end
-redis.call('HSET', KEYS[2], ARGV[2], ARGV[3])
-local ttl = redis.call('PTTL', KEYS[1])
-if ttl > 0 then redis.call('PEXPIRE', KEYS[2], ttl) end
-redis.call('HSET', KEYS[1], 'received_bytes', ARGV[4], 'last_progress_at', ARGV[5], 'progress_score', ARGV[6])
+local committed = redis.call('HGET', KEYS[1], 'committed')
+if not committed then
+  local counter = tonumber(redis.call('HGET', KEYS[1], 'received_bytes') or '0')
+  committed = ''
+  if counter > 0 then committed = string.format('0-%.0f', counter) end
+end
+local s = tonumber(ARGV[2])
+local e = tonumber(ARGV[3])
+local merged = {}
+local placed = false
+for a, b in string.gmatch(committed, '(%d+)-(%d+)') do
+  a = tonumber(a)
+  b = tonumber(b)
+  if b < s then
+    merged[#merged + 1] = string.format('%.0f-%.0f', a, b)
+  elseif a > e then
+    if not placed then
+      merged[#merged + 1] = string.format('%.0f-%.0f', s, e)
+      placed = true
+    end
+    merged[#merged + 1] = string.format('%.0f-%.0f', a, b)
+  else
+    if a < s then s = a end
+    if b > e then e = b end
+  end
+end
+if not placed then merged[#merged + 1] = string.format('%.0f-%.0f', s, e) end
+local first, through = string.match(merged[1], '(%d+)-(%d+)')
+local prefix = '0'
+if first == '0' then prefix = through end
+redis.call('HSET', KEYS[1], 'committed', table.concat(merged, ','), 'received_bytes', prefix, 'last_progress_at', ARGV[4], 'progress_score', ARGV[5])
 if status == 'pending' then
   redis.call('HSET', KEYS[1], 'status', 'uploading')
   status = 'uploading'
 end
-if status == 'uploading' then redis.call('ZADD', KEYS[3], ARGV[6], ARGV[7]) end
-return redis.call('HGETALL', KEYS[1])"
-);
-
-// KEYS: record, chunks. ARGV: now, offset.
-script!(
-    CHUNK_AT,
-    "if not live(KEYS[1], ARGV[1], KEYS[2]) then return nil end
-return redis.call('HGET', KEYS[2], ARGV[2])"
-);
-
-// KEYS: record, chunks. ARGV: now, on_disk. The one write that does not touch the clock.
-script!(
-    RECONCILE_BYTES,
-    "if not live(KEYS[1], ARGV[1], KEYS[2]) then return nil end
-redis.call('HSET', KEYS[1], 'received_bytes', ARGV[2])
+if status == 'uploading' then redis.call('ZADD', KEYS[3], ARGV[5], ARGV[6]) end
 return redis.call('HGETALL', KEYS[1])"
 );
 
 // KEYS: record, chunks, progress zset, claimed set. ARGV: now, status, upload_id, in_flight,
-// evictable.
+// evictable, [failure_code]. The failure code, when given, lands in the same step as the status
+// it explains, so no reader sees `failed_processing` without it.
 script!(
     SET_STATUS,
     "if not live(KEYS[1], ARGV[1], KEYS[2]) then return nil end
 redis.call('HSET', KEYS[1], 'status', ARGV[2])
+if ARGV[6] then redis.call('HSET', KEYS[1], 'failure_code', ARGV[6]) end
 local uploader = redis.call('HGET', KEYS[1], 'upload_user_id')
 local hash = redis.call('HGET', KEYS[1], 'expected_hash')
 local album = redis.call('HGET', KEYS[1], 'album_id')
 local ttl = redis.call('PTTL', KEYS[1])
 local pending = 'capsule:upload:pending:' .. uploader .. ':' .. hash
+local address = 'capsule:upload:address:' .. hash
 if ARGV[4] == '1' then
   redis.call('SADD', pending, ARGV[3])
   extend(pending, ttl)
+  redis.call('SADD', address, ARGV[3])
+  extend(address, ttl)
   if album then
     redis.call('SADD', 'capsule:upload:album:' .. album, ARGV[3])
     extend('capsule:upload:album:' .. album, ttl)
   end
 else
   redis.call('SREM', pending, ARGV[3])
+  redis.call('SREM', address, ARGV[3])
   if album then redis.call('SREM', 'capsule:upload:album:' .. album, ARGV[3]) end
 end
 if ARGV[5] == '1' then
@@ -972,11 +1007,19 @@ redis.call('SADD', KEYS[4], ARGV[2])
 return redis.call('HGETALL', KEYS[1])"
 );
 
-// KEYS: record, chunks, progress zset, claimed set. ARGV: now, upload_id. Record, replay
-// entries and every view entry, together.
+// KEYS: record, chunks, progress zset, claimed set. ARGV: now, upload_id, and an optional
+// `unclaimed`. Record, replay entries and every view entry, together. With `unclaimed`, only a
+// live `pending` or `uploading` session goes, and the script returns 0 (not found) or 1
+// (claimed or terminal) instead — the compare and the discard are one script, as in
+// `CLAIM_FINALIZE`.
 script!(
     DISCARD_UPLOAD,
-    "local record = redis.call('HGETALL', KEYS[1])
+    "if ARGV[3] == 'unclaimed' then
+  if not live(KEYS[1], ARGV[1], KEYS[2]) then return 0 end
+  local status = redis.call('HGET', KEYS[1], 'status')
+  if status ~= 'pending' and status ~= 'uploading' then return 1 end
+end
+local record = redis.call('HGETALL', KEYS[1])
 redis.call('DEL', KEYS[1], KEYS[2])
 redis.call('ZREM', KEYS[3], ARGV[2])
 redis.call('SREM', KEYS[4], ARGV[2])
@@ -987,6 +1030,7 @@ if f.upload_user_id then redis.call('SREM', 'capsule:upload:uploader:' .. f.uplo
 if f.upload_user_id and f.expected_hash then
   redis.call('SREM', 'capsule:upload:pending:' .. f.upload_user_id .. ':' .. f.expected_hash, ARGV[2])
 end
+if f.expected_hash then redis.call('SREM', 'capsule:upload:address:' .. f.expected_hash, ARGV[2]) end
 if f.album_id then redis.call('SREM', 'capsule:upload:album:' .. f.album_id, ARGV[2]) end
 if expired(record, ARGV[1]) then return nil end
 return record"
@@ -1010,6 +1054,34 @@ for _, id in ipairs(redis.call('SMEMBERS', KEYS[1])) do
       redis.call('SREM', KEYS[1], id)
       mismatched = mismatched + 1
     elseif r[3] == 'completed' or r[3] == 'failed_processing' then
+      redis.call('SREM', KEYS[1], id)
+      gone = gone + 1
+    else
+      found[#found + 1] = id
+    end
+  end
+end
+return {gone, mismatched, found}"
+);
+
+// KEYS: address set. ARGV: now, expected_hash. Returns {gone, mismatched, {upload_id…}}.
+// `PENDING_FOR_ADDRESS` without the uploader: a terminal session counts as gone.
+script!(
+    LIVE_FOR_ADDRESS,
+    "local gone = 0
+local mismatched = 0
+local found = {}
+for _, id in ipairs(redis.call('SMEMBERS', KEYS[1])) do
+  local key = 'capsule:upload:session:' .. id
+  if not live(key, ARGV[1], 'capsule:upload:chunks:' .. id) then
+    redis.call('SREM', KEYS[1], id)
+    gone = gone + 1
+  else
+    local r = redis.call('HMGET', key, 'expected_hash', 'status')
+    if r[1] ~= ARGV[2] then
+      redis.call('SREM', KEYS[1], id)
+      mismatched = mismatched + 1
+    elseif r[2] == 'completed' or r[2] == 'failed_processing' then
       redis.call('SREM', KEYS[1], id)
       gone = gone + 1
     else
@@ -1259,12 +1331,26 @@ pub struct ValkeyAuthState {
     valkey: Valkey,
     clock: Arc<dyn Clock>,
     ttl: SignedDuration,
+    hard_cap: SignedDuration,
 }
 
 impl ValkeyAuthState {
-    /// A store on `valkey` and `clock` with the given session lifetime.
+    /// A store on `valkey` and `clock` with the given sliding window and
+    /// [`DEFAULT_SESSION_HARD_CAP`].
     pub fn new(valkey: Valkey, clock: Arc<dyn Clock>, ttl: SignedDuration) -> Self {
-        Self { valkey, clock, ttl }
+        Self {
+            valkey,
+            clock,
+            ttl,
+            hard_cap: DEFAULT_SESSION_HARD_CAP,
+        }
+    }
+
+    /// The same store with its hard cap set to `hard_cap`.
+    #[must_use]
+    pub fn with_hard_cap(mut self, hard_cap: SignedDuration) -> Self {
+        self.hard_cap = hard_cap;
+        self
     }
 
     /// A store with [`DEFAULT_SESSION_TTL`].
@@ -1274,6 +1360,38 @@ impl ValkeyAuthState {
 
     fn now(&self) -> String {
         micros(self.clock.now()).to_string()
+    }
+
+    /// Store `record` until `expires_at`, indexed under its user: the one write both
+    /// [`AuthStateStore::open_session`] and [`AuthStateStore::restore_session`] make.
+    fn store_session(
+        &self,
+        record: SessionRecord,
+        expires_at: Timestamp,
+        verb: &'static str,
+    ) -> StoreFuture<'_, ()> {
+        Box::pin(async move {
+            let now = self.clock.now();
+            let session_id = record.session_id.clone();
+            let user_id = record.user_id.clone();
+            let mut args = vec![
+                ttl_millis(expires_at.duration_since(now)),
+                session_id.to_string(),
+                user_id.to_string(),
+            ];
+            args.extend(encode_session(&record, expires_at));
+            let _: i64 = self
+                .valkey
+                .eval(
+                    AUTH,
+                    &OPEN_SESSION,
+                    &[session_key(&session_id), user_sessions_key(&user_id)],
+                    &args,
+                )
+                .await?;
+            tracing::debug!(%session_id, %user_id, %expires_at, verb, "stored session");
+            Ok(())
+        })
     }
 
     async fn set_field(
@@ -1327,29 +1445,22 @@ impl AuthStateStore for ValkeyAuthState {
         self.ttl
     }
 
+    fn hard_cap(&self) -> SignedDuration {
+        self.hard_cap
+    }
+
     fn open_session(&self, record: SessionRecord) -> StoreFuture<'_, ()> {
-        Box::pin(async move {
-            let expires_at = deadline(self.clock.now(), self.ttl);
-            let session_id = record.session_id.clone();
-            let user_id = record.user_id.clone();
-            let mut args = vec![
-                ttl_millis(self.ttl),
-                session_id.to_string(),
-                user_id.to_string(),
-            ];
-            args.extend(encode_session(&record, expires_at));
-            let _: i64 = self
-                .valkey
-                .eval(
-                    AUTH,
-                    &OPEN_SESSION,
-                    &[session_key(&session_id), user_sessions_key(&user_id)],
-                    &args,
-                )
-                .await?;
-            tracing::debug!(%session_id, %user_id, "opened session");
-            Ok(())
-        })
+        // The sliding window clipped to the lineage's hard cap. A record already past its cap
+        // gets a deadline at or before `now`: the read gate refuses it at once and the
+        // one-millisecond floor in `ttl_millis` lets the collector take it.
+        let expires_at = self.expires_at(&record, self.clock.now());
+        self.store_session(record, expires_at, "opened")
+    }
+
+    fn restore_session(&self, record: SessionRecord) -> StoreFuture<'_, ()> {
+        // The window the record was last opened under, not a fresh one.
+        let expires_at = self.expires_at(&record, record.created_at);
+        self.store_session(record, expires_at, "restored")
     }
 
     fn read_session<'a>(
@@ -1473,7 +1584,7 @@ impl ValkeyUploadSessions {
         micros(self.clock.now()).to_string()
     }
 
-    /// The four keys most record scripts take: the record, its replay hash, the eviction view
+    /// The four keys most record scripts take: the record, its legacy replay hash, the eviction view
     /// and the claimed view. A script that maintains neither view simply does not name them.
     fn record_keys(upload: &UploadId) -> [String; 4] {
         [
@@ -1519,6 +1630,7 @@ impl UploadSessionStore for ValkeyUploadSessions {
                 pending_key(&record.upload_user_id, &record.expected_hash),
                 PROGRESS_KEY.to_owned(),
                 CLAIMED_KEY.to_owned(),
+                address_key(&record.expected_hash),
             ];
             if let Some(album) = &record.album_id {
                 keys.push(album_key(album));
@@ -1585,23 +1697,22 @@ impl UploadSessionStore for ValkeyUploadSessions {
         })
     }
 
-    fn record_progress<'a>(
+    fn record_range<'a>(
         &'a self,
         upload: &'a UploadId,
-        chunk: AcceptedChunk,
+        range: CommittedRange,
     ) -> StoreFuture<'a, Option<UploadSessionRecord>> {
         Box::pin(async move {
             let updated = self
                 .record_script(
-                    &RECORD_PROGRESS,
+                    &RECORD_RANGE,
                     upload,
                     &[
                         self.now(),
-                        chunk.offset.to_string(),
-                        encode_chunk(&chunk),
-                        chunk.next_offset.to_string(),
-                        chunk.accepted_at.to_string(),
-                        micros(chunk.accepted_at).to_string(),
+                        range.start.to_string(),
+                        range.end.to_string(),
+                        range.accepted_at.to_string(),
+                        micros(range.accepted_at).to_string(),
                         upload.to_string(),
                     ],
                 )
@@ -1609,51 +1720,16 @@ impl UploadSessionStore for ValkeyUploadSessions {
             if let Some(record) = &updated {
                 tracing::debug!(
                     %upload,
-                    received_bytes = record.received_bytes,
-                    "accepted chunk"
+                    start = range.start,
+                    end = range.end,
+                    fragments = record.committed.fragments(),
+                    prefix = record.committed.prefix(),
+                    "recorded a committed range"
                 );
             } else {
-                tracing::debug!(%upload, "progress found no active session");
+                tracing::debug!(%upload, "a range found no active session to record against");
             }
             Ok(updated)
-        })
-    }
-
-    fn chunk_at<'a>(
-        &'a self,
-        upload: &'a UploadId,
-        offset: u64,
-    ) -> StoreFuture<'a, Option<AcceptedChunk>> {
-        Box::pin(async move {
-            let packed: Option<String> = self
-                .valkey
-                .eval(
-                    UPLOADS,
-                    &CHUNK_AT,
-                    &[upload_key(upload), chunks_key(upload)],
-                    &[self.now(), offset.to_string()],
-                )
-                .await?;
-            tracing::trace!(%upload, offset, hit = packed.is_some(), "chunk replay lookup");
-            packed
-                .map(|packed| decode_chunk(offset, &packed))
-                .transpose()
-        })
-    }
-
-    fn reconcile_received_bytes<'a>(
-        &'a self,
-        upload: &'a UploadId,
-        on_disk: u64,
-    ) -> StoreFuture<'a, Option<UploadSessionRecord>> {
-        Box::pin(async move {
-            let reconciled = self
-                .record_script(&RECONCILE_BYTES, upload, &[self.now(), on_disk.to_string()])
-                .await?;
-            if reconciled.is_some() {
-                tracing::info!(%upload, now = on_disk, "reconciled received bytes to disk");
-            }
-            Ok(reconciled)
         })
     }
 
@@ -1681,6 +1757,37 @@ impl UploadSessionStore for ValkeyUploadSessions {
                 status = status.as_str(),
                 hit = updated.is_some(),
                 "set upload status"
+            );
+            Ok(updated)
+        })
+    }
+
+    fn fail_processing<'a>(
+        &'a self,
+        upload: &'a UploadId,
+        failure_code: &'a str,
+    ) -> StoreFuture<'a, Option<UploadSessionRecord>> {
+        Box::pin(async move {
+            let status = UploadSessionStatus::FailedProcessing;
+            let updated = self
+                .record_script(
+                    &SET_STATUS,
+                    upload,
+                    &[
+                        self.now(),
+                        status.as_str().to_owned(),
+                        upload.to_string(),
+                        flag(status.is_active()),
+                        flag(status.is_evictable()),
+                        failure_code.to_owned(),
+                    ],
+                )
+                .await?;
+            tracing::debug!(
+                %upload,
+                failure_code,
+                hit = updated.is_some(),
+                "failed an upload session"
             );
             Ok(updated)
         })
@@ -1760,6 +1867,44 @@ impl UploadSessionStore for ValkeyUploadSessions {
         })
     }
 
+    fn discard_unclaimed<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, UnclaimedDiscard> {
+        Box::pin(async move {
+            let outcome: Value = self
+                .valkey
+                .eval(
+                    UPLOADS,
+                    &DISCARD_UPLOAD,
+                    &Self::record_keys(upload),
+                    &[self.now(), upload.to_string(), "unclaimed".to_owned()],
+                )
+                .await?;
+            match outcome {
+                Value::Int(0) | Value::Nil => {
+                    tracing::debug!(%upload, "an unclaimed discard found no session");
+                    Ok(UnclaimedDiscard::NotFound)
+                }
+                Value::Int(1) => {
+                    tracing::debug!(%upload, "an unclaimed discard found the session claimed");
+                    Ok(UnclaimedDiscard::Claimed)
+                }
+                record => {
+                    let flat = Vec::<String>::from_redis_value(record).map_err(|_| {
+                        tracing::error!(%upload, "the discard script answered a shape it should not");
+                        StoreError::Corrupt {
+                            store: UPLOADS,
+                            record: "UploadSessionRecord",
+                            detail: "the discard script answered neither a verdict nor a record"
+                                .to_owned(),
+                        }
+                    })?;
+                    let removed = decode_upload(flat)?;
+                    tracing::info!(%upload, "discarded an unclaimed upload session");
+                    Ok(UnclaimedDiscard::Discarded(Box::new(removed)))
+                }
+            }
+        })
+    }
+
     fn pending_for_address<'a>(
         &'a self,
         uploader: &'a UserId,
@@ -1780,6 +1925,24 @@ impl UploadSessionStore for ValkeyUploadSessions {
             // answer — the same rule the in-memory double applies.
             ids.sort();
             Ok(ids.into_iter().next().map(UploadId::new))
+        })
+    }
+
+    fn live_for_address<'a>(&'a self, expected_hash: &'a str) -> StoreFuture<'a, Vec<UploadId>> {
+        Box::pin(async move {
+            let (gone, mismatched, mut ids): (u64, u64, Vec<String>) = self
+                .valkey
+                .eval(
+                    UPLOADS,
+                    &LIVE_FOR_ADDRESS,
+                    &[address_key(expected_hash)],
+                    &[self.now(), expected_hash.to_owned()],
+                )
+                .await?;
+            healed(UPLOADS, expected_hash, gone, mismatched);
+            ids.sort();
+            tracing::debug!(count = ids.len(), "listed live sessions for an address");
+            Ok(ids.into_iter().map(UploadId::new).collect())
         })
     }
 
@@ -2617,17 +2780,25 @@ pub struct ValkeyStores {
 }
 
 impl ValkeyStores {
-    /// Connect to `url` and build every store with its production lifetime.
+    /// Connect to `url` and build every store with its production lifetime, the session store
+    /// on the deployment's sliding window `session_ttl` and hard cap `session_hard_cap`
+    /// (`SESSION_TTL_DAYS`, `SESSION_HARD_CAP_DAYS`).
     ///
     /// # Errors
     ///
     /// As [`Valkey::connect`].
-    pub async fn connect(url: &str, clock: Arc<dyn Clock>) -> Result<Self, StoreError> {
+    pub async fn connect(
+        url: &str,
+        clock: Arc<dyn Clock>,
+        session_ttl: SignedDuration,
+        session_hard_cap: SignedDuration,
+    ) -> Result<Self, StoreError> {
         let valkey = Valkey::connect(url).await?;
         Ok(Self::with_ttl(
             valkey,
             clock,
-            DEFAULT_SESSION_TTL,
+            session_ttl,
+            session_hard_cap,
             LIFETIME_CAP,
             CHALLENGE_TTL,
             ENROLLMENT_CODE_TTL,
@@ -2649,7 +2820,16 @@ impl ValkeyStores {
     ) -> Result<Self, StoreError> {
         let valkey = Valkey::connect(url).await?;
         Ok(Self::with_ttl(
-            valkey, clock, ttl, ttl, ttl, ttl, ttl, ttl, ttl,
+            valkey,
+            clock,
+            ttl,
+            DEFAULT_SESSION_HARD_CAP,
+            ttl,
+            ttl,
+            ttl,
+            ttl,
+            ttl,
+            ttl,
         ))
     }
 
@@ -2661,6 +2841,7 @@ impl ValkeyStores {
         valkey: Valkey,
         clock: Arc<dyn Clock>,
         session: SignedDuration,
+        session_hard_cap: SignedDuration,
         upload: SignedDuration,
         challenge: SignedDuration,
         enrollment: SignedDuration,
@@ -2669,11 +2850,10 @@ impl ValkeyStores {
         oidc_device: SignedDuration,
     ) -> Self {
         Self {
-            auth: Arc::new(ValkeyAuthState::new(
-                valkey.clone(),
-                Arc::clone(&clock),
-                session,
-            )),
+            auth: Arc::new(
+                ValkeyAuthState::new(valkey.clone(), Arc::clone(&clock), session)
+                    .with_hard_cap(session_hard_cap),
+            ),
             uploads: Arc::new(ValkeyUploadSessions::new(
                 valkey.clone(),
                 Arc::clone(&clock),

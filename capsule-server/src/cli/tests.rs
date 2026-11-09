@@ -3,7 +3,7 @@ use clap::{CommandFactory as _, Parser as _};
 use super::{
     Cli, CollectionReport, Command, Mode, ModerationCommand, PeerAction, PurgeReport, QuotaAction,
     RebuildReport, ScrubReport, mode, render_block, render_collection, render_peer, render_pin,
-    render_purge, render_rebuild, render_reports, render_scrub,
+    render_purge, render_rebuild, render_reports, render_scrub, render_size_repair,
 };
 use crate::federation::{BlockOutcome, Blocked, PeerId, PeerRecord, PinOutcome};
 
@@ -345,6 +345,25 @@ fn a_collection_pass_names_the_blobs_rather_than_counting_them() {
 }
 
 #[test]
+fn a_collection_pass_reports_the_expired_activity_it_deleted_or_would_delete() {
+    let report = CollectionReport {
+        expired_activity: 42,
+        ..CollectionReport::default()
+    };
+    let applied = render_collection(&report, Mode::Apply).to_string();
+    assert!(
+        applied.contains("expired activity events (deleted 42)"),
+        "{applied}"
+    );
+    assert!(!applied.contains("nothing to do"), "{applied}");
+    let dry = render_collection(&report, Mode::DryRun).to_string();
+    assert!(
+        dry.contains("expired activity events (would delete 42)"),
+        "{dry}"
+    );
+}
+
+#[test]
 fn a_purge_reports_what_is_still_waiting() {
     // "Why has this not gone yet" is exactly the question a dry run is run to answer.
     let report = PurgeReport {
@@ -451,6 +470,54 @@ fn a_rebuild_is_a_dry_run_unless_applied() {
 }
 
 #[test]
+fn a_size_repair_is_a_maintenance_dry_run_unless_applied() {
+    let dry = Cli::parse_from(["capsule-server", "repair-sizes", "--memory"]).command;
+    assert!(matches!(dry, Command::RepairSizes { apply: false, .. }));
+    assert!(matches!(dry.demands(), crate::config::Demands::Maintenance));
+    let applied = Cli::parse_from(["capsule-server", "repair-sizes", "--apply"]).command;
+    assert!(matches!(applied, Command::RepairSizes { apply: true, .. }));
+}
+
+#[test]
+fn a_size_repair_report_names_every_reference_and_its_posture() {
+    use crate::ledger::rebuild::sizes::{Resized, SizeRepairReport, ZeroSized};
+    use crate::store::{AssetId, BlobRole};
+
+    let reference = |name: &str, role| ZeroSized {
+        asset: AssetId::new(name),
+        role,
+        address: crate::blob::ContentAddress::parse(&"ab".repeat(32)).expect("an address"),
+    };
+    let report = SizeRepairReport {
+        applied: false,
+        repaired: vec![Resized {
+            reference: reference("fixed", BlobRole::Provenance),
+            size: 812,
+        }],
+        moved: vec![Resized {
+            reference: reference("raced", BlobRole::Metadata),
+            size: 9,
+        }],
+        missing: vec![reference("lost", BlobRole::Original)],
+        empty: vec![reference("hollow", BlobRole::Metadata)],
+    };
+    let rendered = render_size_repair(&report, Mode::DryRun).to_string();
+    assert!(rendered.contains("dry run"), "{rendered}");
+    assert!(rendered.contains("repaired (1)"), "{rendered}");
+    assert!(rendered.contains("fixed provenance"), "{rendered}");
+    assert!(rendered.contains("-> 812 bytes"), "{rendered}");
+    assert!(rendered.contains("moved before repair"), "{rendered}");
+    assert!(rendered.contains("blob missing, kept (1)"), "{rendered}");
+    assert!(rendered.contains("lost original"), "{rendered}");
+    assert!(rendered.contains("blob empty, kept (1)"), "{rendered}");
+    assert!(rendered.contains("hollow metadata"), "{rendered}");
+
+    let quiet = render_size_repair(&SizeRepairReport::default(), Mode::Apply).to_string();
+    assert!(quiet.contains("applied"), "{quiet}");
+    assert!(quiet.contains("nothing to do"), "{quiet}");
+}
+
+#[test]
 fn a_rebuild_report_names_what_it_restored_and_what_it_found() {
     use crate::ledger::ChainFault;
     use crate::ledger::directory::{DirectoryFault, Refusal};
@@ -488,6 +555,20 @@ fn a_rebuild_report_names_what_it_restored_and_what_it_found() {
         links_only: true,
         owners: vec![owner],
         orphans: vec![address(0xDD)],
+        pulled_drift: vec![
+            crate::quota::PulledDrift {
+                user: crate::store::UserId::new("drifted-total"),
+                stored: 14,
+                derived: 9,
+                holdings: false,
+            },
+            crate::quota::PulledDrift {
+                user: crate::store::UserId::new("drifted-refs"),
+                stored: 9,
+                derived: 9,
+                holdings: true,
+            },
+        ],
     };
     let rendered = render_rebuild(&report, Mode::DryRun).to_string();
     for expected in [
@@ -507,6 +588,9 @@ fn a_rebuild_report_names_what_it_restored_and_what_it_found() {
         "ledger entry 3 (the directory copy is missing)",
         "needs a new sync epoch",
         "orphans, left to gc (1)",
+        "pulled quota totals that drifted, would rebuild (2)",
+        "drifted-total: stored 14, derived 9\n",
+        "drifted-refs: stored 9, derived 9, holdings differ",
     ] {
         assert!(
             rendered.contains(expected),
@@ -560,8 +644,18 @@ fn a_rebuild_report_names_the_way_out_of_a_caught_rewrite() {
             ),
         ],
         orphans: Vec::new(),
+        pulled_drift: vec![crate::quota::PulledDrift {
+            user: crate::store::UserId::new("drifted"),
+            stored: 3,
+            derived: 1,
+            holdings: false,
+        }],
     };
     let rendered = render_rebuild(&report, Mode::Apply).to_string();
+    assert!(
+        rendered.contains("pulled quota totals that drifted, rebuilt (1)"),
+        "{rendered}"
+    );
     assert!(
         rendered.contains("rebuild --apply --accept-rewrites"),
         "{rendered}"

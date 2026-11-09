@@ -14,8 +14,7 @@
 //! [`AuthContext`] is one field, not four, and [`UploadContext`] is the second field
 //! beside it rather than five more loose collaborators. `#[derive(Provider)]` emits one
 //! `Provides<T>` per field, and two fields of the same type is a derive error — so the shape
-//! here is "one bundle per cohesive module", which is also the shape design/module-map.md
-//! describes.
+//! here is "one bundle per cohesive module", which is also the shape the crate docs describe.
 //!
 //! [`App::new`] is the **only** constructor, and that is deliberate. There was a `with_auth`
 //! convenience taking the auth module's four collaborators inline beside the other bundles,
@@ -28,6 +27,7 @@
 use kynos::prelude::*;
 use kynos::security::Authenticates;
 
+use crate::activity::ActivityContext;
 use crate::album::AlbumContext;
 use crate::attestation::AttestationContext;
 use crate::auth::oidc::OidcContext;
@@ -100,6 +100,8 @@ pub struct App {
     drops: DropContext,
     /// The rate-limit counters.
     counters: CounterContext,
+    /// The account activity log's collaborators.
+    activity: ActivityContext,
 }
 
 /// The modules an [`App`] is assembled from.
@@ -151,6 +153,8 @@ pub struct Modules {
     pub drops: DropContext,
     /// The rate-limit counters.
     pub counters: CounterContext,
+    /// The account activity log's collaborators.
+    pub activity: ActivityContext,
 }
 
 impl App {
@@ -162,6 +166,13 @@ impl App {
     /// The rate-limit counters, for the read scheme's request-nonce replay memory.
     pub(crate) fn counters(&self) -> &CounterContext {
         &self.counters
+    }
+
+    /// The account activity log's collaborators, for the assembly tests that must see the very
+    /// store the application records into.
+    #[cfg(test)]
+    pub(crate) fn activity(&self) -> &ActivityContext {
+        &self.activity
     }
 
     /// Assembles the application from its modules.
@@ -187,6 +198,7 @@ impl App {
             share,
             drops,
             counters,
+            activity,
         } = modules;
         Self {
             auth,
@@ -209,6 +221,7 @@ impl App {
             share,
             drops,
             counters,
+            activity,
         }
     }
 }

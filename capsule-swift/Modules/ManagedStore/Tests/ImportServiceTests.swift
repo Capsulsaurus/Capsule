@@ -10,13 +10,21 @@ import CapsuleTestSupport
 struct ImportServiceTests {
     private let layout = ManagedLibraryLayout(root: URL(filePath: "/capsule/Library"))
 
-    private func makeService(catalog: MockCatalog, fileStore: MockFileStore) -> ImportService {
+    private func makeService(
+        catalog: MockCatalog,
+        fileStore: MockFileStore,
+        metadataExtractor: MockMetadataExtractor = MockMetadataExtractor()
+    ) -> ImportService {
         ImportService(
-            library: ManagedLibrary(layout: layout, fileStore: fileStore, catalog: catalog),
+            library: ManagedLibrary(
+                layout: layout,
+                fileStore: fileStore,
+                catalog: catalog,
+                hasher: MockContentHasher(),
+                metadataExtractor: metadataExtractor
+            ),
             fileStore: fileStore,
-            hasher: MockContentHasher(),
-            metadataExtractor: MockMetadataExtractor(),
-            sidecarCoder: JSONSidecarCoder()
+            hasher: MockContentHasher()
         )
     }
 
@@ -109,16 +117,14 @@ struct ImportServiceTests {
         let fileStore = MockFileStore()
         let source = URL(filePath: "/tmp/import/located.jpg")
         await fileStore.seedFile(Data("located".utf8), at: source)
-        let service = ImportService(
-            library: ManagedLibrary(layout: layout, fileStore: fileStore, catalog: catalog),
+        let service = makeService(
+            catalog: catalog,
             fileStore: fileStore,
-            hasher: MockContentHasher(),
             metadataExtractor: MockMetadataExtractor(template: MediaMetadata(
                 captureTimestamp: Fixtures.referenceTimestamp,
                 latitude: -33.8568,
                 longitude: 151.2153
-            )),
-            sidecarCoder: JSONSidecarCoder()
+            ))
         )
 
         let result = await service.importAssets(from: [ImportSource(url: source, originalFilename: "located.jpg")])
@@ -132,6 +138,31 @@ struct ImportServiceTests {
         let sidecar = try JSONSidecarCoder().decode(bytes)
         #expect(sidecar.gpsLatitude == -33.8568)
         #expect(sidecar.gpsLongitude == 151.2153)
+    }
+
+    @Test("a second import of the same bytes is a duplicate of the first")
+    func reimportIsDuplicate() async {
+        let catalog = MockCatalog()
+        let fileStore = MockFileStore()
+        let source = URL(filePath: "/tmp/import/again.jpg")
+        await fileStore.seedFile(Data("again".utf8), at: source)
+        let service = makeService(catalog: catalog, fileStore: fileStore)
+
+        let first = await service.importAssets(from: [ImportSource(url: source, originalFilename: "again.jpg")])
+        let second = await service.importAssets(from: [ImportSource(url: source, originalFilename: "again.jpg")])
+
+        #expect(first.importedCount == 1)
+        #expect(second.duplicateCount == 1)
+    }
+
+    @Test("the sealed name keeps the original's extension, or borrows the source file's")
+    func sealFileName() {
+        let named = ImportSource(url: URL(filePath: "/tmp/x.tmp"), originalFilename: "IMG_0001.HEIC")
+        let bare = ImportSource(url: URL(filePath: "/tmp/copy.heic"), originalFilename: "IMG_0001")
+        let neither = ImportSource(url: URL(filePath: "/tmp/copy"), originalFilename: "IMG_0001")
+        #expect(ImportService.sealFileName(for: named) == "IMG_0001.HEIC")
+        #expect(ImportService.sealFileName(for: bare) == "IMG_0001.heic")
+        #expect(ImportService.sealFileName(for: neither) == "IMG_0001")
     }
 }
 

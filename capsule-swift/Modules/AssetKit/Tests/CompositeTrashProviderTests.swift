@@ -15,8 +15,12 @@ struct CompositeTrashProviderTests {
     /// built over `gate` exactly as the composition root builds it.
     private func makeManaged(gate: SecondaryTrashGate, trashedID: String) async throws -> ManagedProvider {
         let catalog = MockCatalog()
-        try await catalog.insertAsset(Fixtures.catalogAsset(id: trashedID, captureTimestamp: 2000))
-        await catalog.softDeleteAsset(id: trashedID, deletedAt: 2001)
+        try await catalog.insertAsset(Fixtures.catalogAsset(
+            id: trashedID,
+            captureTimestamp: 2000,
+            isDeleted: true,
+            deletedAt: 2001
+        ))
         return ManagedProvider(
             library: ManagedLibrary(layout: layout, fileStore: MockFileStore(), catalog: catalog),
             authGate: gate

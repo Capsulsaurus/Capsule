@@ -51,6 +51,7 @@ use kynos::http::media::OctetStream;
 use kynos::prelude::*;
 use kynos::response::range::served::{Conditions, Delivery, Served};
 
+use crate::activity::{ActivityContext, Served as ServedTo};
 use crate::counter::CounterContext;
 use crate::federation::scheme::RequestSignatureHeader;
 use crate::federation::{
@@ -271,11 +272,16 @@ impl BlobRejection {
 /// A federated peer fetches here with a capability instead of a session token, through
 /// the same resolution and the same authority.
 #[kynos::get("/v1/blob/{hash}", operation_id = "get_blob", tag = MediaTag)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one extractor per argument; Kynos resolves each one, and bundling them would hide which the contract declares"
+)]
 pub async fn get_blob(
     Auth(principal): Auth<ReadBearer>,
     Inject(serve): Inject<ServeContext>,
     Inject(federation): Inject<FederationContext>,
     Inject(counters): Inject<CounterContext>,
+    Inject(activity): Inject<ActivityContext>,
     Path(path): Path<BlobPath>,
     // Declared for the contract; `ReadBearer` has already verified it (see its module docs).
     Headers(_signature): Headers<RequestSignatureHeader>,
@@ -310,8 +316,12 @@ pub async fn get_blob(
             BlobRejection::unavailable()
         })?;
 
-    let (address, size) = match resolution {
-        ServeResolution::Serve { address, size } => (address, size),
+    let (address, size, owner) = match resolution {
+        ServeResolution::Serve {
+            address,
+            size,
+            owner,
+        } => (address, size, owner),
         ServeResolution::AwaitingUpload { .. } => return Err(BlobRejection::pending()),
         ServeResolution::NotFound => return Err(BlobRejection::not_found()),
         // The `403` says the same thing to both readers and says it differently, because what
@@ -353,12 +363,18 @@ pub async fn get_blob(
         && delivers_bytes(delivery.status())
     {
         federation::charge_served_bytes(&counters, &capability.record.peer_id, *tier, size).await?;
+        // The owner's log names the peer, aggregated per window, and never the address: an
+        // account's own fetches are not an event about it and record nothing.
+        activity.record_served(
+            &crate::store::UserId::new(owner.as_str()),
+            ServedTo::Peer(capability.record.peer_id.as_str()),
+        );
     }
     Ok(delivery)
 }
 
 /// Whether a delivery with `status` carries any of the blob's bytes.
-fn delivers_bytes(status: kynos::http::StatusCode) -> bool {
+pub(crate) fn delivers_bytes(status: kynos::http::StatusCode) -> bool {
     matches!(
         status,
         kynos::http::StatusCode::OK | kynos::http::StatusCode::PARTIAL_CONTENT

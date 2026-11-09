@@ -7211,6 +7211,10 @@
     "message": "Capsule 目前無法連線至您的身分提供者，請再試一次。",
     "origin": "machine"
   },
+  "error.auth.password_disabled": {
+    "message": "此伺服器僅接受透過單一登入進行登入。",
+    "origin": "machine"
+  },
   "error.auth.password_invalid": {
     "message": "無法使用該密碼。",
     "origin": "machine"
@@ -7225,6 +7229,10 @@
   },
   "error.auth.rate_limited": {
     "message": "嘗試次數過多。請稍候再試。",
+    "origin": "machine"
+  },
+  "error.auth.registration_at_capacity": {
+    "message": "此伺服器目前處理的註冊請求過多，請稍後再試。",
     "origin": "machine"
   },
   "error.auth.registration_invalid": {
@@ -7463,8 +7471,28 @@
     "message": "此來源在多次出錯後暫時被退避處理。",
     "origin": "machine"
   },
+  "error.federation.hint_at_capacity": {
+    "message": "此伺服器目前正在處理的更新通知過多。請稍候再試。",
+    "origin": "machine"
+  },
+  "error.federation.hint_malformed": {
+    "message": "該更新通知無效。",
+    "origin": "machine"
+  },
+  "error.federation.hint_rate_limited": {
+    "message": "來自此伺服器的更新通知過多。請稍候再試。",
+    "origin": "machine"
+  },
+  "error.federation.hint_unsigned": {
+    "message": "無法驗證該更新通知。",
+    "origin": "machine"
+  },
   "error.federation.member_not_on_roster": {
     "message": "此人不在這本相簿的成員名單中。",
+    "origin": "machine"
+  },
+  "error.federation.mint_at_capacity": {
+    "message": "此伺服器目前處理的存取授權過多，請稍後再試。",
     "origin": "machine"
   },
   "error.federation.not_configured": {
@@ -7487,12 +7515,20 @@
     "message": "此存取授權不涵蓋所請求的內容。",
     "origin": "machine"
   },
+  "error.federation.subscription_limit": {
+    "message": "你追蹤的其他伺服器共享相簿已達上限。請移除一個後再新增。",
+    "origin": "machine"
+  },
   "error.federation.unavailable": {
     "message": "Capsule 無法存取聯邦記錄，請再試一次。",
     "origin": "machine"
   },
   "error.moderation.account_suspended": {
     "message": "您的帳戶已被停用。在恢復之前，您無法上傳或分享。",
+    "origin": "machine"
+  },
+  "error.moderation.report_at_capacity": {
+    "message": "此伺服器目前處理的檢舉過多，請稍候再試。",
     "origin": "machine"
   },
   "error.moderation.report_malformed": {
@@ -7569,6 +7605,10 @@
   },
   "error.request.range_not_satisfiable": {
     "message": "Capsule 無法傳送檔案的該部分。",
+    "origin": "machine"
+  },
+  "error.request.too_early": {
+    "message": "該請求傳送得過早，請重試。",
     "origin": "machine"
   },
   "error.request.too_large": {
@@ -7763,6 +7803,10 @@
     "message": "您無法代表此使用者上傳。",
     "origin": "machine"
   },
+  "error.upload.range_conflict": {
+    "message": "此上傳的一部分已在傳送中。正在繼續…",
+    "origin": "machine"
+  },
   "error.upload.rate_limited": {
     "message": "上傳暫時暫停，稍後會自動恢復。",
     "origin": "machine"
@@ -7791,6 +7835,10 @@
     "message": "上傳傳送的資料超過了其宣告的大小。",
     "origin": "machine"
   },
+  "error.upload.source_changed": {
+    "message": "此檔案在上傳過程中發生了變更，因此已停止上傳。",
+    "origin": "machine"
+  },
   "error.upload.stale_revival": {
     "message": "此變更基於該項目的過時版本。",
     "origin": "machine"
@@ -7805,6 +7853,14 @@
   },
   "error.upload.timestamp_out_of_range": {
     "message": "您裝置的時鐘似乎不正確。請檢查其日期和時間。",
+    "origin": "machine"
+  },
+  "error.upload.too_fragmented": {
+    "message": "此上傳的缺口過多。正在補齊…",
+    "origin": "machine"
+  },
+  "error.upload.too_many_in_flight": {
+    "message": "此上傳同時傳送的部分過多。正在放慢速度…",
     "origin": "machine"
   },
   "error.upload.unavailable": {

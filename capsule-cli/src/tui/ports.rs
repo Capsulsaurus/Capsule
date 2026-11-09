@@ -67,6 +67,13 @@ pub trait Ports: Send + Sync + 'static {
         async { Err(NOT_OFFERED.to_owned()) }
     }
 
+    /// Whether the server's `server-info` record says it refuses passwords, as `capsule auth
+    /// login` reads it before asking for one ([`remote::password_sign_in_disabled`]). Only a
+    /// published `true` is `true`; the default, like an unreadable record, is `false`.
+    fn password_sign_in_disabled(&self) -> impl Future<Output = bool> + Send {
+        async { false }
+    }
+
     /// Answer a second-factor challenge with an authenticator code, storing the session.
     fn verify_second_factor(
         &self,
@@ -183,8 +190,9 @@ pub trait Ports: Send + Sync + 'static {
         async { Err(NOT_OFFERED.to_owned()) }
     }
 
-    /// Decode an asset's original into a preview no larger than [`PREVIEW_EDGE`] on its long
-    /// edge, through `capsule-core::media`. `Err` says why there is none, including a terminal
+    /// Decode a preview of an asset's original no larger than [`PREVIEW_EDGE`] on its long
+    /// edge, through `capsule-core::media`, from the source the render ladder picks
+    /// ([`super::library::decode_preview`]). `Err` says why there is none, including a terminal
     /// that draws no images.
     fn preview(
         &self,
@@ -223,7 +231,9 @@ pub trait Ports: Send + Sync + 'static {
 
     /// Decode an asset's original into a preview no larger than [`REGION_PREVIEW_EDGE`] for
     /// the label editor to draw regions on as half blocks: unlike
-    /// [`preview`](Self::preview), whatever image protocol the terminal speaks.
+    /// [`preview`](Self::preview), whatever image protocol the terminal speaks, and always from
+    /// the original itself, because a region's coordinates are relative to the original's
+    /// upright frame and a camera's embedded preview need not share its crop.
     fn region_preview(
         &self,
         request: PreviewRequest,
@@ -263,6 +273,9 @@ pub async fn perform<P: Ports>(ports: &P, effect: Effect) -> Action {
             ports.cancel_provider(attempt).await;
             Action::Auth(AuthAction::ProviderCancelled { attempt })
         }
+        Effect::Auth(AuthEffect::CheckPasswordSignIn) => Action::Auth(
+            AuthAction::PasswordSignInChecked(ports.password_sign_in_disabled().await),
+        ),
         Effect::Sync(SyncEffect::Run { from_start }) => {
             Action::Sync(SyncAction::Finished(ports.sync(from_start).await))
         }
@@ -764,6 +777,15 @@ impl Ports for LocalPorts {
         .await
     }
 
+    async fn password_sign_in_disabled(&self) -> bool {
+        let remote = self.remote.clone();
+        // Off the input loop like every network call here; a task that did not finish refuses
+        // nothing, as an unreadable record does not.
+        off_loop(move || async move { Ok(remote::password_sign_in_disabled(&remote).await) })
+            .await
+            .unwrap_or(false)
+    }
+
     async fn verify_second_factor(&self, mfa_token: Secret, code: Secret) -> Result<(), String> {
         let (remote, store) = (self.remote.clone(), self.store()?);
         off_loop(move || async move {
@@ -939,7 +961,7 @@ impl Ports for LocalPorts {
                 &remote,
                 &store,
                 &mut workspace,
-                crate::push_options(false, false, false),
+                crate::push_options(false, false, false, crate::cli::PathArgs::default()),
                 run,
             )
             .await;
@@ -1032,8 +1054,9 @@ impl Ports for LocalPorts {
         tokio::task::spawn_blocking(move || {
             let bytes = std::fs::read(&request.original)
                 .map_err(|e| format!("could not read the original: {e}"))?;
-            super::library::decode_preview(
+            super::library::decode_preview_from(
                 &capsule_core::media::RawshiftDecoder,
+                None,
                 &bytes,
                 &request.ext,
                 REGION_PREVIEW_EDGE,

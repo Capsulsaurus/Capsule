@@ -9,8 +9,12 @@
 //! return an [`FfiSession`] **handle** — an opaque object that owns the token store
 //! internally. Every subsequent call ([`upload`](crate::ffi::FfiSession::upload),
 //! [`push_asset`](crate::ffi::FfiSession::push_asset),
+//! [`push_assets`](crate::ffi::FfiSession::push_assets),
 //! [`upload_status`](crate::ffi::FfiSession::upload_status),
 //! [`fetch_blob_to_path`](crate::ffi::FfiSession::fetch_blob_to_path),
+//! [`apply_lifecycle_op`](crate::ffi::FfiSession::apply_lifecycle_op),
+//! [`deliver_purge`](crate::ffi::FfiSession::deliver_purge),
+//! [`deliver_lifecycle_at_hash`](crate::ffi::FfiSession::deliver_lifecycle_at_hash),
 //! [`sync_pull`](crate::ffi::FfiSession::sync_pull),
 //! [`logout`](crate::ffi::FfiSession::logout)) rides that handle, and
 //! [`transfer_events`](crate::ffi::FfiSession::transfer_events) subscribes to the step-by-step
@@ -54,12 +58,17 @@ use crate::directory::{DirectoryClient, DirectoryError};
 use crate::events::TransferEvents;
 use crate::fetch::{FetchError, HttpBlobSource, RangedFetcher};
 use crate::net::ConnectionClass;
-use crate::push::{AssetPushReport, PushError, PushedBlob};
+use crate::net::path::{GenerationPool, PathMonitor, PathSample};
+use crate::push::{
+    AssetPushReport, LaneBundle, LanePush, PUSH_BATCH_BUNDLES, PUSH_BYTE_BUDGET, PushError,
+    PushedBlob, push_lanes,
+};
 use crate::recovery::{EscrowStored, RecoveryClient, RecoveryError};
-use crate::staged::{StagedScheduler, TierSessionOutcome};
+use crate::staged::{TierSessionOutcome, run_under_path};
 use crate::sync::{
     BlobManifest, BlobRef, ChangeKind, FeedEntry, SyncConsumer, SyncCursor, SyncError, SyncPage,
 };
+use crate::upload::queue::{LaneWindows, ServerKey};
 use crate::upload::{
     BlobRole, CreateUploadRequest, HeadInfo, ManifestEnvelope, UploadClient, UploadError,
     UploadOutcome, UploadTransport,
@@ -71,12 +80,19 @@ use crate::upload::{
 mod workspace;
 
 pub use workspace::{
-    FfiAlbum, FfiAssetFacts, FfiAssetMetadata, FfiClientBuild, FfiDeviceTier,
+    FfiAlbum, FfiAssetFacts, FfiAssetMetadata, FfiClientBuild, FfiDeviceTier, FfiFeedDrain,
     FfiHardwareKeyAgreement, FfiHardwareSigner, FfiHardwareSignerError, FfiLabelRefusal,
-    FfiLabelTarget, FfiOpenedOriginal, FfiRegion, FfiRegionShape, FfiSyncApplyOutcome,
-    FfiSyncEntry, FfiSyncHead, FfiUploadBlob, FfiVerifyOutcome, FfiWorkspace,
-    p256_hardware_dek_round_trip,
+    FfiLabelTarget, FfiOpenedOriginal, FfiPurgeOutcome, FfiRegion, FfiRegionShape,
+    FfiSyncApplyOutcome, FfiSyncEntry, FfiSyncHead, FfiTrashEntry, FfiTrashRefusal, FfiUploadBlob,
+    FfiVerifyOutcome, FfiWorkspace, p256_hardware_dek_round_trip,
 };
+
+/// The cull verbs on [`FfiWorkspace`]: flag an asset or a stack, read a stack's derived state,
+/// list by flag, list stack membership, and the reject sweep. Its own module because culling is one workflow with one
+/// destructive step, and reads better as a unit than as another section of `workspace`.
+mod culling;
+
+pub use culling::{FfiCullFlag, FfiStackCullState, FfiStackMember};
 
 /// The transfer event stream: the flattened mirror of `crate::events` and the subscription a
 /// real-time transfer view polls. Separated because it is the one surface that is a stream
@@ -97,6 +113,30 @@ pub use notify::{
     FfiAlert, FfiAlertClass, FfiAlertSeverity, FfiClassDeadline, FfiNotifyInput, FfiQuotaAdvisory,
     evaluate_alerts, next_alert_deadline, pre_arm_deadlines,
 };
+
+/// The path snapshot an app's OS listeners report, flattened, and what a finished push tells
+/// the adverse detector. Separated because it is the session's one input that is device state
+/// rather than a request.
+mod path;
+
+pub use path::{FfiPathCost, FfiPathInterface, FfiPathSnapshot, FfiPowerState, FfiThermalState};
+
+/// The render ladder: the one order every app renders by, and the embedded-preview read that
+/// feeds it. Separated for the reason `notify` is: pure functions of caller-supplied state.
+mod ladder;
+
+pub use ladder::{
+    FfiEmbeddedPreview, FfiLocalHoldings, FfiNextStep, FfiRenderRequest, FfiRenderStep,
+    FfiRendition, FfiRepresentation, FfiRungSource, embedded_preview, render_step,
+};
+
+/// Lifecycle ops from an app: a signed `delete` or `trash-restore` record, judged at the
+/// boundary and sent to its album's ops surface, and a purge's delivery from the chain the
+/// workspace kept. Separated because it is the one surface where a workspace record meets the
+/// network, and where the rule that holds a delete until its create is indexed lives.
+mod ops;
+
+pub use ops::{FfiLifecycleOpOutcome, MAX_OP_RECORD_BYTES};
 
 // ─── Errors ──────────────────────────────────────────────────────────────────
 
@@ -150,6 +190,21 @@ pub enum FfiError {
         /// English detail (developer/log message).
         detail: String,
     },
+    /// A trash verb (delete, restore, purge) was refused before anything was written: the asset
+    /// is unknown, not in the trash, or past its signed retention window. `refusal` says which.
+    #[error("trash verb refused ({refusal:?}): {detail}")]
+    Trash {
+        /// Why the verb was refused.
+        refusal: FfiTrashRefusal,
+        /// Stable `error.*` catalog code, when one applies: `error.upload.retention_elapsed`
+        /// for [`FfiTrashRefusal::RetentionElapsed`], the code the server answers the same
+        /// refusal with.
+        code: Option<String>,
+        /// The signed retention floor (RFC 3339) a refused restore came too late for.
+        retention_until: Option<String>,
+        /// English detail (developer/log message).
+        detail: String,
+    },
     /// A master-key escrow flow (store/fetch) failed.
     #[error("escrow failed ({code:?}): {detail}")]
     Escrow {
@@ -173,7 +228,9 @@ pub enum FfiError {
     /// written locally. Nothing is left at the destination path.
     #[error("blob fetch failed ({code:?}): {detail}")]
     Fetch {
-        /// Stable `error.*` catalog code, when one applies (e.g. `error.blob.pending_upload`).
+        /// Stable `error.*` catalog code, when one applies (e.g. `error.blob.pending_upload`;
+        /// `error.blob.gone` for a blob or record the server will never serve again: a `410`
+        /// past a retention window or under a takedown, or a `404`).
         code: Option<String>,
         /// English detail (developer/log message).
         detail: String,
@@ -253,11 +310,10 @@ impl From<UploadError> for FfiError {
             return auth.into();
         }
         let code = match &err {
-            UploadError::Rejected { code, .. } => code.clone(),
             UploadError::UpgradeRequired { .. } => {
                 Some(capsule_i18n::error_codes::PROTOCOL_VERSION_UNSUPPORTED.to_owned())
             }
-            _ => None,
+            _ => err.error_code().map(str::to_owned),
         };
         Self::Upload {
             code,
@@ -295,6 +351,26 @@ impl From<FetchError> for FfiError {
         Self::Fetch {
             code: err.error_code().map(str::to_string),
             detail: err.to_string(),
+        }
+    }
+}
+
+impl From<crate::sync::HistoryError> for FfiError {
+    fn from(err: crate::sync::HistoryError) -> Self {
+        match err {
+            // The fetch's own mapping, so a refused refresh stays an auth error, with the link
+            // that could not be followed named.
+            crate::sync::HistoryError::Fetch { hash, source } => match Self::from(source) {
+                Self::Fetch { code, detail } => Self::Fetch {
+                    code,
+                    detail: format!("provenance record {hash}: {detail}"),
+                },
+                other => other,
+            },
+            other => Self::Sync {
+                code: None,
+                detail: other.to_string(),
+            },
         }
     }
 }
@@ -604,6 +680,9 @@ pub struct FfiPushReport {
     pub pushed: Vec<FfiPushedBlob>,
     /// Total bytes handed to the upload client, the original included.
     pub bytes: u64,
+    /// Blobs the reported path held back ([`FfiSession::set_path`]): push the asset again once
+    /// the path allows them. Zero when the whole ladder ran.
+    pub deferred: u32,
 }
 
 impl From<AssetPushReport> for FfiPushReport {
@@ -612,8 +691,27 @@ impl From<AssetPushReport> for FfiPushReport {
             asset_id: report.asset_id,
             pushed: report.pushed.into_iter().map(FfiPushedBlob::from).collect(),
             bytes: report.bytes,
+            deferred: u32::try_from(report.deferred).unwrap_or(u32::MAX),
         }
     }
+}
+
+/// How one asset of an [`FfiSession::push_assets`] call ended.
+#[derive(uniffi::Enum)]
+pub enum FfiPushAssetResult {
+    /// The asset's admitted ladder ran: what [`FfiSession::push_asset`] would have returned.
+    Pushed {
+        /// What the push did, the asset id included.
+        report: FfiPushReport,
+    },
+    /// The asset did not push: the error [`FfiSession::push_asset`] would have failed with.
+    /// It stays local, and pushing it again is safe.
+    Failed {
+        /// The asset id, as the caller passed it.
+        asset_id: String,
+        /// Why the asset did not push.
+        error: FfiError,
+    },
 }
 
 // ─── Sync mirrors ────────────────────────────────────────────────────────────
@@ -682,6 +780,90 @@ impl From<BlobManifest> for FfiBlobManifest {
     }
 }
 
+/// FFI mirror of [`HistorySources`](crate::sync::HistorySources): the blobs adopting an asset
+/// from its fetched history needs beyond its records.
+#[derive(uniffi::Record)]
+pub struct FfiHistorySources {
+    /// The asset's live metadata blob's content address (lowercase hex), for
+    /// [`FfiSession::fetch_metadata_blob`]; its bytes are the [`FfiSyncHead::metadata_blob`]
+    /// [`FfiWorkspace::open_synced_history`] takes.
+    pub metadata_blob_hash: String,
+    /// The original the head commits to, role `original`, sized for
+    /// [`FfiSession::fetch_blob_to_path`]; that file is the `ciphertext_path`
+    /// [`FfiWorkspace::open_synced_history`] takes.
+    pub original: FfiBlobRef,
+}
+
+impl From<crate::sync::HistorySources> for FfiHistorySources {
+    fn from(sources: crate::sync::HistorySources) -> Self {
+        Self {
+            metadata_blob_hash: sources.metadata_blob_hash.to_hex(),
+            original: FfiBlobRef {
+                ciphertext_hash: sources.original_hash.to_hex(),
+                role: "original".to_owned(),
+                size: sources.original_size,
+            },
+        }
+    }
+}
+
+/// **Name what adopting an asset from its history fetches**: the live metadata blob and the
+/// original, read off the asset's latest record `manifest_cbor` (a feed entry's) and `history`,
+/// the records before it that [`FfiSession::fetch_provenance_history`] returned.
+///
+/// An album page — the one a writer member's device reads — serves a `delete` with no metadata
+/// blob and no blob, so a device that first sees the asset there has only its records. The live
+/// metadata blob is the newest record that binds one, and the delete commits to the original;
+/// the server serves both to the asset's readers until its retention window closes. Fetch them
+/// with [`FfiSession::fetch_metadata_blob`] and [`FfiSession::fetch_blob_to_path`], set the
+/// entry's `metadata_blob` to the first, and hand the second to
+/// [`FfiWorkspace::open_synced_history`]: the asset is held in this device's trash and its
+/// `trash-restore` can be signed. An entry that names its metadata blob (the owner's own feed)
+/// agrees with this answer.
+///
+/// Pure and offline. Nothing is trusted for being named: the adoption binds the metadata blob and
+/// the original to the records, and refuses what does not.
+///
+/// # Errors
+///
+/// [`FfiError::Sync`] when a record does not decode or none binds a metadata blob.
+#[uniffi::export]
+pub fn synced_history_sources(
+    manifest_cbor: Vec<u8>,
+    history: Vec<Vec<u8>>,
+) -> Result<FfiHistorySources, FfiError> {
+    Ok(crate::sync::history_sources(&manifest_cbor, &history)?.into())
+}
+
+/// **Whether a tombstone's retention window had closed** at `changed_at` (RFC 3339, a feed
+/// entry's own): `manifest_cbor` is a `delete` record and `changed_at` is at or after the
+/// `retention_until` signed into it.
+///
+/// A device that first sees an asset at an album page's tombstone reads this before it calls
+/// [`FfiSession::fetch_provenance_history`]: once the window has closed the server refuses the
+/// asset's records and bytes to its readers, so there is nothing left to adopt, and passing the
+/// entry loses nothing. A record that is not a `delete`, or a `delete` whose window is absent or
+/// unreadable, answers `false`.
+///
+/// Pure and offline.
+///
+/// # Errors
+///
+/// [`FfiError::InvalidArgument`] when `changed_at` is not an RFC 3339 instant;
+/// [`FfiError::Sync`] when `manifest_cbor` does not decode.
+#[uniffi::export]
+pub fn synced_retention_closed(
+    manifest_cbor: Vec<u8>,
+    changed_at: String,
+) -> Result<bool, FfiError> {
+    let at = changed_at
+        .parse::<jiff::Timestamp>()
+        .map_err(|error| FfiError::InvalidArgument {
+            detail: format!("changed_at {changed_at:?} is not an RFC 3339 instant: {error}"),
+        })?;
+    Ok(crate::sync::retention_closed(&manifest_cbor, at)?)
+}
+
 /// FFI mirror of [`FeedEntry`] — one decoded sync feed entry. Ids/manifest/metadata
 /// cross as opaque bytes.
 #[derive(uniffi::Record)]
@@ -698,9 +880,11 @@ pub struct FfiFeedEntry {
     pub asset_id: Vec<u8>,
     /// The signed `AssetManifest` as opaque canonical CBOR.
     pub manifest_cbor: Vec<u8>,
-    /// The encrypted metadata blob's content address, as UTF-8 bytes; empty for deletes.
+    /// The encrypted metadata blob's content address, as UTF-8 bytes. On a delete in trash, the
+    /// asset's live metadata blob, which a restore needs; empty for a purged delete.
     pub metadata_blob: Vec<u8>,
-    /// Content addresses of the asset's blobs by role.
+    /// Content addresses of the asset's blobs by role. On a delete in trash, only its original;
+    /// none for a purged delete.
     pub blobs: FfiBlobManifest,
     /// Whether the original blob is finalized server-side.
     pub original_held: bool,
@@ -891,6 +1075,8 @@ impl FfiCapsuleClient {
             upload_base_url: self.upload_base_url.clone(),
             protocol_version: self.protocol_version.clone(),
             events: TransferEvents::default_channel(),
+            path: PathMonitor::new(PathSample::desktop(), LaneWindows::default()),
+            pool: GenerationPool::sdk(),
         })
     }
 }
@@ -908,10 +1094,29 @@ pub struct FfiSession {
     /// Where every upload, push and fetch this session drives publishes its steps. Nothing is
     /// built while nobody is subscribed.
     events: TransferEvents,
+    /// The path the app last reported and the link behaviour seen on it: every push and fetch
+    /// plans from it. Until the app reports one, the desktop default — reachable, unmetered,
+    /// foreground.
+    path: PathMonitor,
+    /// The HTTP client uploads ride, rebuilt on each new path generation so no pooled
+    /// connection outlives its path.
+    pool: GenerationPool,
 }
 
 #[uniffi::export]
 impl FfiSession {
+    /// Report the path as the app's OS listeners see it now, and return its path generation.
+    ///
+    /// Call it whenever a listener fires. The generation advances only when reachability, the
+    /// interface or the cost changes; it then drops this session's pooled connections, forgets
+    /// the resets and stalls seen on the old path, and cancels — within one scheduling tick —
+    /// any push work the new path forbids, which re-plans and resumes. Power, thermal and
+    /// background-deadline changes re-plan without a new generation.
+    pub fn set_path(&self, snapshot: FfiPathSnapshot) -> u64 {
+        let update = self.path.observe(snapshot.into());
+        update.plan().generation.0
+    }
+
     /// Subscribe to the step-by-step progress of every upload, push and fetch this session
     /// drives from now on, each event stamped with the milliseconds since this call on a
     /// monotonic clock.
@@ -966,9 +1171,11 @@ impl FfiSession {
     /// transfer window whatever the original's size. The workspace lock is held only while the
     /// bundle is built, never across the network.
     ///
-    /// Every blob is driven; one the server already holds answers `duplicate_blob` and comes
-    /// back [`FfiUploadOutcome::AlreadyStored`], so pushing twice is safe. The album must
-    /// already be provisioned on the server.
+    /// Every blob the reported path admits is driven ([`set_path`](Self::set_path)); the tiers
+    /// it holds back are counted in [`FfiPushReport::deferred`] and wait for the next push. A
+    /// blob the server already holds answers `duplicate_blob` and comes back
+    /// [`FfiUploadOutcome::AlreadyStored`], so pushing twice is safe. The album must already be
+    /// provisioned on the server.
     ///
     /// **A create the server refused is re-sealed and retried once** (issue #822). When the
     /// album's epoch moved past the one the asset was sealed under, the server refuses its
@@ -979,25 +1186,50 @@ impl FfiSession {
     /// asset stays local. That detail names no missing key: the refusal may have had nothing to
     /// do with the epoch (a revoked device, withdrawn write access), or another device rotated
     /// the album and its key has not reached this one yet.
+    ///
+    /// To push several assets, use [`push_assets`](Self::push_assets): one call here is one
+    /// bundle on the server's lane, so the lane never holds more than one session open.
     pub async fn push_asset(
         &self,
         workspace: Arc<FfiWorkspace>,
         asset_id: String,
     ) -> Result<FfiPushReport, FfiError> {
-        let bundle = workspace.bundle(&asset_id)?;
-        let refused = match self.push_bundle(&bundle).await {
-            Err(PushError::CreateRefused { source, .. }) => source,
-            other => return Ok(other?.into()),
-        };
-        tracing::warn!(
-            asset_id = %bundle.asset_id,
-            amk_version = bundle.amk_version,
-            "ffi: the server refused this create; re-sealing it at the album's current epoch"
-        );
-        workspace.reseal(&bundle.asset_id, &refused)?;
-        let resealed = workspace.bundle(&asset_id)?;
-        let report = self.push_bundle(&resealed).await?;
+        let report = self
+            .push_batch(&workspace, std::slice::from_ref(&asset_id))
+            .await
+            .into_iter()
+            .next()
+            .expect("push_batch returns one result per asset id")?;
         Ok(report.into())
+    }
+
+    /// **Push** several sealed assets of `workspace` in one call, returning one
+    /// [`FfiPushAssetResult`] per id, in the order of `asset_ids`.
+    ///
+    /// Every asset is pushed exactly as [`push_asset`](Self::push_asset) pushes one — its
+    /// original streamed in bounded windows, the tiers the reported path holds back counted in
+    /// [`FfiPushReport::deferred`], and a create the server refused re-sealed and retried once —
+    /// but the assets share one run of the server's lane: up to W of them have their sessions
+    /// open at once, every range any of them sends reserves against one device-wide byte
+    /// budget, and their retries spend from one lane budget. Calling `push_asset` concurrently
+    /// instead gives each call its own budget, so the budgets add up rather than being shared.
+    ///
+    /// The ids are pushed in batches of a bounded size, so a list of any length holds only one
+    /// batch's bundles in memory at a time. One asset's failure is its own
+    /// ([`FfiPushAssetResult::Failed`], carrying the error `push_asset` would have returned for
+    /// it): the others still push, and the call itself never fails. An id repeated in
+    /// `asset_ids` pushes once, at its first occurrence; each later occurrence is
+    /// [`FfiPushAssetResult::Failed`] with [`FfiError::InvalidArgument`].
+    ///
+    /// The adverse-link detector hears each batch's outcomes when that batch's run ends, so a
+    /// link that degrades mid-batch re-plans the push from the next batch on.
+    pub async fn push_assets(
+        &self,
+        workspace: Arc<FfiWorkspace>,
+        asset_ids: Vec<String>,
+    ) -> Vec<FfiPushAssetResult> {
+        self.push_assets_in(&workspace, &asset_ids, PUSH_BATCH_BUNDLES)
+            .await
     }
 
     /// **Fetch** the blob at content address `hash` (`size` bytes, as the sync feed's
@@ -1018,21 +1250,92 @@ impl FfiSession {
         size: u64,
         path: String,
     ) -> Result<(), FfiError> {
-        if hash.len() != 64 || !hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
-            return Err(FfiError::InvalidArgument {
-                detail: format!("hash: {hash:?} is not a lowercase hex SHA-256"),
-            });
-        }
+        check_content_address(&hash)?;
         let path = PathBuf::from(path);
         tracing::info!(%hash, size, path = %path.display(), "ffi: fetching a blob to disk");
-        let source = HttpBlobSource::new(self.session.clone(), blob_base_url);
-        let result = fetch_to_file(&source, &hash, size, &path, &self.events).await;
+        let source = HttpBlobSource::new(self.path_session(), blob_base_url);
+        // A fetch is a request the user is waiting on: the path sizes its range windows (bounded
+        // under `adverse`) but never holds it back.
+        let class = self.path.plan().class;
+        let result = fetch_to_file(&source, &hash, size, &path, class, &self.events).await;
         if let Err(error) = &result {
             tracing::warn!(%hash, %error, "ffi: blob fetch failed; removing the partial file");
             // Best effort: the file may never have been created.
             let _ = std::fs::remove_file(&path);
         }
         result
+    }
+
+    /// **Fetch the metadata blob** at content address `hash`, which a sync feed entry names by
+    /// address only (its `metadata_blob`): the feed lists no size for it, so it is read in
+    /// bounded `Range` windows until the server's answer ends, and returned whole once it hashes
+    /// to `hash`. This is the bytes [`FfiSyncHead::metadata_blob`] carries into
+    /// [`FfiWorkspace::open_synced_original`] or [`FfiWorkspace::open_synced_history`].
+    ///
+    /// A sealed sidecar is a few KiB; a blob that grows past [`MAX_METADATA_BLOB_BYTES`] is
+    /// refused rather than buffered without bound. On a `delete` in trash the server serves the
+    /// asset's live metadata blob to its readers until the retention window closes, so an asset
+    /// first seen at its delete can be adopted and restored; where the entry names no metadata
+    /// blob (an album page's tombstone), [`synced_history_sources`] names its address.
+    ///
+    /// `blob_base_url` is as for [`fetch_blob_to_path`](Self::fetch_blob_to_path). A `hash` that
+    /// is not a lowercase hex SHA-256 is [`FfiError::InvalidArgument`] and reaches no network; a
+    /// session that cannot authorize the fetch is [`FfiError::Auth`]; a blob the server refuses,
+    /// that does not hash to its address, or that runs past the bound is [`FfiError::Fetch`].
+    pub async fn fetch_metadata_blob(
+        &self,
+        blob_base_url: String,
+        hash: String,
+    ) -> Result<Vec<u8>, FfiError> {
+        check_content_address(&hash)?;
+        tracing::info!(%hash, "ffi: fetching a metadata blob of unlisted size");
+        let source = HttpBlobSource::new(self.path_session(), blob_base_url);
+        let fetcher = RangedFetcher::new(self.path.plan().class).with_events(self.events.clone());
+        let fetched = fetcher
+            .fetch_unsized(&source, &hash, MAX_METADATA_BLOB_BYTES)
+            .await;
+        match &fetched {
+            Ok(bytes) => tracing::debug!(%hash, bytes = bytes.len(), "ffi: metadata blob fetched"),
+            Err(error) => tracing::warn!(%hash, %error, "ffi: metadata blob fetch failed"),
+        }
+        Ok(fetched?)
+    }
+
+    /// **Fetch the earlier provenance records** of the asset whose latest record is
+    /// `manifest_cbor` (a feed entry's): each record the one after it names by
+    /// `prior_provenance_hash`, back to the asset's `create`, from the blob route the server
+    /// serves an asset's superseded records on. Returned oldest first, each the exact bytes the
+    /// server holds, checked against its content address; empty for a `create`.
+    ///
+    /// For an asset this workspace does not hold, first seen past its create — an entry
+    /// [`FfiWorkspace::apply_sync_entry_from_file`] quarantines as `Rejected.ForgedChain` when
+    /// the app's catalog holds no head for it, or applies without adopting
+    /// ([`FfiAssetFacts::adopted`] `false`) when it does — hand the records to
+    /// [`FfiWorkspace::open_synced_history`], which verifies them in order and holds the asset
+    /// from its create. Nothing is verified here: the walk only follows links.
+    ///
+    /// An asset first seen at its `delete` is fetched the same way while it is in trash: the
+    /// server serves a trashed asset's records, and its live metadata blob and original, to
+    /// its readers until the retention window closes, so the adopted asset can be restored. An
+    /// album page's tombstone names neither blob; [`synced_history_sources`] names both from
+    /// these records.
+    ///
+    /// `blob_base_url` is as for [`fetch_blob_to_path`](Self::fetch_blob_to_path). A record the
+    /// server refuses (a deleted asset's past its retention window, a purged asset's, or one the
+    /// caller may not read) or that does not hash
+    /// to its address is [`FfiError::Fetch`]; a session that cannot authorize the fetch is
+    /// [`FfiError::Auth`]; a record that does not decode, or a chain longer than
+    /// [`MAX_HISTORY_RECORDS`](crate::sync::MAX_HISTORY_RECORDS), is [`FfiError::Sync`].
+    pub async fn fetch_provenance_history(
+        &self,
+        blob_base_url: String,
+        manifest_cbor: Vec<u8>,
+    ) -> Result<Vec<Vec<u8>>, FfiError> {
+        let source = HttpBlobSource::new(self.path_session(), blob_base_url);
+        let fetcher = RangedFetcher::new(self.path.plan().class).with_events(self.events.clone());
+        crate::sync::fetch_history(&fetcher, &source, &manifest_cbor)
+            .await
+            .map_err(FfiError::from)
     }
 
     /// Pull one page of the key-free sync feed after `cursor` from `api_base_url`
@@ -1167,35 +1470,284 @@ impl FfiSession {
 }
 
 impl FfiSession {
+    /// The session, sending through the current path generation's pooled connections.
+    fn path_session(&self) -> Session {
+        let generation = self.path.snapshot().generation;
+        // Requests routed through the HTTP/3 transport start on the same network.
+        #[cfg(feature = "http3")]
+        crate::net::h3::route::observe_generation(generation);
+        match self.pool.client(generation) {
+            Ok(http) => self.session.with_http_client(http),
+            Err(error) => {
+                // Building a client fails only where the platform lacks something the builder
+                // needs; the session's own client still sends, on the pool it already has.
+                tracing::warn!(%error, generation = generation.0, "ffi: no client for the new path; sending on the session's own");
+                self.session.clone()
+            }
+        }
+    }
+
+    /// An upload client on the current path's pooled connections, sizing its chunks to the
+    /// current plan's class: under `adverse` each chunk request targets the shorter duration.
     fn upload_client(&self) -> UploadClient {
         let transport = UploadTransport::with_session(
-            self.session.clone(),
+            self.path_session(),
             self.upload_base_url.clone(),
             self.protocol_version.clone(),
         );
-        UploadClient::new(transport).with_events(self.events.clone())
+        UploadClient::new(transport)
+            .with_events(self.events.clone())
+            .with_connection_class(self.path.plan().class)
     }
 
-    /// Drive one bundle's ladder. The workspace lock is not held: the bundle is owned.
-    async fn push_bundle(&self, bundle: &UploadBundle) -> Result<AssetPushReport, PushError> {
+    /// [`push_assets`](Self::push_assets) in batches of at most `batch_size` distinct ids, so
+    /// tests reach more than one batch without sealing [`PUSH_BATCH_BUNDLES`] assets.
+    async fn push_assets_in(
+        &self,
+        workspace: &FfiWorkspace,
+        asset_ids: &[String],
+        batch_size: usize,
+    ) -> Vec<FfiPushAssetResult> {
         tracing::info!(
-            asset_id = %bundle.asset_id,
-            amk_version = bundle.amk_version,
-            original_bytes = bundle.original.size(),
-            "ffi: pushing a sealed asset"
+            assets = asset_ids.len(),
+            batch = batch_size,
+            "ffi: pushing several sealed assets through one lane"
         );
-        // Eager, unmetered ordering: the policy `upload` callers have always had. A
-        // connection class from the app would plug in here.
-        let scheduler = StagedScheduler::new(UploadPolicy::Full, ConnectionClass::Unmetered);
-        crate::push::push_bundle(
-            &self.upload_client(),
-            &scheduler,
-            bundle,
-            &HashSet::<String>::new(),
-            false,
-        )
-        .await
+        // A repeated id is refused in its own slot: pushing it twice would open two sessions
+        // for one asset in one lane. Its first occurrence pushes as usual.
+        let mut seen = HashSet::with_capacity(asset_ids.len());
+        let mut slots: Vec<Option<FfiPushAssetResult>> = Vec::with_capacity(asset_ids.len());
+        let mut distinct = Vec::with_capacity(asset_ids.len());
+        for (at, asset_id) in asset_ids.iter().enumerate() {
+            if seen.insert(asset_id.as_str()) {
+                distinct.push(at);
+                slots.push(None);
+            } else {
+                tracing::warn!(%asset_id, "ffi: the asset id is repeated; refusing the repeat");
+                slots.push(Some(FfiPushAssetResult::Failed {
+                    asset_id: asset_id.clone(),
+                    error: FfiError::InvalidArgument {
+                        detail: format!(
+                            "asset_ids: {asset_id:?} is repeated; it is pushed once, at its first occurrence"
+                        ),
+                    },
+                }));
+            }
+        }
+        for batch in distinct.chunks(batch_size.max(1)) {
+            let ids: Vec<String> = batch.iter().map(|&at| asset_ids[at].clone()).collect();
+            let pushed = self.push_batch(workspace, &ids).await;
+            for ((&at, asset_id), pushed) in batch.iter().zip(ids).zip(pushed) {
+                slots[at] = Some(match pushed {
+                    Ok(report) => FfiPushAssetResult::Pushed {
+                        report: report.into(),
+                    },
+                    Err(error) => FfiPushAssetResult::Failed { asset_id, error },
+                });
+            }
+        }
+        let results: Vec<FfiPushAssetResult> = slots
+            .into_iter()
+            .map(|slot| slot.expect("every requested id ended exactly once"))
+            .collect();
+        let failed = results
+            .iter()
+            .filter(|result| matches!(result, FfiPushAssetResult::Failed { .. }))
+            .count();
+        tracing::info!(
+            assets = results.len(),
+            failed,
+            "ffi: pushed several sealed assets"
+        );
+        results
     }
+
+    /// Push the assets `asset_ids` names — at most one batch — and return how each ended, in
+    /// the order of `asset_ids`. The workspace lock is held only while a bundle is built or
+    /// re-sealed, or its upload guard released, never across the network.
+    ///
+    /// A bundle whose push ends with every blob `Completed` or already held, and no tier
+    /// deferred, has its original's upload source guard released.
+    ///
+    /// Every bundle that builds goes through one [`push_bundles`](Self::push_bundles) run. A
+    /// create the server refused for good is re-sealed at the album's current epoch (issue
+    /// #822), and every re-sealed bundle goes through one more run, once: a second refusal
+    /// fails its asset.
+    async fn push_batch(
+        &self,
+        workspace: &FfiWorkspace,
+        asset_ids: &[String],
+    ) -> Vec<Result<AssetPushReport, FfiError>> {
+        let mut outcomes: Vec<Option<Result<AssetPushReport, FfiError>>> =
+            Vec::with_capacity(asset_ids.len());
+        let mut bundles = Vec::with_capacity(asset_ids.len());
+        let mut bundled_at = Vec::with_capacity(asset_ids.len());
+        for (at, asset_id) in asset_ids.iter().enumerate() {
+            match workspace.bundle(asset_id) {
+                Ok(bundle) => {
+                    bundles.push(bundle);
+                    bundled_at.push(at);
+                    outcomes.push(None);
+                }
+                Err(error) => {
+                    tracing::warn!(%asset_id, %error, "ffi: the asset's bundle could not be built");
+                    outcomes.push(Some(Err(error)));
+                }
+            }
+        }
+
+        let pushed = self.push_bundles(&bundles).await;
+        let mut resealed = Vec::new();
+        let mut resealed_at = Vec::new();
+        // The first run's bundles are consumed one by one, each dropped before its re-sealed
+        // replacement is built, so the batch never holds both at once.
+        for ((bundle, at), pushed) in bundles.into_iter().zip(bundled_at).zip(pushed) {
+            let refused = match pushed {
+                Err(PushError::CreateRefused { source, .. }) => source,
+                other => {
+                    release_if_complete(workspace, &bundle, &other);
+                    outcomes[at] = Some(other.map_err(FfiError::from));
+                    continue;
+                }
+            };
+            tracing::warn!(
+                asset_id = %bundle.asset_id,
+                amk_version = bundle.amk_version,
+                "ffi: the server refused this create; re-sealing it at the album's current epoch"
+            );
+            let asset_id = bundle.asset_id;
+            drop(bundle);
+            match workspace
+                .reseal(&asset_id, &refused)
+                .and_then(|()| workspace.bundle(&asset_ids[at]))
+            {
+                Ok(bundle) => {
+                    resealed.push(bundle);
+                    resealed_at.push(at);
+                }
+                Err(error) => outcomes[at] = Some(Err(error)),
+            }
+        }
+        if !resealed.is_empty() {
+            tracing::info!(
+                resealed = resealed.len(),
+                "ffi: pushing the re-sealed creates again, once"
+            );
+            let retried = self.push_bundles(&resealed).await;
+            for ((bundle, at), pushed) in resealed.iter().zip(resealed_at).zip(retried) {
+                release_if_complete(workspace, bundle, &pushed);
+                outcomes[at] = Some(pushed.map_err(FfiError::from));
+            }
+        }
+        outcomes
+            .into_iter()
+            .map(|outcome| outcome.expect("every asset of the batch ended exactly once"))
+            .collect()
+    }
+
+    /// Drive `bundles` through one run of this server's lane, returning each bundle's result
+    /// in their order. The workspace lock is not held: the bundles are owned.
+    ///
+    /// The bundles are the jobs of this server's lane in [`push_lanes`], so up to W of them
+    /// have sessions open at once, their ranges reserve against the one push byte budget, the
+    /// server's advice narrows the lane's windows, and their retries spend from the lane's
+    /// budget. The run happens under the reported path ([`run_under_path`]): a path change that
+    /// closes a running tier cancels and re-plans it. Each outcome observed on the path the run
+    /// started on feeds the adverse detector.
+    async fn push_bundles(
+        &self,
+        bundles: &[UploadBundle],
+    ) -> Vec<Result<AssetPushReport, PushError>> {
+        if bundles.is_empty() {
+            return Vec::new();
+        }
+        for bundle in bundles {
+            tracing::info!(
+                asset_id = %bundle.asset_id,
+                amk_version = bundle.amk_version,
+                original_bytes = bundle.original.size(),
+                "ffi: pushing a sealed asset"
+            );
+        }
+        // Full ordering where the path allows it; the plan stages the push where it holds bulk
+        // back, and a path change that closes a running tier cancels and re-plans the push.
+        let held = HashSet::<String>::new();
+        let started_on = self.path.snapshot().generation;
+        let pushed = run_under_path(&self.path, UploadPolicy::Full, false, |scheduler| {
+            let client = self.upload_client();
+            let held = &held;
+            async move {
+                let lanes = [LanePush {
+                    server: ServerKey::new(self.upload_base_url.clone()),
+                    client: &client,
+                    bundles: bundles
+                        .iter()
+                        .map(|bundle| LaneBundle { bundle, held })
+                        .collect(),
+                    // The server publishes no live-session cap; its advice narrows W instead.
+                    session_cap: None,
+                }];
+                push_lanes(
+                    &scheduler,
+                    &lanes,
+                    false,
+                    PUSH_BYTE_BUDGET,
+                    LaneWindows::default(),
+                )
+                .await
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+            }
+        })
+        .await;
+        debug_assert_eq!(
+            pushed.len(),
+            bundles.len(),
+            "push_lanes returns one result per queued bundle"
+        );
+        // Only outcomes on the path the push started on: if the path changed under it, the
+        // detector was reset for a link these outcomes never measured.
+        for result in &pushed {
+            if let Some(signal) = path::link_signal(result)
+                && let Some(plan) = self.path.record_on(started_on, signal)
+            {
+                tracing::debug!(?signal, class = ?plan.class, "ffi: the push's outcome fed the adverse detector");
+            }
+        }
+        pushed
+    }
+}
+
+/// Release `bundle`'s upload source guard once `pushed` shows every blob of it `Completed` or
+/// already held. A deferred tier keeps it, since the original is still to be sent under its
+/// nonces, and so does a failed push, which a retry resumes under the same ones.
+fn release_if_complete(
+    workspace: &FfiWorkspace,
+    bundle: &UploadBundle,
+    pushed: &Result<AssetPushReport, PushError>,
+) {
+    if let Ok(report) = pushed
+        && report.deferred == 0
+    {
+        workspace.release_upload_guard(&bundle.asset_id);
+    }
+}
+
+/// The most [`FfiSession::fetch_metadata_blob`] reads of a metadata blob whose size the feed
+/// does not list (16 MiB, the upload protocol's largest chunk), the bound the CLI's restore
+/// reads one under. A sealed sidecar is a few KiB; the cap only stops a server that keeps
+/// answering full windows from growing the buffer without bound.
+pub const MAX_METADATA_BLOB_BYTES: u64 = crate::upload::PROTOCOL_MAX_CHUNK;
+
+/// Refuse a `hash` that is not a lowercase hex SHA-256 before it reaches a blob route.
+fn check_content_address(hash: &str) -> Result<(), FfiError> {
+    if hash.len() != 64 || !hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+        return Err(FfiError::InvalidArgument {
+            detail: format!("hash: {hash:?} is not a lowercase hex SHA-256"),
+        });
+    }
+    Ok(())
 }
 
 /// Stream the blob at `hash` from `source` into a fresh file at `path`, synced to disk once
@@ -1205,6 +1757,7 @@ async fn fetch_to_file<B: crate::fetch::BlobSource>(
     hash: &str,
     size: u64,
     path: &Path,
+    class: ConnectionClass,
     events: &TransferEvents,
 ) -> Result<(), FfiError> {
     let local = |action: &str, e: std::io::Error| FfiError::Fetch {
@@ -1213,7 +1766,7 @@ async fn fetch_to_file<B: crate::fetch::BlobSource>(
     };
     let file = std::fs::File::create(path).map_err(|e| local("creating", e))?;
     let mut sink = std::io::BufWriter::new(file);
-    RangedFetcher::new(ConnectionClass::Unmetered)
+    RangedFetcher::new(class)
         .with_events(events.clone())
         .fetch_into(source, hash, size, &mut sink)
         .await?;

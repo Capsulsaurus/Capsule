@@ -67,7 +67,8 @@
 //! terminal state, and the losing caller's own work — its chunk — was accepted. So
 //! [`Outcome::AlreadyClaimed`] is a success shape, not a rejection, and the route answers the
 //! chunk that triggered it with the same `204` it would have answered anyway. The client
-//! learns the terminal outcome by listing its sessions. The Salvo server returned
+//! learns the terminal outcome from `HEAD` or the session list, which carry a failure's `error.*`
+//! code ([`FinalizeFailure::code`]) once it has one. The Salvo server returned
 //! `409 finalize_in_progress` here, which told a client its own accepted chunk had failed.
 //!
 //! # A claim is driven to a terminal state whatever happens to its request
@@ -80,11 +81,13 @@
 //! - **The request goes away.** A client that disconnects drops the request's future, and a
 //!   finalization running *inside* that future stops at whatever `await` it had reached — after
 //!   the commit and before the index write, typically, which strands the bytes as an orphan and
-//!   the session claimed. So the route never runs finalization inline: the chunk's append and
-//!   the finalization it triggers run as one task, which the route awaits for its answer but
-//!   which outlives the route if the route is dropped. One task rather than two, because a
-//!   request dropped between an append that completed the session and the claim would leave a
-//!   full session nobody finishes.
+//!   the session claimed. So no request runs finalization inline, and none waits for it:
+//!   [`start`] takes the claim and runs steps 2–8 in a task of their own, and the request answers
+//!   `waiting_for_processing` the moment it holds the claim. A request's answer therefore never
+//!   depends on the blob's size, and a reverse proxy's read timeout cannot turn a slow re-hash
+//!   into a `504` the client replays. The chunk's append and the claim it leads to still run as
+//!   one task the route awaits, because a request dropped between an append that completed the
+//!   session and the claim would leave a full session nobody finishes.
 //! - **The process goes away.** The claim lives in the session store and outlives the process
 //!   that took it. [`recover`] drives every claim listed by
 //!   [`claimed`](crate::store::UploadSessionStore::claimed) before the listener accepts a
@@ -95,9 +98,9 @@
 //! ([`is_full_and_unclaimed`](crate::store::UploadSessionRecord::is_full_and_unclaimed)), and
 //! nothing depends on the client replaying a chunk to finish it. Every request that meets such a
 //! session finalizes it as the completing chunk would have — a replay of any of its chunks, the
-//! client's duplicate `create`, and its `HEAD` — and the next boot finalizes every one left
-//! ([`full_unclaimed`], [`finish_unclaimed`]). Each goes through [`finalize`]'s claim, so any two
-//! of them racing finalize once.
+//! client's duplicate `create`, and its `HEAD`, each through [`start`] — and the next boot
+//! finalizes every one left ([`full_unclaimed`], [`finish_unclaimed`]). Each goes through the same
+//! claim, so any two of them racing finalize once.
 //!
 //! A re-driven claim may find its stage already committed: the finalizer died between step 4
 //! and step 8. The committed blob is then re-hashed in place of the stage and step 4 is
@@ -122,6 +125,8 @@
 
 use capsule_core::crypto::hash::{Hash32, Sha256Hasher};
 use capsule_core::crypto::receipts::CustodyReceipt;
+use capsule_i18n::error_codes;
+use tracing::Instrument as _;
 
 use super::envelope::{GateContext, GateReject, ManifestEnvelope, check_finalize};
 use super::{AlbumWriteAccess, UploadContext};
@@ -218,6 +223,97 @@ pub enum FinalizeFailure {
     /// A collaborator could not answer.
     #[error("finalization could not be completed: {0}")]
     Unavailable(String),
+}
+
+impl FinalizeFailure {
+    /// The stable `error.*` code this failure is reported under.
+    ///
+    /// Recorded on the session when finalization fails it, and read back by `HEAD`
+    /// (`X-Capsule-Upload-Error`) and the session list: no request waits on finalization, so
+    /// this code is the only way a client learns why its upload was refused.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::ContentHashMismatch { .. } => error_codes::UPLOAD_CONTENT_HASH_MISMATCH,
+            Self::EnvelopeRejected(_) => error_codes::UPLOAD_ENVELOPE_REJECTED,
+            Self::StorageInconsistent { .. } => error_codes::UPLOAD_STORAGE_INCONSISTENT,
+            Self::ReplaceIncomplete { .. } => error_codes::UPLOAD_REPLACE_INCOMPLETE,
+            Self::ReplaceRefused { .. } => error_codes::UPLOAD_STALE_REVIVAL,
+            Self::Unavailable(_) => error_codes::UPLOAD_UNAVAILABLE,
+        }
+    }
+}
+
+/// What [`start`] did: whether this caller took the claim and set finalization running.
+#[derive(Debug)]
+pub enum Started {
+    /// This caller won the claim, and finalization is running detached from it.
+    ///
+    /// The handle is the detached task's, for a caller that wants the outcome — a test, or a
+    /// caller with nothing to answer. A request never awaits it: dropping the handle leaves the
+    /// task running to `Completed` or `FailedProcessing`.
+    Claimed(tokio::task::JoinHandle<Result<Placement, FinalizeFailure>>),
+    /// Another caller holds the claim, or the session already reached a terminal state.
+    AlreadyClaimed,
+    /// The session was gone by the time the claim was attempted.
+    NotFound,
+}
+
+/// Take the finalize claim for `upload` and run the rest of finalization detached.
+///
+/// What every request that meets a full session does — the completing chunk, a replay of a full
+/// session's chunk, a duplicate `create`, a `HEAD`: the claim is one compare-and-set, so the
+/// request answers `waiting_for_processing` as soon as it holds it, and the re-hash, commit, ledger
+/// and index steps run in a task of their own. A request's answer therefore never depends on the
+/// blob's size (transfer upload design doc, Hostile Clients: no request waits on finalization),
+/// and a client that disconnects stops nothing. The client reads the outcome from `HEAD`.
+///
+/// # Errors
+///
+/// [`FinalizeFailure::Unavailable`] when the session store could not answer the claim. Nothing
+/// was claimed, so the session is still full and unclaimed for the next request to finish.
+#[tracing::instrument(skip(context, attestation), fields(upload = %upload))]
+pub async fn start(
+    context: &UploadContext,
+    attestation: &AttestationContext,
+    upload: &UploadId,
+) -> Result<Started, FinalizeFailure> {
+    let record = match context
+        .sessions()
+        .claim_finalize(upload)
+        .await
+        .map_err(unavailable("claim finalization"))?
+    {
+        FinalizeClaim::Won(record) => record,
+        FinalizeClaim::AlreadyClaimed => {
+            tracing::info!(%upload, "finalization was already claimed; this caller stands down");
+            return Ok(Started::AlreadyClaimed);
+        }
+        FinalizeClaim::NotFound => {
+            tracing::info!(%upload, "finalization found no session to claim");
+            return Ok(Started::NotFound);
+        }
+    };
+    tracing::info!(
+        %upload,
+        size = record.total_size,
+        "claimed finalization; running it detached from the request"
+    );
+    let (context, attestation) = (context.clone(), attestation.clone());
+    let task = tokio::spawn(
+        async move {
+            let started = std::time::Instant::now();
+            let outcome = drive(&context, &attestation, &record).await;
+            tracing::info!(
+                upload = %record.upload_id,
+                elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                completed = outcome.is_ok(),
+                "detached finalization reached a terminal state"
+            );
+            outcome
+        }
+        .instrument(tracing::Span::current()),
+    );
+    Ok(Started::Claimed(task))
 }
 
 /// Run finalization for `upload`.
@@ -394,7 +490,7 @@ async fn drive(
     let upload = &record.upload_id;
     match run_claimed(context, attestation, upload, record).await {
         Ok((placement, minted)) => {
-            complete(context, upload).await?;
+            complete(context, record).await?;
             tracing::info!(
                 %upload,
                 asset_id = %record.asset_id,
@@ -410,7 +506,7 @@ async fn drive(
             // A claimed session is never left claimed: the bytes go and the status is terminal,
             // so the receipt a resuming client reads says "failed" rather than "in progress
             // forever".
-            fail(context, upload).await;
+            fail(context, upload, failure.code()).await;
             tracing::warn!(%upload, %failure, "finalization refused the upload");
             Err(failure)
         }
@@ -971,7 +1067,11 @@ async fn apply_replace(
                 manifest_hash,
                 prior_provenance_hash: prior,
                 amk_version: u64::from(envelope.amk_version),
-                provenance: address.clone(),
+                // The manifest is this session's own blob, measured against the stage's length.
+                provenance: crate::index::OpBlob {
+                    address: address.clone(),
+                    size: record.total_size,
+                },
                 metadata: Some(metadata),
                 original: Some(original),
                 retention_until: None,
@@ -1030,7 +1130,7 @@ async fn named_blob(
     context: &UploadContext,
     hex: Option<&str>,
     field: &'static str,
-) -> Result<ContentAddress, FinalizeFailure> {
+) -> Result<crate::index::OpBlob, FinalizeFailure> {
     let Some(hex) = hex else {
         // Refused at the gate; reaching here means a session predates that check.
         return Err(FinalizeFailure::EnvelopeRejected(
@@ -1044,11 +1144,17 @@ async fn named_blob(
         .stat(&address)
         .await
         .map_err(blob_unavailable("stat a blob a replace names"))?;
-    if present.is_none() {
+    let Some(present) = present else {
         tracing::info!(%address, field, "a replace named a blob the store does not hold");
         return Err(FinalizeFailure::ReplaceIncomplete { field });
-    }
-    Ok(address)
+    };
+    // The member finalized through its own session, which measured these bytes; the store's
+    // length is that measurement, read once here because this is the only place the manifest's
+    // finalization meets the member (#1128).
+    Ok(crate::index::OpBlob {
+        address,
+        size: present.size,
+    })
 }
 
 /// What one pass over the staged bytes established.
@@ -1257,34 +1363,56 @@ async fn revalidate(
     Ok(envelope)
 }
 
-/// Step 8, the winning half.
-async fn complete(context: &UploadContext, upload: &UploadId) -> Result<(), FinalizeFailure> {
+/// Step 8, the winning half: the session's quota reservation is settled, then the session is
+/// `Completed`.
+///
+/// The settle comes after the blob commit, so a reservation sweep racing it either finds the
+/// blob or is answered by the settle re-charging the bytes ([`super::reservation::settle`]).
+/// A settle that found the reservation swept and could not charge the bytes leaves the
+/// session claimed, as a status write that fails does: the bytes are committed, so the claim
+/// is re-driven ([`recover`]) rather than failed, and `Completed` is written only once the
+/// bytes are charged to somebody. A settle the ledger cannot answer at all completes, because
+/// the reservation it left is the sweep's to settle.
+async fn complete(
+    context: &UploadContext,
+    record: &UploadSessionRecord,
+) -> Result<(), FinalizeFailure> {
+    super::reservation::settle(context, record)
+        .await
+        .map_err(unavailable("settle the quota reservation"))?;
     context
         .sessions()
-        .set_status(upload, UploadSessionStatus::Completed)
+        .set_status(&record.upload_id, UploadSessionStatus::Completed)
         .await
         .map_err(unavailable("complete the session"))?;
     Ok(())
 }
 
-/// Step 8, the losing half: the bytes go and the session is terminal.
+/// Step 8, the losing half: the bytes go, the session is terminal, and its quota reservation
+/// goes back.
 ///
 /// Best-effort by construction — it runs *because* something already failed, and a second
-/// failure here must not replace the diagnosis the caller is about to return. Both halves are
-/// logged so an operator sees a stage that outlived its session.
-async fn fail(context: &UploadContext, upload: &UploadId) {
+/// failure here must not replace the diagnosis the caller is about to return. Every step is
+/// logged so an operator sees a stage that outlived its session or a reservation that did.
+/// The release is [`super::reservation::release`]'s, which keeps the attribution when the
+/// bytes did reach the store before a later step failed.
+async fn fail(context: &UploadContext, upload: &UploadId, failure_code: &str) {
     match context.blobs().abandon(upload).await {
         Ok(dropped) => tracing::debug!(%upload, dropped, "dropped the staged bytes"),
         Err(error) => {
             tracing::error!(%upload, %error, "a failed upload's stage could not be dropped");
         }
     }
-    if let Err(error) = context
+    match context
         .sessions()
-        .set_status(upload, UploadSessionStatus::FailedProcessing)
+        .fail_processing(upload, failure_code)
         .await
     {
-        tracing::error!(%upload, %error, "a failed upload's session could not be marked");
+        Ok(Some(failed)) => super::reservation::release_logged(context, &failed).await,
+        Ok(None) => tracing::debug!(%upload, "a failed upload's session was already gone"),
+        Err(error) => {
+            tracing::error!(%upload, %error, "a failed upload's session could not be marked");
+        }
     }
 }
 

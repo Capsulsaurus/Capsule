@@ -6,10 +6,15 @@
 //! filesystem: storage reaches it through ports such as `ml::VectorIndex`, and time and
 //! identifier randomness through [`ambient::Clock`] and [`ambient::Rng`], all of which callers
 //! implement. Local state — the SQLite index, the on-disk library, the `Workspace`, import
-//! execution, backup I/O and the hardware signers — lives in `capsule-library`. The exceptions
-//! are the OS CSPRNG behind `crypto::rng` and `catch_unwind` in `media::decode`;
-//! `cargo xtask architecture-check` enforces the rest. See
-//! [Module Map — Stateless Core](https://docs/design/module-map/#stateless-core).
+//! execution, backup I/O and the hardware signers — lives in `capsule-library`; network state
+//! lives in `capsule-sdk`. Two exceptions, each confined to one module:
+//!
+//! - the OS CSPRNG behind `crypto::rng`: key material must never come from an injectable, and
+//!   therefore replaceable, source;
+//! - `catch_unwind` in `media::decode`: a decoder panic on hostile input must become a typed
+//!   error, not abort the caller.
+//!
+//! `cargo xtask architecture-check` enforces the rest.
 
 // ── WASM sealing surface (always compiled) ──────────────────────────────────
 // `cbor`, `crypto`, and `drop` are the only modules the guest web client (WASM) needs:
@@ -35,6 +40,10 @@ pub mod sharing;
 /// Client build identification — the `client_version` / `generated_by_client` grammar and the
 /// build-embedded git commit. Always compiled: pure string formatting, no native deps.
 pub mod client_build;
+
+/// The file extension an original is named by for its sidecar `content_type` — the one table
+/// the library's adoption and a restore share. Always compiled: a pure string table.
+pub mod content_type;
 
 /// The closed set of still-derivative formats and the structural check over it — the tier
 /// table's format column as a type. Always compiled, and for the same reason [`lqip`] is: the

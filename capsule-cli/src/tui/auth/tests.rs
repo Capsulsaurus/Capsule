@@ -42,9 +42,76 @@ fn token() -> Secret {
 fn begin_sign_in_shows_the_form_taking_text() {
     let mut screen = AuthScreen::default();
     assert!(!screen.is_editing());
-    assert!(screen.update(AuthAction::BeginSignIn).is_empty());
+    // The form opens at once, and the server is asked whether it takes passwords at all.
+    assert_eq!(
+        screen.update(AuthAction::BeginSignIn),
+        vec![Effect::Auth(AuthEffect::CheckPasswordSignIn)]
+    );
     assert!(screen.is_editing());
     assert_eq!(screen.form().fields().len(), 2);
+}
+
+// ---- a server that refuses passwords (issue #1098) ---------------------------------------
+
+#[test]
+fn a_server_refusing_passwords_closes_the_form_and_drops_what_was_typed() {
+    let mut screen = filled();
+    assert!(
+        screen
+            .update(AuthAction::PasswordSignInChecked(true))
+            .is_empty()
+    );
+    assert!(!screen.is_editing());
+    assert!(screen.password_disabled());
+    assert!(screen.form().secret(PASSWORD).is_empty());
+    assert!(screen.form().value(EMAIL).is_empty());
+    assert_eq!(screen.status(), &Status::Failed(password_disabled_line()));
+    assert!(
+        password_disabled_line()
+            .starts_with("This server only accepts sign-in through single sign-on."),
+        "the English catalog message for error.auth.password_disabled"
+    );
+
+    // From then on the form does not open, and nothing is asked of the server.
+    assert!(screen.update(AuthAction::BeginSignIn).is_empty());
+    assert!(!screen.is_editing());
+    assert_eq!(screen.status(), &Status::Failed(password_disabled_line()));
+
+    // The identity provider is still offered.
+    assert_eq!(
+        screen.update(AuthAction::BeginProvider(ProviderFlow::Browser)),
+        vec![Effect::Auth(AuthEffect::BeginProvider {
+            attempt: 1,
+            flow: ProviderFlow::Browser
+        })]
+    );
+}
+
+#[test]
+fn a_server_accepting_passwords_leaves_the_form_as_it_was() {
+    let mut screen = filled();
+    assert!(
+        screen
+            .update(AuthAction::PasswordSignInChecked(false))
+            .is_empty()
+    );
+    assert!(screen.is_editing());
+    assert!(!screen.password_disabled());
+    assert_eq!(screen.form().secret(PASSWORD).expose(), "hunter2");
+    assert_eq!(screen.status(), &Status::Idle);
+}
+
+#[test]
+fn a_refusal_that_arrives_after_the_sign_in_was_sent_leaves_it_to_the_server() {
+    let mut screen = filled();
+    screen.on_form_key(FormKey::Submit);
+    screen.update(AuthAction::PasswordSignInChecked(true));
+    assert_eq!(screen.status(), &Status::Working("Signing in…"));
+    // The server's own refusal is what the screen then shows.
+    screen.update(AuthAction::LoginFinished(Err(
+        "This server only accepts sign-in through single sign-on.".to_owned(),
+    )));
+    assert!(matches!(screen.status(), Status::Failed(_)));
 }
 
 #[test]
@@ -234,6 +301,11 @@ fn each_failed_effect_reports_its_own_outcome() {
         AuthEffect::Logout.failed(reason()),
         AuthAction::SignOutFinished(Err(reason()))
     );
+    // A check that could not run refuses nothing.
+    assert_eq!(
+        AuthEffect::CheckPasswordSignIn.failed(reason()),
+        AuthAction::PasswordSignInChecked(false)
+    );
 }
 
 #[test]
@@ -342,6 +414,55 @@ fn account_asking_whether_to_sign_out() {
     let mut state = on_auth();
     state.update(Action::Auth(AuthAction::SignOut));
     insta::assert_snapshot!(draw(&state));
+}
+
+#[test]
+fn account_password_sign_in_refused_by_the_server() {
+    let mut state = on_auth();
+    state.update(Action::Auth(AuthAction::BeginSignIn));
+    state.update(Action::Auth(AuthAction::PasswordSignInChecked(true)));
+    insta::assert_snapshot!(draw(&state));
+}
+
+/// Ports whose server answers the password check with `disabled`, and nothing else.
+struct PasswordPorts {
+    disabled: bool,
+}
+
+impl Ports for PasswordPorts {
+    async fn session_summary(&self) -> Result<SessionSummary, String> {
+        Ok(SessionSummary::SignedOut)
+    }
+
+    async fn password_sign_in_disabled(&self) -> bool {
+        self.disabled
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_l_key_on_a_server_refusing_passwords_ends_without_a_form() {
+    let mut d = Driver::new(PasswordPorts { disabled: true }, 80, 14);
+    d.settle().await;
+    d.press(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+    d.press(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
+    d.settle().await;
+    assert!(!d.state().auth().is_editing());
+    assert_eq!(
+        d.state().auth().status(),
+        &Status::Failed(password_disabled_line())
+    );
+    assert!(d.pending().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_l_key_on_a_server_accepting_passwords_keeps_the_form() {
+    let mut d = Driver::new(PasswordPorts { disabled: false }, 80, 14);
+    d.settle().await;
+    d.press(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+    d.press(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
+    d.settle().await;
+    assert!(d.state().auth().is_editing());
+    assert_eq!(d.state().auth().status(), &Status::Idle);
 }
 
 #[test]

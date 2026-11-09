@@ -5,10 +5,10 @@ import Foundation
 /// Imports media files into the Capsule-managed library.
 ///
 /// Each file runs the pipeline — read, **hash** (SHA-256), **dedup** against
-/// the catalog, extract metadata, then a per-item commit: write the media
-/// file, write its CBOR sidecar, insert the catalog row. If the sidecar or
-/// catalog step fails the media file and sidecar are removed, so a failed
-/// import leaves nothing partial behind.
+/// the catalog, then **seal** through the library's ``ManagedWorkspace``. The
+/// workspace owns the commit: on the FFI lane it is `FfiWorkspace.sealAsset`,
+/// which derives the metadata, signs the sidecar and manifest, and writes the
+/// index row the catalog then reads; a failed seal writes nothing.
 ///
 /// All collaborators are injected behind protocols, so the pipeline is tested
 /// against in-memory mocks — including a deliberately failing file store to
@@ -17,24 +17,18 @@ public actor ImportService {
     private let library: ManagedLibrary
     private let fileStore: any FileStore
     private let hasher: any ContentHasher
-    private let metadataExtractor: any MediaMetadataExtracting
-    private let sidecarCoder: any SidecarCoding
 
-    /// - Parameter sidecarCoder: the mock lane's sidecar format, `JSONSidecarCoder`.
-    ///   A build that links the Rust core has no CBOR sidecar codec: the signed
-    ///   `SidecarV1` is authored by the core alone.
+    /// - Parameter hasher: the dedup hash, which must be the SHA-256 the
+    ///   workspace records on the row (`CatalogAsset.hashSHA256`), or a second
+    ///   import of the same bytes is not recognised.
     public init(
         library: ManagedLibrary,
         fileStore: any FileStore,
-        hasher: any ContentHasher,
-        metadataExtractor: any MediaMetadataExtracting,
-        sidecarCoder: any SidecarCoding
+        hasher: any ContentHasher
     ) {
         self.library = library
         self.fileStore = fileStore
         self.hasher = hasher
-        self.metadataExtractor = metadataExtractor
-        self.sidecarCoder = sidecarCoder
     }
 
     /// Import every source, returning a per-file account of the outcome.
@@ -91,92 +85,19 @@ public actor ImportService {
             return .duplicate
         }
 
-        let metadata = metadataExtractor.extractMetadata(from: data, filename: source.originalFilename)
-        let uuid = UUIDv7.string()
-        let captureTimestamp = metadata.captureTimestamp ?? Int64(Date().timeIntervalSince1970)
-        let captureDate = Date(timeIntervalSince1970: TimeInterval(captureTimestamp))
-        let fileExtension = source.url.pathExtension.isEmpty
-            ? "jpg"
-            : source.url.pathExtension.lowercased()
-
-        let layout = library.layout
-        let mediaURL = layout.mediaFile(uuid: uuid, fileExtension: fileExtension, captureDate: captureDate)
-        let sidecarURL = layout.sidecarFile(uuid: uuid, captureDate: captureDate)
-
-        try await fileStore.createDirectory(at: mediaURL.deletingLastPathComponent())
-        try await fileStore.write(data, to: mediaURL)
-
-        do {
-            let sidecar = makeSidecar(
-                uuid: uuid,
-                hash: hash,
-                metadata: metadata,
-                source: source,
-                captureTimestamp: captureTimestamp
-            )
-            try await fileStore.write(sidecarCoder.encode(sidecar), to: sidecarURL)
-            try await catalog.insertAsset(makeCatalogAsset(
-                uuid: uuid,
-                hash: hash,
-                metadata: metadata,
-                captureTimestamp: captureTimestamp
-            ))
-        } catch {
-            // Roll the partial item back so a failed import leaves nothing.
-            try? await fileStore.removeItem(at: mediaURL)
-            try? await fileStore.removeItem(at: sidecarURL)
-            throw error
-        }
-
+        let uuid = try await library.workspace.sealAsset(fileName: Self.sealFileName(for: source), bytes: data)
         CapsuleLog.managedStore.debug("imported \(source.originalFilename, privacy: .public) as \(uuid, privacy: .public)")
         return .imported(uuid)
     }
 
-    private func makeSidecar(
-        uuid: String,
-        hash: String,
-        metadata: MediaMetadata,
-        source: ImportSource,
-        captureTimestamp: Int64
-    ) -> CatalogSidecar {
-        let now = Int64(Date().timeIntervalSince1970)
-        return CatalogSidecar(
-            version: 1,
-            uuid: uuid,
-            assetType: metadata.assetType,
-            originalFilename: source.originalFilename,
-            importTimestamp: now,
-            modifiedTimestamp: now,
-            hashSHA256: hash,
-            fileSize: UInt64(max(0, metadata.fileSize)),
-            importerVersion: "capsule-ios/0.1.0",
-            rawshiftVersion: "0.0.0",
-            captureTimestamp: captureTimestamp,
-            width: metadata.pixelWidth.flatMap { UInt32(exactly: $0) },
-            height: metadata.pixelHeight.flatMap { UInt32(exactly: $0) },
-            cameraMake: metadata.cameraMake,
-            cameraModel: metadata.cameraModel,
-            gpsLatitude: metadata.latitude,
-            gpsLongitude: metadata.longitude
-        )
-    }
-
-    private func makeCatalogAsset(
-        uuid: String,
-        hash: String,
-        metadata: MediaMetadata,
-        captureTimestamp: Int64
-    ) -> CatalogAsset {
-        CatalogAsset(
-            id: uuid,
-            assetType: metadata.assetType,
-            captureTimestamp: captureTimestamp,
-            importTimestamp: Int64(Date().timeIntervalSince1970),
-            hashSHA256: hash,
-            width: metadata.pixelWidth.map(Int64.init),
-            height: metadata.pixelHeight.map(Int64.init),
-            latitude: metadata.latitude,
-            longitude: metadata.longitude
-        )
+    /// The name the workspace reads the extension from: the original's name,
+    /// or — when that has no extension — the name with the source file's
+    /// extension appended, so a picker copy named `IMG_0001` still seals as the
+    /// `.heic` it is.
+    static func sealFileName(for source: ImportSource) -> String {
+        let name = source.originalFilename
+        let sourceExtension = source.url.pathExtension
+        guard (name as NSString).pathExtension.isEmpty, !sourceExtension.isEmpty else { return name }
+        return "\(name).\(sourceExtension)"
     }
 }

@@ -7,12 +7,15 @@
 //! behind it. What is asserted against the *stores* is asserted against the stores the server
 //! actually read, never against a second reading of the response body.
 //!
-//! The cases named `E2E case 4` are the server half of module-map.md's fourth case; the client
+//! The cases named `E2E case 4` are the server half of the fourth E2E case (the index is in
+//! `capsule-e2e/src/lib.rs`); the client
 //! half (Bob's client renders) is `capsule-e2e`'s.
 
 mod support;
 
+use capsule_core::crypto::hash::Hash32;
 use capsule_core::crypto::keys::HybridSigningKey;
+use capsule_server::activity::ActivityStore as _;
 use capsule_server::blob::{BlobStore, ContentAddress};
 use capsule_server::counter::{CounterKey, CounterStore as _, budgets};
 use capsule_server::federation::scheme::REQUEST_FRESHNESS;
@@ -20,7 +23,9 @@ use capsule_server::federation::{
     CapabilityCodec, CapabilityRecord, CapabilityStore as _, MintRequest, PeerAdministration,
     PeerId, PeerStore as _, Scope,
 };
-use capsule_server::index::{AssetIndex, BlobRecord, PendingAsset, ServingHold};
+use capsule_server::index::{
+    AssetIndex, BlobRecord, LifecycleOp, OpAction, OpBlob, OpOutcome, PendingAsset, ServingHold,
+};
 use capsule_server::membership::{MemberRole, MembershipStore as _, RosterRecord};
 use capsule_server::moderation::ModerationStore as _;
 use capsule_server::store::{AlbumId, AssetId, BlobRole, Clock as _, UserId};
@@ -376,6 +381,100 @@ async fn a_session_token_on_the_feed_is_unchanged_by_the_capability_arm() {
             .collect::<Vec<_>>(),
         expected
     );
+}
+
+/// Move `asset` to trash with a signed delete chained onto its head, its window still open.
+async fn trash(fixture: &Fixture, asset: &AssetId) {
+    let delete = b"signed-delete-for-shared-1";
+    let provenance = store_blob(fixture, delete).await;
+    let chain_head = fixture
+        .index
+        .read(asset)
+        .await
+        .expect("the index reads")
+        .expect("the row exists")
+        .chain_head;
+    let outcome = fixture
+        .index
+        .apply_op(LifecycleOp {
+            asset_id: asset.clone(),
+            owner_id: owner(),
+            album_id: album(),
+            action: OpAction::Delete,
+            manifest_hash: Hash32::from_bytes([0xde; 32]),
+            prior_provenance_hash: chain_head,
+            amk_version: 1,
+            provenance: OpBlob {
+                address: provenance,
+                size: delete.len() as u64,
+            },
+            metadata: None,
+            original: None,
+            retention_until: Some(Timestamp::MAX),
+            at: Timestamp::UNIX_EPOCH,
+        })
+        .await
+        .expect("the index applies");
+    assert!(
+        matches!(outcome, OpOutcome::Applied { .. }),
+        "the delete applies: {outcome:?}"
+    );
+}
+
+/// The tombstone named by `asset` on `body`'s page.
+fn tombstone<'a>(body: &'a Value, asset: &str) -> &'a Value {
+    body["entries"]
+        .as_array()
+        .expect("an array")
+        .iter()
+        .find(|entry| entry["asset_id"] == asset && entry["change"] == "deleted")
+        .expect("the page carries the tombstone")
+}
+
+/// A tombstone names the blobs a restore needs on the owner's own feed only. On the album page,
+/// the peer's and a member's alike, it carries its record and no byte reference: a peer's
+/// puller binds a delete to no metadata blob, so one on an older server would refuse the page.
+#[tokio::test]
+async fn a_tombstone_names_restore_blobs_on_the_owners_feed_and_none_on_an_album_page() {
+    let (fixture, _) = shared().await;
+    let asset = AssetId::new("shared-1");
+    let original = store_blob(&fixture, b"original-of-shared-1").await;
+    record(&fixture, &asset, BlobRole::Original, &original).await;
+    trash(&fixture, &asset).await;
+
+    let owner_bearer = fixture.bearer().await;
+    let own = page(&fixture, &owner_bearer, "").await;
+    own.assert_status(StatusCode::OK);
+    let own: Value = own.json();
+    let entry = tombstone(&own, "shared-1");
+    assert!(
+        entry["metadata_blob"].is_string(),
+        "the owner's feed names the live metadata blob a restore needs"
+    );
+    assert_eq!(
+        entry["blobs"],
+        serde_json::json!([{ "role": "original", "hash": original.as_str(), "size": 32 }])
+    );
+    assert_eq!(entry["original_held"], true);
+
+    let (peer, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+    let bob = fixture.other_bearer(BOB).await;
+    for (who, bearer) in [("a peer", &peer), ("a member", &bob)] {
+        let body = page(&fixture, bearer, &album_query()).await;
+        body.assert_status(StatusCode::OK);
+        let body: Value = body.json();
+        let entry = tombstone(&body, "shared-1");
+        assert!(
+            entry["manifest_cbor"].is_string(),
+            "{who}: the delete record still rides the tombstone"
+        );
+        assert!(
+            entry["metadata_blob"].is_null(),
+            "{who}: an album page's tombstone names no metadata blob"
+        );
+        assert_eq!(entry["blobs"], serde_json::json!([]), "{who}");
+        assert_eq!(entry["original_held"], false, "{who}");
+    }
 }
 
 #[tokio::test]
@@ -1038,6 +1137,82 @@ async fn a_peer_fetches_the_albums_blobs_and_a_derivative_only_grant_is_refused_
         .assert_status(StatusCode::OK);
 }
 
+/// The owner's `peer.served` events, newest first, read past the HTTP surface.
+async fn peer_served(fixture: &Fixture) -> Vec<capsule_server::activity::ActivityEvent> {
+    fixture.activity_settled().await;
+    fixture
+        .activity
+        .recent(&support::user(), Timestamp::MIN, 1_000)
+        .await
+        .expect("the in-memory log reads")
+        .into_iter()
+        .filter(|event| event.kind == capsule_server::activity::ActivityKind::PeerServed)
+        .collect()
+}
+
+#[tokio::test]
+async fn a_peers_fetches_land_in_the_owners_log_once_per_window_naming_the_peer_only() {
+    let (fixture, _) = shared().await;
+    let (original, derivative) = two_roles(&fixture, "served", &album()).await;
+
+    // The owner's own fetches are not an event about the account.
+    let owner_bearer = fixture.bearer().await;
+    fetch(&fixture, &owner_bearer, &original)
+        .await
+        .assert_status(StatusCode::OK);
+    assert!(peer_served(&fixture).await.is_empty());
+
+    // A refused fetch serves nothing and records nothing.
+    let (thumbs, _) = capability(&fixture, PEER, Scope::ReadDerivativeOnly, 1).await;
+    fetch(&fixture, &thumbs, &original)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    assert!(peer_served(&fixture).await.is_empty());
+
+    let (bearer, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+    for address in [&original, &derivative, &original] {
+        fetch(&fixture, &bearer, address)
+            .await
+            .assert_status(StatusCode::OK);
+    }
+    let events = peer_served(&fixture).await;
+    assert_eq!(events.len(), 1, "three blobs in one window are one event");
+    assert_eq!(events[0].subject.as_deref(), Some(PEER));
+    assert_eq!(events[0].session_id, None);
+    for address in [&original, &derivative] {
+        assert!(
+            !format!("{:?}", events[0]).contains(address.as_str()),
+            "the event carries no content address"
+        );
+    }
+
+    // Another peer is its own window, and the next window writes the first again.
+    let (other, _) = capability(&fixture, "third.test", Scope::Read, 1).await;
+    fetch(&fixture, &other, &original)
+        .await
+        .assert_status(StatusCode::OK);
+    fixture
+        .clock
+        .advance(capsule_server::activity::DETACHED_COALESCE_WINDOW);
+    let (bearer, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+    fetch(&fixture, &bearer, &original)
+        .await
+        .assert_status(StatusCode::OK);
+    let subjects: Vec<Option<String>> = peer_served(&fixture)
+        .await
+        .into_iter()
+        .map(|event| event.subject)
+        .collect();
+    assert_eq!(
+        subjects,
+        [
+            Some(PEER.to_owned()),
+            Some("third.test".to_owned()),
+            Some(PEER.to_owned()),
+        ]
+    );
+}
+
 #[tokio::test]
 async fn a_peers_bytes_budget_refuses_a_delivery_that_does_not_fit_and_charges_no_revalidation() {
     // Invariant 21's bytes half (#476). The budget is spent through the counter port up to its
@@ -1172,7 +1347,10 @@ async fn a_capability_for_another_album_gets_the_answer_an_unknown_address_gets(
     .await;
     unknown.assert_status(StatusCode::NOT_FOUND);
     let unknown: Value = unknown.json();
-    assert_eq!(refused, unknown);
+    assert_eq!(
+        support::without_request_id(refused),
+        support::without_request_id(unknown)
+    );
 }
 
 #[tokio::test]
@@ -2764,8 +2942,8 @@ async fn saturate(
 
 #[tokio::test]
 async fn a_full_mint_partition_is_a_429_never_a_500() {
-    // #912: a full partition is the limiter working, so it answers as a spent budget does, not
-    // as the outage a `500` reports.
+    // #912: a full partition is the limiter working, so it is a `429`, not the outage a `500`
+    // reports. #919: under the at-capacity code, because the account's own budget is unspent.
     let dsk = support::identity_key();
     let (fixture, bearer) = anchored(&dsk).await;
     publish_roster(&fixture, &bearer, &dsk, 1, &[(BOB, MemberRole::Reader)])
@@ -2782,7 +2960,44 @@ async fn a_full_mint_partition_is_a_429_never_a_500() {
     let refused = mint(&fixture, &bearer, mint_body("read")).await;
     refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
     let refused: Value = refused.json();
-    assert_eq!(refused["code"], "error.federation.rate_budget_exceeded");
+    assert_eq!(refused["code"], "error.federation.mint_at_capacity");
+    assert_eq!(
+        refused["detail"], "no capability can be minted right now; try again later",
+        "the detail must not tell the caller its own budget is spent"
+    );
+}
+
+#[tokio::test]
+async fn a_full_report_intake_partition_is_an_at_capacity_429() {
+    // #919: a report counter charged through `charge` that is full answers the at-capacity
+    // code, never the spent-budget one, since this peer's intake budget is untouched.
+    let (fixture, _) = shared().await;
+    let (signer, public) = support::peer_keypair();
+    pin(&fixture, public).await;
+    saturate(
+        &fixture,
+        &CounterKey::FederatedIntake(PEER.to_owned()),
+        budgets::FEDERATED_INTAKE,
+        |i| CounterKey::FederatedIntake(format!("filler-{i}.test")),
+    )
+    .await;
+
+    let refused = file(
+        &fixture,
+        support::sign_report(
+            &signer,
+            &claim("0192f1a8-7c4e-4b6a-9d3e-00000000000a", support::REPORTED_AT),
+        ),
+    )
+    .await;
+    refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.moderation.report_at_capacity");
+    assert_eq!(
+        refused["detail"], "no report can be filed right now; try again later",
+        "the detail must not tell the peer its own budget is spent"
+    );
+    assert_eq!(queued(&fixture).await, 0, "nothing is filed");
 }
 
 #[tokio::test]
@@ -2808,7 +3023,7 @@ async fn a_full_report_nonce_partition_is_a_429_never_a_500_or_a_replay() {
     .await;
     refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
     let refused: Value = refused.json();
-    assert_eq!(refused["code"], "error.moderation.report_rate_limited");
+    assert_eq!(refused["code"], "error.moderation.report_at_capacity");
     assert_eq!(queued(&fixture).await, 0, "nothing is filed");
 }
 

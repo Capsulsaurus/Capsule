@@ -82,7 +82,7 @@
           "kind": "protocol",
           "name": "FfiHardwareSigner",
           "signature": "public protocol FfiHardwareSigner: AnyObject, Sendable",
-          "doc": "The per-platform secure element (Secure Enclave, StrongBox, TPM), implemented by native\nSwift/Kotlin over the uniffi foreign-trait boundary.\n\nThe byte shapes are fixed by the constructor the element is handed to, not by the trait:\n\n- [`FfiWorkspace::create_with_p256_hardware_signer`] — the **P-256** shape shipping\nelements actually provide: [`enroll`](Self::enroll) /\n[`classical_public_key`](Self::classical_public_key) return a SEC1 public key and\n[`sign_classical`](Self::sign_classical) a **DER-encoded ECDSA** signature over\n`SHA-256(msg)`.\n- [`FfiWorkspace::create_with_hardware_signer`] — the **Ed25519** shape: a 32-byte public\nkey and a 64-byte signature over `msg`. No shipping secure element holds Ed25519 keys, so\nthis is the software/TPM reference path.\n\nEither way Rust composes the classical half with a software-sealed ML-DSA-65 half into the\npublished hybrid device key.",
+          "doc": "The per-platform secure element (Secure Enclave, StrongBox, TPM), implemented by native\nSwift/Kotlin over the uniffi foreign-trait boundary.\n\nThe byte shapes are fixed by the constructor the element is handed to, not by the trait:\n\n- [`FfiWorkspace::create_with_p256_hardware_signer`] and\n[`FfiWorkspace::open_with_p256_hardware_signer`] — the **P-256** shape shipping\nelements actually provide: [`enroll`](Self::enroll) /\n[`classical_public_key`](Self::classical_public_key) return a SEC1 public key and\n[`sign_classical`](Self::sign_classical) a **DER-encoded ECDSA** signature over\n`SHA-256(msg)`.\n- [`FfiWorkspace::create_with_hardware_signer`] — the **Ed25519** shape: a 32-byte public\nkey and a 64-byte signature over `msg`. No shipping secure element holds Ed25519 keys, so\nthis is the software/TPM reference path.\n\nEither way Rust composes the classical half with a software-sealed ML-DSA-65 half into the\npublished hybrid device key.",
           "members": [
             {
               "kind": "func",
@@ -150,6 +150,20 @@
             },
             {
               "kind": "func",
+              "name": "fetchMetadataBlob",
+              "signature": "func fetchMetadataBlob(blobBaseUrl: String, hash: String) async throws -> Data",
+              "doc": "**Fetch the metadata blob** at content address `hash`, which a sync feed entry names by\naddress only (its `metadata_blob`): the feed lists no size for it, so it is read in\nbounded `Range` windows until the server's answer ends, and returned whole once it hashes\nto `hash`. This is the bytes [`FfiSyncHead::metadata_blob`] carries into\n[`FfiWorkspace::open_synced_original`] or [`FfiWorkspace::open_synced_history`].\n\nA sealed sidecar is a few KiB; a blob that grows past [`MAX_METADATA_BLOB_BYTES`] is\nrefused rather than buffered without bound. On a `delete` in trash the server serves the\nasset's live metadata blob to its readers until the retention window closes, so an asset\nfirst seen at its delete can be adopted and restored; where the entry names no metadata\nblob (an album page's tombstone), [`synced_history_sources`] names its address.\n\n`blob_base_url` is as for [`fetch_blob_to_path`](Self::fetch_blob_to_path). A `hash` that\nis not a lowercase hex SHA-256 is [`FfiError::InvalidArgument`] and reaches no network; a\nsession that cannot authorize the fetch is [`FfiError::Auth`]; a blob the server refuses,\nthat does not hash to its address, or that runs past the bound is [`FfiError::Fetch`].",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "fetchProvenanceHistory",
+              "signature": "func fetchProvenanceHistory(blobBaseUrl: String, manifestCbor: Data) async throws -> [Data]",
+              "doc": "**Fetch the earlier provenance records** of the asset whose latest record is\n`manifest_cbor` (a feed entry's): each record the one after it names by\n`prior_provenance_hash`, back to the asset's `create`, from the blob route the server\nserves an asset's superseded records on. Returned oldest first, each the exact bytes the\nserver holds, checked against its content address; empty for a `create`.\n\nFor an asset this workspace does not hold, first seen past its create — an entry\n[`FfiWorkspace::apply_sync_entry_from_file`] quarantines as `Rejected.ForgedChain` when\nthe app's catalog holds no head for it, or applies without adopting\n([`FfiAssetFacts::adopted`] `false`) when it does — hand the records to\n[`FfiWorkspace::open_synced_history`], which verifies them in order and holds the asset\nfrom its create. Nothing is verified here: the walk only follows links.\n\nAn asset first seen at its `delete` is fetched the same way while it is in trash: the\nserver serves a trashed asset's records, and its live metadata blob and original, to\nits readers until the retention window closes, so the adopted asset can be restored. An\nalbum page's tombstone names neither blob; [`synced_history_sources`] names both from\nthese records.\n\n`blob_base_url` is as for [`fetch_blob_to_path`](Self::fetch_blob_to_path). A record the\nserver refuses (a deleted asset's past its retention window, a purged asset's, or one the\ncaller may not read) or that does not hash\nto its address is [`FfiError::Fetch`]; a session that cannot authorize the fetch is\n[`FfiError::Auth`]; a record that does not decode, or a chain longer than\n[`MAX_HISTORY_RECORDS`](crate::sync::MAX_HISTORY_RECORDS), is [`FfiError::Sync`].",
+              "members": []
+            },
+            {
+              "kind": "func",
               "name": "isAuthenticated",
               "signature": "func isAuthenticated() async -> Bool",
               "doc": "Whether the session currently holds tokens (`false` after logout).",
@@ -173,7 +187,21 @@
               "kind": "func",
               "name": "pushAsset",
               "signature": "func pushAsset(workspace: FfiWorkspace, assetId: String) async throws -> FfiPushReport",
-              "doc": "**Push** one sealed asset of `workspace` — every blob of its bundle, in ladder order\n(provenance and metadata, then derivative manifests and derivatives, then the\noriginal) — driving `capsule_sdk::push::push_bundle` inside the SDK.\n\nThe original never crosses the boundary: its ciphertext is re-derived from the\nplaintext on disk one upload chunk window at a time, so memory is bounded by the\ntransfer window whatever the original's size. The workspace lock is held only while the\nbundle is built, never across the network.\n\nEvery blob is driven; one the server already holds answers `duplicate_blob` and comes\nback [`FfiUploadOutcome::AlreadyStored`], so pushing twice is safe. The album must\nalready be provisioned on the server.\n\n**A create the server refused is re-sealed and retried once** (issue #822). When the\nalbum's epoch moved past the one the asset was sealed under, the server refuses its\ncreate for good; if this device holds a newer epoch, the asset is re-sealed at it\n(`Workspace::reseal_create`) and pushed again, once. A second refusal fails the push.\nWhen this device holds no newer epoch the push fails with [`FfiError::Upload`] carrying\nthe server's code and a detail saying there is no newer epoch to re-seal at, and the\nasset stays local. That detail names no missing key: the refusal may have had nothing to\ndo with the epoch (a revoked device, withdrawn write access), or another device rotated\nthe album and its key has not reached this one yet.",
+              "doc": "**Push** one sealed asset of `workspace` — every blob of its bundle, in ladder order\n(provenance and metadata, then derivative manifests and derivatives, then the\noriginal) — driving `capsule_sdk::push::push_bundle` inside the SDK.\n\nThe original never crosses the boundary: its ciphertext is re-derived from the\nplaintext on disk one upload chunk window at a time, so memory is bounded by the\ntransfer window whatever the original's size. The workspace lock is held only while the\nbundle is built, never across the network.\n\nEvery blob the reported path admits is driven ([`set_path`](Self::set_path)); the tiers\nit holds back are counted in [`FfiPushReport::deferred`] and wait for the next push. A\nblob the server already holds answers `duplicate_blob` and comes back\n[`FfiUploadOutcome::AlreadyStored`], so pushing twice is safe. The album must already be\nprovisioned on the server.\n\n**A create the server refused is re-sealed and retried once** (issue #822). When the\nalbum's epoch moved past the one the asset was sealed under, the server refuses its\ncreate for good; if this device holds a newer epoch, the asset is re-sealed at it\n(`Workspace::reseal_create`) and pushed again, once. A second refusal fails the push.\nWhen this device holds no newer epoch the push fails with [`FfiError::Upload`] carrying\nthe server's code and a detail saying there is no newer epoch to re-seal at, and the\nasset stays local. That detail names no missing key: the refusal may have had nothing to\ndo with the epoch (a revoked device, withdrawn write access), or another device rotated\nthe album and its key has not reached this one yet.\n\nTo push several assets, use [`push_assets`](Self::push_assets): one call here is one\nbundle on the server's lane, so the lane never holds more than one session open.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "pushAssets",
+              "signature": "func pushAssets(workspace: FfiWorkspace, assetIds: [String]) async -> [FfiPushAssetResult]",
+              "doc": "**Push** several sealed assets of `workspace` in one call, returning one\n[`FfiPushAssetResult`] per id, in the order of `asset_ids`.\n\nEvery asset is pushed exactly as [`push_asset`](Self::push_asset) pushes one — its\noriginal streamed in bounded windows, the tiers the reported path holds back counted in\n[`FfiPushReport::deferred`], and a create the server refused re-sealed and retried once —\nbut the assets share one run of the server's lane: up to W of them have their sessions\nopen at once, every range any of them sends reserves against one device-wide byte\nbudget, and their retries spend from one lane budget. Calling `push_asset` concurrently\ninstead gives each call its own budget, so the budgets add up rather than being shared.\n\nThe ids are pushed in batches of a bounded size, so a list of any length holds only one\nbatch's bundles in memory at a time. One asset's failure is its own\n([`FfiPushAssetResult::Failed`], carrying the error `push_asset` would have returned for\nit): the others still push, and the call itself never fails. An id repeated in\n`asset_ids` pushes once, at its first occurrence; each later occurrence is\n[`FfiPushAssetResult::Failed`] with [`FfiError::InvalidArgument`].\n\nThe adverse-link detector hears each batch's outcomes when that batch's run ends, so a\nlink that degrades mid-batch re-plans the push from the next batch on.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "setPath",
+              "signature": "func setPath(snapshot: FfiPathSnapshot) -> UInt64",
+              "doc": "Report the path as the app's OS listeners see it now, and return its path generation.\n\nCall it whenever a listener fires. The generation advances only when reachability, the\ninterface or the cost changes; it then drops this session's pooled connections, forgets\nthe resets and stalls seen on the old path, and cancels — within one scheduling tick —\nany push work the new path forbids, which re-plans and resumes. Power, thermal and\nbackground-deadline changes re-plan without a new generation.",
               "members": []
             },
             {
@@ -202,6 +230,34 @@
               "name": "uploadStatus",
               "signature": "func uploadStatus(sessionId: String) async throws -> FfiUploadStatus?",
               "doc": "Query an upload session's progress (`HEAD /upload/{id}`). `None` means the\nsession is gone (discarded/expired/never-existent).",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "applyLifecycleOp",
+              "signature": "func applyLifecycleOp(apiBaseUrl: String, workspace: FfiWorkspace, record: Data, serverHead: Data?) async throws -> FfiLifecycleOpOutcome",
+              "doc": "Apply one signed lifecycle op `record` — a `delete` or a `trash-restore`, as the opaque\ncanonical CBOR [`FfiWorkspace::provenance_head`],\n[`FfiPurgeOutcome::reissue_record`](super::FfiPurgeOutcome::reissue_record) and\n[`FfiWorkspace::purged_record`] carry — to its album's ops surface on `api_base_url`\n(`http[s]://host:port`, the root `sync_pull` takes).\n\nThe record must be one `workspace` holds: its device signature verifies under the\nworkspace's device directory, and it is a record of the workspace's chain for its asset\n(live, trashed, or kept by a purge). The server cannot verify signatures, so a record\nthat is not this workspace's own is refused here rather than becoming the asset's chain\nhead there.\n\n`server_head` is the sync feed's evidence for the asset: the `manifest_cbor` of the\nlatest entry listing it (empty for an entry that carries none), or `None` when the feed\ndoes not list it. With `None` nothing is sent and the answer is\n[`FfiLifecycleOpOutcome::NotIndexed`]: the server never sees a lifecycle op for an asset\nit has not indexed.\n\nIdempotent: a record the server already applied answers `Applied` with `replayed` set.\nA refusal, or a server that could not be reached, is [`FfiLifecycleOpOutcome::Failed`];\na session the server did not accept is [`FfiError::Auth`].\n\n# Errors\n\n[`FfiError::InvalidArgument`] for bytes that are not a lifecycle op record (over the\nbound, not canonical, not a `delete` or `trash-restore`, not signed by a device of the\nworkspace's directory, or not on the workspace's chain for its asset) or an\n`api_base_url` that is not an http(s) URL, before anything is sent;\n[`FfiError::Auth`] for a refused session.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "deliverLifecycleAtHash",
+              "signature": "func deliverLifecycleAtHash(apiBaseUrl: String, workspace: FfiWorkspace, assetId: String, serverHeadHash: Data?, latestChangedAt: String?) async throws -> FfiLifecycleOpOutcome",
+              "doc": "Deliver the held lifecycle records of an asset `workspace` still holds, live or in the\ntrash: every record of its chain after the head the server holds, in chain order, each\nonce the one before it was applied. That is a `delete` or `trash-restore` signed while\nthe server had not indexed the asset, or whose send failed, together with any it chains\nonto that the server never saw. The rule is the CLI's and a purge's\n([`plan_delivery`]).\n\n`server_head_hash` is the feed's evidence for the asset, as\n[`deliver_purge_at_hash`](Self::deliver_purge_at_hash) takes it: `None`, an asset the\nfeed does not list, sends nothing and answers [`FfiLifecycleOpOutcome::NotIndexed`].\n\n`latest_changed_at` is the latest `changed_at` (RFC 3339) the caller's feed drain saw,\non the server's clock, or `None` when it saw none. It floors this device's clock\n([`judging_clock`]), and a stretch in which a `trash-restore` undoes a `delete` whose\nwindow had closed by that clock is withheld and answers\n[`FfiLifecycleOpOutcome::RestoreTooLate`]: sent, the server would apply the delete and\nrefuse the restore.\n\nEverything is read from the workspace's chain, so a delivery that failed or was held is\nretried by calling this again, also after the workspace was reopened. The workspace lock\nis held only while the chain is read, never across the network, and every record of\nthe stretch is judged as [`apply_lifecycle_op`](Self::apply_lifecycle_op) judges a\nforeign one before any is sent. A server level with the chain is sent its head alone,\nwhich it answers as a replay; a caller that compares the listed head with\n[`FfiWorkspace::provenance_head`] first sends nothing for it. The answer is the last\nrecord's `Applied`, or the first record that was not applied, whose `Failed` stops the\nstretch.\n\n# Errors\n\n[`FfiError::Trash`] with [`FfiTrashRefusal::NotFound`](super::FfiTrashRefusal::NotFound)\nfor an asset this workspace does not hold (a purged one goes through\n[`deliver_purge_at_hash`](Self::deliver_purge_at_hash)); [`FfiError::InvalidArgument`]\nfor a malformed `asset_id` or `api_base_url`, a `server_head_hash` that is neither empty\nnor 32 bytes, or a `latest_changed_at` that is not an RFC 3339 timestamp, before\nanything is sent; [`FfiError::Workspace`] for a chain whose records do not verify under\nthe workspace's device directory; [`FfiError::Auth`] for a refused session.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "deliverPurge",
+              "signature": "func deliverPurge(apiBaseUrl: String, workspace: FfiWorkspace, assetId: String, serverHead: Data?) async throws -> FfiLifecycleOpOutcome",
+              "doc": "Deliver a purged asset's `delete` to its album's ops surface: every record of the chain\nthe purge kept after the head the server holds, in chain order, each once the one\nbefore it was applied. After an early purge that is the shorter-retention re-issue\n([`FfiPurgeOutcome::reissue_record`](super::FfiPurgeOutcome::reissue_record)) together\nwith any `delete` it chains onto that the server never saw.\n\nEverything is read from the workspace's kept chain, so a delivery that failed or was\nheld is retried by calling this again, also after the workspace was reopened\n([`FfiWorkspace::purged_asset_ids`] lists what to walk). The workspace lock is held only\nwhile the chain is read, never across the network. Every record of the stretch is\njudged as [`apply_lifecycle_op`](Self::apply_lifecycle_op) judges a foreign one before\nany is sent, so a kept chain whose records no longer verify sends nothing.\n\n`server_head` is as [`apply_lifecycle_op`](Self::apply_lifecycle_op) takes it: `None`\nsends nothing and answers [`FfiLifecycleOpOutcome::NotIndexed`]. The answer is the last\nrecord's `Applied` — the purge reached the server — or the first record that was not\napplied, whose `Failed` stops the stretch.\n\nThe held rules are a live asset's\n([`deliver_lifecycle_at_hash`](Self::deliver_lifecycle_at_hash)), judged by this\ndevice's clock: a kept chain whose stretch holds a `trash-restore` undoing a `delete` the server never saw, whose window has\nclosed, is withheld and answers [`FfiLifecycleOpOutcome::RestoreTooLate`].\n\n# Errors\n\n[`FfiError::Trash`] with [`FfiTrashRefusal::NotFound`](super::FfiTrashRefusal::NotFound)\nfor an asset this workspace has not purged; [`FfiError::InvalidArgument`] for a malformed\n`asset_id` or `api_base_url`; [`FfiError::Workspace`] for a kept chain whose records do\nnot verify under the workspace's device directory; [`FfiError::Auth`] for a refused\nsession.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "deliverPurgeAtHash",
+              "signature": "func deliverPurgeAtHash(apiBaseUrl: String, workspace: FfiWorkspace, assetId: String, serverHeadHash: Data?) async throws -> FfiLifecycleOpOutcome",
+              "doc": "[`deliver_purge`](Self::deliver_purge) with the head the feed lists given by its record\nhash rather than its bytes: the SHA-256 of the latest entry's `manifest_cbor`, which is\nthe head record's hash, so a caller keeps 32 bytes per listed asset instead of the\nrecord. `Some` of an empty vector is an entry that carries no record, and `None` an asset\nthe feed does not list, exactly as `deliver_purge` reads its `server_head`.\n\n# Errors\n\nAs [`deliver_purge`](Self::deliver_purge), and [`FfiError::InvalidArgument`] for a\n`server_head_hash` that is neither empty nor 32 bytes, before anything is sent.",
               "members": []
             }
           ]
@@ -245,7 +301,7 @@
               "kind": "static func",
               "name": "createWithP256HardwareSigner",
               "signature": "public static func createWithP256HardwareSigner(root: String, passphrase: Data, tier: FfiDeviceTier, hardware: FfiHardwareSigner, keyAlias: String, mlSeed: Data, client: FfiClientBuild) throws -> FfiWorkspace",
-              "doc": "**Enroll with a hardware-bound device key**: as [`create`](Self::create), but the\nclassical half of the device signing key is produced by `hardware` (a native Secure\nEnclave / StrongBox / TPM element) under `key_alias`, over **ECDSA-P256** — the\ncomposition shipping secure elements actually provide, none of which do Ed25519. The\npost-quantum ML-DSA-65 half is the software-sealed `ml_seed` (32 bytes).\n\nThe published device key carries the P-256 tag and `verify_asset` dispatches on it, so\nthis is constructor parity with `capsule-core`'s own\n`create_with_p256_hardware_signer` — the same core call, reached through this\nnamespace's [`FfiHardwareSigner`] seam.",
+              "doc": "**Enroll with a hardware-bound device key**: as [`create`](Self::create), but the\nclassical half of the device signing key is produced by `hardware` (a native Secure\nEnclave / StrongBox / TPM element) under `key_alias`, over **ECDSA-P256** — the\ncomposition shipping secure elements actually provide, none of which do Ed25519. The\npost-quantum ML-DSA-65 half is the software-sealed `ml_seed` (32 bytes).\n\nThe published device key carries the P-256 tag and `verify_asset` dispatches on it. The\nlibrary records the binding (the alias, `ml_seed` sealed under the account master key,\nand the published key), so every later launch reopens it with\n[`open_with_p256_hardware_signer`](Self::open_with_p256_hardware_signer) on the same\nkey; plain [`open`](Self::open) refuses such a library. An element that refuses\nenrollment fails this call before anything is written under `root`.",
               "members": []
             },
             {
@@ -253,6 +309,69 @@
               "name": "open",
               "signature": "public static func `open`(root: String, passphrase: Data, tier: FfiDeviceTier, client: FfiClientBuild) throws -> FfiWorkspace",
               "doc": "**Open** the existing library at `root` under `passphrase`, restoring its album keys and\nauthorities, every managed asset, and the `add_id` counter from disk. This is\nwhat makes an app relaunch resume rather than re-enroll.",
+              "members": []
+            },
+            {
+              "kind": "static func",
+              "name": "openWithP256HardwareSigner",
+              "signature": "public static func openWithP256HardwareSigner(root: String, passphrase: Data, tier: FfiDeviceTier, hardware: FfiHardwareSigner, keyAlias: String, client: FfiClientBuild) throws -> FfiWorkspace",
+              "doc": "**Open** the existing library at `root` as [`open`](Self::open) does, re-attaching\n`hardware`, the element that holds this device's P-256 signing key. Required for a\nlibrary made by\n[`create_with_p256_hardware_signer`](Self::create_with_p256_hardware_signer): the element\nis asked for the key under the alias the library recorded, never to make a new one, and\nthe rebuilt key must be the one this device published. An element that lost the key or\nis unavailable fails the open with [`FfiError::Workspace`] rather than letting the\nlibrary sign with another key.\n\nThe library's record decides, not the caller: a library created with the software key\nopens on it and `hardware` is not used. `key_alias` is used only when `root` holds a\nlaid-out library with no account yet, whose fresh account is then enrolled under it.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "assetsByCull",
+              "signature": "func assetsByCull(flag: FfiCullFlag) throws -> [String]",
+              "doc": "The managed, non-trashed assets currently carrying `flag`, sorted. `Neutral` includes\nthe never-flagged ones.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "cullFlag",
+              "signature": "func cullFlag(assetId: String) throws -> FfiCullFlag",
+              "doc": "The asset's current flag: `Neutral` when it was never flagged, and for an asset this\nworkspace does not hold.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "flagStack",
+              "signature": "func flagStack(stackId: String, flag: FfiCullFlag) throws -> [String]",
+              "doc": "Flag every non-trashed member of a stack, one `metadata-update` each — flagging a\ncollapsed stack flags its members, since a stack stores no flag of its own. Returns the\nmembers flagged, sorted; empty for a stack with no members.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "rejectSweep",
+              "signature": "func rejectSweep(retainDays: UInt32) throws -> [String]",
+              "doc": "The reject sweep: move every rejected, not-yet-trashed asset to the trash with a\nretention window of `retain_days` days, and return the swept ids, sorted. Each is a\nsigned `delete`, restorable from the trash until its window closes. A refusal partway\nis [`FfiError::Trash`]; the assets swept before it stay in the trash, and a retried\nsweep moves the rest.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "setCull",
+              "signature": "func setCull(assetId: String, flag: FfiCullFlag) throws",
+              "doc": "Flag one asset. `Neutral` clears a prior flag. Signs one `metadata-update`, stamped with\nthis device and now, so concurrent flags from two devices converge under LWW.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "stackCullState",
+              "signature": "func stackCullState(stackId: String) throws -> FfiStackCullState?",
+              "doc": "A stack's cull state, derived from its members on this read. `None` for a stack with no\nnon-trashed members.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "stackMemberships",
+              "signature": "func stackMemberships() throws -> [FfiStackMember]",
+              "doc": "Every managed, non-trashed asset that belongs to a stack, with its stack, whether it is\nthe cover and its member index, sorted by asset id. An asset in no stack is absent, so a\ncull pass reads it as a lone asset; a trashed member is absent too, matching the members\n[`flag_stack`](Self::flag_stack) writes.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "purgedAssetIds",
+              "signature": "func purgedAssetIds() throws -> [String]",
+              "doc": "Every asset this workspace has purged (UUID strings), whose kept chain\n[`purged_record`](Self::purged_record) reads: the list a relaunch walks to deliver the\npurges whose delivery failed or was held, with [`FfiSession::deliver_purge`]. A purge\nthe server already applied answers as a replay, so walking it again is safe.",
               "members": []
             },
             {
@@ -273,21 +392,28 @@
               "kind": "func",
               "name": "albums",
               "signature": "func albums() throws -> [FfiAlbum]",
-              "doc": "Every album this workspace holds key material for.",
+              "doc": "Every album this workspace holds key material for, in the one album order every app\nshows as is: the album with the most recent visible, untrashed asset first, an empty\nalbum by its creation time, ties by ascending id (`Workspace::albums`).",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "applyHeldSyncEntry",
+              "signature": "func applyHeldSyncEntry(entry: FfiSyncHead) throws -> FfiSyncApplyOutcome",
+              "doc": "[`apply_sync_entry_from_file`](Self::apply_sync_entry_from_file) for an entry of an asset\nthis workspace **holds**, with no original fetched: the original is the one the held\nchain's head commits to, which this workspace verified when it adopted or imported it.\n\nThis is how a `delete` on an album page — which names no metadata blob and no blob — is\napplied to an asset held here: the delete binds no metadata blob and commits to the\noriginal the asset already has, so the same chokepoint and adoption as the apply verb\nverify it against the entry's `local_chain_head`, and the asset moves to this device's\ntrash. A record committing to another original than the held one is quarantined as\n`Rejected.CiphertextHashMismatch`, and one that binds a metadata blob the entry does not\ncarry is refused by the binding check: neither is adopted.\n\n# Errors\n\n[`FfiError::InvalidArgument`] for a malformed `album_id` or `local_chain_head`;\n[`FfiError::Workspace`] when the record names an asset this workspace does not hold, or\nthe workspace itself fails. A record that does not decode is a quarantined verdict, as the\napply verb answers one.",
               "members": []
             },
             {
               "kind": "func",
               "name": "applySyncEntry",
               "signature": "func applySyncEntry(entry: FfiSyncEntry) throws -> FfiSyncApplyOutcome",
-              "doc": "**Sync-apply**: verify one remote feed entry through the `verify_asset` chokepoint,\nbind and decrypt its metadata blob, and return either the facts to upsert or a named\nquarantine/hold verdict.\n\nNever silently drops and never silently accepts: a refused entry is a\n[`FfiSyncApplyOutcome::Quarantined`] the app must surface, not an error that aborts the\npage. Errors are reserved for a failure of this workspace itself.",
+              "doc": "**Sync-apply**: verify one remote feed entry through the `verify_asset` chokepoint,\nbind and decrypt its metadata blob, and return either the facts to upsert or a named\nquarantine/hold verdict.\n\nNever silently drops and never silently accepts: a refused entry is a\n[`FfiSyncApplyOutcome::Quarantined`] the app must surface, not an error that aborts the\npage. Errors are reserved for a failure of this workspace itself.\n\nAn applied record that chains onto an asset this workspace holds is **adopted**: appended\nto the asset's chain with the metadata it binds, written and indexed, and the facts say\nso ([`FfiAssetFacts::adopted`]). A `create` is adopted only by\n[`open_synced_original`](Self::open_synced_original), which has its original.",
               "members": []
             },
             {
               "kind": "func",
               "name": "applySyncEntryFromFile",
               "signature": "func applySyncEntryFromFile(entry: FfiSyncHead, ciphertextPath: String) throws -> FfiSyncApplyOutcome",
-              "doc": "[`apply_sync_entry`](Self::apply_sync_entry) for an entry whose original ciphertext is\nthe file at `ciphertext_path` — the one\n[`FfiSession::fetch_blob_to_path`](crate::ffi::FfiSession::fetch_blob_to_path) wrote —\nread in memory bounded by one STREAM chunk whatever the original's size.\n\nThe same chokepoint and verdicts: the file is hashed, and that digest is what the\ncontent-integrity step checks against the manifest's content address, so a file that is\nnot the committed ciphertext is quarantined as `Rejected.CiphertextHashMismatch`, as\n`apply_sync_entry` quarantines those bytes. Nothing is written anywhere.\n\nA malformed `album_id` or `local_chain_head` is refused before the file is opened, so a\nbad argument never costs a read of the original. The file is hashed before the workspace\nis locked, so other verbs are not held up while a large original is read.",
+              "doc": "[`apply_sync_entry`](Self::apply_sync_entry) for an entry whose original ciphertext is\nthe file at `ciphertext_path` — the one\n[`FfiSession::fetch_blob_to_path`](crate::ffi::FfiSession::fetch_blob_to_path) wrote —\nread in memory bounded by one STREAM chunk whatever the original's size.\n\nThe same chokepoint and verdicts: the file is hashed, and that digest is what the\ncontent-integrity step checks against the manifest's content address, so a file that is\nnot the committed ciphertext is quarantined as `Rejected.CiphertextHashMismatch`, as\n`apply_sync_entry` quarantines those bytes. The ciphertext file is only read.\n\nAn applied record is adopted as [`apply_sync_entry`](Self::apply_sync_entry) adopts one:\na `delete`, `trash-restore` or edit of an asset this workspace holds is appended to its\nchain, written under `media/` and indexed, and the facts say so\n([`FfiAssetFacts::adopted`]).\n\nA malformed `album_id` or `local_chain_head` is refused before the file is opened, so a\nbad argument never costs a read of the original. The file is hashed before the workspace\nis locked, so other verbs are not held up while a large original is read.",
               "members": []
             },
             {
@@ -309,6 +435,13 @@
               "name": "defaultAlbumId",
               "signature": "func defaultAlbumId() throws -> String",
               "doc": "The default album's id, derived deterministically from the account master key — so every\ndevice of this account computes the same value with nothing to synchronize.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "deleteAsset",
+              "signature": "func deleteAsset(assetId: String, retainDays: UInt32) throws -> FfiTrashEntry",
+              "doc": "Move an asset to the trash: sign a `delete` whose retention window is `retain_days` days\nfrom now, and return its trash entry. An asset already in the trash keeps the window it\nwas deleted with and signs nothing, so a retried delete never extends it.",
               "members": []
             },
             {
@@ -341,6 +474,13 @@
             },
             {
               "kind": "func",
+              "name": "expiredTrash",
+              "signature": "func expiredTrash(drain: FfiFeedDrain?) throws -> [FfiTrashEntry]",
+              "doc": "The trash entries whose signed retention window has closed: the retention sweep's\ninput, each one ready for [`purge_asset`](Self::purge_asset).\n\nA deadline is judged only after a sync drained the feed to its head, so a restore on a\nlater page lands first: pass that drain as `drain`, its `server_heads` covering the whole\nfeed as [`FfiFeedDrain::server_heads`] requires. The deadline is judged by the\ndrain's latest server `changed_at` alone, never by this device's clock, and an asset\nwhose `delete` the server has not indexed (a held delete) never expires. With no drain\n(`None`: the sync failed, or this device has no server), or a drain that saw no entry,\nnothing has expired, and the trash keeps every asset until the user empties it.\n\n# Errors\n\n[`FfiError::InvalidArgument`] for a `latest_changed_at` that is not RFC 3339.",
+              "members": []
+            },
+            {
+              "kind": "func",
               "name": "labels",
               "signature": "func labels(target: FfiLabelTarget) throws -> [String]",
               "doc": "The labels `target` carries, sorted. An unknown target is [`FfiError::Label`] with\n[`FfiLabelRefusal::NotFound`].",
@@ -348,9 +488,16 @@
             },
             {
               "kind": "func",
+              "name": "openSyncedHistory",
+              "signature": "func openSyncedHistory(entry: FfiSyncHead, history: [Data], ciphertextPath: String, destinationPath: String) throws -> FfiOpenedOriginal",
+              "doc": "[`open_synced_original`](Self::open_synced_original) for an asset this workspace does not\nhold and first sees **past its create**, with `history` the records before the entry's,\noldest first from the create — what\n[`FfiSession::fetch_provenance_history`](crate::ffi::FfiSession::fetch_provenance_history)\nreturns for the entry's `manifest_cbor`.\n\nThe entry is applied against the last record of `history`, whatever its\n`local_chain_head` says, and its original opened from `ciphertext_path` as\n`open_synced_original` opens one. Then every record of `history` is verified through\nthe chokepoint in order from the create, the sidecar is opened from the entry's\n`metadata_blob` (the asset's live one, which the server's metadata role names: a\nsuperseded metadata blob is collected), and the asset is **adopted**, held from its\ncreate with the opened original as its library copy. The facts say whether it was\n([`FfiAssetFacts::adopted`]); a held asset's `delete`, `trash-restore` or edit then works\non this device as on one it imported.\n\nAn entry that names no metadata blob or original — a `delete` on an album page, the\nsurface a writer member's device reads — is opened the same way once they are fetched:\n[`synced_history_sources`](crate::ffi::synced_history_sources) names both from the entry\nand `history`, the fetched metadata blob goes in the entry's `metadata_blob`, and the\nfetched original is `ciphertext_path`. Left empty, the `metadata_blob` binds to nothing\nand the entry is refused.\n\nA history that does not verify, or a live metadata blob that does not bind, is\n[`FfiOpenedOriginal::Refused`] with the verdict that refused it, and\n`destination_path` is untouched: the original is placed there only once the asset it\nbelongs to verifies from its create. An empty `history` is `open_synced_original`, and so\nis an entry of an asset this workspace already holds: its history is not read, so none of\nits records can refuse the entry, and the entry is applied against its own\n`local_chain_head`.\n\n# Errors\n\nAs [`open_synced_original`](Self::open_synced_original); an adoption whose write failed\nleaves nothing at `destination_path`.",
+              "members": []
+            },
+            {
+              "kind": "func",
               "name": "openSyncedOriginal",
               "signature": "func openSyncedOriginal(entry: FfiSyncHead, ciphertextPath: String, destinationPath: String) throws -> FfiOpenedOriginal",
-              "doc": "**Open a synced original** from the ciphertext file at `ciphertext_path` to its plaintext\nat `destination_path`, in memory bounded by a few STREAM chunks whatever its size.\n\nThe entry goes through the chokepoint as\n[`apply_sync_entry_from_file`](Self::apply_sync_entry_from_file) would take it, then the\nfile is hashed while it is decrypted: it opens only if it is the ciphertext the manifest\ncommits to, every chunk authenticates, and the plaintext hashes to the signed sidecar's\ndigest. The plaintext is written to a hidden staging file beside the destination and\nrenamed into place only once all of that holds, so `destination_path` is untouched by\nany other verdict and never holds a partial or unverified original. An existing file there\nis replaced only by a verified one.\n\nThe workspace stays locked while the original decrypts.\n\n# Errors\n\n[`FfiError::Workspace`] when a file cannot be read or written, or the workspace itself\nfails; [`FfiError::InvalidArgument`] for a malformed entry or a destination with no file\nname. A refused entry is a verdict, never an error.",
+              "doc": "**Open a synced original** from the ciphertext file at `ciphertext_path` to its plaintext\nat `destination_path`, in memory bounded by a few STREAM chunks whatever its size.\n\nThe entry goes through the chokepoint as\n[`apply_sync_entry_from_file`](Self::apply_sync_entry_from_file) would take it, then the\nfile is hashed while it is decrypted: it opens only if it is the ciphertext the manifest\ncommits to, every chunk authenticates, and the plaintext hashes to the signed sidecar's\ndigest. The plaintext is written to a hidden staging file beside the destination and\nrenamed into place only once all of that holds, so `destination_path` is untouched by\nany other verdict and never holds a partial or unverified original. An existing file there\nis replaced only by a verified one.\n\nAn opened entry is then **adopted**: a `create` of an asset this workspace does not hold\nmakes it held, with its chain, sidecar and sealed metadata written under `media/`, the\nopened original copied there as its own library copy, and its row and user\ntags indexed; a later record of a held asset is appended as\n[`apply_sync_entry_from_file`](Self::apply_sync_entry_from_file) appends one. The facts\nsay whether it was ([`FfiAssetFacts::adopted`]). `destination_path` still holds the\nplaintext either way, for the caller to keep or remove.\n\nThe workspace stays locked while the original decrypts and is adopted.\n\n# Errors\n\n[`FfiError::Workspace`] when a file cannot be read or written, or the workspace itself\nfails (an adoption whose write failed included, after the original was placed at\n`destination_path`); [`FfiError::InvalidArgument`] for a malformed entry or a destination\nwith no file name. A refused entry is a verdict, never an error.",
               "members": []
             },
             {
@@ -358,6 +505,20 @@
               "name": "provenanceHead",
               "signature": "func provenanceHead(assetId: String) throws -> Data",
               "doc": "The asset's **head provenance record** as opaque canonical CBOR — the exact bytes the\n`provenance` blob carries, the feed serves back as `manifest_cbor`, and a receiving\ndevice runs through [`apply_sync_entry`](Self::apply_sync_entry).\n\nThe record wraps the head signed manifest with its chain position. That wrapper is not\noptional: the server's chain head is the SHA-256 of these bytes while a client's next\n`prior_provenance_hash` is the record's own hash, so the bare manifest is the one\nencoding under which no lifecycle op can ever chain. Canonical CBOR is deterministic, so\nthe manifest inside is byte-identical to its own signed bytes — nothing is re-authored\nand the two signatures still verify over exactly what they covered.\n\nUse [`signed_manifest`](Self::signed_manifest) when the *manifest* is what is wanted.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "purgeAsset",
+              "signature": "func purgeAsset(assetId: String) throws -> FfiPurgeOutcome",
+              "doc": "Permanently delete a trashed asset: its original, every derivative and local cache\nentry, its sidecar and its index row. The provenance chain is kept as the record of the\ndeletion. Before `retention_until` a signed shorter-retention `delete` is appended first\nand handed back in [`FfiPurgeOutcome::reissue_record`] to send to the server.",
+              "members": []
+            },
+            {
+              "kind": "func",
+              "name": "purgedRecord",
+              "signature": "func purgedRecord(assetId: String) throws -> Data?",
+              "doc": "The signed `delete` that ended a purged asset, the head of its kept provenance chain, as\nthe opaque canonical CBOR record [`FfiPurgeOutcome::reissue_record`] carries. After an\nearly purge it is that same re-issue, so a delivery to the album's ops surface that\nfailed can be resent from here, also after a reopen\n([`FfiSession::apply_lifecycle_op`](super::FfiSession::apply_lifecycle_op), or\n[`FfiSession::deliver_purge`](super::FfiSession::deliver_purge) for the whole stretch).\n`None` for an asset this workspace has not purged.",
               "members": []
             },
             {
@@ -383,6 +544,13 @@
             },
             {
               "kind": "func",
+              "name": "restoreAsset",
+              "signature": "func restoreAsset(assetId: String) throws",
+              "doc": "Restore an asset from the trash: sign a `trash-restore`. Refused with\n[`FfiTrashRefusal::RetentionElapsed`] (and the `error.upload.retention_elapsed` code) at\nor after the signed `retention_until`, and with [`FfiTrashRefusal::NotInTrash`] for an\nasset that is not in the trash.",
+              "members": []
+            },
+            {
+              "kind": "func",
               "name": "sealAsset",
               "signature": "func sealAsset(albumId: String, fileName: String, bytes: Data) throws -> String",
               "doc": "**Seal + import**: take bytes the app already holds (a PhotoKit / MediaStore export),\nderive the file key, STREAM-encrypt, author and sign the create manifest, seal the\nsigned sidecar into its metadata blob, append the provenance chain, and self-verify\nthrough the `verify_asset` chokepoint. Returns the asset id.\n\n`file_name` is consulted for its extension and nothing else. One call, one core call:\nthe whole sealing order is `capsule-core`'s.",
@@ -404,9 +572,16 @@
             },
             {
               "kind": "func",
+              "name": "trash",
+              "signature": "func trash() throws -> [FfiTrashEntry]",
+              "doc": "Every asset in the trash with its signed retention window, most recently deleted first.\n\nThis is the retention data, not the Recently Deleted *view*: a surface that shows the\ntrash still opens it behind the SR1 fresh-local-auth gate, as `Catalog::query_trash`\ndoes.",
+              "members": []
+            },
+            {
+              "kind": "func",
               "name": "uploadBlobs",
               "signature": "func uploadBlobs(assetId: String) throws -> [FfiUploadBlob]",
-              "doc": "Everything needed to push one sealed asset, in ladder order: for each blob, the\n`POST /upload` body (manifest envelope projected per the server's invariant-15 rule)\nand the bytes. Feed each straight to\n[`FfiSession::upload`](crate::ffi::FfiSession::upload).\n\nThe index tier (`T0`) is **two** blobs — the provenance record then the sealed metadata\nblob — because the server publishes an asset to other devices only once it holds both\nroles. Push all of them: an app that stopped after the metadata blob would upload an\nasset no device, its own included, could ever see.\n\nThe original's ciphertext is re-derived from the manifest's recorded nonce prefix and\ngated on the manifest's own content address, so what reaches the network is what the\nsigned manifest vouches for.\n\nEvery blob comes back whole, the original included. To push without holding the\noriginal in memory, use [`FfiSession::push_asset`](crate::ffi::FfiSession::push_asset).",
+              "doc": "Everything needed to push one sealed asset, in ladder order: for each blob, the\n`POST /upload` body (manifest envelope projected per the server's invariant-15 rule)\nand the bytes. Feed each straight to\n[`FfiSession::upload`](crate::ffi::FfiSession::upload).\n\nThe index tier (`T0`) is **two** blobs — the provenance record then the sealed metadata\nblob — because the server publishes an asset to other devices only once it holds both\nroles. Push all of them: an app that stopped after the metadata blob would upload an\nasset no device, its own included, could ever see.\n\nThe original's ciphertext is re-derived from the manifest's recorded nonce prefix and\ngated on the manifest's own content address, so what reaches the network is what the\nsigned manifest vouches for.\n\nEvery blob comes back whole, the original included. To push without holding the\noriginal in memory, use [`FfiSession::push_asset`](crate::ffi::FfiSession::push_asset).\n\nBuilding the bundle records the original's upload source guard; once every blob is\nmaterialised nothing re-derives the original from this bundle again, so the guard is\nreleased before the blobs are returned. A later call re-verifies the plaintext against\nthe signed content address and records it afresh.",
               "members": []
             },
             {
@@ -571,6 +746,13 @@
               "name": "metadata",
               "signature": "public var metadata: FfiAssetMetadata?",
               "doc": "The decrypted, signature-checked metadata.\n\n`None` exactly when the action mints no metadata blob — a `delete` tombstone or a\n`trash-restore`. Those are fully-verified entries that simply carry no metadata, so an\napp applies the lifecycle change and leaves the row's metadata as it stands.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "adopted",
+              "signature": "public var adopted: Bool",
+              "doc": "Whether this workspace now holds the asset at this entry's record: it adopted the\nentry, writing the asset's chain, sidecar, sealed metadata and original under `media/`\nand its index row and user tags into the library catalog, so the trash verbs and tag\nedits work on it. When `true` the catalog already describes the asset and an app writes\nnothing of its own for it; when `false` (an asset first seen past its create, a fork, or\na verb that applies without adopting) the facts are the app's to upsert. An asset first\nseen past its create is adopted from its earlier records:\n[`FfiSession::fetch_provenance_history`](crate::ffi::FfiSession::fetch_provenance_history),\nthen [`FfiWorkspace::open_synced_history`].",
               "members": []
             }
           ]
@@ -757,6 +939,42 @@
         },
         {
           "kind": "struct",
+          "name": "FfiEmbeddedPreview",
+          "signature": "public struct FfiEmbeddedPreview: Equatable, Hashable",
+          "doc": "A RAW original's embedded JPEG, as [`embedded_preview`] reads it.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "jpeg",
+              "signature": "public var jpeg: Data",
+              "doc": "The JPEG exactly as the RAW file carries it.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "width",
+              "signature": "public var width: UInt32",
+              "doc": "Upright width in pixels, once `orientation` is applied.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "height",
+              "signature": "public var height: UInt32",
+              "doc": "Upright height in pixels.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "orientation",
+              "signature": "public var orientation: UInt16",
+              "doc": "The EXIF orientation (1..=8) to apply to `jpeg`'s stored pixels, in place of any tag the\nJPEG itself carries.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
           "name": "FfiEscrowStored",
           "signature": "public struct FfiEscrowStored: Equatable, Hashable",
           "doc": "FFI mirror of [`EscrowStored`] — what [`FfiSession::escrow_put`] did.",
@@ -773,6 +991,28 @@
               "name": "replaced",
               "signature": "public var replaced: Bool",
               "doc": "Whether this displaced an earlier escrow: `false` is a first enrollment (recovery set\nup), `true` a replacement (the previous recovery secret has stopped working).",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiFeedDrain",
+          "signature": "public struct FfiFeedDrain: Equatable, Hashable",
+          "doc": "A sync that drained the feed to its head, the evidence [`FfiWorkspace::expired_trash`]\nneeds before it judges a retention deadline.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "latestChangedAt",
+              "signature": "public var latestChangedAt: String?",
+              "doc": "The latest server `changed_at` the drain saw (RFC 3339), or `None` for a drain that saw\nno entry. Deadlines are judged at it alone, never by this device's clock, so with\n`None` nothing has expired.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "serverHeads",
+              "signature": "public var serverHeads: [String: Data]",
+              "doc": "Every asset the server's feed lists, keyed by its id as the feed names it, with the\n`manifest_cbor` of its latest entry (empty for an entry that carries no record). An\nasset whose latest `delete` is not that head or before it is a held delete, which\nnever expires. Ids that are not UUIDs name no asset of this workspace and are ignored.\n\nThe map must cover the whole feed: a drain from the feed's start (no cursor), or the\nheads this app kept, entry by entry, across every cursored drain since one. A drain\nresumed from a cursor lists only the assets that changed after it, so passing it alone\nleaves out every asset whose `delete` an earlier sync indexed: each is judged held and\nnever expires, and the trash grows until the user empties it. That loses nothing, but\nthe sweep stops working.",
               "members": []
             }
           ]
@@ -829,14 +1069,14 @@
               "kind": "field",
               "name": "metadataBlob",
               "signature": "public var metadataBlob: Data",
-              "doc": "The encrypted metadata blob's content address, as UTF-8 bytes; empty for deletes.",
+              "doc": "The encrypted metadata blob's content address, as UTF-8 bytes. On a delete in trash, the\nasset's live metadata blob, which a restore needs; empty for a purged delete.",
               "members": []
             },
             {
               "kind": "field",
               "name": "blobs",
               "signature": "public var blobs: FfiBlobManifest",
-              "doc": "Content addresses of the asset's blobs by role.",
+              "doc": "Content addresses of the asset's blobs by role. On a delete in trash, only its original;\nnone for a purged delete.",
               "members": []
             },
             {
@@ -851,6 +1091,57 @@
               "name": "changedAt",
               "signature": "public var changedAt: String",
               "doc": "When the change happened, RFC 3339, on the server's clock.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiHistorySources",
+          "signature": "public struct FfiHistorySources: Equatable, Hashable",
+          "doc": "FFI mirror of [`HistorySources`](crate::sync::HistorySources): the blobs adopting an asset\nfrom its fetched history needs beyond its records.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "metadataBlobHash",
+              "signature": "public var metadataBlobHash: String",
+              "doc": "The asset's live metadata blob's content address (lowercase hex), for\n[`FfiSession::fetch_metadata_blob`]; its bytes are the [`FfiSyncHead::metadata_blob`]\n[`FfiWorkspace::open_synced_history`] takes.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "original",
+              "signature": "public var original: FfiBlobRef",
+              "doc": "The original the head commits to, role `original`, sized for\n[`FfiSession::fetch_blob_to_path`]; that file is the `ciphertext_path`\n[`FfiWorkspace::open_synced_history`] takes.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiLocalHoldings",
+          "signature": "public struct FfiLocalHoldings: Equatable, Hashable",
+          "doc": "What this device holds for the asset. **Flat**, like `FfiNotifyInput`: an embedded preview\nis present when both of its dimensions are.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "held",
+              "signature": "public var held: [FfiRepresentation]",
+              "doc": "The encoded tiers and the original held locally; the LQIP is implied.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "embeddedPreviewWidth",
+              "signature": "public var embeddedPreviewWidth: UInt32?",
+              "doc": "The embedded preview's upright width, from [`embedded_preview`].",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "embeddedPreviewHeight",
+              "signature": "public var embeddedPreviewHeight: UInt32?",
+              "doc": "The embedded preview's upright height.",
               "members": []
             }
           ]
@@ -1083,6 +1374,78 @@
         },
         {
           "kind": "struct",
+          "name": "FfiPathSnapshot",
+          "signature": "public struct FfiPathSnapshot: Equatable, Hashable",
+          "doc": "One sample of the path as the app's OS listeners report it.\n\nFlat, like [`FfiNotifyInput`](crate::ffi::FfiNotifyInput): `background_deadline_ms` present\nmeans the app runs in a background task the OS ends that many milliseconds from now; absent\nmeans the foreground.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "cost",
+              "signature": "public var cost: FfiPathCost",
+              "doc": "What the path costs.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "reachable",
+              "signature": "public var reachable: Bool",
+              "doc": "Whether the OS reports a usable path.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "interface",
+              "signature": "public var interface: FfiPathInterface",
+              "doc": "The interface the path runs over.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "power",
+              "signature": "public var power: FfiPowerState",
+              "doc": "The device's power source.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "thermal",
+              "signature": "public var thermal: FfiThermalState",
+              "doc": "The device's thermal state.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "backgroundDeadlineMs",
+              "signature": "public var backgroundDeadlineMs: UInt64?",
+              "doc": "Milliseconds before the OS ends the background task the app runs in; `None` in the\nforeground.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiPurgeOutcome",
+          "signature": "public struct FfiPurgeOutcome: Equatable, Hashable",
+          "doc": "What a [`FfiWorkspace::purge_asset`] did.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "assetId",
+              "signature": "public var assetId: String",
+              "doc": "The purged asset (UUID string).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "reissueRecord",
+              "signature": "public var reissueRecord: Data?",
+              "doc": "The signed shorter-retention `delete` an early purge appended, as the opaque canonical\nCBOR provenance record [`FfiWorkspace::provenance_head`] would have returned. It goes to\nthe album's ops surface so the server may purge too, through\n[`FfiSession::deliver_purge`](super::FfiSession::deliver_purge), which sends it with any\n`delete` it chains onto that the server never saw; when that delivery fails,\n[`FfiWorkspace::purged_record`] hands the same record back from the kept chain. `None`\nwhen the window had closed.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
           "name": "FfiPushReport",
           "signature": "public struct FfiPushReport: Equatable, Hashable",
           "doc": "What [`FfiSession::push_asset`] did — FFI mirror of [`AssetPushReport`].",
@@ -1106,6 +1469,13 @@
               "name": "bytes",
               "signature": "public var bytes: UInt64",
               "doc": "Total bytes handed to the upload client, the original included.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "deferred",
+              "signature": "public var deferred: UInt32",
+              "doc": "Blobs the reported path held back ([`FfiSession::set_path`]): push the asset again once\nthe path allows them. Zero when the whole ladder ran.",
               "members": []
             }
           ]
@@ -1164,6 +1534,122 @@
               "name": "labels",
               "signature": "public var labels: [String]",
               "doc": "The region's labels, sorted.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiRenderRequest",
+          "signature": "public struct FfiRenderRequest: Equatable, Hashable",
+          "doc": "A surface's request: its intent and its size in device pixels when the view opened.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "intent",
+              "signature": "public var intent: FfiRepresentation",
+              "doc": "The rung the surface's intent needs: `Thumbnail` for the grid, `Preview` for the\nsingle-asset view, `Original` for a full-fidelity view.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "surfaceWidth",
+              "signature": "public var surfaceWidth: UInt32",
+              "doc": "The surface's width when the view opened. A view that grows keeps passing this.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "surfaceHeight",
+              "signature": "public var surfaceHeight: UInt32",
+              "doc": "The surface's height when the view opened.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiRenderStep",
+          "signature": "public struct FfiRenderStep: Equatable, Hashable",
+          "doc": "The answer to one [`render_step`].",
+          "members": [
+            {
+              "kind": "field",
+              "name": "show",
+              "signature": "public var show: FfiRendition",
+              "doc": "What to show now.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "changed",
+              "signature": "public var changed: Bool",
+              "doc": "Whether `show` differs from the `shown` passed in.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "next",
+              "signature": "public var next: FfiNextStep?",
+              "doc": "What to obtain next, or `None` when the intent is met or nothing can raise it.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiRendition",
+          "signature": "public struct FfiRendition: Equatable, Hashable",
+          "doc": "What a surface shows: a rung and its source. The caller keeps the last one and passes it\nback as `shown`.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "rung",
+              "signature": "public var rung: FfiRepresentation",
+              "doc": "The rung shown.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "source",
+              "signature": "public var source: FfiRungSource",
+              "doc": "What fills it.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiStackMember",
+          "signature": "public struct FfiStackMember: Equatable, Hashable",
+          "doc": "Where one live asset sits in its stack, read from its signed `stack_membership` register.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "assetId",
+              "signature": "public var assetId: String",
+              "doc": "The asset (UUID string).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "stackId",
+              "signature": "public var stackId: String",
+              "doc": "The stack it belongs to (UUID string).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "isCover",
+              "signature": "public var isCover: Bool",
+              "doc": "Whether it is the stack's cover: its `primary` member, the \"best photo\".",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "memberIndex",
+              "signature": "public var memberIndex: UInt32?",
+              "doc": "Its position within the stack (burst sequence, chapter index), when one was recorded.",
               "members": []
             }
           ]
@@ -1294,6 +1780,42 @@
               "name": "hasMore",
               "signature": "public var hasMore: Bool",
               "doc": "Whether the server holds changes beyond this page.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "FfiTrashEntry",
+          "signature": "public struct FfiTrashEntry: Equatable, Hashable",
+          "doc": "One asset in the trash, as its latest signed `delete` record describes it.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "assetId",
+              "signature": "public var assetId: String",
+              "doc": "The trashed asset (UUID string).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "deletedAt",
+              "signature": "public var deletedAt: String",
+              "doc": "When the `delete` was signed (RFC 3339, UTC).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "retentionUntil",
+              "signature": "public var retentionUntil: String?",
+              "doc": "The signed retention floor (RFC 3339, UTC): a restore is refused at or after it. `None`\nfor a `delete` that carries no readable window, which never expires.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "restorable",
+              "signature": "public var restorable: Bool",
+              "doc": "Whether a restore is accepted now, by this device's clock. Computed by the workspace so\nno app re-implements the window; the server judges the same floor by its own clock.",
               "members": []
             }
           ]
@@ -1594,6 +2116,35 @@
         },
         {
           "kind": "enum",
+          "name": "FfiCullFlag",
+          "signature": "public enum FfiCullFlag: Equatable, Hashable",
+          "doc": "The trinary culling flag, mirrored from core's `CullFlag`. `Neutral` is the never-flagged\nstate and what an unwritten register reads as.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "pick",
+              "signature": "case pick",
+              "doc": "A keeper.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "neutral",
+              "signature": "case neutral",
+              "doc": "Not yet culled either way.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "reject",
+              "signature": "case reject",
+              "doc": "Marked for rejection: a candidate for the reject sweep.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
           "name": "FfiDeviceTier",
           "signature": "public enum FfiDeviceTier: Equatable, Hashable",
           "doc": "Device hardware tier, selecting the Argon2id cost at wrap time. Mirrors core's `DeviceTier`\nin this namespace (see the module docs on why it is not shared).",
@@ -1664,6 +2215,13 @@
             },
             {
               "kind": "case",
+              "name": "Trash",
+              "signature": "case Trash",
+              "doc": "A trash verb (delete, restore, purge) was refused before anything was written: the asset\nis unknown, not in the trash, or past its signed retention window. `refusal` says which.",
+              "members": []
+            },
+            {
+              "kind": "case",
               "name": "Escrow",
               "signature": "case Escrow",
               "doc": "A master-key escrow flow (store/fetch) failed.",
@@ -1696,40 +2254,40 @@
           "kind": "enum",
           "name": "FfiHardwareSignerError",
           "signature": "public enum FfiHardwareSignerError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError",
-          "doc": "Failure surfaced by a foreign [`FfiHardwareSigner`]. Mirrors `capsule-core`'s\n`HardwareSignerError` variant for variant — it is the same contract, declared in the\n`capsule_sdk` namespace because core's own type carries no uniffi derive.",
+          "doc": "Failure surfaced by a foreign [`FfiHardwareSigner`]. Mirrors `capsule-core`'s\n`HardwareSignerError` variant for variant — it is the same contract, declared in the\n`capsule_sdk` namespace because core's own type carries no uniffi derive.\n\nThe error is **thrown by foreign code** — it is the declared error of the\n[`FfiHardwareSigner`] and [`FfiHardwareKeyAgreement`] foreign traits — so Rust must *lift*\nit, and uniffi lifts only a non-flat error. Every variant therefore carries a named\n`detail` field (the element's own English diagnostic), which also gives the Kotlin\nexceptions and Swift cases the same `(detail)` shape. Core's error keeps `detail` only on\n[`Backend`](Self::Backend); for the other variants it is logged at the seam and dropped.",
           "members": [
             {
               "kind": "case",
               "name": "AuthCancelled",
-              "signature": "case AuthCancelled(message: String)",
+              "signature": "case AuthCancelled",
               "doc": "The user cancelled the biometric / the element refused authentication.",
               "members": []
             },
             {
               "kind": "case",
               "name": "Unavailable",
-              "signature": "case Unavailable(message: String)",
+              "signature": "case Unavailable",
               "doc": "No secure element is available on this device.",
               "members": []
             },
             {
               "kind": "case",
               "name": "NotFound",
-              "signature": "case NotFound(message: String)",
+              "signature": "case NotFound",
               "doc": "No key exists for the requested alias.",
               "members": []
             },
             {
               "kind": "case",
               "name": "Exportable",
-              "signature": "case Exportable(message: String)",
+              "signature": "case Exportable",
               "doc": "The private key was readable — non-exportability is violated (a failure).",
               "members": []
             },
             {
               "kind": "case",
               "name": "Backend",
-              "signature": "case Backend(message: String)",
+              "signature": "case Backend",
               "doc": "Any other backend error.",
               "members": []
             }
@@ -1816,6 +2374,42 @@
         },
         {
           "kind": "enum",
+          "name": "FfiLifecycleOpOutcome",
+          "signature": "public enum FfiLifecycleOpOutcome: Equatable, Hashable",
+          "doc": "What became of one lifecycle op.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "applied",
+              "signature": "case applied",
+              "doc": "The server applied the op, or had applied it already (`replayed`).",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "notIndexed",
+              "signature": "case notIndexed",
+              "doc": "Nothing was sent: the feed does not list the asset, so its create is not indexed on the\nserver, and the server never sees a `delete` for an asset it has not indexed. The record\nstays on the asset's chain; deliver it once a sync lists the asset.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "restoreTooLate",
+              "signature": "case restoreTooLate",
+              "doc": "Nothing was sent: a `trash-restore` in the stretch undoes a `delete` the server has not\nseen, and that delete's window closed at `retention_until`. Sent, the server would apply\nthe delete, refuse the restore and purge an asset the user restored in time. Withheld\nfor good: the server keeps the asset live at the head it holds, the workspace keeps\nevery record, and nothing after the pair can be sent either, since the chain is\nhash-linked. A later delivery judges it the same way, so it never needs retrying.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "failed",
+              "signature": "case failed",
+              "doc": "The server refused the op, or could not be reached. `permanent` says whether sending\nthe same bytes again can only be refused again.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
           "name": "FfiLoginOutcome",
           "signature": "public enum FfiLoginOutcome",
           "doc": "What a password login answered with, across the FFI.\n\nAn enum rather than an optional session handle: \"signed in\" and \"needs a code\" are different\nstates an app renders differently, and a `null` handle beside a `mfaToken` string would let a\ncaller read one while acting on the other.",
@@ -1832,6 +2426,28 @@
               "name": "secondFactorRequired",
               "signature": "case secondFactorRequired",
               "doc": "The password verified and a code is still needed.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiNextStep",
+          "signature": "public enum FfiNextStep: Equatable, Hashable",
+          "doc": "How to obtain the next rung.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "fetch",
+              "signature": "case fetch",
+              "doc": "Fetch it from the server.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "generate",
+              "signature": "case generate",
+              "doc": "Produce it on the device from the original it holds.",
               "members": []
             }
           ]
@@ -1868,6 +2484,122 @@
               "name": "digestMismatch",
               "signature": "case digestMismatch",
               "doc": "The ciphertext opened, but the plaintext does not hash to the signed sidecar's digest.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiPathCost",
+          "signature": "public enum FfiPathCost: Equatable, Hashable",
+          "doc": "FFI mirror of [`PathCost`].",
+          "members": [
+            {
+              "kind": "case",
+              "name": "unmetered",
+              "signature": "case unmetered",
+              "doc": "Bulk transfer is acceptable.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "metered",
+              "signature": "case metered",
+              "doc": "The link is byte-counted (iOS `isExpensive`, Android without `NOT_METERED`).",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "constrained",
+              "signature": "case constrained",
+              "doc": "The OS data saver is on (iOS Low Data Mode, Android Data Saver).",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiPathInterface",
+          "signature": "public enum FfiPathInterface: Equatable, Hashable",
+          "doc": "FFI mirror of [`PathInterface`].",
+          "members": [
+            {
+              "kind": "case",
+              "name": "wired",
+              "signature": "case wired",
+              "doc": "Ethernet or another wired link.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "wifi",
+              "signature": "case wifi",
+              "doc": "Wi-Fi.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "cellular",
+              "signature": "case cellular",
+              "doc": "A cellular radio.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "other",
+              "signature": "case other",
+              "doc": "Anything else, or unknown.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiPowerState",
+          "signature": "public enum FfiPowerState: Equatable, Hashable",
+          "doc": "FFI mirror of [`PowerState`].",
+          "members": [
+            {
+              "kind": "case",
+              "name": "external",
+              "signature": "case external",
+              "doc": "On external power.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "battery",
+              "signature": "case battery",
+              "doc": "On battery.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "lowPower",
+              "signature": "case lowPower",
+              "doc": "On battery with the OS low-power mode on.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiPushAssetResult",
+          "signature": "public enum FfiPushAssetResult: Equatable, Hashable",
+          "doc": "How one asset of an [`FfiSession::push_assets`] call ended.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "pushed",
+              "signature": "case pushed",
+              "doc": "The asset's admitted ladder ran: what [`FfiSession::push_asset`] would have returned.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "failed",
+              "signature": "case failed",
+              "doc": "The asset did not push: the error [`FfiSession::push_asset`] would have failed with.\nIt stays local, and pushing it again is safe.",
               "members": []
             }
           ]
@@ -1939,6 +2671,42 @@
         },
         {
           "kind": "enum",
+          "name": "FfiRepresentation",
+          "signature": "public enum FfiRepresentation: Equatable, Hashable",
+          "doc": "A rung of the ladder, cheapest first.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "lqip",
+              "signature": "case lqip",
+              "doc": "The LQIP, embedded in the metadata blob; always present.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "thumbnail",
+              "signature": "case thumbnail",
+              "doc": "The grid thumbnail.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "preview",
+              "signature": "case preview",
+              "doc": "The single-asset view's preview.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "original",
+              "signature": "case original",
+              "doc": "The original.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
           "name": "FfiRetryReason",
           "signature": "public enum FfiRetryReason: Equatable, Hashable",
           "doc": "Why an upload chunk is sent again. Mirrors [`RetryReason`] variant for variant.",
@@ -1975,6 +2743,71 @@
         },
         {
           "kind": "enum",
+          "name": "FfiRungSource",
+          "signature": "public enum FfiRungSource: Equatable, Hashable",
+          "doc": "Where a shown rung's pixels come from.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "lqip",
+              "signature": "case lqip",
+              "doc": "The LQIP (`render_lqip`), which paints the dominant colour where it does not decode.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "embedded",
+              "signature": "case embedded",
+              "doc": "The original's embedded preview ([`embedded_preview`]).",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "encoded",
+              "signature": "case encoded",
+              "doc": "The rung's encoded tier.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "original",
+              "signature": "case original",
+              "doc": "The original, decoded.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiStackCullState",
+          "signature": "public enum FfiStackCullState: Equatable, Hashable",
+          "doc": "A stack's derived cull state, by the doc's precedence `all-rejected → any-pick → else mixed`.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "allRejected",
+              "signature": "case allRejected",
+              "doc": "Every member is rejected: the whole stack is a sweep candidate.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "anyPick",
+              "signature": "case anyPick",
+              "doc": "At least one member is picked.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "mixed",
+              "signature": "case mixed",
+              "doc": "Neither: undecided, or rejects mixed with neutrals.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
           "name": "FfiSyncApplyOutcome",
           "signature": "public enum FfiSyncApplyOutcome: Equatable, Hashable",
           "doc": "How applying one remote entry resolved — the three verdicts the client validation duties\npermit. There is no \"ignored\" case: a failure is always a named quarantine or a hold.",
@@ -1998,6 +2831,42 @@
               "name": "quarantined",
               "signature": "case quarantined",
               "doc": "Refused. `reason` is a stable, switchable code; `detail` is English developer text.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
+          "name": "FfiThermalState",
+          "signature": "public enum FfiThermalState: Equatable, Hashable",
+          "doc": "FFI mirror of [`ThermalState`].",
+          "members": [
+            {
+              "kind": "case",
+              "name": "nominal",
+              "signature": "case nominal",
+              "doc": "No thermal pressure.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "fair",
+              "signature": "case fair",
+              "doc": "Slightly elevated.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "serious",
+              "signature": "case serious",
+              "doc": "High: the OS asks apps to reduce work.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "critical",
+              "signature": "case critical",
+              "doc": "Critical: the OS asks apps to stop discretionary work.",
               "members": []
             }
           ]
@@ -2139,6 +3008,35 @@
         },
         {
           "kind": "enum",
+          "name": "FfiTrashRefusal",
+          "signature": "public enum FfiTrashRefusal: Equatable, Hashable",
+          "doc": "Why a trash verb was refused ([`FfiError::Trash`]). Nothing was written.",
+          "members": [
+            {
+              "kind": "case",
+              "name": "notFound",
+              "signature": "case notFound",
+              "doc": "The workspace holds no such asset.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "notInTrash",
+              "signature": "case notInTrash",
+              "doc": "The asset is not in the trash: a restore has nothing to undo, and a purge never skips\nthe trash.",
+              "members": []
+            },
+            {
+              "kind": "case",
+              "name": "retentionElapsed",
+              "signature": "case retentionElapsed",
+              "doc": "The signed retention window has closed, so the asset can no longer be restored. It\nstays in the trash until it is purged.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum",
           "name": "FfiUploadOutcome",
           "signature": "public enum FfiUploadOutcome: Equatable, Hashable",
           "doc": "FFI mirror of [`UploadOutcome`] — how a full upload resolved.",
@@ -2187,6 +3085,34 @@
               "members": []
             }
           ]
+        },
+        {
+          "kind": "func",
+          "name": "syncedHistorySources",
+          "signature": "public func syncedHistorySources(manifestCbor: Data, history: [Data]) throws -> FfiHistorySources",
+          "doc": "**Name what adopting an asset from its history fetches**: the live metadata blob and the\noriginal, read off the asset's latest record `manifest_cbor` (a feed entry's) and `history`,\nthe records before it that [`FfiSession::fetch_provenance_history`] returned.\n\nAn album page — the one a writer member's device reads — serves a `delete` with no metadata\nblob and no blob, so a device that first sees the asset there has only its records. The live\nmetadata blob is the newest record that binds one, and the delete commits to the original;\nthe server serves both to the asset's readers until its retention window closes. Fetch them\nwith [`FfiSession::fetch_metadata_blob`] and [`FfiSession::fetch_blob_to_path`], set the\nentry's `metadata_blob` to the first, and hand the second to\n[`FfiWorkspace::open_synced_history`]: the asset is held in this device's trash and its\n`trash-restore` can be signed. An entry that names its metadata blob (the owner's own feed)\nagrees with this answer.\n\nPure and offline. Nothing is trusted for being named: the adoption binds the metadata blob and\nthe original to the records, and refuses what does not.\n\n# Errors\n\n[`FfiError::Sync`] when a record does not decode or none binds a metadata blob.",
+          "members": []
+        },
+        {
+          "kind": "func",
+          "name": "syncedRetentionClosed",
+          "signature": "public func syncedRetentionClosed(manifestCbor: Data, changedAt: String) throws -> Bool",
+          "doc": "**Whether a tombstone's retention window had closed** at `changed_at` (RFC 3339, a feed\nentry's own): `manifest_cbor` is a `delete` record and `changed_at` is at or after the\n`retention_until` signed into it.\n\nA device that first sees an asset at an album page's tombstone reads this before it calls\n[`FfiSession::fetch_provenance_history`]: once the window has closed the server refuses the\nasset's records and bytes to its readers, so there is nothing left to adopt, and passing the\nentry loses nothing. A record that is not a `delete`, or a `delete` whose window is absent or\nunreadable, answers `false`.\n\nPure and offline.\n\n# Errors\n\n[`FfiError::InvalidArgument`] when `changed_at` is not an RFC 3339 instant;\n[`FfiError::Sync`] when `manifest_cbor` does not decode.",
+          "members": []
+        },
+        {
+          "kind": "func",
+          "name": "embeddedPreview",
+          "signature": "public func embeddedPreview(originalPath: String, ext: String) throws -> FfiEmbeddedPreview?",
+          "doc": "Read the embedded preview of the original at `original_path`, whose extension (without the\ndot) is `ext`.\n\n`None` when the original is not a RAW, carries no preview, or carries one that does not read\nwithin the decode budget: each leaves the rung to the next source, so none is an error. The\nreason is logged.\n\nThis reads the whole original into memory, because the extraction's IFD bounds walk and its\nstated-length guard run over the full file before the RAW reader does. Call it once per asset\nand keep the [`FfiEmbeddedPreview`] it returns, rather than once per render.\n\n# Errors\n\n[`FfiError::Workspace`] when the file cannot be read.",
+          "members": []
+        },
+        {
+          "kind": "func",
+          "name": "renderStep",
+          "signature": "public func renderStep(request: FfiRenderRequest, shown: FfiRendition?, local: FfiLocalHoldings, fetchable: [FfiRepresentation]) -> FfiRenderStep",
+          "doc": "One step of the render ladder ([`crate::fetch::render_step`]): what to show now and what to\nobtain next. `shown` is what the surface shows, `None` when it shows nothing yet or is falling\nback below what it showed; `fetchable` is what the server lists for the asset.",
+          "members": []
         },
         {
           "kind": "func",
@@ -2297,7 +3223,7 @@
           "kind": "interface",
           "name": "FfiHardwareSigner",
           "signature": "public interface FfiHardwareSigner",
-          "doc": "The per-platform secure element (Secure Enclave, StrongBox, TPM), implemented by native\nSwift/Kotlin over the uniffi foreign-trait boundary.\n\nThe byte shapes are fixed by the constructor the element is handed to, not by the trait:\n\n- [`FfiWorkspace::create_with_p256_hardware_signer`] — the **P-256** shape shipping\nelements actually provide: [`enroll`](Self::enroll) /\n[`classical_public_key`](Self::classical_public_key) return a SEC1 public key and\n[`sign_classical`](Self::sign_classical) a **DER-encoded ECDSA** signature over\n`SHA-256(msg)`.\n- [`FfiWorkspace::create_with_hardware_signer`] — the **Ed25519** shape: a 32-byte public\nkey and a 64-byte signature over `msg`. No shipping secure element holds Ed25519 keys, so\nthis is the software/TPM reference path.\n\nEither way Rust composes the classical half with a software-sealed ML-DSA-65 half into the\npublished hybrid device key.",
+          "doc": "The per-platform secure element (Secure Enclave, StrongBox, TPM), implemented by native\nSwift/Kotlin over the uniffi foreign-trait boundary.\n\nThe byte shapes are fixed by the constructor the element is handed to, not by the trait:\n\n- [`FfiWorkspace::create_with_p256_hardware_signer`] and\n[`FfiWorkspace::open_with_p256_hardware_signer`] — the **P-256** shape shipping\nelements actually provide: [`enroll`](Self::enroll) /\n[`classical_public_key`](Self::classical_public_key) return a SEC1 public key and\n[`sign_classical`](Self::sign_classical) a **DER-encoded ECDSA** signature over\n`SHA-256(msg)`.\n- [`FfiWorkspace::create_with_hardware_signer`] — the **Ed25519** shape: a 32-byte public\nkey and a 64-byte signature over `msg`. No shipping secure element holds Ed25519 keys, so\nthis is the software/TPM reference path.\n\nEither way Rust composes the classical half with a software-sealed ML-DSA-65 half into the\npublished hybrid device key.",
           "members": [
             {
               "kind": "fun",
@@ -2365,6 +3291,20 @@
             },
             {
               "kind": "fun",
+              "name": "fetchMetadataBlob",
+              "signature": "suspend fun fetchMetadataBlob(blobBaseUrl: kotlin.String, hash: kotlin.String): kotlin.ByteArray",
+              "doc": "**Fetch the metadata blob** at content address `hash`, which a sync feed entry names by\naddress only (its `metadata_blob`): the feed lists no size for it, so it is read in\nbounded `Range` windows until the server's answer ends, and returned whole once it hashes\nto `hash`. This is the bytes [`FfiSyncHead::metadata_blob`] carries into\n[`FfiWorkspace::open_synced_original`] or [`FfiWorkspace::open_synced_history`].\n\nA sealed sidecar is a few KiB; a blob that grows past [`MAX_METADATA_BLOB_BYTES`] is\nrefused rather than buffered without bound. On a `delete` in trash the server serves the\nasset's live metadata blob to its readers until the retention window closes, so an asset\nfirst seen at its delete can be adopted and restored; where the entry names no metadata\nblob (an album page's tombstone), [`synced_history_sources`] names its address.\n\n`blob_base_url` is as for [`fetch_blob_to_path`](Self::fetch_blob_to_path). A `hash` that\nis not a lowercase hex SHA-256 is [`FfiError::InvalidArgument`] and reaches no network; a\nsession that cannot authorize the fetch is [`FfiError::Auth`]; a blob the server refuses,\nthat does not hash to its address, or that runs past the bound is [`FfiError::Fetch`].",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "fetchProvenanceHistory",
+              "signature": "suspend fun fetchProvenanceHistory(blobBaseUrl: kotlin.String, manifestCbor: kotlin.ByteArray): List<kotlin.ByteArray>",
+              "doc": "**Fetch the earlier provenance records** of the asset whose latest record is\n`manifest_cbor` (a feed entry's): each record the one after it names by\n`prior_provenance_hash`, back to the asset's `create`, from the blob route the server\nserves an asset's superseded records on. Returned oldest first, each the exact bytes the\nserver holds, checked against its content address; empty for a `create`.\n\nFor an asset this workspace does not hold, first seen past its create — an entry\n[`FfiWorkspace::apply_sync_entry_from_file`] quarantines as `Rejected.ForgedChain` when\nthe app's catalog holds no head for it, or applies without adopting\n([`FfiAssetFacts::adopted`] `false`) when it does — hand the records to\n[`FfiWorkspace::open_synced_history`], which verifies them in order and holds the asset\nfrom its create. Nothing is verified here: the walk only follows links.\n\nAn asset first seen at its `delete` is fetched the same way while it is in trash: the\nserver serves a trashed asset's records, and its live metadata blob and original, to\nits readers until the retention window closes, so the adopted asset can be restored. An\nalbum page's tombstone names neither blob; [`synced_history_sources`] names both from\nthese records.\n\n`blob_base_url` is as for [`fetch_blob_to_path`](Self::fetch_blob_to_path). A record the\nserver refuses (a deleted asset's past its retention window, a purged asset's, or one the\ncaller may not read) or that does not hash\nto its address is [`FfiError::Fetch`]; a session that cannot authorize the fetch is\n[`FfiError::Auth`]; a record that does not decode, or a chain longer than\n[`MAX_HISTORY_RECORDS`](crate::sync::MAX_HISTORY_RECORDS), is [`FfiError::Sync`].",
+              "members": []
+            },
+            {
+              "kind": "fun",
               "name": "isAuthenticated",
               "signature": "suspend fun isAuthenticated(): kotlin.Boolean",
               "doc": "Whether the session currently holds tokens (`false` after logout).",
@@ -2388,7 +3328,21 @@
               "kind": "fun",
               "name": "pushAsset",
               "signature": "suspend fun pushAsset(workspace: FfiWorkspace, assetId: kotlin.String): FfiPushReport",
-              "doc": "**Push** one sealed asset of `workspace` — every blob of its bundle, in ladder order\n(provenance and metadata, then derivative manifests and derivatives, then the\noriginal) — driving `capsule_sdk::push::push_bundle` inside the SDK.\n\nThe original never crosses the boundary: its ciphertext is re-derived from the\nplaintext on disk one upload chunk window at a time, so memory is bounded by the\ntransfer window whatever the original's size. The workspace lock is held only while the\nbundle is built, never across the network.\n\nEvery blob is driven; one the server already holds answers `duplicate_blob` and comes\nback [`FfiUploadOutcome::AlreadyStored`], so pushing twice is safe. The album must\nalready be provisioned on the server.\n\n**A create the server refused is re-sealed and retried once** (issue #822). When the\nalbum's epoch moved past the one the asset was sealed under, the server refuses its\ncreate for good; if this device holds a newer epoch, the asset is re-sealed at it\n(`Workspace::reseal_create`) and pushed again, once. A second refusal fails the push.\nWhen this device holds no newer epoch the push fails with [`FfiError::Upload`] carrying\nthe server's code and a detail saying there is no newer epoch to re-seal at, and the\nasset stays local. That detail names no missing key: the refusal may have had nothing to\ndo with the epoch (a revoked device, withdrawn write access), or another device rotated\nthe album and its key has not reached this one yet.",
+              "doc": "**Push** one sealed asset of `workspace` — every blob of its bundle, in ladder order\n(provenance and metadata, then derivative manifests and derivatives, then the\noriginal) — driving `capsule_sdk::push::push_bundle` inside the SDK.\n\nThe original never crosses the boundary: its ciphertext is re-derived from the\nplaintext on disk one upload chunk window at a time, so memory is bounded by the\ntransfer window whatever the original's size. The workspace lock is held only while the\nbundle is built, never across the network.\n\nEvery blob the reported path admits is driven ([`set_path`](Self::set_path)); the tiers\nit holds back are counted in [`FfiPushReport::deferred`] and wait for the next push. A\nblob the server already holds answers `duplicate_blob` and comes back\n[`FfiUploadOutcome::AlreadyStored`], so pushing twice is safe. The album must already be\nprovisioned on the server.\n\n**A create the server refused is re-sealed and retried once** (issue #822). When the\nalbum's epoch moved past the one the asset was sealed under, the server refuses its\ncreate for good; if this device holds a newer epoch, the asset is re-sealed at it\n(`Workspace::reseal_create`) and pushed again, once. A second refusal fails the push.\nWhen this device holds no newer epoch the push fails with [`FfiError::Upload`] carrying\nthe server's code and a detail saying there is no newer epoch to re-seal at, and the\nasset stays local. That detail names no missing key: the refusal may have had nothing to\ndo with the epoch (a revoked device, withdrawn write access), or another device rotated\nthe album and its key has not reached this one yet.\n\nTo push several assets, use [`push_assets`](Self::push_assets): one call here is one\nbundle on the server's lane, so the lane never holds more than one session open.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "pushAssets",
+              "signature": "suspend fun pushAssets(workspace: FfiWorkspace, assetIds: List<kotlin.String>): List<FfiPushAssetResult>",
+              "doc": "**Push** several sealed assets of `workspace` in one call, returning one\n[`FfiPushAssetResult`] per id, in the order of `asset_ids`.\n\nEvery asset is pushed exactly as [`push_asset`](Self::push_asset) pushes one — its\noriginal streamed in bounded windows, the tiers the reported path holds back counted in\n[`FfiPushReport::deferred`], and a create the server refused re-sealed and retried once —\nbut the assets share one run of the server's lane: up to W of them have their sessions\nopen at once, every range any of them sends reserves against one device-wide byte\nbudget, and their retries spend from one lane budget. Calling `push_asset` concurrently\ninstead gives each call its own budget, so the budgets add up rather than being shared.\n\nThe ids are pushed in batches of a bounded size, so a list of any length holds only one\nbatch's bundles in memory at a time. One asset's failure is its own\n([`FfiPushAssetResult::Failed`], carrying the error `push_asset` would have returned for\nit): the others still push, and the call itself never fails. An id repeated in\n`asset_ids` pushes once, at its first occurrence; each later occurrence is\n[`FfiPushAssetResult::Failed`] with [`FfiError::InvalidArgument`].\n\nThe adverse-link detector hears each batch's outcomes when that batch's run ends, so a\nlink that degrades mid-batch re-plans the push from the next batch on.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "setPath",
+              "signature": "fun setPath(snapshot: FfiPathSnapshot): kotlin.ULong",
+              "doc": "Report the path as the app's OS listeners see it now, and return its path generation.\n\nCall it whenever a listener fires. The generation advances only when reachability, the\ninterface or the cost changes; it then drops this session's pooled connections, forgets\nthe resets and stalls seen on the old path, and cancels — within one scheduling tick —\nany push work the new path forbids, which re-plans and resumes. Power, thermal and\nbackground-deadline changes re-plan without a new generation.",
               "members": []
             },
             {
@@ -2417,6 +3371,34 @@
               "name": "uploadStatus",
               "signature": "suspend fun uploadStatus(sessionId: kotlin.String): FfiUploadStatus?",
               "doc": "Query an upload session's progress (`HEAD /upload/{id}`). `None` means the\nsession is gone (discarded/expired/never-existent).",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "applyLifecycleOp",
+              "signature": "suspend fun applyLifecycleOp(apiBaseUrl: kotlin.String, workspace: FfiWorkspace, record: kotlin.ByteArray, serverHead: kotlin.ByteArray?): FfiLifecycleOpOutcome",
+              "doc": "Apply one signed lifecycle op `record` — a `delete` or a `trash-restore`, as the opaque\ncanonical CBOR [`FfiWorkspace::provenance_head`],\n[`FfiPurgeOutcome::reissue_record`](super::FfiPurgeOutcome::reissue_record) and\n[`FfiWorkspace::purged_record`] carry — to its album's ops surface on `api_base_url`\n(`http[s]://host:port`, the root `sync_pull` takes).\n\nThe record must be one `workspace` holds: its device signature verifies under the\nworkspace's device directory, and it is a record of the workspace's chain for its asset\n(live, trashed, or kept by a purge). The server cannot verify signatures, so a record\nthat is not this workspace's own is refused here rather than becoming the asset's chain\nhead there.\n\n`server_head` is the sync feed's evidence for the asset: the `manifest_cbor` of the\nlatest entry listing it (empty for an entry that carries none), or `None` when the feed\ndoes not list it. With `None` nothing is sent and the answer is\n[`FfiLifecycleOpOutcome::NotIndexed`]: the server never sees a lifecycle op for an asset\nit has not indexed.\n\nIdempotent: a record the server already applied answers `Applied` with `replayed` set.\nA refusal, or a server that could not be reached, is [`FfiLifecycleOpOutcome::Failed`];\na session the server did not accept is [`FfiError::Auth`].\n\n# Errors\n\n[`FfiError::InvalidArgument`] for bytes that are not a lifecycle op record (over the\nbound, not canonical, not a `delete` or `trash-restore`, not signed by a device of the\nworkspace's directory, or not on the workspace's chain for its asset) or an\n`api_base_url` that is not an http(s) URL, before anything is sent;\n[`FfiError::Auth`] for a refused session.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "deliverLifecycleAtHash",
+              "signature": "suspend fun deliverLifecycleAtHash(apiBaseUrl: kotlin.String, workspace: FfiWorkspace, assetId: kotlin.String, serverHeadHash: kotlin.ByteArray?, latestChangedAt: kotlin.String?): FfiLifecycleOpOutcome",
+              "doc": "Deliver the held lifecycle records of an asset `workspace` still holds, live or in the\ntrash: every record of its chain after the head the server holds, in chain order, each\nonce the one before it was applied. That is a `delete` or `trash-restore` signed while\nthe server had not indexed the asset, or whose send failed, together with any it chains\nonto that the server never saw. The rule is the CLI's and a purge's\n([`plan_delivery`]).\n\n`server_head_hash` is the feed's evidence for the asset, as\n[`deliver_purge_at_hash`](Self::deliver_purge_at_hash) takes it: `None`, an asset the\nfeed does not list, sends nothing and answers [`FfiLifecycleOpOutcome::NotIndexed`].\n\n`latest_changed_at` is the latest `changed_at` (RFC 3339) the caller's feed drain saw,\non the server's clock, or `None` when it saw none. It floors this device's clock\n([`judging_clock`]), and a stretch in which a `trash-restore` undoes a `delete` whose\nwindow had closed by that clock is withheld and answers\n[`FfiLifecycleOpOutcome::RestoreTooLate`]: sent, the server would apply the delete and\nrefuse the restore.\n\nEverything is read from the workspace's chain, so a delivery that failed or was held is\nretried by calling this again, also after the workspace was reopened. The workspace lock\nis held only while the chain is read, never across the network, and every record of\nthe stretch is judged as [`apply_lifecycle_op`](Self::apply_lifecycle_op) judges a\nforeign one before any is sent. A server level with the chain is sent its head alone,\nwhich it answers as a replay; a caller that compares the listed head with\n[`FfiWorkspace::provenance_head`] first sends nothing for it. The answer is the last\nrecord's `Applied`, or the first record that was not applied, whose `Failed` stops the\nstretch.\n\n# Errors\n\n[`FfiError::Trash`] with [`FfiTrashRefusal::NotFound`](super::FfiTrashRefusal::NotFound)\nfor an asset this workspace does not hold (a purged one goes through\n[`deliver_purge_at_hash`](Self::deliver_purge_at_hash)); [`FfiError::InvalidArgument`]\nfor a malformed `asset_id` or `api_base_url`, a `server_head_hash` that is neither empty\nnor 32 bytes, or a `latest_changed_at` that is not an RFC 3339 timestamp, before\nanything is sent; [`FfiError::Workspace`] for a chain whose records do not verify under\nthe workspace's device directory; [`FfiError::Auth`] for a refused session.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "deliverPurge",
+              "signature": "suspend fun deliverPurge(apiBaseUrl: kotlin.String, workspace: FfiWorkspace, assetId: kotlin.String, serverHead: kotlin.ByteArray?): FfiLifecycleOpOutcome",
+              "doc": "Deliver a purged asset's `delete` to its album's ops surface: every record of the chain\nthe purge kept after the head the server holds, in chain order, each once the one\nbefore it was applied. After an early purge that is the shorter-retention re-issue\n([`FfiPurgeOutcome::reissue_record`](super::FfiPurgeOutcome::reissue_record)) together\nwith any `delete` it chains onto that the server never saw.\n\nEverything is read from the workspace's kept chain, so a delivery that failed or was\nheld is retried by calling this again, also after the workspace was reopened\n([`FfiWorkspace::purged_asset_ids`] lists what to walk). The workspace lock is held only\nwhile the chain is read, never across the network. Every record of the stretch is\njudged as [`apply_lifecycle_op`](Self::apply_lifecycle_op) judges a foreign one before\nany is sent, so a kept chain whose records no longer verify sends nothing.\n\n`server_head` is as [`apply_lifecycle_op`](Self::apply_lifecycle_op) takes it: `None`\nsends nothing and answers [`FfiLifecycleOpOutcome::NotIndexed`]. The answer is the last\nrecord's `Applied` — the purge reached the server — or the first record that was not\napplied, whose `Failed` stops the stretch.\n\nThe held rules are a live asset's\n([`deliver_lifecycle_at_hash`](Self::deliver_lifecycle_at_hash)), judged by this\ndevice's clock: a kept chain whose stretch holds a `trash-restore` undoing a `delete` the server never saw, whose window has\nclosed, is withheld and answers [`FfiLifecycleOpOutcome::RestoreTooLate`].\n\n# Errors\n\n[`FfiError::Trash`] with [`FfiTrashRefusal::NotFound`](super::FfiTrashRefusal::NotFound)\nfor an asset this workspace has not purged; [`FfiError::InvalidArgument`] for a malformed\n`asset_id` or `api_base_url`; [`FfiError::Workspace`] for a kept chain whose records do\nnot verify under the workspace's device directory; [`FfiError::Auth`] for a refused\nsession.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "deliverPurgeAtHash",
+              "signature": "suspend fun deliverPurgeAtHash(apiBaseUrl: kotlin.String, workspace: FfiWorkspace, assetId: kotlin.String, serverHeadHash: kotlin.ByteArray?): FfiLifecycleOpOutcome",
+              "doc": "[`deliver_purge`](Self::deliver_purge) with the head the feed lists given by its record\nhash rather than its bytes: the SHA-256 of the latest entry's `manifest_cbor`, which is\nthe head record's hash, so a caller keeps 32 bytes per listed asset instead of the\nrecord. `Some` of an empty vector is an entry that carries no record, and `None` an asset\nthe feed does not list, exactly as `deliver_purge` reads its `server_head`.\n\n# Errors\n\nAs [`deliver_purge`](Self::deliver_purge), and [`FfiError::InvalidArgument`] for a\n`server_head_hash` that is neither empty nor 32 bytes, before anything is sent.",
               "members": []
             }
           ]
@@ -2460,7 +3442,7 @@
               "kind": "fun",
               "name": "createWithP256HardwareSigner",
               "signature": "@Throws(FfiException::class) fun createWithP256HardwareSigner(root: kotlin.String, passphrase: kotlin.ByteArray, tier: FfiDeviceTier, hardware: FfiHardwareSigner, keyAlias: kotlin.String, mlSeed: kotlin.ByteArray, client: FfiClientBuild): FfiWorkspace",
-              "doc": "**Enroll with a hardware-bound device key**: as [`create`](Self::create), but the\nclassical half of the device signing key is produced by `hardware` (a native Secure\nEnclave / StrongBox / TPM element) under `key_alias`, over **ECDSA-P256** — the\ncomposition shipping secure elements actually provide, none of which do Ed25519. The\npost-quantum ML-DSA-65 half is the software-sealed `ml_seed` (32 bytes).\n\nThe published device key carries the P-256 tag and `verify_asset` dispatches on it, so\nthis is constructor parity with `capsule-core`'s own\n`create_with_p256_hardware_signer` — the same core call, reached through this\nnamespace's [`FfiHardwareSigner`] seam.",
+              "doc": "**Enroll with a hardware-bound device key**: as [`create`](Self::create), but the\nclassical half of the device signing key is produced by `hardware` (a native Secure\nEnclave / StrongBox / TPM element) under `key_alias`, over **ECDSA-P256** — the\ncomposition shipping secure elements actually provide, none of which do Ed25519. The\npost-quantum ML-DSA-65 half is the software-sealed `ml_seed` (32 bytes).\n\nThe published device key carries the P-256 tag and `verify_asset` dispatches on it. The\nlibrary records the binding (the alias, `ml_seed` sealed under the account master key,\nand the published key), so every later launch reopens it with\n[`open_with_p256_hardware_signer`](Self::open_with_p256_hardware_signer) on the same\nkey; plain [`open`](Self::open) refuses such a library. An element that refuses\nenrollment fails this call before anything is written under `root`.",
               "members": []
             },
             {
@@ -2468,6 +3450,69 @@
               "name": "open",
               "signature": "@Throws(FfiException::class) fun open(root: kotlin.String, passphrase: kotlin.ByteArray, tier: FfiDeviceTier, client: FfiClientBuild): FfiWorkspace",
               "doc": "**Open** the existing library at `root` under `passphrase`, restoring its album keys and\nauthorities, every managed asset, and the `add_id` counter from disk. This is\nwhat makes an app relaunch resume rather than re-enroll.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "openWithP256HardwareSigner",
+              "signature": "@Throws(FfiException::class) fun openWithP256HardwareSigner(root: kotlin.String, passphrase: kotlin.ByteArray, tier: FfiDeviceTier, hardware: FfiHardwareSigner, keyAlias: kotlin.String, client: FfiClientBuild): FfiWorkspace",
+              "doc": "**Open** the existing library at `root` as [`open`](Self::open) does, re-attaching\n`hardware`, the element that holds this device's P-256 signing key. Required for a\nlibrary made by\n[`create_with_p256_hardware_signer`](Self::create_with_p256_hardware_signer): the element\nis asked for the key under the alias the library recorded, never to make a new one, and\nthe rebuilt key must be the one this device published. An element that lost the key or\nis unavailable fails the open with [`FfiError::Workspace`] rather than letting the\nlibrary sign with another key.\n\nThe library's record decides, not the caller: a library created with the software key\nopens on it and `hardware` is not used. `key_alias` is used only when `root` holds a\nlaid-out library with no account yet, whose fresh account is then enrolled under it.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "assetsByCull",
+              "signature": "fun assetsByCull(flag: FfiCullFlag): List<kotlin.String>",
+              "doc": "The managed, non-trashed assets currently carrying `flag`, sorted. `Neutral` includes\nthe never-flagged ones.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "cullFlag",
+              "signature": "fun cullFlag(assetId: kotlin.String): FfiCullFlag",
+              "doc": "The asset's current flag: `Neutral` when it was never flagged, and for an asset this\nworkspace does not hold.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "flagStack",
+              "signature": "fun flagStack(stackId: kotlin.String, flag: FfiCullFlag): List<kotlin.String>",
+              "doc": "Flag every non-trashed member of a stack, one `metadata-update` each — flagging a\ncollapsed stack flags its members, since a stack stores no flag of its own. Returns the\nmembers flagged, sorted; empty for a stack with no members.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "rejectSweep",
+              "signature": "fun rejectSweep(retainDays: kotlin.UInt): List<kotlin.String>",
+              "doc": "The reject sweep: move every rejected, not-yet-trashed asset to the trash with a\nretention window of `retain_days` days, and return the swept ids, sorted. Each is a\nsigned `delete`, restorable from the trash until its window closes. A refusal partway\nis [`FfiError::Trash`]; the assets swept before it stay in the trash, and a retried\nsweep moves the rest.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "setCull",
+              "signature": "fun setCull(assetId: kotlin.String, flag: FfiCullFlag)",
+              "doc": "Flag one asset. `Neutral` clears a prior flag. Signs one `metadata-update`, stamped with\nthis device and now, so concurrent flags from two devices converge under LWW.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "stackCullState",
+              "signature": "fun stackCullState(stackId: kotlin.String): FfiStackCullState?",
+              "doc": "A stack's cull state, derived from its members on this read. `None` for a stack with no\nnon-trashed members.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "stackMemberships",
+              "signature": "fun stackMemberships(): List<FfiStackMember>",
+              "doc": "Every managed, non-trashed asset that belongs to a stack, with its stack, whether it is\nthe cover and its member index, sorted by asset id. An asset in no stack is absent, so a\ncull pass reads it as a lone asset; a trashed member is absent too, matching the members\n[`flag_stack`](Self::flag_stack) writes.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "purgedAssetIds",
+              "signature": "fun purgedAssetIds(): List<kotlin.String>",
+              "doc": "Every asset this workspace has purged (UUID strings), whose kept chain\n[`purged_record`](Self::purged_record) reads: the list a relaunch walks to deliver the\npurges whose delivery failed or was held, with [`FfiSession::deliver_purge`]. A purge\nthe server already applied answers as a replay, so walking it again is safe.",
               "members": []
             },
             {
@@ -2488,21 +3533,28 @@
               "kind": "fun",
               "name": "albums",
               "signature": "fun albums(): List<FfiAlbum>",
-              "doc": "Every album this workspace holds key material for.",
+              "doc": "Every album this workspace holds key material for, in the one album order every app\nshows as is: the album with the most recent visible, untrashed asset first, an empty\nalbum by its creation time, ties by ascending id (`Workspace::albums`).",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "applyHeldSyncEntry",
+              "signature": "fun applyHeldSyncEntry(entry: FfiSyncHead): FfiSyncApplyOutcome",
+              "doc": "[`apply_sync_entry_from_file`](Self::apply_sync_entry_from_file) for an entry of an asset\nthis workspace **holds**, with no original fetched: the original is the one the held\nchain's head commits to, which this workspace verified when it adopted or imported it.\n\nThis is how a `delete` on an album page — which names no metadata blob and no blob — is\napplied to an asset held here: the delete binds no metadata blob and commits to the\noriginal the asset already has, so the same chokepoint and adoption as the apply verb\nverify it against the entry's `local_chain_head`, and the asset moves to this device's\ntrash. A record committing to another original than the held one is quarantined as\n`Rejected.CiphertextHashMismatch`, and one that binds a metadata blob the entry does not\ncarry is refused by the binding check: neither is adopted.\n\n# Errors\n\n[`FfiError::InvalidArgument`] for a malformed `album_id` or `local_chain_head`;\n[`FfiError::Workspace`] when the record names an asset this workspace does not hold, or\nthe workspace itself fails. A record that does not decode is a quarantined verdict, as the\napply verb answers one.",
               "members": []
             },
             {
               "kind": "fun",
               "name": "applySyncEntry",
               "signature": "fun applySyncEntry(entry: FfiSyncEntry): FfiSyncApplyOutcome",
-              "doc": "**Sync-apply**: verify one remote feed entry through the `verify_asset` chokepoint,\nbind and decrypt its metadata blob, and return either the facts to upsert or a named\nquarantine/hold verdict.\n\nNever silently drops and never silently accepts: a refused entry is a\n[`FfiSyncApplyOutcome::Quarantined`] the app must surface, not an error that aborts the\npage. Errors are reserved for a failure of this workspace itself.",
+              "doc": "**Sync-apply**: verify one remote feed entry through the `verify_asset` chokepoint,\nbind and decrypt its metadata blob, and return either the facts to upsert or a named\nquarantine/hold verdict.\n\nNever silently drops and never silently accepts: a refused entry is a\n[`FfiSyncApplyOutcome::Quarantined`] the app must surface, not an error that aborts the\npage. Errors are reserved for a failure of this workspace itself.\n\nAn applied record that chains onto an asset this workspace holds is **adopted**: appended\nto the asset's chain with the metadata it binds, written and indexed, and the facts say\nso ([`FfiAssetFacts::adopted`]). A `create` is adopted only by\n[`open_synced_original`](Self::open_synced_original), which has its original.",
               "members": []
             },
             {
               "kind": "fun",
               "name": "applySyncEntryFromFile",
               "signature": "fun applySyncEntryFromFile(entry: FfiSyncHead, ciphertextPath: kotlin.String): FfiSyncApplyOutcome",
-              "doc": "[`apply_sync_entry`](Self::apply_sync_entry) for an entry whose original ciphertext is\nthe file at `ciphertext_path` — the one\n[`FfiSession::fetch_blob_to_path`](crate::ffi::FfiSession::fetch_blob_to_path) wrote —\nread in memory bounded by one STREAM chunk whatever the original's size.\n\nThe same chokepoint and verdicts: the file is hashed, and that digest is what the\ncontent-integrity step checks against the manifest's content address, so a file that is\nnot the committed ciphertext is quarantined as `Rejected.CiphertextHashMismatch`, as\n`apply_sync_entry` quarantines those bytes. Nothing is written anywhere.\n\nA malformed `album_id` or `local_chain_head` is refused before the file is opened, so a\nbad argument never costs a read of the original. The file is hashed before the workspace\nis locked, so other verbs are not held up while a large original is read.",
+              "doc": "[`apply_sync_entry`](Self::apply_sync_entry) for an entry whose original ciphertext is\nthe file at `ciphertext_path` — the one\n[`FfiSession::fetch_blob_to_path`](crate::ffi::FfiSession::fetch_blob_to_path) wrote —\nread in memory bounded by one STREAM chunk whatever the original's size.\n\nThe same chokepoint and verdicts: the file is hashed, and that digest is what the\ncontent-integrity step checks against the manifest's content address, so a file that is\nnot the committed ciphertext is quarantined as `Rejected.CiphertextHashMismatch`, as\n`apply_sync_entry` quarantines those bytes. The ciphertext file is only read.\n\nAn applied record is adopted as [`apply_sync_entry`](Self::apply_sync_entry) adopts one:\na `delete`, `trash-restore` or edit of an asset this workspace holds is appended to its\nchain, written under `media/` and indexed, and the facts say so\n([`FfiAssetFacts::adopted`]).\n\nA malformed `album_id` or `local_chain_head` is refused before the file is opened, so a\nbad argument never costs a read of the original. The file is hashed before the workspace\nis locked, so other verbs are not held up while a large original is read.",
               "members": []
             },
             {
@@ -2524,6 +3576,13 @@
               "name": "defaultAlbumId",
               "signature": "fun defaultAlbumId(): kotlin.String",
               "doc": "The default album's id, derived deterministically from the account master key — so every\ndevice of this account computes the same value with nothing to synchronize.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "deleteAsset",
+              "signature": "fun deleteAsset(assetId: kotlin.String, retainDays: kotlin.UInt): FfiTrashEntry",
+              "doc": "Move an asset to the trash: sign a `delete` whose retention window is `retain_days` days\nfrom now, and return its trash entry. An asset already in the trash keeps the window it\nwas deleted with and signs nothing, so a retried delete never extends it.",
               "members": []
             },
             {
@@ -2556,6 +3615,13 @@
             },
             {
               "kind": "fun",
+              "name": "expiredTrash",
+              "signature": "fun expiredTrash(drain: FfiFeedDrain?): List<FfiTrashEntry>",
+              "doc": "The trash entries whose signed retention window has closed: the retention sweep's\ninput, each one ready for [`purge_asset`](Self::purge_asset).\n\nA deadline is judged only after a sync drained the feed to its head, so a restore on a\nlater page lands first: pass that drain as `drain`, its `server_heads` covering the whole\nfeed as [`FfiFeedDrain::server_heads`] requires. The deadline is judged by the\ndrain's latest server `changed_at` alone, never by this device's clock, and an asset\nwhose `delete` the server has not indexed (a held delete) never expires. With no drain\n(`None`: the sync failed, or this device has no server), or a drain that saw no entry,\nnothing has expired, and the trash keeps every asset until the user empties it.\n\n# Errors\n\n[`FfiError::InvalidArgument`] for a `latest_changed_at` that is not RFC 3339.",
+              "members": []
+            },
+            {
+              "kind": "fun",
               "name": "labels",
               "signature": "fun labels(target: FfiLabelTarget): List<kotlin.String>",
               "doc": "The labels `target` carries, sorted. An unknown target is [`FfiError::Label`] with\n[`FfiLabelRefusal::NotFound`].",
@@ -2563,9 +3629,16 @@
             },
             {
               "kind": "fun",
+              "name": "openSyncedHistory",
+              "signature": "fun openSyncedHistory(entry: FfiSyncHead, history: List<kotlin.ByteArray>, ciphertextPath: kotlin.String, destinationPath: kotlin.String): FfiOpenedOriginal",
+              "doc": "[`open_synced_original`](Self::open_synced_original) for an asset this workspace does not\nhold and first sees **past its create**, with `history` the records before the entry's,\noldest first from the create — what\n[`FfiSession::fetch_provenance_history`](crate::ffi::FfiSession::fetch_provenance_history)\nreturns for the entry's `manifest_cbor`.\n\nThe entry is applied against the last record of `history`, whatever its\n`local_chain_head` says, and its original opened from `ciphertext_path` as\n`open_synced_original` opens one. Then every record of `history` is verified through\nthe chokepoint in order from the create, the sidecar is opened from the entry's\n`metadata_blob` (the asset's live one, which the server's metadata role names: a\nsuperseded metadata blob is collected), and the asset is **adopted**, held from its\ncreate with the opened original as its library copy. The facts say whether it was\n([`FfiAssetFacts::adopted`]); a held asset's `delete`, `trash-restore` or edit then works\non this device as on one it imported.\n\nAn entry that names no metadata blob or original — a `delete` on an album page, the\nsurface a writer member's device reads — is opened the same way once they are fetched:\n[`synced_history_sources`](crate::ffi::synced_history_sources) names both from the entry\nand `history`, the fetched metadata blob goes in the entry's `metadata_blob`, and the\nfetched original is `ciphertext_path`. Left empty, the `metadata_blob` binds to nothing\nand the entry is refused.\n\nA history that does not verify, or a live metadata blob that does not bind, is\n[`FfiOpenedOriginal::Refused`] with the verdict that refused it, and\n`destination_path` is untouched: the original is placed there only once the asset it\nbelongs to verifies from its create. An empty `history` is `open_synced_original`, and so\nis an entry of an asset this workspace already holds: its history is not read, so none of\nits records can refuse the entry, and the entry is applied against its own\n`local_chain_head`.\n\n# Errors\n\nAs [`open_synced_original`](Self::open_synced_original); an adoption whose write failed\nleaves nothing at `destination_path`.",
+              "members": []
+            },
+            {
+              "kind": "fun",
               "name": "openSyncedOriginal",
               "signature": "fun openSyncedOriginal(entry: FfiSyncHead, ciphertextPath: kotlin.String, destinationPath: kotlin.String): FfiOpenedOriginal",
-              "doc": "**Open a synced original** from the ciphertext file at `ciphertext_path` to its plaintext\nat `destination_path`, in memory bounded by a few STREAM chunks whatever its size.\n\nThe entry goes through the chokepoint as\n[`apply_sync_entry_from_file`](Self::apply_sync_entry_from_file) would take it, then the\nfile is hashed while it is decrypted: it opens only if it is the ciphertext the manifest\ncommits to, every chunk authenticates, and the plaintext hashes to the signed sidecar's\ndigest. The plaintext is written to a hidden staging file beside the destination and\nrenamed into place only once all of that holds, so `destination_path` is untouched by\nany other verdict and never holds a partial or unverified original. An existing file there\nis replaced only by a verified one.\n\nThe workspace stays locked while the original decrypts.\n\n# Errors\n\n[`FfiError::Workspace`] when a file cannot be read or written, or the workspace itself\nfails; [`FfiError::InvalidArgument`] for a malformed entry or a destination with no file\nname. A refused entry is a verdict, never an error.",
+              "doc": "**Open a synced original** from the ciphertext file at `ciphertext_path` to its plaintext\nat `destination_path`, in memory bounded by a few STREAM chunks whatever its size.\n\nThe entry goes through the chokepoint as\n[`apply_sync_entry_from_file`](Self::apply_sync_entry_from_file) would take it, then the\nfile is hashed while it is decrypted: it opens only if it is the ciphertext the manifest\ncommits to, every chunk authenticates, and the plaintext hashes to the signed sidecar's\ndigest. The plaintext is written to a hidden staging file beside the destination and\nrenamed into place only once all of that holds, so `destination_path` is untouched by\nany other verdict and never holds a partial or unverified original. An existing file there\nis replaced only by a verified one.\n\nAn opened entry is then **adopted**: a `create` of an asset this workspace does not hold\nmakes it held, with its chain, sidecar and sealed metadata written under `media/`, the\nopened original copied there as its own library copy, and its row and user\ntags indexed; a later record of a held asset is appended as\n[`apply_sync_entry_from_file`](Self::apply_sync_entry_from_file) appends one. The facts\nsay whether it was ([`FfiAssetFacts::adopted`]). `destination_path` still holds the\nplaintext either way, for the caller to keep or remove.\n\nThe workspace stays locked while the original decrypts and is adopted.\n\n# Errors\n\n[`FfiError::Workspace`] when a file cannot be read or written, or the workspace itself\nfails (an adoption whose write failed included, after the original was placed at\n`destination_path`); [`FfiError::InvalidArgument`] for a malformed entry or a destination\nwith no file name. A refused entry is a verdict, never an error.",
               "members": []
             },
             {
@@ -2573,6 +3646,20 @@
               "name": "provenanceHead",
               "signature": "fun provenanceHead(assetId: kotlin.String): kotlin.ByteArray",
               "doc": "The asset's **head provenance record** as opaque canonical CBOR — the exact bytes the\n`provenance` blob carries, the feed serves back as `manifest_cbor`, and a receiving\ndevice runs through [`apply_sync_entry`](Self::apply_sync_entry).\n\nThe record wraps the head signed manifest with its chain position. That wrapper is not\noptional: the server's chain head is the SHA-256 of these bytes while a client's next\n`prior_provenance_hash` is the record's own hash, so the bare manifest is the one\nencoding under which no lifecycle op can ever chain. Canonical CBOR is deterministic, so\nthe manifest inside is byte-identical to its own signed bytes — nothing is re-authored\nand the two signatures still verify over exactly what they covered.\n\nUse [`signed_manifest`](Self::signed_manifest) when the *manifest* is what is wanted.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "purgeAsset",
+              "signature": "fun purgeAsset(assetId: kotlin.String): FfiPurgeOutcome",
+              "doc": "Permanently delete a trashed asset: its original, every derivative and local cache\nentry, its sidecar and its index row. The provenance chain is kept as the record of the\ndeletion. Before `retention_until` a signed shorter-retention `delete` is appended first\nand handed back in [`FfiPurgeOutcome::reissue_record`] to send to the server.",
+              "members": []
+            },
+            {
+              "kind": "fun",
+              "name": "purgedRecord",
+              "signature": "fun purgedRecord(assetId: kotlin.String): kotlin.ByteArray?",
+              "doc": "The signed `delete` that ended a purged asset, the head of its kept provenance chain, as\nthe opaque canonical CBOR record [`FfiPurgeOutcome::reissue_record`] carries. After an\nearly purge it is that same re-issue, so a delivery to the album's ops surface that\nfailed can be resent from here, also after a reopen\n([`FfiSession::apply_lifecycle_op`](super::FfiSession::apply_lifecycle_op), or\n[`FfiSession::deliver_purge`](super::FfiSession::deliver_purge) for the whole stretch).\n`None` for an asset this workspace has not purged.",
               "members": []
             },
             {
@@ -2598,6 +3685,13 @@
             },
             {
               "kind": "fun",
+              "name": "restoreAsset",
+              "signature": "fun restoreAsset(assetId: kotlin.String)",
+              "doc": "Restore an asset from the trash: sign a `trash-restore`. Refused with\n[`FfiTrashRefusal::RetentionElapsed`] (and the `error.upload.retention_elapsed` code) at\nor after the signed `retention_until`, and with [`FfiTrashRefusal::NotInTrash`] for an\nasset that is not in the trash.",
+              "members": []
+            },
+            {
+              "kind": "fun",
               "name": "sealAsset",
               "signature": "fun sealAsset(albumId: kotlin.String, fileName: kotlin.String, bytes: kotlin.ByteArray): kotlin.String",
               "doc": "**Seal + import**: take bytes the app already holds (a PhotoKit / MediaStore export),\nderive the file key, STREAM-encrypt, author and sign the create manifest, seal the\nsigned sidecar into its metadata blob, append the provenance chain, and self-verify\nthrough the `verify_asset` chokepoint. Returns the asset id.\n\n`file_name` is consulted for its extension and nothing else. One call, one core call:\nthe whole sealing order is `capsule-core`'s.",
@@ -2619,9 +3713,16 @@
             },
             {
               "kind": "fun",
+              "name": "trash",
+              "signature": "fun trash(): List<FfiTrashEntry>",
+              "doc": "Every asset in the trash with its signed retention window, most recently deleted first.\n\nThis is the retention data, not the Recently Deleted *view*: a surface that shows the\ntrash still opens it behind the SR1 fresh-local-auth gate, as `Catalog::query_trash`\ndoes.",
+              "members": []
+            },
+            {
+              "kind": "fun",
               "name": "uploadBlobs",
               "signature": "fun uploadBlobs(assetId: kotlin.String): List<FfiUploadBlob>",
-              "doc": "Everything needed to push one sealed asset, in ladder order: for each blob, the\n`POST /upload` body (manifest envelope projected per the server's invariant-15 rule)\nand the bytes. Feed each straight to\n[`FfiSession::upload`](crate::ffi::FfiSession::upload).\n\nThe index tier (`T0`) is **two** blobs — the provenance record then the sealed metadata\nblob — because the server publishes an asset to other devices only once it holds both\nroles. Push all of them: an app that stopped after the metadata blob would upload an\nasset no device, its own included, could ever see.\n\nThe original's ciphertext is re-derived from the manifest's recorded nonce prefix and\ngated on the manifest's own content address, so what reaches the network is what the\nsigned manifest vouches for.\n\nEvery blob comes back whole, the original included. To push without holding the\noriginal in memory, use [`FfiSession::push_asset`](crate::ffi::FfiSession::push_asset).",
+              "doc": "Everything needed to push one sealed asset, in ladder order: for each blob, the\n`POST /upload` body (manifest envelope projected per the server's invariant-15 rule)\nand the bytes. Feed each straight to\n[`FfiSession::upload`](crate::ffi::FfiSession::upload).\n\nThe index tier (`T0`) is **two** blobs — the provenance record then the sealed metadata\nblob — because the server publishes an asset to other devices only once it holds both\nroles. Push all of them: an app that stopped after the metadata blob would upload an\nasset no device, its own included, could ever see.\n\nThe original's ciphertext is re-derived from the manifest's recorded nonce prefix and\ngated on the manifest's own content address, so what reaches the network is what the\nsigned manifest vouches for.\n\nEvery blob comes back whole, the original included. To push without holding the\noriginal in memory, use [`FfiSession::push_asset`](crate::ffi::FfiSession::push_asset).\n\nBuilding the bundle records the original's upload source guard; once every blob is\nmaterialised nothing re-derives the original from this bundle again, so the guard is\nreleased before the blobs are returned. A later call re-verifies the plaintext against\nthe signed content address and records it afresh.",
               "members": []
             },
             {
@@ -2786,6 +3887,13 @@
               "name": "metadata",
               "signature": "var metadata: FfiAssetMetadata?",
               "doc": "The decrypted, signature-checked metadata.\n\n`None` exactly when the action mints no metadata blob — a `delete` tombstone or a\n`trash-restore`. Those are fully-verified entries that simply carry no metadata, so an\napp applies the lifecycle change and leaves the row's metadata as it stands.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "adopted",
+              "signature": "var adopted: kotlin.Boolean = false",
+              "doc": "Whether this workspace now holds the asset at this entry's record: it adopted the\nentry, writing the asset's chain, sidecar, sealed metadata and original under `media/`\nand its index row and user tags into the library catalog, so the trash verbs and tag\nedits work on it. When `true` the catalog already describes the asset and an app writes\nnothing of its own for it; when `false` (an asset first seen past its create, a fork, or\na verb that applies without adopting) the facts are the app's to upsert. An asset first\nseen past its create is adopted from its earlier records:\n[`FfiSession::fetch_provenance_history`](crate::ffi::FfiSession::fetch_provenance_history),\nthen [`FfiWorkspace::open_synced_history`].",
               "members": []
             }
           ]
@@ -2972,6 +4080,42 @@
         },
         {
           "kind": "data class",
+          "name": "FfiEmbeddedPreview",
+          "signature": "data class FfiEmbeddedPreview",
+          "doc": "A RAW original's embedded JPEG, as [`embedded_preview`] reads it.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "jpeg",
+              "signature": "var jpeg: kotlin.ByteArray",
+              "doc": "The JPEG exactly as the RAW file carries it.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "width",
+              "signature": "var width: kotlin.UInt",
+              "doc": "Upright width in pixels, once `orientation` is applied.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "height",
+              "signature": "var height: kotlin.UInt",
+              "doc": "Upright height in pixels.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "orientation",
+              "signature": "var orientation: kotlin.UShort",
+              "doc": "The EXIF orientation (1..=8) to apply to `jpeg`'s stored pixels, in place of any tag the\nJPEG itself carries.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
           "name": "FfiEscrowStored",
           "signature": "data class FfiEscrowStored",
           "doc": "FFI mirror of [`EscrowStored`] — what [`FfiSession::escrow_put`] did.",
@@ -2988,6 +4132,28 @@
               "name": "replaced",
               "signature": "var replaced: kotlin.Boolean",
               "doc": "Whether this displaced an earlier escrow: `false` is a first enrollment (recovery set\nup), `true` a replacement (the previous recovery secret has stopped working).",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiFeedDrain",
+          "signature": "data class FfiFeedDrain",
+          "doc": "A sync that drained the feed to its head, the evidence [`FfiWorkspace::expired_trash`]\nneeds before it judges a retention deadline.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "latestChangedAt",
+              "signature": "var latestChangedAt: kotlin.String?",
+              "doc": "The latest server `changed_at` the drain saw (RFC 3339), or `None` for a drain that saw\nno entry. Deadlines are judged at it alone, never by this device's clock, so with\n`None` nothing has expired.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "serverHeads",
+              "signature": "var serverHeads: Map<kotlin.String, kotlin.ByteArray>",
+              "doc": "Every asset the server's feed lists, keyed by its id as the feed names it, with the\n`manifest_cbor` of its latest entry (empty for an entry that carries no record). An\nasset whose latest `delete` is not that head or before it is a held delete, which\nnever expires. Ids that are not UUIDs name no asset of this workspace and are ignored.\n\nThe map must cover the whole feed: a drain from the feed's start (no cursor), or the\nheads this app kept, entry by entry, across every cursored drain since one. A drain\nresumed from a cursor lists only the assets that changed after it, so passing it alone\nleaves out every asset whose `delete` an earlier sync indexed: each is judged held and\nnever expires, and the trash grows until the user empties it. That loses nothing, but\nthe sweep stops working.",
               "members": []
             }
           ]
@@ -3044,14 +4210,14 @@
               "kind": "field",
               "name": "metadataBlob",
               "signature": "var metadataBlob: kotlin.ByteArray",
-              "doc": "The encrypted metadata blob's content address, as UTF-8 bytes; empty for deletes.",
+              "doc": "The encrypted metadata blob's content address, as UTF-8 bytes. On a delete in trash, the\nasset's live metadata blob, which a restore needs; empty for a purged delete.",
               "members": []
             },
             {
               "kind": "field",
               "name": "blobs",
               "signature": "var blobs: FfiBlobManifest",
-              "doc": "Content addresses of the asset's blobs by role.",
+              "doc": "Content addresses of the asset's blobs by role. On a delete in trash, only its original;\nnone for a purged delete.",
               "members": []
             },
             {
@@ -3066,6 +4232,57 @@
               "name": "changedAt",
               "signature": "var changedAt: kotlin.String",
               "doc": "When the change happened, RFC 3339, on the server's clock.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiHistorySources",
+          "signature": "data class FfiHistorySources",
+          "doc": "FFI mirror of [`HistorySources`](crate::sync::HistorySources): the blobs adopting an asset\nfrom its fetched history needs beyond its records.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "metadataBlobHash",
+              "signature": "var metadataBlobHash: kotlin.String",
+              "doc": "The asset's live metadata blob's content address (lowercase hex), for\n[`FfiSession::fetch_metadata_blob`]; its bytes are the [`FfiSyncHead::metadata_blob`]\n[`FfiWorkspace::open_synced_history`] takes.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "original",
+              "signature": "var original: FfiBlobRef",
+              "doc": "The original the head commits to, role `original`, sized for\n[`FfiSession::fetch_blob_to_path`]; that file is the `ciphertext_path`\n[`FfiWorkspace::open_synced_history`] takes.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiLocalHoldings",
+          "signature": "data class FfiLocalHoldings",
+          "doc": "What this device holds for the asset. **Flat**, like `FfiNotifyInput`: an embedded preview\nis present when both of its dimensions are.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "held",
+              "signature": "var held: List<FfiRepresentation>",
+              "doc": "The encoded tiers and the original held locally; the LQIP is implied.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "embeddedPreviewWidth",
+              "signature": "var embeddedPreviewWidth: kotlin.UInt?",
+              "doc": "The embedded preview's upright width, from [`embedded_preview`].",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "embeddedPreviewHeight",
+              "signature": "var embeddedPreviewHeight: kotlin.UInt?",
+              "doc": "The embedded preview's upright height.",
               "members": []
             }
           ]
@@ -3298,6 +4515,78 @@
         },
         {
           "kind": "data class",
+          "name": "FfiPathSnapshot",
+          "signature": "data class FfiPathSnapshot",
+          "doc": "One sample of the path as the app's OS listeners report it.\n\nFlat, like [`FfiNotifyInput`](crate::ffi::FfiNotifyInput): `background_deadline_ms` present\nmeans the app runs in a background task the OS ends that many milliseconds from now; absent\nmeans the foreground.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "cost",
+              "signature": "var cost: FfiPathCost",
+              "doc": "What the path costs.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "reachable",
+              "signature": "var reachable: kotlin.Boolean",
+              "doc": "Whether the OS reports a usable path.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "interface",
+              "signature": "var interface: FfiPathInterface",
+              "doc": "The interface the path runs over.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "power",
+              "signature": "var power: FfiPowerState",
+              "doc": "The device's power source.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "thermal",
+              "signature": "var thermal: FfiThermalState",
+              "doc": "The device's thermal state.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "backgroundDeadlineMs",
+              "signature": "var backgroundDeadlineMs: kotlin.ULong?",
+              "doc": "Milliseconds before the OS ends the background task the app runs in; `None` in the\nforeground.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiPurgeOutcome",
+          "signature": "data class FfiPurgeOutcome",
+          "doc": "What a [`FfiWorkspace::purge_asset`] did.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "assetId",
+              "signature": "var assetId: kotlin.String",
+              "doc": "The purged asset (UUID string).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "reissueRecord",
+              "signature": "var reissueRecord: kotlin.ByteArray?",
+              "doc": "The signed shorter-retention `delete` an early purge appended, as the opaque canonical\nCBOR provenance record [`FfiWorkspace::provenance_head`] would have returned. It goes to\nthe album's ops surface so the server may purge too, through\n[`FfiSession::deliver_purge`](super::FfiSession::deliver_purge), which sends it with any\n`delete` it chains onto that the server never saw; when that delivery fails,\n[`FfiWorkspace::purged_record`] hands the same record back from the kept chain. `None`\nwhen the window had closed.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
           "name": "FfiPushReport",
           "signature": "data class FfiPushReport",
           "doc": "What [`FfiSession::push_asset`] did — FFI mirror of [`AssetPushReport`].",
@@ -3321,6 +4610,13 @@
               "name": "bytes",
               "signature": "var bytes: kotlin.ULong",
               "doc": "Total bytes handed to the upload client, the original included.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "deferred",
+              "signature": "var deferred: kotlin.UInt",
+              "doc": "Blobs the reported path held back ([`FfiSession::set_path`]): push the asset again once\nthe path allows them. Zero when the whole ladder ran.",
               "members": []
             }
           ]
@@ -3379,6 +4675,122 @@
               "name": "labels",
               "signature": "var labels: List<kotlin.String>",
               "doc": "The region's labels, sorted.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiRenderRequest",
+          "signature": "data class FfiRenderRequest",
+          "doc": "A surface's request: its intent and its size in device pixels when the view opened.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "intent",
+              "signature": "var intent: FfiRepresentation",
+              "doc": "The rung the surface's intent needs: `Thumbnail` for the grid, `Preview` for the\nsingle-asset view, `Original` for a full-fidelity view.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "surfaceWidth",
+              "signature": "var surfaceWidth: kotlin.UInt",
+              "doc": "The surface's width when the view opened. A view that grows keeps passing this.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "surfaceHeight",
+              "signature": "var surfaceHeight: kotlin.UInt",
+              "doc": "The surface's height when the view opened.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiRenderStep",
+          "signature": "data class FfiRenderStep",
+          "doc": "The answer to one [`render_step`].",
+          "members": [
+            {
+              "kind": "field",
+              "name": "show",
+              "signature": "var show: FfiRendition",
+              "doc": "What to show now.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "changed",
+              "signature": "var changed: kotlin.Boolean",
+              "doc": "Whether `show` differs from the `shown` passed in.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "next",
+              "signature": "var next: FfiNextStep?",
+              "doc": "What to obtain next, or `None` when the intent is met or nothing can raise it.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiRendition",
+          "signature": "data class FfiRendition",
+          "doc": "What a surface shows: a rung and its source. The caller keeps the last one and passes it\nback as `shown`.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "rung",
+              "signature": "var rung: FfiRepresentation",
+              "doc": "The rung shown.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "source",
+              "signature": "var source: FfiRungSource",
+              "doc": "What fills it.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiStackMember",
+          "signature": "data class FfiStackMember",
+          "doc": "Where one live asset sits in its stack, read from its signed `stack_membership` register.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "assetId",
+              "signature": "var assetId: kotlin.String",
+              "doc": "The asset (UUID string).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "stackId",
+              "signature": "var stackId: kotlin.String",
+              "doc": "The stack it belongs to (UUID string).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "isCover",
+              "signature": "var isCover: kotlin.Boolean",
+              "doc": "Whether it is the stack's cover: its `primary` member, the \"best photo\".",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "memberIndex",
+              "signature": "var memberIndex: kotlin.UInt?",
+              "doc": "Its position within the stack (burst sequence, chapter index), when one was recorded.",
               "members": []
             }
           ]
@@ -3509,6 +4921,42 @@
               "name": "hasMore",
               "signature": "var hasMore: kotlin.Boolean",
               "doc": "Whether the server holds changes beyond this page.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "data class",
+          "name": "FfiTrashEntry",
+          "signature": "data class FfiTrashEntry",
+          "doc": "One asset in the trash, as its latest signed `delete` record describes it.",
+          "members": [
+            {
+              "kind": "field",
+              "name": "assetId",
+              "signature": "var assetId: kotlin.String",
+              "doc": "The trashed asset (UUID string).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "deletedAt",
+              "signature": "var deletedAt: kotlin.String",
+              "doc": "When the `delete` was signed (RFC 3339, UTC).",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "retentionUntil",
+              "signature": "var retentionUntil: kotlin.String?",
+              "doc": "The signed retention floor (RFC 3339, UTC): a restore is refused at or after it. `None`\nfor a `delete` that carries no readable window, which never expires.",
+              "members": []
+            },
+            {
+              "kind": "field",
+              "name": "restorable",
+              "signature": "var restorable: kotlin.Boolean",
+              "doc": "Whether a restore is accepted now, by this device's clock. Computed by the workspace so\nno app re-implements the window; the server judges the same floor by its own clock.",
               "members": []
             }
           ]
@@ -3809,6 +5257,35 @@
         },
         {
           "kind": "enum class",
+          "name": "FfiCullFlag",
+          "signature": "enum class FfiCullFlag",
+          "doc": "The trinary culling flag, mirrored from core's `CullFlag`. `Neutral` is the never-flagged\nstate and what an unwritten register reads as.",
+          "members": [
+            {
+              "kind": "entry",
+              "name": "PICK",
+              "signature": "PICK,",
+              "doc": "A keeper.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "NEUTRAL",
+              "signature": "NEUTRAL,",
+              "doc": "Not yet culled either way.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "REJECT",
+              "signature": "REJECT;",
+              "doc": "Marked for rejection: a candidate for the reject sweep.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum class",
           "name": "FfiDeviceTier",
           "signature": "enum class FfiDeviceTier",
           "doc": "Device hardware tier, selecting the Argon2id cost at wrap time. Mirrors core's `DeviceTier`\nin this namespace (see the module docs on why it is not shared).",
@@ -3879,6 +5356,13 @@
             },
             {
               "kind": "variant",
+              "name": "Trash",
+              "signature": "class Trash",
+              "doc": "A trash verb (delete, restore, purge) was refused before anything was written: the asset\nis unknown, not in the trash, or past its signed retention window. `refusal` says which.",
+              "members": []
+            },
+            {
+              "kind": "variant",
               "name": "Escrow",
               "signature": "class Escrow",
               "doc": "A master-key escrow flow (store/fetch) failed.",
@@ -3910,41 +5394,41 @@
         {
           "kind": "sealed class",
           "name": "FfiHardwareSignerException",
-          "signature": "sealed class FfiHardwareSignerException(message: String): kotlin.Exception(message)",
-          "doc": "Failure surfaced by a foreign [`FfiHardwareSigner`]. Mirrors `capsule-core`'s\n`HardwareSignerError` variant for variant — it is the same contract, declared in the\n`capsule_sdk` namespace because core's own type carries no uniffi derive.",
+          "signature": "sealed class FfiHardwareSignerException: kotlin.Exception()",
+          "doc": "Failure surfaced by a foreign [`FfiHardwareSigner`]. Mirrors `capsule-core`'s\n`HardwareSignerError` variant for variant — it is the same contract, declared in the\n`capsule_sdk` namespace because core's own type carries no uniffi derive.\n\nThe error is **thrown by foreign code** — it is the declared error of the\n[`FfiHardwareSigner`] and [`FfiHardwareKeyAgreement`] foreign traits — so Rust must *lift*\nit, and uniffi lifts only a non-flat error. Every variant therefore carries a named\n`detail` field (the element's own English diagnostic), which also gives the Kotlin\nexceptions and Swift cases the same `(detail)` shape. Core's error keeps `detail` only on\n[`Backend`](Self::Backend); for the other variants it is logged at the seam and dropped.",
           "members": [
             {
               "kind": "variant",
               "name": "AuthCancelled",
-              "signature": "class AuthCancelled(message: String) : FfiHardwareSignerException(message)",
+              "signature": "class AuthCancelled",
               "doc": "The user cancelled the biometric / the element refused authentication.",
               "members": []
             },
             {
               "kind": "variant",
               "name": "Unavailable",
-              "signature": "class Unavailable(message: String) : FfiHardwareSignerException(message)",
+              "signature": "class Unavailable",
               "doc": "No secure element is available on this device.",
               "members": []
             },
             {
               "kind": "variant",
               "name": "NotFound",
-              "signature": "class NotFound(message: String) : FfiHardwareSignerException(message)",
+              "signature": "class NotFound",
               "doc": "No key exists for the requested alias.",
               "members": []
             },
             {
               "kind": "variant",
               "name": "Exportable",
-              "signature": "class Exportable(message: String) : FfiHardwareSignerException(message)",
+              "signature": "class Exportable",
               "doc": "The private key was readable — non-exportability is violated (a failure).",
               "members": []
             },
             {
               "kind": "variant",
               "name": "Backend",
-              "signature": "class Backend(message: String) : FfiHardwareSignerException(message)",
+              "signature": "class Backend",
               "doc": "Any other backend error.",
               "members": []
             }
@@ -4031,6 +5515,42 @@
         },
         {
           "kind": "sealed class",
+          "name": "FfiLifecycleOpOutcome",
+          "signature": "sealed class FfiLifecycleOpOutcome",
+          "doc": "What became of one lifecycle op.",
+          "members": [
+            {
+              "kind": "variant",
+              "name": "Applied",
+              "signature": "data class Applied",
+              "doc": "The server applied the op, or had applied it already (`replayed`).",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "NotIndexed",
+              "signature": "object NotIndexed : FfiLifecycleOpOutcome()",
+              "doc": "Nothing was sent: the feed does not list the asset, so its create is not indexed on the\nserver, and the server never sees a `delete` for an asset it has not indexed. The record\nstays on the asset's chain; deliver it once a sync lists the asset.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "RestoreTooLate",
+              "signature": "data class RestoreTooLate",
+              "doc": "Nothing was sent: a `trash-restore` in the stretch undoes a `delete` the server has not\nseen, and that delete's window closed at `retention_until`. Sent, the server would apply\nthe delete, refuse the restore and purge an asset the user restored in time. Withheld\nfor good: the server keeps the asset live at the head it holds, the workspace keeps\nevery record, and nothing after the pair can be sent either, since the chain is\nhash-linked. A later delivery judges it the same way, so it never needs retrying.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Failed",
+              "signature": "data class Failed",
+              "doc": "The server refused the op, or could not be reached. `permanent` says whether sending\nthe same bytes again can only be refused again.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "sealed class",
           "name": "FfiLoginOutcome",
           "signature": "sealed class FfiLoginOutcome: Disposable",
           "doc": "What a password login answered with, across the FFI.\n\nAn enum rather than an optional session handle: \"signed in\" and \"needs a code\" are different\nstates an app renders differently, and a `null` handle beside a `mfaToken` string would let a\ncaller read one while acting on the other.",
@@ -4047,6 +5567,28 @@
               "name": "SecondFactorRequired",
               "signature": "data class SecondFactorRequired",
               "doc": "The password verified and a code is still needed.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "sealed class",
+          "name": "FfiNextStep",
+          "signature": "sealed class FfiNextStep",
+          "doc": "How to obtain the next rung.",
+          "members": [
+            {
+              "kind": "variant",
+              "name": "Fetch",
+              "signature": "data class Fetch",
+              "doc": "Fetch it from the server.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Generate",
+              "signature": "data class Generate",
+              "doc": "Produce it on the device from the original it holds.",
               "members": []
             }
           ]
@@ -4083,6 +5625,122 @@
               "name": "DigestMismatch",
               "signature": "data class DigestMismatch",
               "doc": "The ciphertext opened, but the plaintext does not hash to the signed sidecar's digest.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum class",
+          "name": "FfiPathCost",
+          "signature": "enum class FfiPathCost",
+          "doc": "FFI mirror of [`PathCost`].",
+          "members": [
+            {
+              "kind": "entry",
+              "name": "UNMETERED",
+              "signature": "UNMETERED,",
+              "doc": "Bulk transfer is acceptable.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "METERED",
+              "signature": "METERED,",
+              "doc": "The link is byte-counted (iOS `isExpensive`, Android without `NOT_METERED`).",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "CONSTRAINED",
+              "signature": "CONSTRAINED;",
+              "doc": "The OS data saver is on (iOS Low Data Mode, Android Data Saver).",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum class",
+          "name": "FfiPathInterface",
+          "signature": "enum class FfiPathInterface",
+          "doc": "FFI mirror of [`PathInterface`].",
+          "members": [
+            {
+              "kind": "entry",
+              "name": "WIRED",
+              "signature": "WIRED,",
+              "doc": "Ethernet or another wired link.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "WIFI",
+              "signature": "WIFI,",
+              "doc": "Wi-Fi.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "CELLULAR",
+              "signature": "CELLULAR,",
+              "doc": "A cellular radio.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "OTHER",
+              "signature": "OTHER;",
+              "doc": "Anything else, or unknown.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum class",
+          "name": "FfiPowerState",
+          "signature": "enum class FfiPowerState",
+          "doc": "FFI mirror of [`PowerState`].",
+          "members": [
+            {
+              "kind": "entry",
+              "name": "EXTERNAL",
+              "signature": "EXTERNAL,",
+              "doc": "On external power.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "BATTERY",
+              "signature": "BATTERY,",
+              "doc": "On battery.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "LOW_POWER",
+              "signature": "LOW_POWER;",
+              "doc": "On battery with the OS low-power mode on.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "sealed class",
+          "name": "FfiPushAssetResult",
+          "signature": "sealed class FfiPushAssetResult",
+          "doc": "How one asset of an [`FfiSession::push_assets`] call ended.",
+          "members": [
+            {
+              "kind": "variant",
+              "name": "Pushed",
+              "signature": "data class Pushed",
+              "doc": "The asset's admitted ladder ran: what [`FfiSession::push_asset`] would have returned.",
+              "members": []
+            },
+            {
+              "kind": "variant",
+              "name": "Failed",
+              "signature": "data class Failed",
+              "doc": "The asset did not push: the error [`FfiSession::push_asset`] would have failed with.\nIt stays local, and pushing it again is safe.",
               "members": []
             }
           ]
@@ -4153,6 +5811,42 @@
           ]
         },
         {
+          "kind": "enum class",
+          "name": "FfiRepresentation",
+          "signature": "enum class FfiRepresentation",
+          "doc": "A rung of the ladder, cheapest first.",
+          "members": [
+            {
+              "kind": "entry",
+              "name": "LQIP",
+              "signature": "LQIP,",
+              "doc": "The LQIP, embedded in the metadata blob; always present.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "THUMBNAIL",
+              "signature": "THUMBNAIL,",
+              "doc": "The grid thumbnail.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "PREVIEW",
+              "signature": "PREVIEW,",
+              "doc": "The single-asset view's preview.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "ORIGINAL",
+              "signature": "ORIGINAL;",
+              "doc": "The original.",
+              "members": []
+            }
+          ]
+        },
+        {
           "kind": "sealed class",
           "name": "FfiRetryReason",
           "signature": "sealed class FfiRetryReason",
@@ -4189,6 +5883,71 @@
           ]
         },
         {
+          "kind": "enum class",
+          "name": "FfiRungSource",
+          "signature": "enum class FfiRungSource",
+          "doc": "Where a shown rung's pixels come from.",
+          "members": [
+            {
+              "kind": "entry",
+              "name": "LQIP",
+              "signature": "LQIP,",
+              "doc": "The LQIP (`render_lqip`), which paints the dominant colour where it does not decode.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "EMBEDDED",
+              "signature": "EMBEDDED,",
+              "doc": "The original's embedded preview ([`embedded_preview`]).",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "ENCODED",
+              "signature": "ENCODED,",
+              "doc": "The rung's encoded tier.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "ORIGINAL",
+              "signature": "ORIGINAL;",
+              "doc": "The original, decoded.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum class",
+          "name": "FfiStackCullState",
+          "signature": "enum class FfiStackCullState",
+          "doc": "A stack's derived cull state, by the doc's precedence `all-rejected → any-pick → else mixed`.",
+          "members": [
+            {
+              "kind": "entry",
+              "name": "ALL_REJECTED",
+              "signature": "ALL_REJECTED,",
+              "doc": "Every member is rejected: the whole stack is a sweep candidate.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "ANY_PICK",
+              "signature": "ANY_PICK,",
+              "doc": "At least one member is picked.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "MIXED",
+              "signature": "MIXED;",
+              "doc": "Neither: undecided, or rejects mixed with neutrals.",
+              "members": []
+            }
+          ]
+        },
+        {
           "kind": "sealed class",
           "name": "FfiSyncApplyOutcome",
           "signature": "sealed class FfiSyncApplyOutcome",
@@ -4213,6 +5972,42 @@
               "name": "Quarantined",
               "signature": "data class Quarantined",
               "doc": "Refused. `reason` is a stable, switchable code; `detail` is English developer text.",
+              "members": []
+            }
+          ]
+        },
+        {
+          "kind": "enum class",
+          "name": "FfiThermalState",
+          "signature": "enum class FfiThermalState",
+          "doc": "FFI mirror of [`ThermalState`].",
+          "members": [
+            {
+              "kind": "entry",
+              "name": "NOMINAL",
+              "signature": "NOMINAL,",
+              "doc": "No thermal pressure.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "FAIR",
+              "signature": "FAIR,",
+              "doc": "Slightly elevated.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "SERIOUS",
+              "signature": "SERIOUS,",
+              "doc": "High: the OS asks apps to reduce work.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "CRITICAL",
+              "signature": "CRITICAL;",
+              "doc": "Critical: the OS asks apps to stop discretionary work.",
               "members": []
             }
           ]
@@ -4353,6 +6148,35 @@
           ]
         },
         {
+          "kind": "enum class",
+          "name": "FfiTrashRefusal",
+          "signature": "enum class FfiTrashRefusal",
+          "doc": "Why a trash verb was refused ([`FfiError::Trash`]). Nothing was written.",
+          "members": [
+            {
+              "kind": "entry",
+              "name": "NOT_FOUND",
+              "signature": "NOT_FOUND,",
+              "doc": "The workspace holds no such asset.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "NOT_IN_TRASH",
+              "signature": "NOT_IN_TRASH,",
+              "doc": "The asset is not in the trash: a restore has nothing to undo, and a purge never skips\nthe trash.",
+              "members": []
+            },
+            {
+              "kind": "entry",
+              "name": "RETENTION_ELAPSED",
+              "signature": "RETENTION_ELAPSED;",
+              "doc": "The signed retention window has closed, so the asset can no longer be restored. It\nstays in the trash until it is purged.",
+              "members": []
+            }
+          ]
+        },
+        {
           "kind": "sealed class",
           "name": "FfiUploadOutcome",
           "signature": "sealed class FfiUploadOutcome",
@@ -4402,6 +6226,34 @@
               "members": []
             }
           ]
+        },
+        {
+          "kind": "fun",
+          "name": "syncedHistorySources",
+          "signature": "@Throws(FfiException::class) fun syncedHistorySources(manifestCbor: kotlin.ByteArray, history: List<kotlin.ByteArray>): FfiHistorySources",
+          "doc": "**Name what adopting an asset from its history fetches**: the live metadata blob and the\noriginal, read off the asset's latest record `manifest_cbor` (a feed entry's) and `history`,\nthe records before it that [`FfiSession::fetch_provenance_history`] returned.\n\nAn album page — the one a writer member's device reads — serves a `delete` with no metadata\nblob and no blob, so a device that first sees the asset there has only its records. The live\nmetadata blob is the newest record that binds one, and the delete commits to the original;\nthe server serves both to the asset's readers until its retention window closes. Fetch them\nwith [`FfiSession::fetch_metadata_blob`] and [`FfiSession::fetch_blob_to_path`], set the\nentry's `metadata_blob` to the first, and hand the second to\n[`FfiWorkspace::open_synced_history`]: the asset is held in this device's trash and its\n`trash-restore` can be signed. An entry that names its metadata blob (the owner's own feed)\nagrees with this answer.\n\nPure and offline. Nothing is trusted for being named: the adoption binds the metadata blob and\nthe original to the records, and refuses what does not.\n\n# Errors\n\n[`FfiError::Sync`] when a record does not decode or none binds a metadata blob.",
+          "members": []
+        },
+        {
+          "kind": "fun",
+          "name": "syncedRetentionClosed",
+          "signature": "@Throws(FfiException::class) fun syncedRetentionClosed(manifestCbor: kotlin.ByteArray, changedAt: kotlin.String): kotlin.Boolean",
+          "doc": "**Whether a tombstone's retention window had closed** at `changed_at` (RFC 3339, a feed\nentry's own): `manifest_cbor` is a `delete` record and `changed_at` is at or after the\n`retention_until` signed into it.\n\nA device that first sees an asset at an album page's tombstone reads this before it calls\n[`FfiSession::fetch_provenance_history`]: once the window has closed the server refuses the\nasset's records and bytes to its readers, so there is nothing left to adopt, and passing the\nentry loses nothing. A record that is not a `delete`, or a `delete` whose window is absent or\nunreadable, answers `false`.\n\nPure and offline.\n\n# Errors\n\n[`FfiError::InvalidArgument`] when `changed_at` is not an RFC 3339 instant;\n[`FfiError::Sync`] when `manifest_cbor` does not decode.",
+          "members": []
+        },
+        {
+          "kind": "fun",
+          "name": "embeddedPreview",
+          "signature": "@Throws(FfiException::class) fun embeddedPreview(originalPath: kotlin.String, ext: kotlin.String): FfiEmbeddedPreview?",
+          "doc": "Read the embedded preview of the original at `original_path`, whose extension (without the\ndot) is `ext`.\n\n`None` when the original is not a RAW, carries no preview, or carries one that does not read\nwithin the decode budget: each leaves the rung to the next source, so none is an error. The\nreason is logged.\n\nThis reads the whole original into memory, because the extraction's IFD bounds walk and its\nstated-length guard run over the full file before the RAW reader does. Call it once per asset\nand keep the [`FfiEmbeddedPreview`] it returns, rather than once per render.\n\n# Errors\n\n[`FfiError::Workspace`] when the file cannot be read.",
+          "members": []
+        },
+        {
+          "kind": "fun",
+          "name": "renderStep",
+          "signature": "fun renderStep(request: FfiRenderRequest, shown: FfiRendition?, local: FfiLocalHoldings, fetchable: List<FfiRepresentation>): FfiRenderStep",
+          "doc": "One step of the render ladder ([`crate::fetch::render_step`]): what to show now and what to\nobtain next. `shown` is what the surface shows, `None` when it shows nothing yet or is falling\nback below what it showed; `fetchable` is what the server lists for the asset.",
+          "members": []
         },
         {
           "kind": "fun",

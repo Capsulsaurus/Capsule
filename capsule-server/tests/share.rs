@@ -128,6 +128,77 @@ async fn a_live_link_serves_its_metadata_and_its_blobs_without_a_credential() {
     assert_eq!(bytes.bytes().as_ref(), payload(b'o', 512).as_slice());
 }
 
+/// The owner's `share_link.served` events, newest first, read past the HTTP surface.
+async fn link_served(fixture: &Fixture) -> Vec<capsule_server::activity::ActivityEvent> {
+    use capsule_server::activity::{ActivityKind, ActivityStore as _};
+
+    fixture.activity_settled().await;
+    fixture
+        .activity
+        .recent(&support::user(), jiff::Timestamp::MIN, 1_000)
+        .await
+        .expect("the in-memory log reads")
+        .into_iter()
+        .filter(|event| event.kind == ActivityKind::ShareLinkServed)
+        .collect()
+}
+
+#[tokio::test]
+async fn serving_a_links_blobs_leaves_one_event_per_window_naming_the_link_only() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (id, metadata, original) = live_link(&fixture, &bearer, 7).await;
+
+    // Opening the link, and a revalidation, send none of its blobs.
+    fetch(&fixture, &format!("/s/{id}"), StatusCode::OK).await;
+    fixture
+        .client
+        .get(&format!("/s/{id}/blob/{original}"))
+        .header("if-none-match", &format!("\"{original}\""))
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_MODIFIED);
+    assert!(link_served(&fixture).await.is_empty());
+
+    for path in [&metadata, &original, &original, &metadata] {
+        fetch(&fixture, &format!("/s/{id}/blob/{path}"), StatusCode::OK).await;
+    }
+    let events = link_served(&fixture).await;
+    assert_eq!(events.len(), 1, "four blobs in one window are one event");
+    assert_eq!(events[0].subject.as_deref(), Some(id.as_str()));
+    assert_eq!(events[0].session_id, None);
+    for address in [&metadata, &original] {
+        assert!(
+            !format!("{:?}", events[0]).contains(address.as_str()),
+            "the event carries no content address"
+        );
+    }
+
+    // A second link has a window of its own, and the next window writes the first again.
+    let (other, _, other_original) = live_link(&fixture, &bearer, 8).await;
+    fetch(
+        &fixture,
+        &format!("/s/{other}/blob/{other_original}"),
+        StatusCode::OK,
+    )
+    .await;
+    fixture
+        .clock
+        .advance(capsule_server::activity::DETACHED_COALESCE_WINDOW);
+    fetch(
+        &fixture,
+        &format!("/s/{id}/blob/{original}"),
+        StatusCode::OK,
+    )
+    .await;
+    let subjects: Vec<Option<String>> = link_served(&fixture)
+        .await
+        .into_iter()
+        .map(|event| event.subject)
+        .collect();
+    assert_eq!(subjects, [Some(id.clone()), Some(other), Some(id)]);
+}
+
 /// Lowercase hex, the encoding the browser surface takes its URL components in.
 fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
@@ -395,7 +466,7 @@ async fn every_refusal_on_the_public_path_is_one_answer() {
         format!("/s/{}/wrapped-secret", opaque(9)),
     ] {
         let body: Value = fetch(&fixture, &path, StatusCode::NOT_FOUND).await.json();
-        bodies.push(body);
+        bodies.push(support::without_request_id(body));
     }
 
     for body in &bodies[1..] {
@@ -498,6 +569,23 @@ async fn revocation_takes_effect_immediately_and_is_only_the_owners() {
         fixture.blobs.stat(&original).await.expect("stat").is_some(),
         "revoking a link is a serving constraint; the owner's bytes stay"
     );
+    // The owner's log holds the issue and the one revocation that changed something; the
+    // stranger's indistinguishable `204` recorded nothing anywhere.
+    assert_eq!(
+        fixture.activity_kinds(&support::user()).await[..2],
+        [
+            capsule_server::activity::ActivityKind::ShareLinkRevoked,
+            capsule_server::activity::ActivityKind::ShareLinkCreated
+        ]
+    );
+    assert!(
+        fixture
+            .activity_kinds(&capsule_server::store::UserId::new(
+                "01937b7c-0000-7000-8000-0000000000ff"
+            ))
+            .await
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -517,8 +605,12 @@ async fn a_held_opaque_id_cannot_be_reissued_and_the_refusal_is_one_answer() {
         "serves": [hostile.as_str()],
     });
 
-    let from_stranger = issue(&fixture, &stranger, &takeover, StatusCode::BAD_REQUEST).await;
-    let from_owner = issue(&fixture, &bearer, &takeover, StatusCode::BAD_REQUEST).await;
+    let from_stranger = support::without_request_id(
+        issue(&fixture, &stranger, &takeover, StatusCode::BAD_REQUEST).await,
+    );
+    let from_owner = support::without_request_id(
+        issue(&fixture, &bearer, &takeover, StatusCode::BAD_REQUEST).await,
+    );
     assert_eq!(
         from_stranger, from_owner,
         "the refusal must not say whose the id is"

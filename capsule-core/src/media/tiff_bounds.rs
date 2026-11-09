@@ -28,6 +28,13 @@
 //! its work stack, bounded by the pointers it has read, and a `SubIFDs` list is iterated lazily
 //! from the file rather than collected.
 //!
+//! It also records the largest length any walked `JPEGInterchangeFormatLength` entry states
+//! ([`IfdWalk::max_jpeg_length`]). `RawFile::thumbnail` reads an embedded preview by allocating
+//! that many bytes and only then reading them, so a few-byte file stating a 4 GiB preview would
+//! abort the process the same way. That length is not refused here, because a broken preview
+//! must not refuse the RAW decode: the embedded-preview extraction refuses it instead, before it
+//! calls the reader.
+//!
 //! # The nesting bound
 //!
 //! `TiffParser::parse_ifd_at` follows each `SubIFDs` offset, the EXIF IFD and the GPS IFD by
@@ -157,6 +164,11 @@ pub(super) struct IfdWalk {
     pub entries: u64,
     /// The deepest level any IFD was reached at.
     pub depth: u32,
+    /// The largest embedded-JPEG length any walked IFD's `JPEGInterchangeFormatLength` states,
+    /// read the way `RawFile::thumbnail` reads it (the first `SHORT` or `LONG` value), `0` where
+    /// none does. The thumbnail reader allocates that many bytes before it reads one, so
+    /// [`crate::media::extract_embedded_preview`] holds it to the file's length first.
+    pub max_jpeg_length: u64,
 }
 
 /// One unit of pending work on the walk's stack.
@@ -441,6 +453,11 @@ fn walk_ifd(
             field: at + 4 + if tiff.big { 8 } else { 4 },
         };
         check_entry(offset, &entry, file_len)?;
+        if tag == TiffTag::JPEGInterchangeFormatLength.as_u16()
+            && let Some(length) = first_short_or_long(tiff, &entry)
+        {
+            walk.max_jpeg_length = walk.max_jpeg_length.max(length);
+        }
         follow(tiff, &entry, depth + 1, first, stack);
     }
     // Pushed last, so popped first: the whole top-level chain is walked before any child, and an
@@ -525,16 +542,18 @@ fn follow(tiff: &Tiff<'_>, entry: &Entry, depth: u32, first: bool, stack: &mut V
             )
         }
     } else if first && entry.tag == TAG_SONY_SR2_IFD {
-        child(sr2_offset(tiff, entry))
+        child(first_short_or_long(tiff, entry))
     } else {
         None
     };
     stack.extend(work);
 }
 
-/// The SR2 IFD offset the ARW reader takes from IFD0's tag `0x02BC`: the first value of a
-/// `SHORT` or `LONG`/`IFD` entry, and nothing for any other type.
-fn sr2_offset(tiff: &Tiff<'_>, entry: &Entry) -> Option<u64> {
+/// The first value of a `SHORT` or `LONG`/`IFD` entry, and nothing for any other type: how the
+/// ARW reader takes the SR2 IFD offset from IFD0's tag `0x02BC`, and how both RAW readers take an
+/// embedded JPEG's length from `JPEGInterchangeFormatLength`. Reading an `IFD`-typed length too
+/// only widens the bound, since the reader takes no length from one.
+fn first_short_or_long(tiff: &Tiff<'_>, entry: &Entry) -> Option<u64> {
     if entry.count == 0 {
         return None;
     }

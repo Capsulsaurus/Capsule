@@ -91,6 +91,8 @@ fn server(args: &[&str]) -> Command {
         "SHUTDOWN_TIMEOUT_SECONDS",
         "MAX_CONNECTIONS",
         "HEADER_READ_TIMEOUT_SECONDS",
+        "CHUNK_STALL_TIMEOUT_SECONDS",
+        "CHUNK_MIN_RATE_BYTES_PER_SECOND",
         "CHUNK_READ_TIMEOUT_SECONDS",
         "LOG_FORMAT",
         "TRUSTED_PROXY_HOPS",

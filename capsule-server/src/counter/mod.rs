@@ -217,12 +217,12 @@ pub enum CounterKey {
     SecondFactor(String),
     /// Account registrations from one source address.
     ///
-    /// Declared and consumed nowhere yet. The client address it needs now exists
-    /// ([`crate::client_addr`], #704) and the share and drop paths charge their source keys with
-    /// it; registration is the one **unauthenticated write** on the surface, so it is the next
-    /// place that fact is owed — recorded here rather than replaced by an email-keyed limiter,
-    /// which would bound repeated probes against one address while doing nothing about a sweep
-    /// across many.
+    /// Charged by `POST /v1/auth/register` with
+    /// [`ClientAddr::source_key`](crate::client_addr::ClientAddr::source_key) against
+    /// [`budgets::REGISTRATION_SOURCE`] (#1001): registration is the one **unauthenticated
+    /// write** on the surface, and this is what bounds its account oracle. Keyed on the source
+    /// rather than the email, because an email-keyed limiter would bound repeated probes against
+    /// one address while doing nothing about a sweep across many.
     RegistrationSource(String),
     /// Begun OIDC ceremonies naming one **admitted** redirect host.
     ///
@@ -300,6 +300,18 @@ pub enum CounterKey {
     /// under the peer's pinned key, and not for a peer that is blocked or over its events budget,
     /// so the key space is what pinned peers' admitted requests make it.
     FederatedRequestNonce(String),
+    /// Pull hints at `POST /v1/federation/hints` from one **verified** home server (#1158).
+    ///
+    /// Charged only once the hint's signature has verified under the peer's pinned key, for the
+    /// reason [`Self::FederatedIntake`] is: keyed on an origin a body merely claims, it would be a
+    /// budget a stranger spends to silence a real peer's hints.
+    FederatedHints(String),
+    /// One hint nonce from one verified home server, keyed on `"{home_server}:{nonce}"` (#1158).
+    ///
+    /// The hint's replay memory, for the reason [`Self::FederatedReportNonce`] is the report's.
+    /// A partition of its own rather than the report's, so a peer hinting at its whole budget
+    /// cannot fill the memory reports are refused closed by.
+    FederatedHintNonce(String),
     /// Ciphertext served to one federated peer at `GET /v1/blob/{hash}`, in kibibytes (#476).
     ///
     /// The bytes-per-hour half of invariant 21's transfer budget, keyed on the peer's origin for
@@ -307,6 +319,20 @@ pub enum CounterKey {
     /// call per delivery, and never as a loop of hits: kibibytes rather than bytes so a `u32`
     /// budget reaches terabytes an hour.
     PeerBytes(String),
+    /// Validation failures of input pulled from one source peer by the egress pull worker (#964).
+    ///
+    /// The **error budget** design/federation.md's circuit breaker spends: one unit per pull
+    /// whose input failed validation, keyed on the source peer's origin. A transport failure
+    /// never charges it — an unreachable peer is backed off, not distrusted. A spent budget
+    /// opens the peer's circuit ([`crate::federation::pull`]).
+    PeerPullErrors(String),
+    /// Validation time the egress pull worker spent on one source peer's input, in
+    /// milliseconds (#964).
+    ///
+    /// The receiving half's CPU-per-hour budget: the one per-peer CPU this server spends that a
+    /// counter can measure. Charged with [`CounterStore::charge`], one weighted call per pull,
+    /// for the reason [`Self::PeerBytes`] is.
+    PeerPullCpu(String),
     /// Capability mints by one account (#529).
     ///
     /// Keyed on the authenticated owner: every mint writes a capability row, and nothing else
@@ -371,7 +397,11 @@ impl CounterKey {
             Self::FederatedIntake(_) => "federated_intake",
             Self::FederatedReportNonce(_) => "federated_report_nonce",
             Self::FederatedRequestNonce(_) => "federated_request_nonce",
+            Self::FederatedHints(_) => "federated_hints",
+            Self::FederatedHintNonce(_) => "federated_hint_nonce",
             Self::PeerBytes(_) => "peer_bytes",
+            Self::PeerPullErrors(_) => "peer_pull_errors",
+            Self::PeerPullCpu(_) => "peer_pull_cpu",
             Self::CapabilityMints(_) => "capability_mints",
         }
     }
@@ -407,7 +437,11 @@ impl CounterKey {
             Self::FederatedIntake(_) => Slot::FederatedIntake,
             Self::FederatedReportNonce(_) => Slot::FederatedReportNonce,
             Self::FederatedRequestNonce(_) => Slot::FederatedRequestNonce,
+            Self::FederatedHints(_) => Slot::FederatedHints,
+            Self::FederatedHintNonce(_) => Slot::FederatedHintNonce,
             Self::PeerBytes(_) => Slot::PeerBytes,
+            Self::PeerPullErrors(_) => Slot::PeerPullErrors,
+            Self::PeerPullCpu(_) => Slot::PeerPullCpu,
             Self::CapabilityMints(_) => Slot::CapabilityMints,
         }
     }
@@ -439,13 +473,17 @@ impl CounterKey {
             Self::OidcAuthorize(_) => ceilings::OIDC_AUTHORIZE,
             Self::OidcAuthorizeRefused => ceilings::OIDC_AUTHORIZE_REFUSED,
             Self::OidcDevice => ceilings::OIDC_DEVICE,
-            Self::PeerRequests(_) | Self::PeerReports(_) | Self::PeerBytes(_) => {
-                ceilings::PEER_ORIGIN
-            }
+            Self::PeerRequests(_)
+            | Self::PeerReports(_)
+            | Self::PeerBytes(_)
+            | Self::PeerPullErrors(_)
+            | Self::PeerPullCpu(_) => ceilings::PEER_ORIGIN,
             Self::FederatedReports(_) => ceilings::FEDERATED_REPORTS,
             Self::FederatedIntake(_) => ceilings::FEDERATED_INTAKE,
             Self::FederatedReportNonce(_) => ceilings::FEDERATED_REPORT_NONCE,
             Self::FederatedRequestNonce(_) => ceilings::FEDERATED_REQUEST_NONCE,
+            Self::FederatedHints(_) => ceilings::FEDERATED_HINTS,
+            Self::FederatedHintNonce(_) => ceilings::FEDERATED_HINT_NONCE,
             Self::CapabilityMints(_) => ceilings::CAPABILITY_MINTS,
         }
     }
@@ -470,11 +508,15 @@ impl CounterKey {
             | Self::OidcAuthorize(scope)
             | Self::PeerRequests(scope)
             | Self::PeerBytes(scope)
+            | Self::PeerPullErrors(scope)
+            | Self::PeerPullCpu(scope)
             | Self::FederatedReports(scope)
             | Self::PeerReports(scope)
             | Self::FederatedIntake(scope)
             | Self::FederatedReportNonce(scope)
             | Self::FederatedRequestNonce(scope)
+            | Self::FederatedHints(scope)
+            | Self::FederatedHintNonce(scope)
             | Self::RegistrationSource(scope) => scope,
             // The two unit variants are each **one** global bucket by construction — that is why
             // they are unit variants rather than a scoped one carrying a sentinel string (see
@@ -735,7 +777,9 @@ pub mod ceilings {
 
     /// [`CounterKey::PeerRequests`](super::CounterKey::PeerRequests),
     /// [`CounterKey::PeerBytes`](super::CounterKey::PeerBytes) and
-    /// [`CounterKey::PeerReports`](super::CounterKey::PeerReports) — all keyed on a peer's
+    /// [`CounterKey::PeerReports`](super::CounterKey::PeerReports), and the pull worker's
+    /// [`CounterKey::PeerPullErrors`](super::CounterKey::PeerPullErrors) and
+    /// [`CounterKey::PeerPullCpu`](super::CounterKey::PeerPullCpu) — all keyed on a peer's
     /// origin, so all are bounded by the same thing and share one number.
     ///
     /// Not caller-controlled: a peer origin reaches either key only off a capability this
@@ -782,6 +826,24 @@ pub mod ceilings {
     /// ten peers doing that at once. Full, the partition refuses every capability presentation
     /// closed until windows lapse, which is the cost of a replay memory that never fails open.
     pub const FEDERATED_REQUEST_NONCE: usize = 200_000;
+
+    /// [`CounterKey::FederatedHints`](super::CounterKey::FederatedHints) — 1-hour window, keyed
+    /// on a **verified** home server.
+    ///
+    /// Only a peer an operator pinned can hold a window here, so the key space is the pinned
+    /// list, which is what [`PEER_ORIGIN`] is sized for.
+    pub const FEDERATED_HINTS: usize = PEER_ORIGIN;
+
+    /// [`CounterKey::FederatedHintNonce`](super::CounterKey::FederatedHintNonce) — 10-minute
+    /// window, keyed on a verified home server and a nonce it chose.
+    ///
+    /// A nonce is spent only for a hint inside
+    /// [`budgets::FEDERATED_HINTS`](super::budgets::FEDERATED_HINTS), six hundred an hour in a
+    /// fixed window — so one peer holds at most twelve hundred live windows here, its whole
+    /// budget at the end of one hour and again at the start of the next. A hundred thousand is
+    /// eighty peers doing that at once. Full, the partition refuses every hint closed until
+    /// windows lapse, and a refused hint costs nothing but the wait for the next interval.
+    pub const FEDERATED_HINT_NONCE: usize = 100_000;
 
     /// [`CounterKey::CapabilityMints`](super::CounterKey::CapabilityMints) — 1-hour window, keyed
     /// on an authenticated account. Bounded by the directory, as `LOGIN_ATTEMPTS` is.
@@ -861,7 +923,11 @@ partition_slots!(
     FederatedIntake,
     FederatedReportNonce,
     FederatedRequestNonce,
+    FederatedHints,
+    FederatedHintNonce,
     PeerBytes,
+    PeerPullErrors,
+    PeerPullCpu,
     CapabilityMints,
 );
 

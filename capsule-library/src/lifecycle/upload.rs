@@ -17,18 +17,22 @@
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use capsule_core::cbor;
 use capsule_core::crypto::encryption::{
-    AssetEncryption, CiphertextReader, NONCE_PREFIX_LEN, StreamError, ciphertext_len,
-    encrypt_asset_vec_with_prefix, encrypt_asset_with_prefix,
+    AssetEncryption, CIPHERTEXT_CHUNK, CiphertextReader, NONCE_PREFIX_LEN, StreamError, TAG_LEN,
+    blob_ciphertext_hash, ciphertext_len, encrypt_asset_vec_with_prefix, encrypt_asset_with_prefix,
 };
 use capsule_core::crypto::hash::{self, Hash32};
-use capsule_core::crypto::provenance::{Action, DerivativeManifest, DerivativeRole, KeyMode};
+use capsule_core::crypto::provenance::{
+    Action, DerivativeManifest, DerivativeRole, KeyMode, ManifestCore,
+};
 use capsule_core::derivative_format::{DerivativeFormat, verify_still_format};
 use uuid::Uuid;
 
 use super::{AlbumKeys, AssetState, LifecycleError, Result, Workspace, media_dir};
+use crate::db::upload_guard::UploadGuardRow;
 
 /// The original media types the upload protocol's closed `content_type` enum names for this
 /// protocol version (server-side validation, invariant 5). Every other blob — and every
@@ -127,8 +131,10 @@ pub struct UploadBundle {
     pub key_mode: KeyMode,
     /// The **exact** sealed metadata-blob wire bytes the manifest commits to.
     pub metadata_blob: Vec<u8>,
-    /// The **exact** provenance-blob wire bytes: the canonical CBOR of the chain's head
-    /// [`ProvenanceRecord`](capsule_core::crypto::provenance::ProvenanceRecord).
+    /// The **exact** provenance-blob wire bytes: the canonical CBOR of the chain's `create`
+    /// [`ProvenanceRecord`](capsule_core::crypto::provenance::ProvenanceRecord), its genesis.
+    /// The records after it are not uploaded: they reach the server as lifecycle ops once it
+    /// has indexed this one.
     ///
     /// This is the asset's *envelope object* — the `provenance` blob of
     /// [provenance.md § Physical Storage](https://docs/design/cryptography/provenance/#physical-storage),
@@ -141,9 +147,9 @@ pub struct UploadBundle {
     /// bytes" holds through the wrapper.
     ///
     /// Always present, unlike [`metadata_blob_hash`](Self::metadata_blob_hash): a managed asset
-    /// always has a chain head, even when its head action binds no metadata blob.
+    /// always has a create record, even when it binds no metadata blob.
     pub provenance_blob: Vec<u8>,
-    /// The content address of the sealed metadata blob, when the head action binds one.
+    /// The content address of the sealed metadata blob, when the create binds one.
     pub metadata_blob_hash: Option<Hash32>,
     /// The asset's derivative blobs, if any were generated and persisted.
     pub derivatives: Vec<DerivativeBlob>,
@@ -164,15 +170,15 @@ pub struct UploadBundle {
     pub created_by_user: Uuid,
     /// The authoring device.
     pub created_by_device: Uuid,
-    /// The exact client build that authored the head manifest.
+    /// The exact client build that authored the create manifest.
     pub client_version: String,
-    /// RFC3339 authoring timestamp of the head manifest.
+    /// RFC3339 authoring timestamp of the create manifest.
     pub timestamp: String,
-    /// The head manifest's lifecycle action.
+    /// The create manifest's lifecycle action: `create`.
     pub action: Action,
-    /// The head manifest's prior-provenance link (null iff `action = create`).
+    /// The create manifest's prior-provenance link: null, as for every `create`.
     pub prior_provenance_hash: Option<Hash32>,
-    /// The head manifest's retention floor (set only for `delete`).
+    /// The create manifest's retention floor: unset, as it is set only for `delete`.
     pub retention_until: Option<String>,
 }
 
@@ -192,15 +198,197 @@ impl UploadBundle {
 /// ([`CiphertextReader`]), so pushing an original holds one transfer window of it, never the
 /// file — an original may be as large as the server accepts (4 GiB) and the device it is pushed
 /// from may be a phone. The bytes it yields are the bytes [`Workspace::upload_bundle`] verified
-/// against the manifest's `ciphertext_hash` when it built the bundle; a plaintext file changed
-/// on disk after that point yields bytes the server's finalize-time hash check refuses, never
-/// bytes it stores under the wrong address.
+/// against the manifest's `ciphertext_hash` when it built the bundle.
+///
+/// It carries the two source guards of
+/// [Encryption — Encryption Workflow](https://docs/design/cryptography/encryption/#encryption-workflow),
+/// both recorded by the hashing pass that verified it:
+///
+/// - **Source identity**, best effort: the plaintext file's length, modification time and, on
+///   Unix, inode and status-change time as they stood when that pass began, so
+///   [`check_unchanged`](Self::check_unchanged) answers cheaply whether the file is still the one
+///   verified.
+/// - **Chunk tags**, authoritative: every STREAM chunk's authentication tag.
+///   [`read_at`](Self::read_at) re-derives every whole chunk a window touches and refuses the
+///   read when any tag differs from the recorded one, so a window it returns is made only of
+///   chunks byte-identical to the verified ciphertext's, and re-sending it puts no second
+///   ciphertext under a nonce, whatever happened to the file.
 #[derive(Clone)]
 pub struct OriginalCiphertext {
     path: PathBuf,
     file_key: [u8; 32],
     nonce_prefix: [u8; NONCE_PREFIX_LEN],
     plaintext_size: u64,
+    identity: FileIdentity,
+    /// Every STREAM chunk's tag, in chunk order, as the verifying pass sealed it.
+    tags: Arc<[ChunkTag]>,
+}
+
+/// One STREAM chunk's authentication tag.
+type ChunkTag = [u8; TAG_LEN];
+
+/// A writer that passes a STREAM ciphertext through to `inner` and records the tag that ends
+/// each chunk: the last [`TAG_LEN`] bytes of every [`CIPHERTEXT_CHUNK`], and of the shorter
+/// final chunk.
+struct TagRecorder<W> {
+    inner: W,
+    /// Ciphertext bytes seen so far.
+    offset: u64,
+    /// The last (up to [`TAG_LEN`]) bytes of the chunk being written.
+    tail: Vec<u8>,
+    tags: Vec<ChunkTag>,
+}
+
+impl<W: Write> TagRecorder<W> {
+    fn new(inner: W) -> Self {
+        Self {
+            inner,
+            offset: 0,
+            tail: Vec::with_capacity(TAG_LEN),
+            tags: Vec::new(),
+        }
+    }
+
+    fn record(&mut self, mut bytes: &[u8]) {
+        while !bytes.is_empty() {
+            let in_chunk = (self.offset % CIPHERTEXT_CHUNK as u64) as usize;
+            let room = CIPHERTEXT_CHUNK - in_chunk;
+            let (piece, rest) = bytes.split_at(room.min(bytes.len()));
+            if piece.len() >= TAG_LEN {
+                self.tail.clear();
+                self.tail.extend_from_slice(&piece[piece.len() - TAG_LEN..]);
+            } else {
+                self.tail.extend_from_slice(piece);
+                let excess = self.tail.len().saturating_sub(TAG_LEN);
+                self.tail.drain(..excess);
+            }
+            self.offset += piece.len() as u64;
+            if piece.len() == room {
+                self.close_chunk();
+            }
+            bytes = rest;
+        }
+    }
+
+    fn close_chunk(&mut self) {
+        let mut tag = [0u8; TAG_LEN];
+        tag.copy_from_slice(&self.tail);
+        self.tags.push(tag);
+        self.tail.clear();
+    }
+
+    /// The tags of every chunk written, closing a final chunk shorter than a whole one.
+    fn finish(mut self) -> io::Result<Vec<ChunkTag>> {
+        match self.tail.len() {
+            0 => {}
+            TAG_LEN => self.close_chunk(),
+            short => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("a STREAM chunk ended {short} bytes in, shorter than its tag"),
+                ));
+            }
+        }
+        Ok(self.tags)
+    }
+}
+
+impl<W: Write> Write for TagRecorder<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let written = self.inner.write(buf)?;
+        self.record(&buf[..written]);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// The plaintext on disk is no longer the file an [`OriginalCiphertext`] was verified from.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("the original changed on disk since its ciphertext was verified: {reason}")]
+pub struct OriginalChanged {
+    /// What differs, in English, for logs.
+    pub reason: String,
+}
+
+/// What a plaintext file looked like on disk: its length, its modification time and, on Unix,
+/// its device and inode (a file replaced by a rename is another inode) and its status-change
+/// time (which a write bumps even when the modification time is set back).
+///
+/// A cheap stand-in for the content: an edit that keeps every one of these is not seen. The
+/// per-chunk authentication tags recorded beside it close that gap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileIdentity {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    file_id: Option<(u64, u64)>,
+    status_changed: Option<(i64, i64)>,
+}
+
+impl FileIdentity {
+    /// The identity of the file at `path` now.
+    fn of(path: &std::path::Path) -> io::Result<Self> {
+        let meta = fs::metadata(path)?;
+        #[cfg(unix)]
+        let (file_id, status_changed) = {
+            use std::os::unix::fs::MetadataExt as _;
+            (
+                Some((meta.dev(), meta.ino())),
+                Some((meta.ctime(), meta.ctime_nsec())),
+            )
+        };
+        #[cfg(not(unix))]
+        let (file_id, status_changed) = (None, None);
+        Ok(Self {
+            len: meta.len(),
+            modified: meta.modified().ok(),
+            file_id,
+            status_changed,
+        })
+    }
+
+    /// What differs between `self` (as recorded) and `now`, or `None` when nothing does.
+    fn difference(&self, now: &Self) -> Option<String> {
+        if self.len != now.len {
+            return Some(format!("its length is {} bytes, not {}", now.len, self.len));
+        }
+        if self.file_id != now.file_id {
+            return Some("it was replaced by another file".to_owned());
+        }
+        if self.modified != now.modified {
+            return Some("its modification time changed".to_owned());
+        }
+        if self.status_changed != now.status_changed {
+            return Some("its status-change time changed".to_owned());
+        }
+        None
+    }
+
+    /// The modification time in nanoseconds since the Unix epoch, when it is representable.
+    fn modified_ns(&self) -> Option<i64> {
+        self.modified
+            .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|since| i64::try_from(since.as_nanos()).ok())
+    }
+
+    /// The identity a persisted guard recorded. A modification time the row could not
+    /// represent reads back as unknown.
+    fn of_row(row: &UploadGuardRow) -> Self {
+        Self {
+            len: row.source_len as u64,
+            modified: row
+                .modified_ns
+                .and_then(|ns| u64::try_from(ns).ok())
+                .map(|ns| std::time::UNIX_EPOCH + std::time::Duration::from_nanos(ns)),
+            file_id: row
+                .file_dev
+                .zip(row.file_ino)
+                .map(|(dev, ino)| (dev as u64, ino as u64)),
+            status_changed: row.ctime_secs.zip(row.ctime_nanos),
+        }
+    }
 }
 
 impl std::fmt::Debug for OriginalCiphertext {
@@ -209,24 +397,145 @@ impl std::fmt::Debug for OriginalCiphertext {
             .field("path", &self.path)
             .field("file_key", &"<redacted>")
             .field("plaintext_size", &self.plaintext_size)
+            .field("chunk_tags", &self.tags.len())
             .finish_non_exhaustive()
     }
 }
 
 impl OriginalCiphertext {
+    /// The source over the plaintext at `path`, after one hashing pass over it: the file's
+    /// identity is recorded first, so a change made during the pass differs from it, then the
+    /// ciphertext is derived once, recording every chunk's tag. Returns what that pass hashed
+    /// to, for the caller to check against the signed manifest; the guards it recorded are
+    /// those of the bytes it hashed.
+    fn seal(
+        path: PathBuf,
+        file_key: [u8; 32],
+        nonce_prefix: [u8; NONCE_PREFIX_LEN],
+        plaintext_size: u64,
+    ) -> io::Result<(Self, AssetEncryption)> {
+        let identity = FileIdentity::of(&path)?;
+        let mut recorder = TagRecorder::new(io::sink());
+        let sealed = encrypt_with(&path, &file_key, nonce_prefix, &mut recorder)?;
+        let tags = recorder.finish()?;
+        let original = Self {
+            path,
+            file_key,
+            nonce_prefix,
+            plaintext_size,
+            identity,
+            tags: tags.into(),
+        };
+        Ok((original, sealed))
+    }
+
+    /// The guard row this original persists for `asset_id`, recorded at `recorded_at`.
+    fn guard_row(&self, asset_id: &Uuid, recorded_at: i64) -> UploadGuardRow {
+        UploadGuardRow {
+            asset_id: asset_id.to_string(),
+            nonce_prefix: self.nonce_prefix.to_vec(),
+            plaintext_size: self.plaintext_size as i64,
+            source_len: self.identity.len as i64,
+            modified_ns: self.identity.modified_ns(),
+            file_dev: self.identity.file_id.map(|(dev, _)| dev as i64),
+            file_ino: self.identity.file_id.map(|(_, ino)| ino as i64),
+            ctime_secs: self.identity.status_changed.map(|(secs, _)| secs),
+            ctime_nanos: self.identity.status_changed.map(|(_, nanos)| nanos),
+            chunk_tags: self.tags.iter().flatten().copied().collect(),
+            recorded_at,
+        }
+    }
+
+    /// Whether the plaintext on disk is still the file this ciphertext was verified from: the
+    /// same length, modification time and (on Unix) inode and status-change time. One `stat`,
+    /// cheap enough to run before every window is read and again after.
+    ///
+    /// `Ok` is a positive claim that every window read while it holds is the window read
+    /// before, up to one limit: an edit that keeps every one of those attributes is not seen.
+    ///
+    /// # Errors
+    ///
+    /// [`OriginalChanged`] naming what differs, or that the file can no longer be read.
+    pub fn check_unchanged(&self) -> std::result::Result<(), OriginalChanged> {
+        let now = FileIdentity::of(&self.path).map_err(|error| OriginalChanged {
+            reason: format!("it can no longer be read: {error}"),
+        })?;
+        match self.identity.difference(&now) {
+            None => Ok(()),
+            Some(reason) => {
+                tracing::warn!(path = %self.path.display(), %reason, "the original changed on disk since its ciphertext was verified");
+                Err(OriginalChanged { reason })
+            }
+        }
+    }
+
     /// The ciphertext's length in bytes — what `POST /upload` declares as `size`.
     #[must_use]
     pub fn size(&self) -> u64 {
         ciphertext_len(self.plaintext_size)
     }
 
-    /// The ciphertext bytes `[offset, offset + len)`, clamped to the end. Memory is the window
-    /// plus one STREAM chunk.
+    /// The ciphertext bytes `[offset, offset + len)`, clamped to the end, cut from whole STREAM
+    /// chunks each checked against the tag the verifying pass recorded. Memory is the window
+    /// plus up to three STREAM chunks.
+    ///
+    /// # Errors
+    ///
+    /// An [`io::Error`] carrying [`OriginalChanged`] (`io::Error::other`) when a chunk the window
+    /// touches re-derives to a tag other than the recorded one: the plaintext under it changed,
+    /// and none of the window is returned. Any other read failure as it occurred.
     #[tracing::instrument(level = "trace", skip(self), fields(path = %self.path.display()))]
     pub fn read_at(&self, offset: u64, len: usize) -> io::Result<Vec<u8>> {
+        let total = self.size();
+        let end = offset.saturating_add(len as u64).min(total);
+        if offset >= end {
+            return Ok(Vec::new());
+        }
+        let chunk = CIPHERTEXT_CHUNK as u64;
+        let first = offset / chunk;
+        let last = (end - 1) / chunk;
+        let from = first * chunk;
+        let to = ((last + 1) * chunk).min(total);
         let file = fs::File::open(&self.path)?;
-        CiphertextReader::new(self.file_key, self.nonce_prefix, file, self.plaintext_size)
-            .read_at(offset, len)
+        let mut whole =
+            CiphertextReader::new(self.file_key, self.nonce_prefix, file, self.plaintext_size)
+                .read_at(from, (to - from) as usize)?;
+        if whole.len() as u64 != to - from {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "the original re-derived to fewer bytes than its chunks hold",
+            ));
+        }
+        for index in first..=last {
+            let at = (((index + 1) * chunk).min(total) - from) as usize;
+            let sealed = &whole[at - TAG_LEN..at];
+            let recorded = usize::try_from(index)
+                .ok()
+                .and_then(|index| self.tags.get(index));
+            if recorded.map(<[u8; TAG_LEN]>::as_slice) != Some(sealed) {
+                let reason =
+                    format!("STREAM chunk {index} re-derived to another authentication tag");
+                tracing::warn!(path = %self.path.display(), offset, len, chunk = index, "the original changed on disk since its ciphertext was verified: a re-derived chunk's tag differs; refusing the read");
+                return Err(io::Error::other(OriginalChanged { reason }));
+            }
+        }
+        let start = (offset - from) as usize;
+        whole.truncate(start + (end - offset) as usize);
+        whole.drain(..start);
+        tracing::trace!(
+            offset,
+            len = whole.len(),
+            chunks = last - first + 1,
+            "re-derived window checked against its chunk tags"
+        );
+        Ok(whole)
+    }
+
+    /// How many STREAM chunk tags this original's guard holds: one per chunk of the verified
+    /// ciphertext. For logs and diagnostics.
+    #[must_use]
+    pub fn chunk_tags(&self) -> usize {
+        self.tags.len()
     }
 
     /// Stream the whole ciphertext into `writer`, one STREAM chunk at a time, and return its
@@ -250,21 +559,23 @@ impl OriginalCiphertext {
         Ok(out)
     }
 
-    /// Re-derive the ciphertext over whatever is on disk now, discarding it, and report what
-    /// it hashed to and how much plaintext there was.
-    fn rederive(&self) -> io::Result<AssetEncryption> {
-        self.encrypt_into(io::sink())
-    }
-
     fn encrypt_into<W: Write>(&self, writer: W) -> io::Result<AssetEncryption> {
-        let file = io::BufReader::new(fs::File::open(&self.path)?);
-        encrypt_asset_with_prefix(&self.file_key, self.nonce_prefix, file, writer).map_err(
-            |error| match error {
-                StreamError::Io(io) => io,
-                other @ StreamError::Auth(_) => io::Error::other(other),
-            },
-        )
+        encrypt_with(&self.path, &self.file_key, self.nonce_prefix, writer)
     }
+}
+
+/// STREAM-encrypt the plaintext at `path` into `writer` under `file_key` and `nonce_prefix`.
+fn encrypt_with<W: Write>(
+    path: &std::path::Path,
+    file_key: &[u8; 32],
+    nonce_prefix: [u8; NONCE_PREFIX_LEN],
+    writer: W,
+) -> io::Result<AssetEncryption> {
+    let file = io::BufReader::new(fs::File::open(path)?);
+    encrypt_asset_with_prefix(file_key, nonce_prefix, file, writer).map_err(|error| match error {
+        StreamError::Io(io) => io,
+        other @ StreamError::Auth(_) => io::Error::other(other),
+    })
 }
 
 /// A backup export streams the original into the artifact through [`OriginalCiphertext::write_to`],
@@ -280,13 +591,33 @@ impl capsule_core::backup::CiphertextSource for OriginalCiphertext {
 }
 
 impl Workspace {
-    /// Build the [`UploadBundle`] for one managed asset.
+    /// Build the [`UploadBundle`] for one managed asset: its **`create` record** and the bytes
+    /// that record commits to.
     ///
-    /// Re-derives the original ciphertext from the head manifest's recorded `nonce_prefix`
-    /// (clients hold plaintext; ciphertext is regenerated deterministically) and gates it on
-    /// the manifest's own content address, so a bundle that reaches the network is one the
-    /// signed manifest vouches for. The sealed metadata blob is carried verbatim — it cannot
-    /// be regenerated, because `seal_metadata_blob` draws a fresh nonce per call.
+    /// An upload establishes an asset on the server, and the server takes nothing but a
+    /// `create` through it. So the bundle carries the chain's genesis whatever the chain holds
+    /// now: an asset deleted and restored, or edited, before its first upload is uploaded as the
+    /// create it began as, and every record after it reaches the server as a lifecycle op once
+    /// the create is indexed (Organization — Deletion State Machine, "Held records").
+    ///
+    /// Re-derives the original ciphertext from the create's recorded `nonce_prefix` (clients
+    /// hold plaintext; ciphertext is regenerated deterministically) and gates it on the
+    /// manifest's own content address, so a bundle that reaches the network is one the signed
+    /// manifest vouches for. The sealed metadata blob the create binds is carried verbatim — it
+    /// cannot be regenerated, because `seal_metadata_blob` draws a fresh nonce per call — so an
+    /// asset edited since its import carries the copy its first edit kept, not its current blob.
+    ///
+    /// # Errors
+    ///
+    /// [`LifecycleError::CreateMetadataSuperseded`] when the create binds a metadata blob the
+    /// library no longer holds: an edit made before the library kept that blob replaced it.
+    /// [`LifecycleError::CiphertextMismatch`] when the plaintext on disk no longer re-derives to
+    /// the signed ciphertext. [`LifecycleError::Db`] when the original's source guard cannot be
+    /// persisted.
+    ///
+    /// The hashing pass that verifies the original records its source guards (identity and
+    /// every STREAM chunk's tag), and the bundle persists them in the catalog until
+    /// [`release_upload_guard`](Self::release_upload_guard) or a purge forgets them.
     #[tracing::instrument(skip(self), fields(asset_id = %asset_id))]
     pub fn upload_bundle(&self, asset_id: &Uuid) -> Result<UploadBundle> {
         let asset = self
@@ -294,48 +625,25 @@ impl Workspace {
             .get(asset_id)
             .ok_or_else(|| LifecycleError::NotFound(format!("asset {asset_id}")))?;
         let album = self.album(&asset.album_id)?;
-        let head_record = asset
+        let create_record = asset
             .chain
             .records()
-            .last()
+            .first()
             .expect("provenance chain is never empty");
-        let head = &head_record.manifest.core;
+        let create = &create_record.manifest.core;
         // The envelope object, encoded once here so the SDK ladder and the FFI hand the wire
         // the same bytes. Canonical by construction: `record_hash()` is defined as the digest
         // of exactly this encoding, which is what makes the server's chain head and a client's
         // next `prior_provenance_hash` the same value.
-        let provenance_blob = cbor::to_canonical_vec(head_record)
+        let provenance_blob = cbor::to_canonical_vec(create_record)
             .map_err(|e| LifecycleError::Cbor(format!("encoding the provenance record: {e}")))?;
 
-        let epoch = head.amk_version.0;
-        let file_key = self.original_file_key(album, head)?;
-        let original = OriginalCiphertext {
-            path: self.media_path(asset),
-            file_key,
-            nonce_prefix: head.nonce_prefix,
-            plaintext_size: head.plaintext_size,
-        };
+        let metadata_blob = self.create_metadata_blob(asset, create.metadata_blob_hash)?;
 
-        // The re-derivation is deterministic, so a mismatch means the library's bytes and its
-        // own signed manifest disagree — never ship that. Hashed in one streaming pass, so
-        // building the bundle holds one STREAM chunk of the original, whatever its size.
-        let rederived = original
-            .rederive()
-            .map_err(|e| LifecycleError::Io(e.to_string()))?;
-        let ciphertext_hash = rederived.ciphertext_hash;
-        if ciphertext_hash != head.ciphertext_hash
-            || rederived.plaintext_size != head.plaintext_size
-        {
-            tracing::error!(
-                asset_id = %asset.asset_id,
-                expected = %head.ciphertext_hash.to_hex(),
-                actual = %ciphertext_hash.to_hex(),
-                expected_plaintext_size = head.plaintext_size,
-                actual_plaintext_size = rederived.plaintext_size,
-                "upload bundle: re-derived ciphertext does not match the manifest"
-            );
-            return Err(LifecycleError::CiphertextMismatch(asset.asset_id));
-        }
+        let epoch = create.amk_version.0;
+        let original = self.verified_original(asset, album, create)?;
+        self.record_upload_guard(&asset.asset_id, &original)?;
+        let ciphertext_hash = create.ciphertext_hash;
 
         let DerivativeSet {
             blobs: derivatives,
@@ -345,39 +653,221 @@ impl Workspace {
             album_id = %asset.album_id,
             amk_version = epoch,
             ciphertext_bytes = original.size(),
-            metadata_blob_bytes = asset.metadata_blob.len(),
+            metadata_blob_bytes = metadata_blob.len(),
             provenance_blob_bytes = provenance_blob.len(),
             derivatives = derivatives.len(),
             derivative_manifests = derivative_manifests.len(),
-            action = ?head.action,
+            action = ?create.action,
+            later_records = asset.chain.records().len() - 1,
             "upload bundle built"
         );
 
         Ok(UploadBundle {
             asset_id: asset.asset_id,
             album_id: asset.album_id,
-            crypto_suite_id: head.crypto_suite_id,
-            protocol_version: head.protocol_version.clone(),
+            crypto_suite_id: create.crypto_suite_id,
+            protocol_version: create.protocol_version.clone(),
             amk_version: epoch,
             original,
             ciphertext_hash,
-            plaintext_size: head.plaintext_size,
-            chunk_size: head.chunk_size,
+            plaintext_size: create.plaintext_size,
+            chunk_size: create.chunk_size,
             content_type: wire_content_type(&asset.sidecar.content_type).to_owned(),
-            key_mode: head.key_mode,
-            metadata_blob: asset.metadata_blob.clone(),
-            metadata_blob_hash: head.metadata_blob_hash,
+            key_mode: create.key_mode,
+            metadata_blob,
+            metadata_blob_hash: create.metadata_blob_hash,
             provenance_blob,
             derivatives,
             derivative_manifests,
-            created_by_user: head.created_by_user,
-            created_by_device: head.created_by_device,
-            client_version: head.client_version.clone(),
-            timestamp: head.timestamp.clone(),
-            action: head.action,
-            prior_provenance_hash: head.prior_provenance_hash,
-            retention_until: head.retention_until.clone(),
+            created_by_user: create.created_by_user,
+            created_by_device: create.created_by_device,
+            client_version: create.client_version.clone(),
+            timestamp: create.timestamp.clone(),
+            action: create.action,
+            prior_provenance_hash: create.prior_provenance_hash,
+            retention_until: create.retention_until.clone(),
         })
+    }
+
+    /// The exact sealed metadata blob a create binding `bound` uploads with: the asset's current
+    /// blob while no edit has replaced it, otherwise the copy the first edit kept
+    /// ([`create_metadata_blob_path`](Self::create_metadata_blob_path)). A create that binds no
+    /// blob carries the current one, as it always has.
+    ///
+    /// Either candidate is checked against `bound` before it is used, so the bytes returned are
+    /// the ones the server accepts under that address.
+    ///
+    /// # Errors
+    ///
+    /// [`LifecycleError::CreateMetadataSuperseded`] when neither answers `bound`: an edit made
+    /// before the library kept the create's blob replaced it, and it is gone.
+    /// [`LifecycleError::Io`] when the kept copy exists and cannot be read.
+    pub(super) fn create_metadata_blob(
+        &self,
+        asset: &AssetState,
+        bound: Option<Hash32>,
+    ) -> Result<Vec<u8>> {
+        let Some(bound) = bound else {
+            return Ok(asset.metadata_blob.clone());
+        };
+        if blob_ciphertext_hash(&asset.metadata_blob) == bound {
+            return Ok(asset.metadata_blob.clone());
+        }
+        let path = self.create_metadata_blob_path_of(asset);
+        let kept = match fs::read(&path) {
+            Ok(kept) => Some(kept),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+            Err(e) => {
+                return Err(LifecycleError::Io(format!(
+                    "the create's metadata blob {}: {e}",
+                    path.display()
+                )));
+            }
+        };
+        match kept {
+            Some(kept) if blob_ciphertext_hash(&kept) == bound => {
+                tracing::debug!(
+                    asset_id = %asset.asset_id,
+                    records = asset.chain.records().len(),
+                    "upload bundle: an edit superseded the create's metadata blob; carrying the \
+                     kept copy"
+                );
+                Ok(kept)
+            }
+            kept => {
+                tracing::warn!(
+                    asset_id = %asset.asset_id,
+                    records = asset.chain.records().len(),
+                    kept_copy = kept.is_some(),
+                    "upload bundle: the metadata blob the create binds was superseded by an edit \
+                     and no kept copy answers it"
+                );
+                Err(LifecycleError::CreateMetadataSuperseded(asset.asset_id))
+            }
+        }
+    }
+
+    /// Persist `original`'s source guard as `asset_id`'s, so it outlives the bundle, the
+    /// session and the process until the bundle is custody-confirmed or abandoned.
+    ///
+    /// The tags `original` holds were recorded by a pass that matched the signed content
+    /// address, so they are the signed ciphertext's own. A guard already recorded under the same
+    /// nonce prefix holds the same tags, and only its identity is refreshed, when the file's
+    /// attributes moved without its content. One under another prefix belonged to a create this
+    /// asset has since re-sealed, and is replaced. One whose tags differ under the same prefix
+    /// was not recorded from the signed ciphertext; it is replaced by the verified one, loudly.
+    fn record_upload_guard(&self, asset_id: &Uuid, original: &OriginalCiphertext) -> Result<()> {
+        let db = &self.library.db;
+        let id = asset_id.to_string();
+        let row = original.guard_row(asset_id, jiff::Timestamp::now().as_second());
+        let prior = db
+            .upload_guard(&id)
+            .map_err(|e| LifecycleError::Db(format!("reading the upload guard of {id}: {e}")))?;
+        match prior {
+            None => tracing::debug!(
+                %asset_id,
+                chunk_tags = original.chunk_tags(),
+                "upload guard recorded"
+            ),
+            Some(prior) if prior.nonce_prefix != row.nonce_prefix => tracing::info!(
+                %asset_id,
+                chunk_tags = original.chunk_tags(),
+                "upload guard replaced: the create was re-sealed under another nonce prefix"
+            ),
+            Some(prior) if prior.chunk_tags != row.chunk_tags => tracing::warn!(
+                %asset_id,
+                recorded_tags = prior.chunk_tags.len() / TAG_LEN,
+                chunk_tags = original.chunk_tags(),
+                "upload guard replaced: its recorded tags are not the verified ciphertext's"
+            ),
+            Some(prior) => {
+                let recorded = FileIdentity::of_row(&prior);
+                match recorded.difference(&original.identity) {
+                    None => {
+                        tracing::trace!(%asset_id, "upload guard already recorded");
+                        return Ok(());
+                    }
+                    Some(reason) => tracing::debug!(
+                        %asset_id,
+                        %reason,
+                        "upload guard identity refreshed: the original's content re-verified \
+                         unchanged"
+                    ),
+                }
+            }
+        }
+        db.upsert_upload_guard(&row)
+            .map_err(|e| LifecycleError::Db(format!("recording the upload guard of {id}: {e}")))
+    }
+
+    /// Forget `asset_id`'s upload source guard: every blob of its bundle is custody-confirmed,
+    /// or the bundle is abandoned. Returns whether one was recorded. The next
+    /// [`upload_bundle`](Self::upload_bundle) records it again.
+    ///
+    /// # Errors
+    ///
+    /// [`LifecycleError::Db`] when the catalog refuses the delete.
+    pub fn release_upload_guard(&self, asset_id: &Uuid) -> Result<bool> {
+        let released = self
+            .library
+            .db
+            .remove_upload_guard(&asset_id.to_string())
+            .map_err(|e| {
+                LifecycleError::Db(format!("releasing the upload guard of {asset_id}: {e}"))
+            })?;
+        tracing::debug!(%asset_id, released, "upload guard released");
+        Ok(released)
+    }
+
+    /// Whether `asset_id` has an upload source guard recorded: a bundle of it was built and
+    /// has not been custody-confirmed or abandoned since.
+    ///
+    /// # Errors
+    ///
+    /// [`LifecycleError::Db`] when the catalog cannot be read.
+    pub fn has_upload_guard(&self, asset_id: &Uuid) -> Result<bool> {
+        self.library
+            .db
+            .upload_guard(&asset_id.to_string())
+            .map(|guard| guard.is_some())
+            .map_err(|e| LifecycleError::Db(format!("reading the upload guard of {asset_id}: {e}")))
+    }
+
+    /// The original's ciphertext as `core` pins it, checked against `core`'s content address.
+    ///
+    /// The re-derivation is deterministic, so a mismatch means the library's bytes and its own
+    /// signed manifest disagree — never ship or export that. Hashed in one streaming pass, so
+    /// this holds one STREAM chunk of the original (and its 16-byte tag per chunk), whatever its
+    /// size; that pass records the source guards the returned original checks its reads
+    /// against. Every record of a chain pins the same original, so any of them may be `core`.
+    pub(super) fn verified_original(
+        &self,
+        asset: &AssetState,
+        album: &AlbumKeys,
+        core: &ManifestCore,
+    ) -> Result<OriginalCiphertext> {
+        let path = self.media_path(asset);
+        let (original, rederived) = OriginalCiphertext::seal(
+            path.clone(),
+            self.original_file_key(album, core)?,
+            core.nonce_prefix,
+            core.plaintext_size,
+        )
+        .map_err(|e| LifecycleError::Io(format!("{}: {e}", path.display())))?;
+        if rederived.ciphertext_hash != core.ciphertext_hash
+            || rederived.plaintext_size != core.plaintext_size
+        {
+            tracing::error!(
+                asset_id = %asset.asset_id,
+                expected = %core.ciphertext_hash.to_hex(),
+                actual = %rederived.ciphertext_hash.to_hex(),
+                expected_plaintext_size = core.plaintext_size,
+                actual_plaintext_size = rederived.plaintext_size,
+                "upload bundle: re-derived ciphertext does not match the manifest"
+            );
+            return Err(LifecycleError::CiphertextMismatch(asset.asset_id));
+        }
+        Ok(original)
     }
 
     /// The asset's persisted derivative blobs, read back from

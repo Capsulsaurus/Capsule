@@ -10,7 +10,7 @@
 //! [`run_all`] call.
 //!
 //! It is also what lets the rest of the Kynos rebuild be tested without live infrastructure —
-//! the acceptance gap design/module-map.md sets for the framework. The in-memory adapter is
+//! the framework's acceptance gap. The in-memory adapter is
 //! only a legitimate stand-in for Valkey to the extent it passes this.
 //!
 //! # What is asserted, and what cannot be
@@ -50,8 +50,8 @@ use super::ids::{
     OidcState, OwnerId, PkceVerifier, SessionId, UploadId, UserId,
 };
 use super::upload::{
-    AcceptedChunk, BlobRole, FinalizeClaim, UploadSessionRecord, UploadSessionStatus,
-    UploadSessionStore,
+    BlobRole, CommittedRange, CommittedSet, FinalizeClaim, UnclaimedDiscard, UploadSessionRecord,
+    UploadSessionStatus, UploadSessionStore,
 };
 use super::{StoreError, StoreFuture, deadline};
 
@@ -99,6 +99,14 @@ pub trait Harness: CohortHarness {
     fn oidc_authorizations(&self) -> &dyn OidcAuthorizationStore;
     /// The pending OIDC device authorization store under test (issue #635).
     fn oidc_devices(&self) -> &dyn OidcDeviceStore;
+
+    /// The instant the stores under test currently read as now.
+    ///
+    /// For the one case whose deadline is measured from a record's own timestamp rather than
+    /// from the store's clock: [`restoring_a_session_keeps_its_original_deadline`] must stamp
+    /// its record with the instant it is opened at, or the restore would compute a deadline
+    /// unrelated to the window the open granted.
+    fn now(&self) -> Timestamp;
 }
 
 /// Unwrap a store result, failing with the operation that was expected to work.
@@ -138,6 +146,7 @@ fn session(case: &str, tag: &str, user: &str, offset: i64) -> SessionRecord {
         user_id: UserId::new(format!("{case}-{user}")),
         created_at,
         authenticated_at: created_at,
+        signed_in_at: created_at,
         last_active_at: created_at,
         user_agent: Some(format!("agent-{tag}")),
         ip_address: Some("203.0.113.7".to_owned()),
@@ -162,9 +171,11 @@ fn upload(case: &str, tag: &str, uploader: &str, offset: i64) -> UploadSessionRe
         blob_role: BlobRole::Original,
         intent_id: None,
         manifest_envelope: format!("{{\"tag\":\"{tag}\"}}"),
-        received_bytes: 0,
+        committed: CommittedSet::default(),
+        in_flight_cap: 4,
         total_size: 8192,
         status: UploadSessionStatus::Pending,
+        failure_code: None,
         created_at,
         last_progress_at: created_at,
     }
@@ -479,6 +490,114 @@ pub async fn an_expired_session_leaves_no_listing_entry_behind(h: &dyn Harness) 
     );
 }
 
+/// A lineage past its hard cap, re-opened beside a live one of the same user, leaves the live
+/// one listed and revocable.
+///
+/// The two lineages carry different caps, so the past-cap record's remaining life is nil while
+/// the live one has a whole window. The per-user listing is shared by both: the one opened last
+/// must not shorten it, or `sessions_for_user` and `close_all_for_user` (revoke-all, a password
+/// change) would miss a session that is still honoured.
+pub async fn a_past_cap_lineage_does_not_hide_a_live_one(h: &dyn Harness) {
+    let store = h.auth();
+    let live = session("cap-index", "live", "user", 0);
+    let mut past_cap = session("cap-index", "past", "user", 1);
+    // Before any harness clock: the cap has passed whatever "now" the store reads.
+    past_cap.signed_in_at = Timestamp::MIN;
+    past_cap.authenticated_at = Timestamp::MIN;
+
+    ok(store.open_session(live.clone()).await, "open_session");
+    ok(store.open_session(past_cap.clone()).await, "open_session");
+
+    assert_eq!(
+        ok(
+            store.read_session(&past_cap.session_id).await,
+            "read_session"
+        ),
+        None,
+        "a lineage past its cap is stored already expired"
+    );
+    assert_eq!(
+        ok(
+            store.sessions_for_user(&live.user_id).await,
+            "sessions_for_user"
+        ),
+        vec![live.clone()],
+        "the live lineage is still listed"
+    );
+    assert_eq!(
+        ok(
+            store.close_all_for_user(&live.user_id).await,
+            "close_all_for_user"
+        ),
+        vec![live],
+        "and a revoke-all still reaches it"
+    );
+}
+
+/// A session closed and restored dies when the window it was opened under closes, not a
+/// window after the restore.
+///
+/// A restore is not an issuance — a password change closes every session of the account and
+/// puts the caller's back — so it must not slide the window: the record lives exactly as long
+/// as the refresh token minted when it was opened. The step is a microsecond rather than a
+/// nanosecond tick because the Valkey read gate compares microseconds, and the harness clock may
+/// sit between two of them by the time this case runs.
+pub async fn restoring_a_session_keeps_its_original_deadline(h: &dyn Harness) {
+    let store = h.auth();
+    let ttl = store.ttl();
+    let step = SignedDuration::from_micros(1);
+    let opened_at = h.now();
+    let record = SessionRecord {
+        created_at: opened_at,
+        authenticated_at: opened_at,
+        signed_in_at: opened_at,
+        last_active_at: opened_at,
+        ..session("restore", "a", "user", 0)
+    };
+    ok(store.open_session(record.clone()).await, "open_session");
+
+    let elapsed = ttl / 2;
+    ok(h.advance(elapsed).await, "advance into the window");
+    let closed = present(
+        ok(
+            store.close_session(&record.session_id).await,
+            "close_session",
+        ),
+        "the live session it closes",
+    );
+    ok(store.restore_session(closed).await, "restore_session");
+    assert_eq!(
+        ok(store.read_session(&record.session_id).await, "read_session"),
+        Some(record.clone()),
+        "a restored session is the record that was closed"
+    );
+
+    ok(
+        h.advance(ttl - elapsed - step).await,
+        "advance to just inside the original window",
+    );
+    assert_eq!(
+        ok(store.read_session(&record.session_id).await, "read_session"),
+        Some(record.clone()),
+        "just inside the original window the restored session is live"
+    );
+
+    ok(h.advance(step).await, "advance to the original deadline");
+    assert_eq!(
+        ok(store.read_session(&record.session_id).await, "read_session"),
+        None,
+        "a restore must not slide the window it was opened under"
+    );
+    assert!(
+        ok(
+            store.sessions_for_user(&record.user_id).await,
+            "sessions_for_user"
+        )
+        .is_empty(),
+        "and the expired restore leaves no listing entry"
+    );
+}
+
 // ===========================================================================================
 // UploadSessionStore
 // ===========================================================================================
@@ -646,31 +765,127 @@ pub async fn discarding_a_session_withdraws_its_pending_address(h: &dyn Harness)
     );
 }
 
-/// Accepting a chunk advances the byte counter, the progress clock and the replay store — as
-/// one operation, because they describe one event.
-pub async fn recording_progress_advances_bytes_clock_and_replay_together(h: &dyn Harness) {
+/// Every active session declaring a hash is live for it, whoever uploads it, until the session
+/// ends, is discarded, or is re-opened declaring other bytes.
+///
+/// The question quota release asks after giving an attribution back (#1064), so unlike
+/// [`a_pending_address_is_uploader_scoped_and_ends_with_the_session`] it crosses accounts.
+pub async fn a_live_address_spans_every_uploader_and_ends_with_the_session(h: &dyn Harness) {
+    let store = h.uploads();
+    // A hash of its own, so sessions other cases leave behind on a shared backend never match.
+    let hash = "c".repeat(64);
+    let mut first = upload("live-addr", "a", "uploader-a", 0);
+    first.expected_hash.clone_from(&hash);
+    let mut second = upload("live-addr", "b", "uploader-b", 0);
+    second.expected_hash.clone_from(&hash);
+    assert_ne!(first.upload_user_id, second.upload_user_id);
+    ok(store.open(second.clone()).await, "open");
+    ok(store.open(first.clone()).await, "open");
+
+    assert_eq!(
+        ok(store.live_for_address(&hash).await, "live_for_address"),
+        vec![first.upload_id.clone(), second.upload_id.clone()],
+        "both accounts' sessions declare the bytes, smallest id first"
+    );
+    assert_eq!(
+        ok(
+            store.live_for_address(&"d".repeat(64)).await,
+            "live_for_address"
+        ),
+        Vec::<UploadId>::new(),
+        "an undeclared hash has no live session"
+    );
+
+    present(
+        ok(
+            store
+                .set_status(&first.upload_id, UploadSessionStatus::FailedProcessing)
+                .await,
+            "set_status",
+        ),
+        "set_status",
+    );
+    assert_eq!(
+        ok(store.live_for_address(&hash).await, "live_for_address"),
+        vec![second.upload_id.clone()],
+        "a terminal session is no longer live"
+    );
+
+    let mut moved = second.clone();
+    moved.expected_hash = "e".repeat(64);
+    ok(store.open(moved.clone()).await, "open");
+    assert_eq!(
+        ok(store.live_for_address(&hash).await, "live_for_address"),
+        Vec::<UploadId>::new(),
+        "a session re-opened declaring other bytes leaves the old address"
+    );
+    assert_eq!(
+        ok(
+            store.live_for_address(&moved.expected_hash).await,
+            "live_for_address"
+        ),
+        vec![moved.upload_id.clone()],
+        "and is live for the bytes it now declares"
+    );
+
+    present(
+        ok(store.discard(&moved.upload_id).await, "discard"),
+        "discard",
+    );
+    assert_eq!(
+        ok(
+            store.live_for_address(&moved.expected_hash).await,
+            "live_for_address"
+        ),
+        Vec::<UploadId>::new(),
+        "a discarded session takes its place in the index with it"
+    );
+}
+
+/// A range at `start..end` recorded at [`base`].
+fn range(start: u64, end: u64) -> CommittedRange {
+    CommittedRange {
+        start,
+        end,
+        accepted_at: base(),
+    }
+}
+
+/// Recording a range merges it into the committed set and moves the progress clock and the
+/// status with it — one operation, because they describe one event.
+pub async fn recording_a_range_moves_set_clock_and_status_together(h: &dyn Harness) {
     let store = h.uploads();
     let record = upload("progress", "a", "uploader", 0);
     ok(store.open(record.clone()).await, "open");
 
     let accepted_at = deadline(base(), SignedDuration::from_secs(60));
-    let chunk = AcceptedChunk {
-        offset: 0,
-        chunk_hash: "b".repeat(64),
-        next_offset: 4096,
-        accepted_at,
-    };
     let updated = present(
         ok(
             store
-                .record_progress(&record.upload_id, chunk.clone())
+                .record_range(
+                    &record.upload_id,
+                    CommittedRange {
+                        start: 4096,
+                        end: 8192,
+                        accepted_at,
+                    },
+                )
                 .await,
-            "record_progress",
+            "record_range",
         ),
         "a live session",
     );
 
-    assert_eq!(updated.received_bytes, 4096, "the byte counter advances");
+    assert_eq!(
+        updated.committed.ranges(),
+        &[(4096, 8192)],
+        "a range past a gap is committed where it lies"
+    );
+    assert_eq!(
+        updated.committed.prefix(),
+        0,
+        "the gap holds the prefix at zero"
+    );
     assert_eq!(
         updated.last_progress_at, accepted_at,
         "the progress clock advances"
@@ -678,12 +893,7 @@ pub async fn recording_progress_advances_bytes_clock_and_replay_together(h: &dyn
     assert_eq!(
         updated.status,
         UploadSessionStatus::Uploading,
-        "the first accepted chunk moves a pending session to uploading"
-    );
-    assert_eq!(
-        ok(store.chunk_at(&record.upload_id, 0).await, "chunk_at"),
-        Some(chunk),
-        "and the chunk is recorded for replay — all three, or none"
+        "the first committed range moves a pending session to uploading"
     );
     assert_eq!(
         ok(store.read(&record.upload_id).await, "read"),
@@ -691,51 +901,88 @@ pub async fn recording_progress_advances_bytes_clock_and_replay_together(h: &dyn
         "the persisted record matches what the write returned"
     );
 
+    let filled = present(
+        ok(
+            store.record_range(&record.upload_id, range(0, 4096)).await,
+            "record_range",
+        ),
+        "a live session",
+    );
+    assert!(
+        filled.committed.is_full(8192),
+        "filling the gap coalesces the set into one range: {:?}",
+        filled.committed
+    );
+    assert_eq!(filled.committed.prefix(), 8192);
+
     let missing = UploadId::new("progress-never-opened");
-    let orphan = AcceptedChunk {
-        offset: 0,
-        chunk_hash: "c".repeat(64),
-        next_offset: 1,
-        accepted_at,
-    };
     assert_eq!(
         ok(
-            store.record_progress(&missing, orphan).await,
-            "record_progress"
+            store.record_range(&missing, range(0, 4096)).await,
+            "record_range"
         ),
         None,
-        "progress against an unknown session advances nothing"
+        "a range against an unknown session records nothing"
     );
 }
 
-/// Replay lookups are addressed by offset, and an offset never accepted is absent.
-pub async fn chunk_replay_is_offset_addressed(h: &dyn Harness) {
+/// Ranges recorded at once all land: the merge happens inside the store, never as a read the
+/// caller writes back over a concurrent one.
+pub async fn ranges_recorded_concurrently_all_land(h: &dyn Harness) {
     let store = h.uploads();
-    let record = upload("replay", "a", "uploader", 0);
+    let mut record = upload("concurrent-ranges", "a", "uploader", 0);
+    record.total_size = 16 * 4096;
     ok(store.open(record.clone()).await, "open");
 
-    for (offset, next) in [(0_u64, 4096_u64), (4096, 8192)] {
-        let chunk = AcceptedChunk {
-            offset,
-            chunk_hash: format!("{offset:064x}"),
-            next_offset: next,
-            accepted_at: base(),
-        };
-        ok(
-            store.record_progress(&record.upload_id, chunk).await,
-            "record_progress",
-        );
-    }
-
-    let second = present(
-        ok(store.chunk_at(&record.upload_id, 4096).await, "chunk_at"),
-        "the chunk accepted at 4096",
+    // Out of order and four lanes in flight together, as a client with a wide window sends them.
+    let lane = |blocks: [u64; 4]| {
+        let id = record.upload_id.clone();
+        async move {
+            for block in blocks {
+                let recorded = store
+                    .record_range(&id, range(block * 4096, (block + 1) * 4096))
+                    .await;
+                present(ok(recorded, "record_range"), "a live session");
+            }
+        }
+    };
+    tokio::join!(
+        lane([9, 3, 15, 0]),
+        lane([7, 12, 1, 4]),
+        lane([14, 8, 2, 11]),
+        lane([5, 13, 10, 6]),
     );
-    assert_eq!(second.next_offset, 8192, "each offset keeps its own record");
+
+    let after = present(
+        ok(store.read(&record.upload_id).await, "read"),
+        "the session",
+    );
+    assert!(
+        after.committed.is_full(16 * 4096),
+        "every concurrently recorded range is in the set: {:?}",
+        after.committed
+    );
+}
+
+/// A range recorded after its session was discarded is lost, and resurrects nothing.
+pub async fn a_range_recorded_against_a_discarded_session_is_lost(h: &dyn Harness) {
+    let store = h.uploads();
+    let record = upload("record-after-discard", "a", "uploader", 0);
+    ok(store.open(record.clone()).await, "open");
+    ok(store.discard(&record.upload_id).await, "discard");
+
     assert_eq!(
-        ok(store.chunk_at(&record.upload_id, 1234).await, "chunk_at"),
+        ok(
+            store.record_range(&record.upload_id, range(0, 4096)).await,
+            "record_range"
+        ),
         None,
-        "an offset never accepted has no replay entry"
+        "the write it records is discarded with its session"
+    );
+    assert_eq!(
+        ok(store.read(&record.upload_id).await, "read"),
+        None,
+        "and the session stays gone"
     );
 }
 
@@ -784,6 +1031,76 @@ pub async fn finalization_is_claimed_exactly_once(h: &dyn Harness) {
         FinalizeClaim::NotFound,
         "claiming an unknown session is distinguishable from losing the race"
     );
+}
+
+/// An unclaimed discard takes a `Pending` or `Uploading` session, and leaves a claimed or
+/// terminal one exactly as it is.
+pub async fn an_unclaimed_discard_never_takes_a_claimed_session(h: &dyn Harness) {
+    let store = h.uploads();
+    let open = upload("unclaimed-open", "a", "uploader", 0);
+    let claimed = upload("unclaimed-claimed", "a", "uploader", 0);
+    let failed = upload("unclaimed-failed", "a", "uploader", 0);
+    for record in [&open, &claimed, &failed] {
+        ok(store.open(record.clone()).await, "open");
+    }
+    ok(
+        store.claim_finalize(&claimed.upload_id).await,
+        "claim_finalize",
+    );
+    ok(
+        store
+            .fail_processing(&failed.upload_id, "error.upload.hash_mismatch")
+            .await,
+        "fail_processing",
+    );
+
+    match ok(
+        store.discard_unclaimed(&open.upload_id).await,
+        "discard_unclaimed",
+    ) {
+        UnclaimedDiscard::Discarded(removed) => assert_eq!(
+            removed.upload_id, open.upload_id,
+            "the discard hands back the session it removed"
+        ),
+        other => panic!("an open session must be discarded, got {other:?}"),
+    }
+    assert_eq!(
+        ok(store.read(&open.upload_id).await, "read"),
+        None,
+        "the discarded session is gone"
+    );
+    assert_eq!(
+        ok(
+            store.discard_unclaimed(&open.upload_id).await,
+            "discard_unclaimed"
+        ),
+        UnclaimedDiscard::NotFound,
+        "discarding it again finds nothing"
+    );
+
+    for (record, status) in [
+        (&claimed, UploadSessionStatus::WaitingForProcessing),
+        (&failed, UploadSessionStatus::FailedProcessing),
+    ] {
+        assert_eq!(
+            ok(
+                store.discard_unclaimed(&record.upload_id).await,
+                "discard_unclaimed"
+            ),
+            UnclaimedDiscard::Claimed,
+            "a {status:?} session is not discarded"
+        );
+        assert_eq!(
+            present(
+                ok(store.read(&record.upload_id).await, "read"),
+                "the session"
+            )
+            .status,
+            status,
+            "the refused discard left the session as it was"
+        );
+        ok(store.discard(&record.upload_id).await, "discard");
+    }
 }
 
 /// A claimed session is no longer an eviction candidate — the promise the claim makes.
@@ -835,38 +1152,34 @@ pub async fn a_claimed_session_leaves_the_eviction_view(h: &dyn Harness) {
     ok(store.discard(&record.upload_id).await, "discard");
 }
 
-/// The startup scrub sets the byte counter absolutely and does not fake progress.
-pub async fn reconciling_received_bytes_does_not_move_the_progress_clock(h: &dyn Harness) {
+/// A terminal session's committed set is settled: a range recorded late changes nothing.
+pub async fn a_terminal_session_takes_no_range(h: &dyn Harness) {
     let store = h.uploads();
-    let record = upload("reconcile", "a", "uploader", 0);
+    let record = upload("terminal-range", "a", "uploader", 0);
     ok(store.open(record.clone()).await, "open");
+    ok(
+        store
+            .set_status(&record.upload_id, UploadSessionStatus::Completed)
+            .await,
+        "set_status",
+    );
 
-    let reconciled = present(
-        ok(
-            store
-                .reconcile_received_bytes(&record.upload_id, 12_288)
-                .await,
-            "reconcile_received_bytes",
-        ),
-        "a live session",
-    );
-    assert_eq!(
-        reconciled.received_bytes, 12_288,
-        "the counter is set to the on-disk truth, not incremented"
-    );
-    assert_eq!(
-        reconciled.last_progress_at, record.last_progress_at,
-        "a scrub is not progress and must not refresh the survival-floor anchor"
-    );
     assert_eq!(
         ok(
-            store
-                .reconcile_received_bytes(&UploadId::new("reconcile-never-opened"), 1)
-                .await,
-            "reconcile_received_bytes"
+            store.record_range(&record.upload_id, range(0, 4096)).await,
+            "record_range"
         ),
         None,
-        "there is nothing to reconcile for an unknown session"
+        "a completed session records no range"
+    );
+    let after = present(
+        ok(store.read(&record.upload_id).await, "read"),
+        "the terminal record",
+    );
+    assert_eq!(after.committed, record.committed, "its set is unchanged");
+    assert_eq!(
+        after.last_progress_at, record.last_progress_at,
+        "and a refused record is not progress"
     );
 }
 
@@ -917,26 +1230,88 @@ pub async fn a_terminal_session_is_not_an_eviction_candidate(h: &dyn Harness) {
     ok(store.discard(&record.upload_id).await, "discard");
 }
 
-/// Discarding removes the record, its replay entries and its listing entry together.
-pub async fn discarding_removes_the_record_its_chunks_and_its_listing(h: &dyn Harness) {
+/// Failing a session records its `error.*` code with the status, and both read back: the code is
+/// what `HEAD` and the session list report once no request waits on finalization.
+pub async fn a_failed_session_carries_its_failure_code(h: &dyn Harness) {
+    let store = h.uploads();
+    let record = upload("failure-code", "a", "uploader", 0);
+    ok(store.open(record.clone()).await, "open");
+    assert_eq!(
+        present(
+            ok(store.read(&record.upload_id).await, "read"),
+            "a live session"
+        )
+        .failure_code,
+        None,
+        "a session that has not failed carries no failure code"
+    );
+    match ok(
+        store.claim_finalize(&record.upload_id).await,
+        "claim_finalize",
+    ) {
+        FinalizeClaim::Won(_) => {}
+        other => panic!("the first claim must win, got {other:?}"),
+    }
+
+    let failed = present(
+        ok(
+            store
+                .fail_processing(&record.upload_id, "error.upload.content_hash_mismatch")
+                .await,
+            "fail_processing",
+        ),
+        "a live session",
+    );
+    assert_eq!(failed.status, UploadSessionStatus::FailedProcessing);
+    assert_eq!(
+        failed.failure_code.as_deref(),
+        Some("error.upload.content_hash_mismatch")
+    );
+    let reread = present(
+        ok(store.read(&record.upload_id).await, "read"),
+        "a live session",
+    );
+    assert_eq!(
+        reread, failed,
+        "the code reads back with the status it explains"
+    );
+    assert!(
+        !mine_claimed(store, &record.upload_id).await,
+        "a failed session has left the claimed listing"
+    );
+    assert_eq!(
+        ok(
+            store
+                .fail_processing(
+                    &UploadId::new("failure-code-unknown"),
+                    "error.upload.unavailable"
+                )
+                .await,
+            "fail_processing",
+        ),
+        None,
+        "failing an unknown session touches nothing"
+    );
+
+    ok(store.discard(&record.upload_id).await, "discard");
+}
+
+async fn mine_claimed(store: &dyn UploadSessionStore, upload: &UploadId) -> bool {
+    ok(store.claimed().await, "claimed")
+        .iter()
+        .any(|claimed| claimed.upload_id == *upload)
+}
+
+/// Discarding removes the record, its committed set and its listing entry together.
+pub async fn discarding_removes_the_record_its_ranges_and_its_listing(h: &dyn Harness) {
     let store = h.uploads();
     let kept = upload("discard", "kept", "uploader", 0);
     let dropped = upload("discard", "dropped", "uploader", 10);
     ok(store.open(kept.clone()).await, "open");
     ok(store.open(dropped.clone()).await, "open");
     ok(
-        store
-            .record_progress(
-                &dropped.upload_id,
-                AcceptedChunk {
-                    offset: 0,
-                    chunk_hash: "d".repeat(64),
-                    next_offset: 4096,
-                    accepted_at: base(),
-                },
-            )
-            .await,
-        "record_progress",
+        store.record_range(&dropped.upload_id, range(0, 4096)).await,
+        "record_range",
     );
 
     let removed = ok(store.discard(&dropped.upload_id).await, "discard");
@@ -949,11 +1324,6 @@ pub async fn discarding_removes_the_record_its_chunks_and_its_listing(h: &dyn Ha
         ok(store.read(&dropped.upload_id).await, "read"),
         None,
         "the record is gone"
-    );
-    assert_eq!(
-        ok(store.chunk_at(&dropped.upload_id, 0).await, "chunk_at"),
-        None,
-        "its replay entries go with it"
     );
     assert_eq!(
         ok(
@@ -1128,18 +1498,8 @@ pub async fn an_expired_upload_session_leaves_no_listing_entry_behind(h: &dyn Ha
     let ttl = store.ttl();
     ok(store.open(record.clone()).await, "open");
     ok(
-        store
-            .record_progress(
-                &record.upload_id,
-                AcceptedChunk {
-                    offset: 0,
-                    chunk_hash: "e".repeat(64),
-                    next_offset: 4096,
-                    accepted_at: base(),
-                },
-            )
-            .await,
-        "record_progress",
+        store.record_range(&record.upload_id, range(0, 4096)).await,
+        "record_range",
     );
 
     ok(h.advance(ttl).await, "advance to the lifetime cap");
@@ -1156,11 +1516,6 @@ pub async fn an_expired_upload_session_leaves_no_listing_entry_behind(h: &dyn Ha
         )
         .is_empty(),
         "and so is its listing entry"
-    );
-    assert_eq!(
-        ok(store.chunk_at(&record.upload_id, 0).await, "chunk_at"),
-        None,
-        "and its replay entries, which have no lifetime of their own"
     );
 }
 
@@ -1872,18 +2227,24 @@ pub async fn run_all(h: &dyn Harness) {
     reopening_a_session_id_does_not_duplicate_the_listing(h).await;
     touching_a_session_records_activity_without_extending_its_life(h).await;
     an_expired_session_leaves_no_listing_entry_behind(h).await;
+    a_past_cap_lineage_does_not_hide_a_live_one(h).await;
+    restoring_a_session_keeps_its_original_deadline(h).await;
 
     upload_session_round_trips_every_field(h).await;
     uploader_listing_is_ordered_and_scoped(h).await;
     a_pending_address_is_uploader_scoped_and_ends_with_the_session(h).await;
     discarding_a_session_withdraws_its_pending_address(h).await;
-    recording_progress_advances_bytes_clock_and_replay_together(h).await;
-    chunk_replay_is_offset_addressed(h).await;
+    a_live_address_spans_every_uploader_and_ends_with_the_session(h).await;
+    recording_a_range_moves_set_clock_and_status_together(h).await;
+    ranges_recorded_concurrently_all_land(h).await;
+    a_range_recorded_against_a_discarded_session_is_lost(h).await;
     finalization_is_claimed_exactly_once(h).await;
+    an_unclaimed_discard_never_takes_a_claimed_session(h).await;
     a_claimed_session_leaves_the_eviction_view(h).await;
-    reconciling_received_bytes_does_not_move_the_progress_clock(h).await;
+    a_terminal_session_takes_no_range(h).await;
     a_terminal_session_is_not_an_eviction_candidate(h).await;
-    discarding_removes_the_record_its_chunks_and_its_listing(h).await;
+    a_failed_session_carries_its_failure_code(h).await;
+    discarding_removes_the_record_its_ranges_and_its_listing(h).await;
     eviction_candidates_are_ordered_by_progress_and_bounded(h).await;
     the_claimed_listing_is_exactly_the_sessions_awaiting_their_finalizer(h).await;
     an_expired_upload_session_leaves_no_listing_entry_behind(h).await;

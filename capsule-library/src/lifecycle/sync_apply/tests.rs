@@ -80,9 +80,11 @@ fn a_delete_tombstone_applies_without_a_sidecar() {
     ws.soft_delete(&asset, 30).unwrap();
     let records = ws.asset(&asset).unwrap().chain.records();
     let create_head = records[0].record_hash();
+    // The feed serves the head record's canonical CBOR; an upload bundle carries the create.
+    let head_cbor = cbor::to_canonical_vec(records.last().unwrap()).unwrap();
     let bundle = ws.upload_bundle(&asset).unwrap();
     let wire = Wire {
-        manifest_cbor: bundle.provenance_blob.clone(),
+        manifest_cbor: head_cbor,
         // A tombstone carries no metadata blob on the wire.
         metadata_blob: Vec::new(),
         ciphertext: bundle.original.to_vec().unwrap(),
@@ -718,4 +720,831 @@ fn a_head_hashed_from_a_stream_applies_as_the_entry_does() {
             RejectReason::CiphertextHashMismatch
         ))
     );
+}
+
+/// A purge's tombstone refuses every later feed entry for the asset — its original `create`
+/// and the purge's own `delete` alike — before and after a reopen, while an entry for an asset
+/// that was not purged still applies. The tombstone itself is left as it was, so the `delete`
+/// the purge signed can still be resent.
+#[test]
+fn a_purged_asset_refuses_every_feed_entry_across_a_reopen() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (mut ws, album, gone, gone_create) = seeded(&lib, &src);
+    let other = src.path().join("other.jpg");
+    std::fs::write(&other, b"\xFF\xD8\xFF another asset").unwrap();
+    let kept = ws.import_asset(album, &other).unwrap();
+    let bundle = ws.upload_bundle(&kept).unwrap();
+    let kept_create = Wire {
+        manifest_cbor: bundle.provenance_blob.clone(),
+        metadata_blob: bundle.metadata_blob.clone(),
+        ciphertext: bundle.original.to_vec().unwrap(),
+    };
+
+    ws.soft_delete(&gone, 30).unwrap();
+    let reissue = ws
+        .purge(&gone)
+        .unwrap()
+        .reissue
+        .expect("an early purge re-signs its delete");
+    let gone_delete = Wire {
+        manifest_cbor: cbor::to_canonical_vec(&reissue).unwrap(),
+        metadata_blob: Vec::new(),
+        ciphertext: gone_create.ciphertext.clone(),
+    };
+
+    let check = |ws: &Workspace| {
+        for (wire, head) in [
+            (&gone_create, None),
+            (&gone_delete, reissue.prior_provenance_hash),
+        ] {
+            assert_eq!(
+                ws.apply_remote_entry(entry(album, wire, head)).unwrap(),
+                SyncApplyOutcome::Quarantined(QuarantineReason::Purged(gone)),
+                "a purged asset's tombstone refuses the entry"
+            );
+        }
+        let outcome = ws
+            .apply_remote_entry(entry(album, &kept_create, None))
+            .unwrap();
+        assert_eq!(
+            outcome.facts().map(|facts| facts.asset_id),
+            Some(kept),
+            "an asset that was not purged still applies"
+        );
+        assert_eq!(ws.tombstones(), std::collections::BTreeSet::from([gone]));
+        assert_eq!(ws.purge_record(&gone), Some(&reissue));
+    };
+    check(&ws);
+    drop(ws);
+
+    let ws = Workspace::open(lib.path(), b"passphrase", crate::lifecycle::FAST_PARAMS).unwrap();
+    check(&ws);
+}
+
+// ── Adoption ──────────────────────────────────────────────────────────────────────────────
+
+/// Two devices of one account: `a` imported `asset` into `album`, its create carrying the user
+/// tag `harbour`, and `b` holds the album's keys and a device directory listing both devices,
+/// as an enrolled second device does. `b` has never seen the asset.
+struct Pair {
+    a: Workspace,
+    b: Workspace,
+    album: Uuid,
+    asset: Uuid,
+    original: Vec<u8>,
+    /// Where `b`'s opened plaintexts are staged, outside either library.
+    staging: TempDir,
+    _libs: (TempDir, TempDir),
+}
+
+fn pair() -> Pair {
+    use capsule_core::crypto::keys::MasterKey;
+
+    use crate::lifecycle::{FAST_PARAMS, SidecarEnrichment, SignedImportOptions};
+
+    let (lib_a, lib_b, staging) = (
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+        TempDir::new().unwrap(),
+    );
+    let mut a = fast_workspace(lib_a.path());
+    let album = a.create_album("Trip").unwrap();
+    let original = b"\xFF\xD8\xFF an original another device imported".to_vec();
+    let img = staging.path().join("photo.jpg");
+    std::fs::write(&img, &original).unwrap();
+    let options = SignedImportOptions {
+        enrichment: Some(SidecarEnrichment {
+            tags: vec!["harbour".into()],
+            ..SidecarEnrichment::default()
+        }),
+        ..SignedImportOptions::default()
+    };
+    let asset = a.import_asset_with(album, &img, &options).unwrap().asset_id;
+    std::fs::remove_file(&img).unwrap();
+
+    let mut b = Workspace::create_from_master(
+        lib_b.path(),
+        b"device b",
+        FAST_PARAMS,
+        MasterKey::from_bytes(*a.account.master.as_bytes()),
+        a.user_id(),
+        &a.sealed_identity(),
+    )
+    .unwrap();
+    b.apply_album_store(&a.album_store_snapshot().unwrap());
+    b.persist_albums().unwrap();
+    let both = b
+        .extend_account_directory(a.device_directory())
+        .unwrap()
+        .expect("b joins the account's directory");
+    assert!(a.extend_account_directory(&both).unwrap().is_none());
+    Pair {
+        a,
+        b,
+        album,
+        asset,
+        original,
+        staging,
+        _libs: (lib_a, lib_b),
+    }
+}
+
+/// The feed entry for `asset`'s latest record on `ws`: the record's canonical CBOR, the sealed
+/// metadata blob it binds (none for an action that binds none), and the original ciphertext.
+fn head_wire(ws: &Workspace, asset: Uuid) -> Wire {
+    let state = ws.asset(&asset).unwrap();
+    let head = state.chain.records().last().unwrap();
+    let metadata_blob = if head.manifest.core.action.binds_metadata_blob() {
+        state.metadata_blob.clone()
+    } else {
+        Vec::new()
+    };
+    Wire {
+        manifest_cbor: cbor::to_canonical_vec(head).unwrap(),
+        metadata_blob,
+        ciphertext: ws.upload_bundle(&asset).unwrap().original.to_vec().unwrap(),
+    }
+}
+
+impl Pair {
+    /// Open `wire` on `b` to a fresh staged plaintext, as a sync driver does before adopting.
+    fn open_on_b(&self, wire: &Wire, head: Option<Hash32>) -> std::path::PathBuf {
+        let path = self.staging.path().join(Uuid::now_v7().to_string());
+        let sink = std::fs::File::create(&path).unwrap();
+        let opened = self
+            .b
+            .open_remote_original_from(
+                entry(self.album, wire, head).head(),
+                wire.ciphertext.as_slice(),
+                sink,
+            )
+            .unwrap();
+        assert!(
+            matches!(opened, RemoteOriginal::Opened { .. }),
+            "{opened:?}"
+        );
+        path
+    }
+
+    /// Adopt `a`'s create of the asset on `b`, from its opened original.
+    fn adopt_create(&mut self) -> Wire {
+        let wire = head_wire(&self.a, self.asset);
+        let plaintext = self.open_on_b(&wire, None);
+        let (outcome, adoption) = self
+            .b
+            .adopt_remote_original(entry(self.album, &wire, None).head(), &plaintext)
+            .unwrap();
+        assert!(outcome.facts().is_some(), "{outcome:?}");
+        assert_eq!(adoption, Some(Adoption::Adopted));
+        wire
+    }
+}
+
+/// A [`pair`] whose `b` has adopted `a`'s create.
+fn adopted_pair() -> (Pair, Wire) {
+    let mut pair = pair();
+    let create = pair.adopt_create();
+    (pair, create)
+}
+
+/// The issue's path: a create from another device is adopted with its chain, sidecar, sealed
+/// blob, original and user tags; the trash verbs then work on it, each record this device signs
+/// chains onto the head the other device wrote (and verifies there), and the asset survives a
+/// reopen.
+#[test]
+fn an_adopted_remote_create_takes_the_trash_verbs_and_its_records_chain_onto_the_remote_head() {
+    let (mut pair, create) = adopted_pair();
+    let (asset, album) = (pair.asset, pair.album);
+    let remote_head = pair.a.asset(&asset).unwrap().chain.head();
+
+    let held = pair.b.asset(&asset).expect("the asset is held");
+    assert_eq!(held.chain.head(), remote_head);
+    assert_eq!(
+        cbor::to_canonical_vec(&held.chain.records()[0]).unwrap(),
+        create.manifest_cbor,
+        "the held record is the one the chokepoint accepted, byte for byte"
+    );
+    assert_eq!(held.metadata_blob, create.metadata_blob);
+    assert_eq!(pair.b.read_plaintext(&asset).unwrap(), pair.original);
+    assert_eq!(
+        pair.b.db().tags_for(&asset.to_string()).unwrap(),
+        vec!["harbour".to_string()]
+    );
+    assert!(
+        pair.b
+            .original_path(&asset)
+            .unwrap()
+            .extension()
+            .is_some_and(|ext| ext == "jpeg")
+    );
+
+    // A delete this device signs names the remote head as its prior, and the device that wrote
+    // the create verifies it as the next record of its chain.
+    pair.b.soft_delete(&asset, 30).unwrap();
+    let delete = head_wire(&pair.b, asset);
+    let b_delete = pair.b.asset(&asset).unwrap().chain.records()[1].clone();
+    assert_eq!(b_delete.prior_provenance_hash, remote_head);
+    let applied = pair
+        .a
+        .apply_remote_entry(entry(album, &delete, remote_head))
+        .unwrap();
+    assert_eq!(
+        applied.facts().map(|facts| facts.action),
+        Some(Action::Delete)
+    );
+    let row = pair.b.db().find_by_uuid(&asset.to_string()).unwrap();
+    assert!(row.unwrap().is_deleted);
+
+    pair.b.restore(&asset).unwrap();
+    assert!(!pair.b.is_trashed(&asset));
+
+    // Held across a reopen, from its files alone.
+    let Pair {
+        b, original, _libs, ..
+    } = pair;
+    let root = b.root().to_path_buf();
+    drop(b);
+    let mut b = Workspace::open(&root, b"device b", crate::lifecycle::FAST_PARAMS).unwrap();
+    assert_eq!(b.asset(&asset).unwrap().chain.records().len(), 3);
+    assert_eq!(b.read_plaintext(&asset).unwrap(), original);
+    assert_eq!(
+        b.db().tags_for(&asset.to_string()).unwrap(),
+        vec!["harbour".to_string()]
+    );
+
+    b.soft_delete(&asset, 30).unwrap();
+    assert_eq!(b.purge(&asset).unwrap().asset_id, asset);
+    assert!(b.asset(&asset).is_none());
+    assert!(b.tombstones().contains(&asset));
+    assert!(b.db().find_by_uuid(&asset.to_string()).unwrap().is_none());
+}
+
+/// A record another device appends to an adopted asset advances the held chain: the tags and
+/// sealed metadata follow it, the create's own blob is kept for upload, a remote delete moves the
+/// asset into the trash, and none of it needs the original, which these records do not change.
+#[test]
+fn a_remote_record_onto_the_held_head_advances_the_adopted_asset() {
+    let (mut pair, create) = adopted_pair();
+    let (asset, album) = (pair.asset, pair.album);
+
+    pair.a.tag_add(&asset, "dusk").unwrap();
+    let edit = head_wire(&pair.a, asset);
+    let create_head = pair.b.asset(&asset).unwrap().chain.head();
+    let (outcome, adoption) = pair
+        .b
+        .adopt_remote_head(entry(album, &edit, create_head).head())
+        .unwrap();
+    assert_eq!(
+        outcome.facts().map(|f| f.action),
+        Some(Action::MetadataUpdate)
+    );
+    assert_eq!(adoption, Some(Adoption::Advanced));
+    assert_eq!(
+        pair.b.asset(&asset).unwrap().chain.head(),
+        pair.a.asset(&asset).unwrap().chain.head()
+    );
+    assert_eq!(
+        pair.b.db().tags_for(&asset.to_string()).unwrap(),
+        vec!["dusk".to_string(), "harbour".to_string()]
+    );
+    assert_eq!(
+        pair.b.asset(&asset).unwrap().metadata_blob,
+        edit.metadata_blob
+    );
+    let kept = pair.b.create_metadata_blob_path(&asset).unwrap();
+    assert_eq!(std::fs::read(kept).unwrap(), create.metadata_blob);
+    pair.b
+        .upload_bundle(&asset)
+        .expect("the create still uploads");
+
+    // A delete another device signed: the asset this device holds moves into the trash, and a
+    // purge here then removes it, as Recently Deleted asks of a row another device trashed.
+    pair.a.soft_delete(&asset, 30).unwrap();
+    let delete = head_wire(&pair.a, asset);
+    let edit_head = pair.b.asset(&asset).unwrap().chain.head();
+    let (_, adoption) = pair
+        .b
+        .adopt_remote_head(entry(album, &delete, edit_head).head())
+        .unwrap();
+    assert_eq!(adoption, Some(Adoption::Advanced));
+    assert!(pair.b.is_trashed(&asset));
+    assert!(
+        pair.b
+            .db()
+            .find_by_uuid(&asset.to_string())
+            .unwrap()
+            .unwrap()
+            .is_deleted
+    );
+    pair.b.purge(&asset).unwrap();
+    assert!(pair.b.tombstones().contains(&asset));
+}
+
+/// An entry whose record the held chain already contains is held already, and writes nothing.
+#[test]
+fn a_record_already_held_is_not_adopted_twice() {
+    let (mut pair, create) = adopted_pair();
+    let before = pair.b.asset(&pair.asset).unwrap().chain.records().len();
+    let (outcome, adoption) = pair
+        .b
+        .adopt_remote_head(entry(pair.album, &create, None).head())
+        .unwrap();
+    assert!(outcome.facts().is_some());
+    assert_eq!(adoption, Some(Adoption::AlreadyHeld));
+    assert_eq!(
+        pair.b.asset(&pair.asset).unwrap().chain.records().len(),
+        before
+    );
+}
+
+/// What adoption refuses, each leaving the workspace as it was: a create handed over without its
+/// original, an original that is not the signed one, an asset first seen past its create, an
+/// entry that did not apply, and a record that does not chain onto the held head.
+#[test]
+fn adoption_refuses_what_would_break_the_held_chain() {
+    let mut pair = pair();
+    let (asset, album) = (pair.asset, pair.album);
+    let create = head_wire(&pair.a, asset);
+
+    let (_, adoption) = pair
+        .b
+        .adopt_remote_head(entry(album, &create, None).head())
+        .unwrap();
+    assert_eq!(adoption, Some(Adoption::NeedsOriginal));
+    assert!(pair.b.asset(&asset).is_none());
+
+    let forged = pair.staging.path().join("forged");
+    std::fs::write(&forged, b"\xFF\xD8\xFF not the signed original").unwrap();
+    assert!(matches!(
+        pair.b
+            .adopt_remote_original(entry(album, &create, None).head(), &forged),
+        Err(LifecycleError::OriginalMismatch(id)) if id == asset
+    ));
+    assert!(pair.b.asset(&asset).is_none());
+    assert!(
+        pair.b
+            .db()
+            .find_by_uuid(&asset.to_string())
+            .unwrap()
+            .is_none()
+    );
+
+    // Seen past its create by a caller whose catalog kept the create's head (an app catalog
+    // written before the workspace adopted): verified, but not held, since its chain would not
+    // start at its create.
+    let create_head = pair.a.asset(&asset).unwrap().chain.head();
+    pair.a.tag_add(&asset, "dusk").unwrap();
+    let edit = head_wire(&pair.a, asset);
+    let plaintext = pair.open_on_b(&edit, create_head);
+    let (outcome, adoption) = pair
+        .b
+        .adopt_remote_original(entry(album, &edit, create_head).head(), &plaintext)
+        .unwrap();
+    assert!(outcome.facts().is_some());
+    assert_eq!(adoption, Some(Adoption::MissingHistory));
+    assert!(pair.b.asset(&asset).is_none());
+
+    // Not applied: nothing to adopt.
+    let (outcome, adoption) = pair
+        .b
+        .adopt_remote_head(entry(Uuid::from_u128(7), &edit, None).head())
+        .unwrap();
+    assert!(outcome.facts().is_none());
+    assert_eq!(adoption, None);
+
+    // A fork: this device edits the adopted create while the other device does too.
+    let (mut pair, _) = adopted_pair();
+    let (asset, album) = (pair.asset, pair.album);
+    let create_head = pair.b.asset(&asset).unwrap().chain.head();
+    pair.b.tag_add(&asset, "mine").unwrap();
+    let held_head = pair.b.asset(&asset).unwrap().chain.head();
+    pair.a.tag_add(&asset, "theirs").unwrap();
+    let theirs = head_wire(&pair.a, asset);
+    let (outcome, adoption) = pair
+        .b
+        .adopt_remote_head(entry(album, &theirs, create_head).head())
+        .unwrap();
+    assert!(outcome.facts().is_some());
+    assert_eq!(adoption, Some(Adoption::Diverged));
+    assert_eq!(pair.b.asset(&asset).unwrap().chain.head(), held_head);
+}
+
+/// An original an app placed under the asset's name before the workspace adopted synced assets
+/// is kept when it is the signed original, under its own extension, and replaced when it is not.
+/// The handed-over plaintext is left in place either way, for its owner to remove.
+#[test]
+fn an_original_already_under_the_assets_name_is_kept_only_when_it_is_the_signed_one() {
+    for signed in [true, false] {
+        let mut pair = pair();
+        let (asset, album) = (pair.asset, pair.album);
+        let wire = head_wire(&pair.a, asset);
+        let plaintext = pair.open_on_b(&wire, None);
+        let capture = pair.a.asset(&asset).unwrap().capture_utc;
+        let stray = media_file_path(pair.b.root(), capture, asset, "jpg");
+        std::fs::create_dir_all(stray.parent().unwrap()).unwrap();
+        let bytes: &[u8] = if signed {
+            &pair.original
+        } else {
+            b"stale bytes"
+        };
+        std::fs::write(&stray, bytes).unwrap();
+
+        let (_, adoption) = pair
+            .b
+            .adopt_remote_original(entry(album, &wire, None).head(), &plaintext)
+            .unwrap();
+        assert_eq!(adoption, Some(Adoption::Adopted));
+        let placed = pair.b.original_path(&asset).unwrap();
+        assert_eq!(placed == stray, signed, "{}", placed.display());
+        assert_eq!(stray.exists(), signed);
+        assert_eq!(pair.b.read_plaintext(&asset).unwrap(), pair.original);
+        assert!(plaintext.exists());
+    }
+}
+
+/// Only a verdict after which the workspace holds the asset at the entry's record says it holds
+/// it; a catalog writer skips its row for exactly those.
+#[test]
+fn only_a_held_adoption_holds_the_asset() {
+    for (adoption, holds) in [
+        (Adoption::Adopted, true),
+        (Adoption::Advanced, true),
+        (Adoption::AlreadyHeld, true),
+        (Adoption::MissingHistory, false),
+        (Adoption::NeedsOriginal, false),
+        (Adoption::Diverged, false),
+    ] {
+        assert_eq!(adoption.holds(), holds, "{adoption:?}");
+    }
+}
+
+/// The library original is the workspace's own copy, not a second name for the handed-over
+/// plaintext: an in-place write to the kept file afterwards leaves the library original as the
+/// signed bytes.
+#[test]
+fn an_adopted_original_does_not_share_the_handed_over_file() {
+    use std::io::Write as _;
+
+    let mut pair = pair();
+    let (asset, album) = (pair.asset, pair.album);
+    let wire = head_wire(&pair.a, asset);
+    let plaintext = pair.open_on_b(&wire, None);
+    let (_, adoption) = pair
+        .b
+        .adopt_remote_original(entry(album, &wire, None).head(), &plaintext)
+        .unwrap();
+    assert_eq!(adoption, Some(Adoption::Adopted));
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let placed = std::fs::metadata(pair.b.original_path(&asset).unwrap()).unwrap();
+        let kept = std::fs::metadata(&plaintext).unwrap();
+        assert_ne!(
+            (placed.dev(), placed.ino()),
+            (kept.dev(), kept.ino()),
+            "the library original is its own inode"
+        );
+    }
+
+    let mut kept = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&plaintext)
+        .unwrap();
+    kept.write_all(b"overwritten in place").unwrap();
+    kept.sync_all().unwrap();
+    drop(kept);
+    assert_eq!(pair.b.read_plaintext(&asset).unwrap(), pair.original);
+}
+
+/// The media types the import path writes take the extension the Apple lane names them by.
+#[test]
+fn an_adopted_original_is_named_for_its_media_type() {
+    assert_eq!(extension_for("image/jpeg"), "jpeg");
+    assert_eq!(extension_for("video/quicktime"), "mov");
+    assert_eq!(extension_for("image/heic"), "heic");
+    assert_eq!(extension_for("image/x-portable-anymap"), "pnm");
+    assert_eq!(extension_for("application/octet-stream"), "bin");
+}
+
+// ── Adopting from a fetched history ─────────────────────────────────────────────────────
+
+/// Every record of `asset`'s chain on `ws` before its head, oldest first, as the server serves
+/// each superseded one: its canonical CBOR.
+fn history_of(ws: &Workspace, asset: Uuid) -> Vec<Vec<u8>> {
+    let records = ws.asset(&asset).unwrap().chain.records();
+    records[..records.len() - 1]
+        .iter()
+        .map(|record| cbor::to_canonical_vec(record).unwrap())
+        .collect()
+}
+
+/// The feed entry for `asset`'s head on `ws`, carrying the asset's **live** metadata blob
+/// whatever the head binds, as the server's metadata role names it.
+fn live_wire(ws: &Workspace, asset: Uuid) -> Wire {
+    let state = ws.asset(&asset).unwrap();
+    Wire {
+        manifest_cbor: cbor::to_canonical_vec(state.chain.records().last().unwrap()).unwrap(),
+        metadata_blob: state.metadata_blob.clone(),
+        ciphertext: ws.upload_bundle(&asset).unwrap().original.to_vec().unwrap(),
+    }
+}
+
+/// The record hash of the last record of `history`.
+fn last_hash(history: &[Vec<u8>]) -> Option<Hash32> {
+    history
+        .last()
+        .map(|bytes| ProvenanceRecord::decode(bytes).unwrap().record_hash())
+}
+
+/// The issue's test: a device first seeing an asset at a `delete`, after an edit, fetches the
+/// records before it, verifies them in order, holds the asset from its create with the live
+/// sidecar and the original, and can restore it — the restore chaining onto the delete the
+/// other device signed, which that device verifies. The held asset survives a reopen.
+#[test]
+fn an_asset_first_seen_at_a_delete_is_adopted_from_its_history_and_restored() {
+    let mut pair = pair();
+    let (asset, album) = (pair.asset, pair.album);
+    pair.a.tag_add(&asset, "dusk").unwrap();
+    pair.a.soft_delete(&asset, 30).unwrap();
+    let remote_head = pair.a.asset(&asset).unwrap().chain.head();
+
+    let wire = live_wire(&pair.a, asset);
+    let history = history_of(&pair.a, asset);
+    assert_eq!(history.len(), 2, "the create and the edit");
+
+    // The head alone is what the feed carries, and it is not enough.
+    let (_, adoption) = pair
+        .b
+        .adopt_remote_head(entry(album, &wire, last_hash(&history)).head())
+        .unwrap();
+    assert_eq!(adoption, Some(Adoption::MissingHistory));
+
+    let plaintext = pair.open_on_b(&wire, last_hash(&history));
+    let (outcome, adoption) = pair
+        .b
+        .adopt_remote_history(entry(album, &wire, None).head(), &history, &plaintext)
+        .unwrap();
+    assert_eq!(outcome.facts().map(|f| f.action), Some(Action::Delete));
+    assert_eq!(adoption, Some(Adoption::Adopted));
+
+    let held = pair.b.asset(&asset).expect("the asset is held");
+    assert_eq!(held.chain.records().len(), 3);
+    assert_eq!(held.chain.head(), remote_head);
+    for (held, fetched) in held.chain.records().iter().zip(&history) {
+        assert_eq!(
+            &cbor::to_canonical_vec(held).unwrap(),
+            fetched,
+            "byte for byte"
+        );
+    }
+    assert_eq!(held.metadata_blob, wire.metadata_blob);
+    assert_eq!(pair.b.read_plaintext(&asset).unwrap(), pair.original);
+    assert!(pair.b.is_trashed(&asset));
+    assert_eq!(
+        pair.b.db().tags_for(&asset.to_string()).unwrap(),
+        vec!["dusk".to_string(), "harbour".to_string()]
+    );
+
+    // Restored here, chaining onto the delete the other device signed, which it verifies.
+    pair.b.restore(&asset).unwrap();
+    assert!(!pair.b.is_trashed(&asset));
+    // The original's ciphertext is the server's (`b` never held the create's sealed blob, so
+    // it cannot build the create's upload, and needs not: the asset is on the server).
+    let restore = Wire {
+        manifest_cbor: cbor::to_canonical_vec(
+            pair.b
+                .asset(&asset)
+                .unwrap()
+                .chain
+                .records()
+                .last()
+                .unwrap(),
+        )
+        .unwrap(),
+        metadata_blob: Vec::new(),
+        ciphertext: wire.ciphertext.clone(),
+    };
+    let applied = pair
+        .a
+        .apply_remote_entry(entry(album, &restore, remote_head))
+        .unwrap();
+    assert_eq!(
+        applied.facts().map(|facts| facts.action),
+        Some(Action::TrashRestore)
+    );
+
+    // Held across a reopen, from its files alone.
+    let Pair {
+        b, original, _libs, ..
+    } = pair;
+    let root = b.root().to_path_buf();
+    drop(b);
+    let b = Workspace::open(&root, b"device b", crate::lifecycle::FAST_PARAMS).unwrap();
+    assert_eq!(b.asset(&asset).unwrap().chain.records().len(), 4);
+    assert_eq!(b.read_plaintext(&asset).unwrap(), original);
+}
+
+/// A head that binds its own metadata takes its sidecar from it, and a history with no record
+/// before the head adopts the head as a create.
+#[test]
+fn a_history_adoption_of_an_edit_takes_the_edits_sidecar() {
+    let mut pair = pair();
+    let (asset, album) = (pair.asset, pair.album);
+    pair.a.tag_add(&asset, "dusk").unwrap();
+    let wire = live_wire(&pair.a, asset);
+    let history = history_of(&pair.a, asset);
+    let plaintext = pair.open_on_b(&wire, last_hash(&history));
+    let (_, adoption) = pair
+        .b
+        .adopt_remote_history(entry(album, &wire, None).head(), &history, &plaintext)
+        .unwrap();
+    assert_eq!(adoption, Some(Adoption::Adopted));
+    assert_eq!(
+        pair.b.asset(&asset).unwrap().chain.head(),
+        pair.a.asset(&asset).unwrap().chain.head()
+    );
+    assert!(
+        pair.b
+            .asset(&asset)
+            .unwrap()
+            .sidecar
+            .tags_user
+            .value()
+            .contains("dusk")
+    );
+
+    // An empty history is the plain create path.
+    let mut pair = self::pair();
+    let create = head_wire(&pair.a, pair.asset);
+    let plaintext = pair.open_on_b(&create, None);
+    let (_, adoption) = pair
+        .b
+        .adopt_remote_history(entry(pair.album, &create, None).head(), &[], &plaintext)
+        .unwrap();
+    assert_eq!(adoption, Some(Adoption::Adopted));
+}
+
+/// What a history adoption refuses, each writing nothing: a history with a record missing (the
+/// chain does not link), one that does not start at the create, a record that is not a record,
+/// and a live metadata blob that is not the one the newest binding record commits to.
+#[test]
+fn a_history_that_does_not_verify_from_its_create_adopts_nothing() {
+    let mut pair = pair();
+    let (asset, album) = (pair.asset, pair.album);
+    pair.a.tag_add(&asset, "dusk").unwrap();
+    pair.a.tag_add(&asset, "night").unwrap();
+    pair.a.soft_delete(&asset, 30).unwrap();
+    let wire = live_wire(&pair.a, asset);
+    let history = history_of(&pair.a, asset);
+    assert_eq!(history.len(), 3);
+    let plaintext = pair.open_on_b(&wire, last_hash(&history));
+
+    let refusals: [(Vec<Vec<u8>>, QuarantineReason); 3] = [
+        (
+            vec![history[0].clone(), history[2].clone()],
+            QuarantineReason::Rejected(RejectReason::ForgedChain),
+        ),
+        (
+            history[1..].to_vec(),
+            QuarantineReason::Rejected(RejectReason::ForgedChain),
+        ),
+        (
+            vec![
+                history[0].clone(),
+                b"not a record".to_vec(),
+                history[2].clone(),
+            ],
+            QuarantineReason::MalformedManifest(String::new()),
+        ),
+    ];
+    for (fetched, expected) in refusals {
+        let (outcome, adoption) = pair
+            .b
+            .adopt_remote_history(entry(album, &wire, None).head(), &fetched, &plaintext)
+            .unwrap();
+        assert_eq!(adoption, None);
+        match (&outcome, &expected) {
+            (
+                SyncApplyOutcome::Quarantined(QuarantineReason::MalformedManifest(_)),
+                QuarantineReason::MalformedManifest(_),
+            ) => {}
+            (SyncApplyOutcome::Quarantined(found), expected) => assert_eq!(found, expected),
+            (other, _) => panic!("{other:?}"),
+        }
+        assert!(pair.b.asset(&asset).is_none());
+    }
+
+    // The live metadata blob of another asset does not bind to this asset's newest edit.
+    let other = pair.staging.path().join("other.jpg");
+    std::fs::write(&other, b"\xFF\xD8\xFF another photo").unwrap();
+    let stranger = pair.a.import_asset(album, &other).unwrap();
+    let wrong = Wire {
+        metadata_blob: pair.a.asset(&stranger).unwrap().metadata_blob.clone(),
+        ..live_wire(&pair.a, asset)
+    };
+    let (outcome, adoption) = pair
+        .b
+        .adopt_remote_history(entry(album, &wrong, None).head(), &history, &plaintext)
+        .unwrap();
+    assert_eq!(adoption, None);
+    assert_eq!(
+        outcome,
+        SyncApplyOutcome::Quarantined(QuarantineReason::Binding(BindingReject::BlobHashMismatch))
+    );
+    assert!(pair.b.asset(&asset).is_none());
+    assert!(
+        pair.b
+            .db()
+            .find_by_uuid(&asset.to_string())
+            .unwrap()
+            .is_none()
+    );
+}
+
+/// Another asset's history handed over in front of this asset's head is refused, though its
+/// record verifies on its own: the head does not chain onto it.
+#[test]
+fn a_history_of_another_asset_is_refused() {
+    let mut pair = pair();
+    let (asset, album) = (pair.asset, pair.album);
+    let other = pair.staging.path().join("other.jpg");
+    std::fs::write(&other, b"\xFF\xD8\xFF another photo").unwrap();
+    let stranger = pair.a.import_asset(album, &other).unwrap();
+    pair.a.tag_add(&asset, "dusk").unwrap();
+    let wire = live_wire(&pair.a, asset);
+    let plaintext = pair.open_on_b(&wire, last_hash(&history_of(&pair.a, asset)));
+    let spliced =
+        vec![cbor::to_canonical_vec(&pair.a.asset(&stranger).unwrap().chain.records()[0]).unwrap()];
+    let (outcome, adoption) = pair
+        .b
+        .adopt_remote_history(entry(album, &wire, None).head(), &spliced, &plaintext)
+        .unwrap();
+    assert_eq!(adoption, None);
+    assert_eq!(
+        outcome,
+        SyncApplyOutcome::Quarantined(QuarantineReason::Rejected(RejectReason::ForgedChain))
+    );
+    assert!(pair.b.asset(&asset).is_none());
+}
+
+/// An asset held already adopts its entry as `adopt_remote_original` would, with the handed-over
+/// history unread: a history that would not verify does not refuse an advance, an entry already
+/// held is held, and a fork is diverged however good the history is.
+#[test]
+fn a_held_asset_adopts_with_the_history_unread() {
+    let (mut pair, _) = adopted_pair();
+    let (asset, album) = (pair.asset, pair.album);
+    let create_head = pair.b.asset(&asset).unwrap().chain.head();
+
+    pair.a.tag_add(&asset, "dusk").unwrap();
+    let edit = live_wire(&pair.a, asset);
+    let plaintext = pair.open_on_b(&edit, create_head);
+    let unreadable = vec![b"not a record".to_vec()];
+    let (outcome, adoption) = pair
+        .b
+        .adopt_remote_history(
+            entry(album, &edit, create_head).head(),
+            &unreadable,
+            &plaintext,
+        )
+        .unwrap();
+    assert_eq!(
+        outcome.facts().map(|f| f.action),
+        Some(Action::MetadataUpdate)
+    );
+    assert_eq!(adoption, Some(Adoption::Advanced));
+    let edit_head = pair.a.asset(&asset).unwrap().chain.head();
+    assert_eq!(pair.b.asset(&asset).unwrap().chain.head(), edit_head);
+
+    let (_, adoption) = pair
+        .b
+        .adopt_remote_history(
+            entry(album, &edit, create_head).head(),
+            &unreadable,
+            &plaintext,
+        )
+        .unwrap();
+    assert_eq!(adoption, Some(Adoption::AlreadyHeld));
+
+    // A fork: both devices edit onto the edit. The other device's history verifies from its
+    // create, and the held chain stands all the same.
+    pair.b.tag_add(&asset, "mine").unwrap();
+    let held_head = pair.b.asset(&asset).unwrap().chain.head();
+    pair.a.tag_add(&asset, "theirs").unwrap();
+    let theirs = live_wire(&pair.a, asset);
+    let history = history_of(&pair.a, asset);
+    let plaintext = pair.open_on_b(&theirs, edit_head);
+    let (outcome, adoption) = pair
+        .b
+        .adopt_remote_history(
+            entry(album, &theirs, edit_head).head(),
+            &history,
+            &plaintext,
+        )
+        .unwrap();
+    assert!(outcome.facts().is_some(), "{outcome:?}");
+    assert_eq!(adoption, Some(Adoption::Diverged));
+    assert_eq!(pair.b.asset(&asset).unwrap().chain.head(), held_head);
 }

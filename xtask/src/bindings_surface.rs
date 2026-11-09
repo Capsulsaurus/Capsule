@@ -83,6 +83,12 @@ const NAMESPACE: &str = "capsule_sdk";
 /// - Client and session: the networked user flows (login, upload, status, sync).
 /// - Workspace verbs: enroll (including hardware-signer parity), album, seal and import, the
 ///   seal-to-upload bridge, verify, sync-apply, escrow, and the device directory.
+/// - Purge delivery: the feed read that names the server's head, the session verbs that send a
+///   purged asset's kept chain (from the listed head or its hash), its outcome, the kept chain's
+///   head a delivery compares with the feed, and the list of kept purges a relaunch walks.
+/// - Lifecycle delivery: the session verb that sends a live or trashed asset's held stretch
+///   (its outcome is the purge's), the chain head a delivery compares with the feed, and the
+///   list of held assets a relaunch walks.
 /// - Alerts: the shared predicate and the per-class pre-arm deadlines a client schedules its
 ///   alarms from. The arm call must not go missing: without it a client can only ask "what is
 ///   true now?", which is the question pre-arming exists to stop it having to ask.
@@ -113,12 +119,22 @@ pub(crate) const REQUIRED: &[(&str, &str)] = &[
         "createWithP256HardwareSigner",
         "createWithP256HardwareSigner",
     ),
+    ("openWithP256HardwareSigner", "openWithP256HardwareSigner"),
     ("FfiHardwareKeyAgreement", "FfiHardwareKeyAgreement"),
     ("FfiHardwareSignerError", "FfiHardwareSignerException"),
     ("FfiDeviceTier", "FfiDeviceTier"),
     ("createWithHardwareSigner", "createWithHardwareSigner"),
     ("p256HardwareDekRoundTrip", "p256HardwareDekRoundTrip"),
     ("verifyAsset", "verifyAsset"),
+    ("syncPull", "syncPull"),
+    ("deliverPurge", "deliverPurge"),
+    ("deliverPurgeAtHash", "deliverPurgeAtHash"),
+    ("purgedRecord", "purgedRecord"),
+    ("purgedAssetIds", "purgedAssetIds"),
+    ("FfiLifecycleOpOutcome", "FfiLifecycleOpOutcome"),
+    ("deliverLifecycleAtHash", "deliverLifecycleAtHash"),
+    ("provenanceHead", "provenanceHead"),
+    ("assetIds", "assetIds"),
 ];
 
 /// The committed dump.
@@ -432,6 +448,10 @@ pub(crate) fn lex(source: &str) -> Result<Vec<Line<'_>>> {
 /// over: uniffi's Swift enum template leaves a blank line between an enum's doc and its
 /// declaration.
 pub(crate) fn doc_above(lines: &[Line<'_>], at: usize) -> String {
+    // A declaration on the line that closes its own doc (`*/ fun …`): the block ends here.
+    if closing_doc(&lines[at]).is_some() {
+        return doc_ending_at(lines, at + 1);
+    }
     let mut end = at;
     while end > 0 {
         let above = lines[end - 1].text.trim();
@@ -444,6 +464,20 @@ pub(crate) fn doc_above(lines: &[Line<'_>], at: usize) -> String {
     if end == 0 || !lines[end - 1].text.trim_end().ends_with("*/") {
         return String::new();
     }
+    doc_ending_at(lines, end)
+}
+
+/// The code after `*/` on a line that starts inside a block comment and whose first text is
+/// that comment's close, or `None` for any other line.
+fn closing_doc<'a>(line: &Line<'a>) -> Option<&'a str> {
+    if !line.in_comment {
+        return None;
+    }
+    line.text.trim_start().strip_prefix("*/")
+}
+
+/// The `/** … */` block whose closing line is `lines[end - 1]`, as Markdown, or `""`.
+fn doc_ending_at(lines: &[Line<'_>], end: usize) -> String {
     let mut start = end - 1;
     while start > 0 && !lines[start].text.trim_start().starts_with("/**") {
         start -= 1;
@@ -706,11 +740,23 @@ pub(crate) fn scan_kotlin(source: &str) -> Result<Vec<Declaration>> {
     let types = top_level(&lines, &TYPE);
     let mut declarations = Vec::new();
     for (i, line) in lines.iter().enumerate() {
-        if line.depth != 0 || line.in_comment {
+        if line.depth != 0 {
             continue;
         }
-        if let Some(captures) = FUN.captures(line.text) {
-            declarations.push(member(&lines, i, "fun", &captures[1]));
+        // uniffi's Kotlin template puts a top-level function that throws nothing on the line
+        // that closes its doc comment (`*/ fun …`), so that line starts inside the comment.
+        let code = match (line.in_comment, closing_doc(line)) {
+            (false, _) => line.text,
+            (true, Some(code)) => code,
+            (true, None) => continue,
+        };
+        if let Some(captures) = FUN.captures(code) {
+            let mut declaration = member(&lines, i, "fun", &captures[1]);
+            declaration.signature = tidy_signature(code);
+            declarations.push(declaration);
+            continue;
+        }
+        if line.in_comment {
             continue;
         }
         let Some(captures) = TYPE.captures(line.text) else {

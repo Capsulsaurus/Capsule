@@ -37,7 +37,7 @@
 //!   document claim it, that one makes the claim true for the framework's own responses.
 //! - **Everything else is per-response and optional**, listed in [`EXTRAS`]. Optional because a
 //!   status carries one response in a description while an enum may reach it from several
-//!   variants — `ChunkRejection`'s `409` is an offset mismatch *or* a plain conflict — so a
+//!   variants — `ChunkRejection`'s `409` is a range conflict *or* a plain conflict — so a
 //!   member one variant renders is a member the response *may* carry.
 //!
 //! # The honest limit
@@ -146,17 +146,31 @@ const EXTRAS: &[Extra] = &[
         }],
     },
     Extra {
-        component: "OffsetMismatchProblem",
+        component: "UploadChunkConflictProblem",
         operation: "append_chunk",
         status: 409,
-        members: &[Member {
-            name: "offset",
-            json_type: "integer",
-            format: None,
-            description: "The offset the server is actually at, so a client resumes from it \
-                          instead of asking again.",
-            nullable: false,
-        }],
+        members: &[
+            Member {
+                name: "committed",
+                json_type: "string",
+                format: None,
+                description: "On `error.upload.range_conflict`, the session's committed set as \
+                              `X-Capsule-Committed` spells it, which the response also carries: \
+                              comma-separated inclusive byte ranges. The client re-plans from \
+                              it. Absent on every other conflict.",
+                nullable: true,
+            },
+            Member {
+                name: "retry_after",
+                json_type: "integer",
+                format: Some("uint64"),
+                description: "When the caller may retry, as Unix seconds; the `Retry-After` \
+                              header carries the same instant as a delay. Set on \
+                              `error.upload.too_many_in_flight`, and on `range_conflict` and \
+                              `too_fragmented` when a range of the session is in flight.",
+                nullable: true,
+            },
+        ],
     },
     Extra {
         component: "DirectoryConflictProblem",
@@ -283,6 +297,12 @@ const EXTRAS: &[Extra] = &[
     Extra {
         component: "ShareBlobRateLimitedProblem",
         operation: "share_blob",
+        status: 429,
+        members: RETRY_AFTER,
+    },
+    Extra {
+        component: "RegistrationRateLimitedProblem",
+        operation: "register_user",
         status: 429,
         members: RETRY_AFTER,
     },
@@ -507,6 +527,20 @@ fn fill_binary(schema: &mut Option<Schema>) {
     );
 }
 
+/// The contract every operation shares, as the document's `info.description`: protocol
+/// negotiation and the operations exempt from its gate, the one bearer scheme, and how a
+/// rejection is coded and mapped to a status.
+///
+/// Kept in `contract.md` beside this module so it is read and reviewed as prose, and emitted
+/// into the document so the generated REST reference and every generated client carry it from
+/// the one place the server defines it.
+pub(crate) const CONTRACT: &str = include_str!("contract.md");
+
+/// Sets the document's description to [`CONTRACT`].
+pub(crate) fn describe_contract(document: &mut Document) {
+    document.info.description = Some(CONTRACT.trim_end().to_owned());
+}
+
 /// Files the protocol window's three response headers under every response (issue #404).
 ///
 /// [`crate::negotiation::Negotiation`] attaches `X-Capsule-Protocol-Min`, `-Max` and
@@ -521,7 +555,34 @@ fn fill_binary(schema: &mut Option<Schema>) {
 /// header under one of these names is left exactly as the router emitted it, so this can never
 /// overwrite what Kynos said.
 pub(crate) fn describe_negotiation_headers(document: &mut Document) {
-    let declarations = crate::negotiation::response_header_declarations();
+    declare_on_every_response(
+        document,
+        &crate::negotiation::response_header_declarations(),
+    );
+}
+
+/// Files `X-Request-Id` under every response.
+///
+/// [`crate::request_span::RequestSpan`] is the root router's outermost interceptor and attaches
+/// the header to everything it forwards, so the gap [`describe_negotiation_headers`] closes for
+/// the protocol window is the same gap here: Kynos would declare it on success responses only.
+/// The declaration is [`crate::request_span::response_header_declaration`], the one the
+/// interceptor's own description uses.
+pub(crate) fn describe_request_id_header(document: &mut Document) {
+    declare_on_every_response(
+        document,
+        &[crate::request_span::response_header_declaration()],
+    );
+}
+
+/// Declares each `(name, header)` on every response that does not already declare it.
+///
+/// A response that declares a header under one of these names, in any case, is left exactly as
+/// the router emitted it, so this can never overwrite what Kynos said.
+fn declare_on_every_response(
+    document: &mut Document,
+    declarations: &[(&'static str, kynos::openapi::Header)],
+) {
     for item in document.paths.items.values_mut() {
         let slots: Vec<&mut Option<Box<kynos::openapi::Operation>>> = vec![
             &mut item.get,
@@ -544,7 +605,7 @@ pub(crate) fn describe_negotiation_headers(document: &mut Document) {
                 let kynos::openapi::RefOr::Item(response) = response else {
                     continue;
                 };
-                for (name, header) in &declarations {
+                for (name, header) in declarations {
                     let declared = response
                         .headers
                         .keys()
@@ -615,6 +676,40 @@ pub(crate) fn describe_retry_after_header(document: &mut Document) {
                     );
                 }
             }
+        }
+    }
+}
+
+/// Files `X-Capsule-Committed` under the chunk route's `409`, where
+/// [`crate::routes::upload::CommittedOnRefusal`] attaches it.
+///
+/// The interceptor's header is one Kynos describes on success responses only, and the chunk's
+/// `204` already declares the same header itself, required. So the one refusal that carries it
+/// — `range_conflict`, among the `409`s — is declared here, optional, as the [`EXTRAS`] row's
+/// `committed` member is.
+pub(crate) fn describe_refusal_committed_header(document: &mut Document) {
+    let header: kynos::openapi::Header = serde_json::from_value(serde_json::json!({
+        "description": "On `error.upload.range_conflict`, the session's committed set to re-plan \
+                        from: comma-separated inclusive byte ranges, as `HEAD` spells it. Absent \
+                        on every other refusal.",
+        "schema": { "type": "string" },
+    }))
+    .expect("a literal header object is a header");
+
+    for item in document.paths.items.values_mut() {
+        let Some(operation) = item.patch.as_deref_mut() else {
+            continue;
+        };
+        if operation.operation_id.as_deref() != Some("append_chunk") {
+            continue;
+        }
+        if let Some(kynos::openapi::RefOr::Item(response)) =
+            operation.responses.responses.get_mut("409")
+        {
+            response.headers.insert(
+                "X-Capsule-Committed".to_owned(),
+                kynos::openapi::RefOr::Item(header.clone()),
+            );
         }
     }
 }
@@ -715,6 +810,21 @@ fn extended(base: &Schema, title: &str, members: &[Member]) -> Schema {
     {
         required.push(crate::problem::CODE_MEMBER.to_owned());
     }
+
+    // Declared on every problem and **not** required: the server stamps it on every one it
+    // sends, but a native client must stay lenient toward a server that predates it, and a
+    // required member a generated decoder cannot find would discard the `code` with it.
+    object.properties.insert(
+        crate::problem::REQUEST_ID_MEMBER.to_owned(),
+        member_schema(
+            // No `format: uuid`, for the reason `request_span`'s header schema gives.
+            "string",
+            None,
+            false,
+            "The UUIDv7 this server minted for the request, as the `X-Request-Id` header \
+             carries it. Quote it when reporting the failure: it names the request's log lines.",
+        ),
+    );
 
     for member in members {
         object.properties.insert(

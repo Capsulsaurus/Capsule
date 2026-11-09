@@ -34,6 +34,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use capsule_core::content_type::extension_for;
 use capsule_core::crypto::hash::Hash32;
 use capsule_core::crypto::provenance::ProvenanceRecord;
 use capsule_library::lifecycle::{
@@ -174,6 +175,10 @@ pub struct RestoreSummary {
     pub failed: usize,
     /// Assets in scope whose head is a deletion, which a restore leaves out.
     pub skipped_deleted: usize,
+    /// Assets in scope that this device purged, whose head is not yet the purge's `delete`. A
+    /// restore leaves them out as it leaves a deleted head out: the purge's tombstone means
+    /// they are never brought back.
+    pub skipped_purged: usize,
     /// Ciphertext bytes requested from the server.
     pub fetched_bytes: u64,
     /// Ciphertext bytes served from part files left by an earlier run.
@@ -208,13 +213,14 @@ impl RestoreSummary {
 #[must_use]
 pub fn summary_line(summary: &RestoreSummary) -> String {
     format!(
-        "Restored {} of {} assets to {} ({} already present, {} failed, {} deleted skipped).",
+        "Restored {} of {} assets to {} ({} already present, {} failed, {} deleted skipped, {} purged skipped).",
         summary.restored,
         summary.assets,
         summary.out,
         summary.already_present,
         summary.failed,
-        summary.skipped_deleted
+        summary.skipped_deleted,
+        summary.skipped_purged
     )
 }
 
@@ -317,6 +323,11 @@ pub async fn restore_entries<B: BlobSource + Sync>(
             summary.skipped_deleted += 1;
             continue;
         }
+        if workspace.purge_record(&head.asset).is_some() {
+            tracing::debug!(asset = %head.asset, "restore: this device purged the asset; skipped");
+            summary.skipped_purged += 1;
+            continue;
+        }
         summary.assets += 1;
         let mut outcome = AssetRestoreOutcome {
             asset_id: head.asset.to_string(),
@@ -365,6 +376,7 @@ pub async fn restore_entries<B: BlobSource + Sync>(
         already_present = summary.already_present,
         failed = summary.failed,
         skipped_deleted = summary.skipped_deleted,
+        skipped_purged = summary.skipped_purged,
         fetched_bytes = summary.fetched_bytes,
         resumed_bytes = summary.resumed_bytes,
         "restore complete"
@@ -623,6 +635,10 @@ fn refusal(verdict: &SyncApplyOutcome) -> AssetRestoreFailure {
             "keys_unavailable",
             format!("the album key for this asset's epoch is not held here ({reason:?})"),
         ),
+        SyncApplyOutcome::Quarantined(QuarantineReason::Purged(asset)) => AssetRestoreFailure::new(
+            "quarantined",
+            format!("this device purged asset {asset}; its tombstone refuses the entry"),
+        ),
         SyncApplyOutcome::Quarantined(reason) => AssetRestoreFailure::new(
             "quarantined",
             format!("the asset did not verify: {reason:?}"),
@@ -637,38 +653,6 @@ fn refusal(verdict: &SyncApplyOutcome) -> AssetRestoreFailure {
 /// upload protocol's largest chunk). A sealed sidecar is a few KiB; the cap only stops a
 /// server that keeps answering full windows from growing the buffer without bound.
 pub const MAX_METADATA_BLOB_BYTES: u64 = capsule_sdk::upload::PROTOCOL_MAX_CHUNK;
-
-/// A file extension for a media type, for naming a restored original. Cosmetic: the bytes are
-/// the original's whatever the name says, and an unlisted type is written as `.bin`.
-#[must_use]
-pub fn extension_for(content_type: &str) -> &'static str {
-    match content_type {
-        "image/jpeg" => "jpg",
-        "image/png" => "png",
-        "image/webp" => "webp",
-        "image/jxl" => "jxl",
-        "image/tiff" => "tiff",
-        "image/gif" => "gif",
-        "image/avif" => "avif",
-        "image/heic" => "heic",
-        "image/heif" => "heif",
-        "image/x-portable-anymap" => "pnm",
-        "image/x-adobe-dng" | "image/dng" => "dng",
-        "image/x-sony-arw" => "arw",
-        "image/x-canon-cr2" => "cr2",
-        "image/x-canon-cr3" => "cr3",
-        "image/x-nikon-nef" => "nef",
-        "image/x-fuji-raf" => "raf",
-        "image/x-olympus-orf" => "orf",
-        "image/x-panasonic-rw2" => "rw2",
-        "video/mp4" => "mp4",
-        "video/quicktime" => "mov",
-        "video/x-matroska" => "mkv",
-        "video/webm" => "webm",
-        "video/x-msvideo" => "avi",
-        _ => "bin",
-    }
-}
 
 /// Move a fully written staging file into place as `target`, so that `target` is either absent
 /// or complete: flushed and synced to disk, then renamed (`staging` is under `OUT`, on the same

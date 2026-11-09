@@ -14,11 +14,17 @@
 //!   representation already in hand ([`best_available`]) — down to the always-present
 //!   LQIP — never removing the asset's metadata or index entry
 //!   ([`open_representation`]).
+//! - **The render ladder.** [`render_step`] extends that ladder with what the device holds,
+//!   a RAW original's embedded preview included, and answers what a surface shows now and what
+//!   to fetch or generate next; it is the one ladder the apps reach over the FFI.
 //! - **Resumable ranged fetch.** [`fetch_blob`] fetches a blob with HTTP `Range`
 //!   windows; an interrupted transfer resumes from the last persisted byte instead
 //!   of restarting, and re-fetches zero bytes it already holds. [`fetch_blob_into`]
 //!   streams the same loop into a writer in bounded windows, so an original of any size
 //!   is fetched — and, through a `StreamDecryptor` sink, restored — in bounded memory.
+//!   [`RangedFetcher::fetch_to_file`] lands a blob in a file: it writes a fsynced partial
+//!   beside the destination, resumes from that partial's length across a process restart,
+//!   and renames it into place only once the content address verifies.
 //! - **Self-verification.** The client recomputes the ciphertext content hash
 //!   against the requested content address; any mismatch discards the blob.
 //! - **Opening a derivative.** Derivative bytes are ciphertext on the server
@@ -62,6 +68,15 @@ use crate::net::{
     ConnectionClass, MonotonicClock, RetryClass, RetryDecision, RetryEngine, Sleeper, StallConfig,
     StallDetector, SystemClock, TokioSleeper, TransferSignal,
 };
+
+mod ladder;
+mod resumable;
+
+pub use ladder::{
+    LocalHoldings, NextStep, PixelSize, RenderRequest, RenderStep, Rendition, RungSource,
+    render_step, thumbnail_long_edge,
+};
+pub use resumable::{PARTIAL_SUFFIX, fetch_blob_to_file, partial_path};
 
 // ─── Representation ladder ───────────────────────────────────────────────────
 
@@ -530,7 +545,10 @@ pub enum FetchError {
     },
     /// The destination of a streamed fetch ([`RangedFetcher::fetch_into`]) refused bytes: a
     /// local write failed, or a decrypting sink rejected a chunk. Whatever the sink holds is
-    /// unverified and must be discarded.
+    /// unverified and must be discarded. For [`RangedFetcher::fetch_to_file`] it is a failure
+    /// reading, writing, syncing or renaming the partial file; the partial is kept, unverified,
+    /// for the next attempt to resume and verify. A failure to sync the destination's directory
+    /// after the rename is logged, not returned here.
     #[error("writing the fetched blob failed: {0}")]
     Sink(#[source] std::io::Error),
     /// A derivative's ciphertext hashed correctly but failed AEAD authentication under the
@@ -548,6 +566,9 @@ impl FetchError {
     pub fn error_code(&self) -> Option<&str> {
         match self {
             Self::PendingUpload => Some(error_codes::BLOB_PENDING_UPLOAD),
+            // A `404` folds in here too: either way the blob is not coming back, which is what a
+            // caller telling a permanent refusal from a transient one needs to read.
+            Self::Gone => Some(error_codes::BLOB_GONE),
             Self::AuthorizationChanged { code }
             | Self::Rejected { code, .. }
             | Self::Unauthenticated { code, .. } => code.as_deref(),
@@ -706,9 +727,13 @@ impl<S: Sleeper, C: MonotonicClock> RangedFetcher<S, C> {
         expected_len: u64,
         sink: &mut W,
     ) -> Result<Vec<TransferSignal>, FetchError> {
-        let window = Some(self.window().map_or(SINK_WINDOW, |w| w.min(SINK_WINDOW)));
-        self.run_into(source, hash, expected_len, window, sink)
+        self.run_into(source, hash, expected_len, self.sink_window(), sink)
             .await
+    }
+
+    /// The window a streamed fetch asks for: [`SINK_WINDOW`], or the class's smaller one.
+    fn sink_window(&self) -> Option<u64> {
+        Some(self.window().map_or(SINK_WINDOW, |w| w.min(SINK_WINDOW)))
     }
 
     /// Fetch a whole blob whose size nobody listed, e.g. a metadata blob the sync feed names by
@@ -817,7 +842,6 @@ impl<S: Sleeper, C: MonotonicClock> RangedFetcher<S, C> {
         Ok((buffer, signals))
     }
 
-    #[instrument(skip(self, source, sink), fields(hash, expected_len, ?window, class = ?self.class))]
     async fn run_into<B: BlobSource, W: std::io::Write>(
         &self,
         source: &B,
@@ -826,8 +850,40 @@ impl<S: Sleeper, C: MonotonicClock> RangedFetcher<S, C> {
         window: Option<u64>,
         sink: &mut W,
     ) -> Result<Vec<TransferSignal>, FetchError> {
-        let mut received: u64 = 0;
-        let mut hasher = Sha256::new();
+        let resume = Resume {
+            held: 0,
+            hasher: Sha256::new(),
+        };
+        self.run_from(source, hash, expected_len, window, resume, sink, |_| Ok(()))
+            .await
+    }
+
+    /// The resume loop: fetch `hash` from `resume.held` to `expected_len` into `sink`, then
+    /// verify the content address over every byte — the `resume.held` bytes `resume.hasher`
+    /// already absorbed and the ones fetched here.
+    ///
+    /// `checkpoint` runs after each window is written and before the next is requested: a
+    /// file-backed fetch makes the window durable there, so the length it later resumes from
+    /// never counts a byte that is not on disk.
+    #[instrument(
+        skip(self, source, resume, sink, checkpoint),
+        fields(hash, expected_len, ?window, held = resume.held, class = ?self.class)
+    )]
+    #[allow(clippy::too_many_arguments)]
+    async fn run_from<B: BlobSource, W: std::io::Write>(
+        &self,
+        source: &B,
+        hash: &str,
+        expected_len: u64,
+        window: Option<u64>,
+        resume: Resume,
+        sink: &mut W,
+        mut checkpoint: impl FnMut(&mut W) -> std::io::Result<()>,
+    ) -> Result<Vec<TransferSignal>, FetchError> {
+        let Resume {
+            held: mut received,
+            mut hasher,
+        } = resume;
         let mut signals: Vec<TransferSignal> = Vec::new();
         // The shared retry engine, `bulk-transfer` class: resume-first, patient,
         // backoff between attempts, bounded give-up.
@@ -861,6 +917,7 @@ impl<S: Sleeper, C: MonotonicClock> RangedFetcher<S, C> {
                     );
                     hasher.update(&bytes);
                     sink.write_all(&bytes).map_err(FetchError::Sink)?;
+                    checkpoint(sink).map_err(FetchError::Sink)?;
                     received += bytes.len() as u64;
                 }
                 // A no-byte read: the request stalled or was black-holed. Cut on
@@ -950,6 +1007,12 @@ impl<S: Sleeper, C: MonotonicClock> RangedFetcher<S, C> {
             }
         });
     }
+}
+
+/// Where a fetch starts: the bytes already held, and the content hash over exactly them.
+struct Resume {
+    held: u64,
+    hasher: Sha256,
 }
 
 /// The `Range` window [`RangedFetcher::fetch_unsized`] asks for (64 KiB). A sealed sidecar is a

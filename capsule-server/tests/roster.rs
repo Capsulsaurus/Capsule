@@ -502,7 +502,8 @@ async fn a_member_cannot_publish_the_owners_roster_and_learns_nothing_trying() {
     .assert_status(StatusCode::NOT_FOUND)
     .json();
     assert_eq!(
-        as_member, unprovisioned,
+        support::without_request_id(as_member),
+        support::without_request_id(unprovisioned),
         "one answer for not-yours and not-there"
     );
     assert!(matches!(

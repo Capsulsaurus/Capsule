@@ -122,16 +122,16 @@ struct CapsuleCatalogTests {
         #expect(page.map(\.id) == ["a7", "a6", "a5"])
     }
 
-    @Test("soft delete hides an asset; restore returns it")
-    func softDeleteAndRestore() async throws {
+    @Test("a trashed row is absent from the timeline")
+    func trashedRowLeavesTheTimeline() async throws {
         let catalog = try FFIAssetCatalog.inMemory()
-        try await catalog.insertAsset(makeAsset(id: "trashed"))
+        var trashed = makeAsset(id: "trashed")
+        trashed.isDeleted = true
+        trashed.deletedAt = 1720000500
+        try await catalog.insertAsset(trashed)
+        try await catalog.insertAsset(makeAsset(id: "kept"))
 
-        try await catalog.softDeleteAsset(id: "trashed", deletedAt: 1720000500)
-        #expect(try await catalog.timeline(offset: 0, limit: 100).isEmpty)
-
-        try await catalog.restoreAsset(id: "trashed")
-        #expect(try await catalog.timeline(offset: 0, limit: 100).count == 1)
+        #expect(try await catalog.timeline(offset: 0, limit: 100).map(\.id) == ["kept"])
     }
 
     @Test("a filtered timeline restricts by catalog asset type")

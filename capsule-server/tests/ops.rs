@@ -173,7 +173,7 @@ async fn feed(fixture: &Fixture, bearer: &str) -> Value {
 // ===========================================================================================
 
 /// A delete tombstones the asset, and the tombstone reaches the feed carrying its signed delete
-/// record and no byte references.
+/// record and, on the owner's own feed, exactly the blobs a restore needs (#1192).
 #[tokio::test]
 async fn a_delete_tombstones_the_asset_and_reaches_the_feed() {
     let fixture = Fixture::working();
@@ -205,10 +205,14 @@ async fn a_delete_tombstones_the_asset_and_reaches_the_feed() {
     );
     assert!(
         entry["blobs"].as_array().expect("blob refs").is_empty(),
-        "a tombstone points at nothing: a client that fetched its blobs would be fetching \
-         bytes the delete exists to stop it wanting"
+        "the owner's tombstone names only an original a restore needs, and none has landed"
     );
-    assert!(entry["metadata_blob"].is_null());
+    assert_eq!(
+        entry["metadata_blob"],
+        support::checksum(b"published-metadata"),
+        "the owner's own feed names the live metadata blob a restoring device adopts from"
+    );
+    assert_eq!(entry["original_held"], false);
 }
 
 /// A restore returns the asset, and both changes are on the feed in order.
@@ -292,6 +296,25 @@ async fn the_feed_serves_the_lifecycle_manifest_byte_for_byte() {
         support::checksum(b"new metadata"),
         "the metadata update did not re-point the metadata blob"
     );
+
+    // #1128: the re-pointed blobs are recorded at the sizes of the bytes the op carried.
+    let row = fixture
+        .index
+        .read(&AssetId::new(ASSET))
+        .await
+        .expect("the index answers")
+        .expect("the asset exists");
+    let size = |role| {
+        row.blobs
+            .iter()
+            .find(|blob| blob.role == role)
+            .map(|blob| blob.size)
+    };
+    assert_eq!(
+        size(BlobRole::Provenance),
+        Some(manifest("m1").len() as u64)
+    );
+    assert_eq!(size(BlobRole::Metadata), Some(b"new metadata".len() as u64));
 }
 
 /// The same manifest twice is one application, one sequence number, one identical body.
@@ -611,7 +634,8 @@ async fn an_asset_that_is_not_the_callers_is_refused_without_disclosure() {
     .await;
 
     assert_eq!(
-        theirs, absent,
+        support::without_request_id(theirs),
+        support::without_request_id(absent),
         "the asset id is the manifest's own field and therefore client-chosen, so a guess must \
          buy nothing — including the knowledge that it guessed right"
     );
@@ -763,6 +787,11 @@ async fn a_reader_a_former_member_and_a_stranger_cannot_apply_an_op() {
     )
     .await;
 
+    let (reader, former, stranger) = (
+        support::without_request_id(reader),
+        support::without_request_id(former),
+        support::without_request_id(stranger),
+    );
     assert_eq!(reader, former);
     assert_eq!(former, stranger);
     // Nothing reached the owner's feed.

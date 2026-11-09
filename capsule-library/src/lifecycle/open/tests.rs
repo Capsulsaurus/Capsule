@@ -1,10 +1,11 @@
-use capsule_core::crypto::keys::encapsulate_to_p256_public;
+use capsule_core::crypto::keys::{ClassicalAlgorithm, encapsulate_to_p256_public};
 use capsule_core::crypto::primitives::Argon2Params;
 use capsule_core::crypto::verify_asset::VerifyOutcome;
 use tempfile::TempDir;
 
 use super::super::{FAST_PARAMS, fast_workspace};
 use super::*;
+use crate::account::tests::MockP256Signer;
 
 /// **The core claim.** An asset imported in one session is fully usable in the next:
 /// its album key comes back from the sealed keystore, so the workspace can re-derive the file
@@ -1196,6 +1197,220 @@ fn software_dek_workspaces_are_unaffected() {
     .unwrap();
     let (hw_ct, _) = encapsulate_to_p256_public(&hw_ws.device_dek_public()).unwrap();
     assert!(reopened.device_dek_decapsulate(&hw_ct).is_err());
+}
+
+// ── the device signing key bound to a secure element, across a reopen ──
+
+const DSK_ALIAS: &str = "capsule-device-dsk";
+
+fn mock_signer_binding(element: &Arc<MockP256Signer>) -> HardwareSignerBinding {
+    HardwareSignerBinding {
+        element: element.clone(),
+        key_alias: DSK_ALIAS.into(),
+    }
+}
+
+fn hardware_signed_workspace(lib: &Path, element: &Arc<MockP256Signer>) -> Workspace {
+    Workspace::create_with_p256_hardware_signer(
+        lib,
+        b"passphrase",
+        FAST_PARAMS,
+        mock_signer_binding(element),
+        &[0x42; 32],
+    )
+    .unwrap()
+}
+
+/// **The acceptance case.** A library created with a hardware-held P-256 signing key reopens
+/// on the same key: the device directory it persisted is restored rather than replaced by a
+/// fresh version-1 one under the software key, an asset signed before the close still
+/// verifies, and a write after the reopen is signed by the element.
+#[test]
+fn a_hardware_signed_library_reopens_on_the_key_it_published() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let img = src.path().join("photo.jpg");
+    fs::write(&img, b"\xFF\xD8\xFF hardware-signed asset").unwrap();
+    let element = Arc::new(MockP256Signer::new(0x31));
+
+    let (published, directory, asset) = {
+        let mut ws = hardware_signed_workspace(lib.path(), &element);
+        let published = ws.exporter_verifying_key();
+        assert_eq!(
+            published.classical_algorithm(),
+            ClassicalAlgorithm::EcdsaP256
+        );
+        assert_ne!(published, ws.account.device.dsk.verifying_key());
+        let album = ws.create_album("Trip").unwrap();
+        let asset = ws.import_asset(album, &img).unwrap();
+        (published, ws.directory.clone(), asset)
+    };
+
+    let mut reopened = Workspace::open_with_hardware_signer(
+        lib.path(),
+        b"passphrase",
+        FAST_PARAMS,
+        mock_signer_binding(&element),
+    )
+    .unwrap();
+    assert_eq!(reopened.exporter_verifying_key(), published);
+    assert_eq!(
+        reopened.directory, directory,
+        "the persisted directory listing the hardware key is restored unchanged"
+    );
+    assert_eq!(reopened.verify(&asset).unwrap(), VerifyOutcome::Accept);
+    reopened.tag_add(&asset, "after-reopen").unwrap();
+    assert_eq!(reopened.verify(&asset).unwrap(), VerifyOutcome::Accept);
+    assert_eq!(element.key_count(), 1, "the reopen minted no second key");
+}
+
+/// A hardware-signed library is refused by every open that supplies no signing element,
+/// rather than reopened on the software key, which would change the key the directory
+/// publishes.
+#[test]
+fn a_hardware_signed_library_is_refused_without_its_element() {
+    let lib = TempDir::new().unwrap();
+    let element = Arc::new(MockP256Signer::new(0x32));
+    drop(hardware_signed_workspace(lib.path(), &element));
+
+    assert!(matches!(
+        Workspace::open(lib.path(), b"passphrase", FAST_PARAMS),
+        Err(LifecycleError::Crypto(CryptoError::Key(_)))
+    ));
+    assert!(matches!(
+        Workspace::open_with_hardware_dek(
+            lib.path(),
+            b"passphrase",
+            FAST_PARAMS,
+            mock_dek_binding(0x33)
+        ),
+        Err(LifecycleError::Crypto(CryptoError::Key(_)))
+    ));
+}
+
+/// An element that lost the key (a cleared keystore) or is switched off refuses the open; the
+/// lost key is never replaced by a fresh one under the same alias.
+#[test]
+fn a_hardware_signed_library_is_refused_when_the_element_cannot_produce_its_key() {
+    let lib = TempDir::new().unwrap();
+    let element = Arc::new(MockP256Signer::new(0x34));
+    drop(hardware_signed_workspace(lib.path(), &element));
+    let open = || {
+        Workspace::open_with_hardware_signer(
+            lib.path(),
+            b"passphrase",
+            FAST_PARAMS,
+            mock_signer_binding(&element),
+        )
+    };
+
+    element.set_unavailable(true);
+    assert!(matches!(
+        open(),
+        Err(LifecycleError::Crypto(CryptoError::Key(_)))
+    ));
+    element.set_unavailable(false);
+
+    element.forget(DSK_ALIAS);
+    assert!(matches!(
+        open(),
+        Err(LifecycleError::Crypto(CryptoError::Key(_)))
+    ));
+    assert_eq!(element.key_count(), 0, "no replacement key was minted");
+}
+
+/// **Older libraries.** A library created on the software key (every library from before the
+/// binding was recorded) opens through `open_with_hardware_signer` on that software key: the
+/// recorded binding decides, the offered element is never asked for a key, and nothing about
+/// the library changes.
+#[test]
+fn a_software_signed_library_opens_on_its_software_key_when_an_element_is_offered() {
+    let lib = TempDir::new().unwrap();
+    let (software_key, directory) = {
+        let ws = fast_workspace(lib.path());
+        (ws.exporter_verifying_key(), ws.directory.clone())
+    };
+    let element = Arc::new(MockP256Signer::new(0x35));
+
+    let reopened = Workspace::open_with_hardware_signer(
+        lib.path(),
+        b"passphrase",
+        FAST_PARAMS,
+        mock_signer_binding(&element),
+    )
+    .unwrap();
+    assert_eq!(reopened.exporter_verifying_key(), software_key);
+    assert_eq!(reopened.directory, directory);
+    assert_eq!(element.key_count(), 0);
+    assert!(!DeviceSignerRecord::path(lib.path()).exists());
+}
+
+/// A first open of a laid-out library with no account enrolls the fresh account's signing key
+/// in the element, and records it so the next open rebuilds the same key.
+#[test]
+fn a_first_open_with_an_element_records_a_hardware_signing_key() {
+    let lib = TempDir::new().unwrap();
+    crate::library::init::init_library(lib.path(), "Capsule").unwrap();
+    let element = Arc::new(MockP256Signer::new(0x36));
+    let open = || {
+        Workspace::open_with_hardware_signer(
+            lib.path(),
+            b"passphrase",
+            FAST_PARAMS,
+            mock_signer_binding(&element),
+        )
+        .unwrap()
+    };
+
+    let published = open().exporter_verifying_key();
+    assert_eq!(
+        published.classical_algorithm(),
+        ClassicalAlgorithm::EcdsaP256
+    );
+    assert_eq!(open().exporter_verifying_key(), published);
+    assert_eq!(element.key_count(), 1);
+}
+
+/// A record left by a creation that stopped before its account file was written is sealed under
+/// a master key no account holds: the first open removes it rather than refusing the library.
+#[test]
+fn a_record_left_by_an_interrupted_creation_is_removed_on_first_open() {
+    let lib = TempDir::new().unwrap();
+    crate::library::init::init_library(lib.path(), "Capsule").unwrap();
+    let element = Arc::new(MockP256Signer::new(0x37));
+    let (_, stale) = DeviceSignerRecord::enroll(
+        mock_signer_binding(&element),
+        &[1; 32],
+        &capsule_core::crypto::keys::MasterKey::generate(),
+    )
+    .unwrap();
+    stale.persist(lib.path()).unwrap();
+
+    drop(Workspace::open(lib.path(), b"passphrase", FAST_PARAMS).unwrap());
+    assert!(!DeviceSignerRecord::path(lib.path()).exists());
+    drop(Workspace::open(lib.path(), b"passphrase", FAST_PARAMS).unwrap());
+}
+
+/// An element that refuses enrollment fails the creation before anything is written under the
+/// root, and never falls back to the software key.
+#[test]
+fn a_refused_hardware_signer_creation_writes_nothing() {
+    let lib = TempDir::new().unwrap();
+    let root = lib.path().join("library");
+    let element = Arc::new(MockP256Signer::new(0x38));
+    element.set_unavailable(true);
+
+    assert!(matches!(
+        Workspace::create_with_p256_hardware_signer(
+            &root,
+            b"passphrase",
+            FAST_PARAMS,
+            mock_signer_binding(&element),
+            &[0x42; 32],
+        ),
+        Err(LifecycleError::Crypto(CryptoError::Key(_)))
+    ));
+    assert!(!root.exists());
 }
 
 /// **Newer-catalog refusal at the workspace boundary.** `Workspace::open` no longer

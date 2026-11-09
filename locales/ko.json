@@ -7211,6 +7211,10 @@
     "message": "Capsule이 지금 ID 제공업체에 연결하지 못했습니다. 다시 시도해 주세요.",
     "origin": "machine"
   },
+  "error.auth.password_disabled": {
+    "message": "이 서버는 싱글 사인온을 통한 로그인만 허용합니다.",
+    "origin": "machine"
+  },
   "error.auth.password_invalid": {
     "message": "해당 비밀번호는 사용할 수 없습니다.",
     "origin": "machine"
@@ -7225,6 +7229,10 @@
   },
   "error.auth.rate_limited": {
     "message": "시도 횟수가 너무 많습니다. 잠시 후 다시 시도해 주세요.",
+    "origin": "machine"
+  },
+  "error.auth.registration_at_capacity": {
+    "message": "현재 이 서버가 처리 중인 가입 요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.",
     "origin": "machine"
   },
   "error.auth.registration_invalid": {
@@ -7463,8 +7471,28 @@
     "message": "이 원본은 반복된 오류로 인해 일시적으로 백오프되었습니다.",
     "origin": "machine"
   },
+  "error.federation.hint_at_capacity": {
+    "message": "현재 이 서버에서 처리 중인 업데이트 알림이 너무 많습니다. 잠시 후 다시 시도해 주세요.",
+    "origin": "machine"
+  },
+  "error.federation.hint_malformed": {
+    "message": "해당 업데이트 알림이 올바르지 않습니다.",
+    "origin": "machine"
+  },
+  "error.federation.hint_rate_limited": {
+    "message": "이 서버에서 보낸 업데이트 알림이 너무 많습니다. 잠시 후 다시 시도해 주세요.",
+    "origin": "machine"
+  },
+  "error.federation.hint_unsigned": {
+    "message": "업데이트 알림을 확인할 수 없습니다.",
+    "origin": "machine"
+  },
   "error.federation.member_not_on_roster": {
     "message": "해당 사용자는 이 앨범의 구성원 목록에 없습니다.",
+    "origin": "machine"
+  },
+  "error.federation.mint_at_capacity": {
+    "message": "현재 이 서버가 처리 중인 접근 권한이 너무 많습니다. 잠시 후 다시 시도해 주세요.",
     "origin": "machine"
   },
   "error.federation.not_configured": {
@@ -7487,12 +7515,20 @@
     "message": "이 접근 권한은 요청한 콘텐츠를 포함하지 않습니다.",
     "origin": "machine"
   },
+  "error.federation.subscription_limit": {
+    "message": "다른 서버에서 팔로우할 수 있는 공유 앨범 수의 한도에 도달했습니다. 다른 앨범을 추가하려면 하나를 삭제하세요.",
+    "origin": "machine"
+  },
   "error.federation.unavailable": {
     "message": "Capsule이 연동 기록에 접근하지 못했습니다. 다시 시도해 주세요.",
     "origin": "machine"
   },
   "error.moderation.account_suspended": {
     "message": "계정이 정지되었습니다. 복구될 때까지 업로드하거나 공유할 수 없습니다.",
+    "origin": "machine"
+  },
+  "error.moderation.report_at_capacity": {
+    "message": "현재 이 서버가 처리 중인 신고가 너무 많습니다. 잠시 후 다시 시도해 주세요.",
     "origin": "machine"
   },
   "error.moderation.report_malformed": {
@@ -7569,6 +7605,10 @@
   },
   "error.request.range_not_satisfiable": {
     "message": "Capsule이 파일의 해당 부분을 보낼 수 없습니다.",
+    "origin": "machine"
+  },
+  "error.request.too_early": {
+    "message": "요청이 너무 일찍 전송되었습니다. 다시 시도해 주세요.",
     "origin": "machine"
   },
   "error.request.too_large": {
@@ -7763,6 +7803,10 @@
     "message": "이 사용자를 대신하여 업로드할 수 없습니다.",
     "origin": "machine"
   },
+  "error.upload.range_conflict": {
+    "message": "이 업로드의 일부가 이미 전송 중입니다. 재개하는 중…",
+    "origin": "machine"
+  },
   "error.upload.rate_limited": {
     "message": "업로드가 잠시 일시 정지되었습니다. 자동으로 재개됩니다.",
     "origin": "machine"
@@ -7791,6 +7835,10 @@
     "message": "업로드가 선언한 크기보다 많은 데이터를 보냈습니다.",
     "origin": "machine"
   },
+  "error.upload.source_changed": {
+    "message": "업로드 중에 이 파일이 변경되어 업로드를 중단했습니다.",
+    "origin": "machine"
+  },
   "error.upload.stale_revival": {
     "message": "이 변경은 항목의 오래된 버전을 기반으로 합니다.",
     "origin": "machine"
@@ -7805,6 +7853,14 @@
   },
   "error.upload.timestamp_out_of_range": {
     "message": "기기의 시계가 잘못된 것 같습니다. 날짜와 시간을 확인해 주세요.",
+    "origin": "machine"
+  },
+  "error.upload.too_fragmented": {
+    "message": "이 업로드에 빈 구간이 너무 많습니다. 채우는 중…",
+    "origin": "machine"
+  },
+  "error.upload.too_many_in_flight": {
+    "message": "이 업로드의 너무 많은 부분이 동시에 전송되고 있습니다. 속도를 줄이는 중…",
     "origin": "machine"
   },
   "error.upload.unavailable": {

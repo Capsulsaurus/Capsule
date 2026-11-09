@@ -8,7 +8,7 @@ Refuse-by-default checks every receiver runs before persisting a write, against 
 
 ## Server-Side Validation Invariants
 
-Key-free **structural** checks. Canonical list; numbers are stable and cited elsewhere. Every rejection carries an [`error.*` code](/design/i18n/#server-error-codes) ([mapping](/design/api-surfaces/#rejection-mapping)) and is logged.
+Key-free **structural** checks. This is the canonical list, and its numbers are stable and cited elsewhere. Request and response shapes per endpoint are in the generated reference ([upload](/reference/api/upload/), [albums](/reference/api/albums/), [drops](/reference/api/drops/), [federation](/reference/api/federation/)). Every rejection carries an [`error.*` code](/design/i18n/#server-error-codes) ([mapping](/reference/api/conventions/#errors)) and is logged.
 
 ### On `POST /v1/upload` (session creation)
 
@@ -19,39 +19,43 @@ Key-free **structural** checks. Canonical list; numbers are stable and cited els
 - **5.** `content_type` ∈ the closed enum for this protocol version → else `400`.
 - **6.** `album_id` exists, caller has write capability, album's pinned `protocol_version` = request's → else `403`.
 - **7.** `created_by_device` is in the user's device directory with `added_at` before `timestamp` → else `403`.
-- **8.** `timestamp` within the gross-drift bound ([Timestamp Grammar](/design/threat-model/schema-rules/#timestamp-grammar)); not an authorization control → else `400`.
+- **8.** `timestamp` within the gross-drift bound ([](/design/threat-model/schema-rules/#timestamp-grammar)), which is not an authorization control → else `400`.
 
 ### On each `PATCH /v1/upload/{id}` chunk
 
-- **9.** Offset = current received count → else `409` + `X-Capsule-Offset`.
-- **10.** Well-shaped chunk: `application/octet-stream` (`415`), non-empty, non-final chunks 4 KiB-aligned (`400`), ≤ protocol max (`413`).
-- **11.** Cumulative received ≤ declared `size` → else `400`/`413`, session `FailedProcessing`.
-- **12.** `(upload_id, offset, chunk_hash)` is new or an exact repeat; `chunk_hash` comes from the **required** `X-Capsule-Checksum` (missing or body mismatch → `400`, nothing persisted). Same offset, different hash → `409`.
+- **9.** The range is admitted against the committed set and the in-flight ranges before any byte is written ([admission](/design/transfer/upload/#chunk-rules-and-strictness)): disjoint → written and committed; wholly committed → duplicate, nothing written; any other overlap → `409 range_conflict`; over the session's in-flight cap → `409 too_many_in_flight`; past the fragment bound → `409 too_fragmented`.
+- **10.** Well-shaped chunk: `application/octet-stream` (`415`), non-empty, offset 4 KiB-aligned and length 4 KiB-aligned unless it ends at `size` (`400`), ≤ protocol max (`413`).
+- **11.** Range end ≤ declared `size` → else `400 size_exceeded`, nothing written.
+- **12.** `chunk_hash` comes from the **required** `X-Capsule-Checksum` and matches the body → else `400`, nothing persisted.
 
 ### At finalization
 
-- **13.** Total received = declared `size` → else `FailedProcessing`.
+- **13.** Committed set = `[0, size)`, the claim's precondition.
 - **14.** Recomputed ciphertext hash = declared `hash` → else `FailedProcessing`.
 - **15.** 1–8 re-run inside the finalization transaction.
 
 ### In the index critical section (every manifest write, upload or lifecycle)
 
-Enforced inside the critical section that mints the sequence number, for [lifecycle writes](/design/authorization/#the-lifecycle-write-surface) **and** upload `replace` — at the gate, concurrent replaces could both pass.
+Enforced inside the critical section that mints the sequence number, for [lifecycle writes](/design/authorization/#the-lifecycle-write-surface) **and** upload `replace`. Checked at the gate instead, concurrent replaces could both pass.
 
 - **16.** `action` ∈ closed enum → else `400`.
 - **17.** `prior_provenance_hash` = last accepted manifest hash for the `asset_id` → else `409` (stale revival).
-- **18.** `amk_version` never regresses per album **and** is within what the admin-signed MLS commit chain attests ([Write Authorization](/design/cryptography/keys/#write-authorization)) → else `400`. A `create` refused here was never published; its client re-seals it at the album's current epoch and retries once ([Stale-Epoch Create](/design/transfer/upload/#stale-epoch-create)). A device that does not yet hold that epoch's key cannot, and keeps the asset local until the key arrives.
+- **18.** `amk_version` never regresses per album **and** is within what the admin-signed MLS commit chain attests ([](/design/cryptography/keys/#write-authorization)) → else `400`. A `create` refused here was never published; its client re-seals it at the album's current epoch and retries once ([Stale-Epoch Create](/design/transfer/upload/#stale-epoch-create)). A device that does not yet hold that epoch's key cannot, and keeps the asset local until the key arrives.
 
 ### On federation pull (server-to-server)
 
 - **19.** Capability verifies, unexpired, `jti` unrevoked (≤ 15 min cache), and recorded here for the member's grant epoch → else `401`/`403`.
-- **20.** 1–18 re-applied; federation never loosens rules. Open: #964 (no inbound federated writes yet).
-- **21.** Per-peer budgets (events, bytes, CPU per hour), keyed on peer origin not token → else `429`. Open: #964 (CPU unmetered; it is the pull worker's).
+- **20.** 1–18 and 25 re-applied to every pulled entry, each as strict as the compacted feed lets a receiver check it. There are no inbound federated writes yet. Where the feed cannot show what the write-time rule reads, the pull applies it as follows:
+  - **7** is left to the receiving client, which holds the device directory a capability does not reach.
+  - **17** refuses a manifest behind the held head and a second `create`. The feed serves only an asset's current manifest, so a pull cannot require `prior_provenance_hash` to equal the held head.
+  - **18** holds **per asset**: an asset's `amk_version` never regresses along its own chain. The feed re-mints an asset's position without a new record and replays from zero after a restart, so an honest feed serves an older epoch's record after a newer one. The receiving client checks the epoch against the MLS commit chain.
+  - **25**: a record that binds a metadata blob is served with exactly that blob. A record that binds none never replaces a metadata blob this server holds. Only a signed binding record proves a newer blob.
+- **21.** Per-peer budgets (events, bytes, CPU per hour), keyed on peer origin, not token → else `429`. CPU is the pull worker's and not yet metered.
 
 ### On the sync feed, directory publish, and federated reports
 
-- **22.** `sync_cursor` carries a server-only MAC; forged → `400`. Clients separately enforce `sync_seq` monotonicity ([Sync](/design/sync/#discovering-what-changed)).
-- **23.** `DeviceDirectory` publish: `directory_version` strictly increases (else `409`) and the master signature verifies under the account's **identity anchor** — the identity key from its first publish (`X-Capsule-Identity-Key`), immutable — else `403` ([Device Directory](/design/cryptography/keys/#device-directory)).
+- **22.** `sync_cursor` carries a server-only MAC; a forged cursor → `400`. Clients separately enforce `sync_seq` monotonicity ([Sync](/design/sync/#discovering-what-changed)).
+- **23.** `DeviceDirectory` publish: `directory_version` strictly increases (else `409`) and the master signature verifies under the account's **identity anchor**, the immutable identity key from its first publish (`X-Capsule-Identity-Key`) → else `403` ([](/design/cryptography/keys/#device-directory)).
 - **24.** Federated report: signature verifies under the peer's pinned key **before** its budget is charged; unpinned peer → `403` ([Federated Reporting](/design/moderation/#federated-reporting)).
 
 ### On `PUT /v1/albums/{album_id}/roster` (album roster publish)
@@ -60,7 +64,7 @@ Enforced inside the critical section that mints the sequence number, for [lifecy
 
 ### On any write whose bundle carries a metadata blob
 
-- **25.** The metadata blob's content hash = the manifest's `metadata_blob_hash` → else `400`, nothing written. ([Metadata Equivalence](/design/metadata/#local-and-server-metadata-equivalence)).
+- **25.** The metadata blob's content hash = the manifest's `metadata_blob_hash` → else `400`, nothing written ([Metadata Equivalence](/design/metadata/#local-and-server-metadata-equivalence)).
 
 ### On `POST /d/{opaque_id}` (upload-link drop session) and adoption
 
@@ -102,15 +106,9 @@ One fail-closed, one-shot gate on every versioned surface, before any state is w
 
 ### Universal Headers
 
-| Header                       | Sent by                    | Meaning                                   |
-| ---------------------------- | -------------------------- | ----------------------------------------- |
-| `X-Capsule-Protocol`         | client/peer                | `YYYY-MM-DD` protocol version             |
-| `X-Capsule-Crypto-Suite`     | client/peer on writes      | suite id ([inventory](/design/cryptography/primitives/#primitives-inventory)) |
-| `X-Capsule-Sidecar-Schema`   | client (SDK: every request) | sidecar schema version                   |
-| `X-Capsule-Protocol-Min/Max` | server, every response     | accepted protocol window                  |
-| `X-Capsule-Min-Client-Build` | server                     | semver deprecation cutoff (advisory)      |
+The negotiation headers are specified in [](/reference/api/conventions/#protocol-negotiation). Clients and peers send `X-Capsule-Protocol` (the `YYYY-MM-DD` protocol version), `X-Capsule-Crypto-Suite` on writes (the suite id from the [inventory](/design/cryptography/primitives/#primitives-inventory)) and `X-Capsule-Sidecar-Schema` (the SDK sends it on every request). The server returns the accepted window as `X-Capsule-Protocol-Min/Max` on every response, and `X-Capsule-Min-Client-Build`, an advisory semver deprecation cutoff.
 
-**Census of `X-Capsule-*`**: new headers MUST register here. By pointer: `X-Capsule-Offset`, `-Content-Length`, `-Upload-Status`, `-Checksum` (required on `PATCH`), `-Suggested-Chunk-Size` ([Transfer — Upload](/design/transfer/upload/#endpoints)); `X-Capsule-Identity-Key` (required on directory publish; invariant 23). `cohort_hash` is deliberately a body field ([Device Cohorts](/design/authentication/#device-cohorts)).
+**Census of `X-Capsule-*`:** new headers MUST register here. By pointer: `X-Capsule-Offset`, `-Committed`, `-Content-Length`, `-Upload-Status`, `-Upload-Error`, `-Checksum` (required on `PATCH`), `-Session-Expires-In`, `-Session-Idle-Expires-In` ([Transfer — Upload](/design/transfer/upload/#endpoints)); `X-Capsule-Advice` ([Network Resilience — Server Advice](/design/networking/#server-advice)); `X-Capsule-Identity-Key` (required on directory publish; invariant 23). `cohort_hash` is deliberately a body field ([Device Cohorts](/design/authentication/#device-cohorts)).
 
 ### Fail-Closed Rules
 
@@ -120,28 +118,28 @@ One fail-closed, one-shot gate on every versioned surface, before any state is w
 
 ## Idempotency Invariants
 
-Duplicates are no-ops; same key, different content is corruption. An unlisted surface is **not** idempotent.
+Duplicates are no-ops; the same key with different content is corruption. An unlisted surface is **not** idempotent.
 
-| Surface                          | Key                                              | Duplicate                                                  |
-| -------------------------------- | ------------------------------------------------ | ---------------------------------------------------------- |
-| Upload chunk                     | `(upload_id, offset, chunk_hash)`                | Returns current offset                                     |
-| Session creation                 | `(owner_id, hash, album_id)`                     | Active session returned; finalized → `409 error.upload.duplicate_blob` + existing asset |
-| Lifecycle manifest               | `(asset_id, prior_provenance_hash, manifest_hash)` | Chain advances once                                      |
-| Metadata update                  | op id + `(asset_id, prior_provenance_hash)`      | Structurally identical                                     |
-| Federation capability proof      | `(peer_id, jti)`                                 | Same response                                              |
-| Federation pull                  | `(peer_id, sync_cursor)`                         | Same page                                                  |
-| MLS commit                       | Group commit chain (OpenMLS)                     | Rejected                                                   |
-| [Album upgrade](/design/versioning/#album-upgrade-ceremony) / [MLS re-key](/design/mls-resilience/#group-re-keying-ceremony) | `intent_id` | Never forks or re-keys twice                  |
-| [Device enrollment](/design/device-enrollment/#cross-device-add) | Single-use enrollment code | Re-redemption rejected                                 |
-| Share/upload-link create         | Client op id                                     | Returns the minted link                                    |
-| Share/upload-link revoke         | `link_id`                                        | No-op                                                      |
-| Drop adoption                    | `drop_id` (invariant 32)                         | Returns the promoted asset                                 |
-| Album roster publish             | `(album_id, roster_version)` (invariant 33)      | Identical bytes → `200 replayed`; different → `409 error.album.roster_stale` |
+| Surface | Key | Duplicate |
+| --- | --- | --- |
+| Upload chunk | `(upload_id, byte range)` | Wholly committed → the session's state, nothing written, bytes not compared and never written (a changed source is stopped by the client's [chunk-tag guard](/design/cryptography/encryption/#encryption-workflow)); partial overlap → `409 error.upload.range_conflict` |
+| Session creation | `(owner_id, hash, album_id)` | Active session returned; finalized → `409 error.upload.duplicate_blob` + existing asset |
+| Lifecycle manifest | `(asset_id, prior_provenance_hash, manifest_hash)` | Chain advances once |
+| Metadata update | op id + `(asset_id, prior_provenance_hash)` | Structurally identical |
+| Federation capability proof | `(peer_id, jti)` | Same response |
+| Federation pull | `(peer_id, sync_cursor)` | Same page |
+| MLS commit | Group commit chain (OpenMLS) | Rejected |
+| [Album upgrade](/design/versioning/#album-upgrade-ceremony) / [MLS re-key](/design/mls-resilience/#group-re-keying-ceremony) | `intent_id` | Never forks or re-keys twice |
+| [Device enrollment](/design/device-enrollment/#cross-device-add) | Single-use enrollment code | Re-redemption rejected |
+| Share/upload-link create | Client op id | Returns the minted link |
+| Share/upload-link revoke | `link_id` | No-op |
+| Drop adoption | `drop_id` (invariant 32) | Returns the promoted asset |
+| Album roster publish | `(album_id, roster_version)` (invariant 33) | Identical bytes → `200 replayed`; different → `409 error.album.roster_stale` |
 
 ## Atomicity Invariants
 
-- **Bundle finalization:** manifest, ciphertext, metadata and provenance commit in one transaction; failure → `FailedProcessing`, partials GC'd ([Atomic Writes](/design/filesystem/maintenance/#atomic-writes-and-crash-recovery)).
+- **Blob finalization:** each blob of a bundle finalizes on its own, and its index rows and custody receipt commit in one transaction; failure → `FailedProcessing`, partials GC'd ([Atomic Writes](/design/filesystem/maintenance/#atomic-writes-and-crash-recovery)). A bundle becomes visible only once its provenance and metadata blobs have finalized ([visibility gate](/design/transfer/upload/#what-gets-uploaded)), and a `replace` applies as one act when its manifest lands.
 - **Stack edits:** all `.tmp` staged, renamed together; any failure discards the bundle.
 - **AMK epoch bump + write-tier rotation:** one MLS commit.
 - **Album upgrade:** one MLS commit (`AlbumTombstone`) ([Versioning](/design/versioning/#album-upgrade-ceremony)).
-- **Lifecycle manifest + provenance:** the same act — the entry *is* the manifest plus its chain link.
+- **Lifecycle manifest + provenance:** the same act, because the entry *is* the manifest plus its chain link.

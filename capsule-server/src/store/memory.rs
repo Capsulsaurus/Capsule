@@ -2,8 +2,8 @@
 //!
 //! Valkey is required; the server refuses to boot without `VALKEY_URL`
 //! (design/filesystem/server.md, "Required Services"). What these types are for is letting the
-//! rest of the rebuild be tested without a container, which is the acceptance gap
-//! design/module-map.md sets for Kynos — and they earn that only by passing the same
+//! rest of the rebuild be tested without a container, which is the acceptance gap set for
+//! Kynos — and they earn that only by passing the same
 //! [`super::conformance`] suite a live backend does.
 //!
 //! Two properties make them *deterministic* rather than merely fast:
@@ -21,7 +21,10 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use jiff::{SignedDuration, Timestamp};
 
-use super::auth::{AuthStateStore, CohortRecord, CohortStore, DEFAULT_SESSION_TTL, SessionRecord};
+use super::auth::{
+    AuthStateStore, CohortRecord, CohortStore, DEFAULT_SESSION_HARD_CAP, DEFAULT_SESSION_TTL,
+    SessionRecord,
+};
 use super::ceremony::{
     CHALLENGE_TTL, ChallengeStore, ChannelStore, DEVICE_SLOW_DOWN_STEP, DevicePollSlot, Direction,
     DrainOutcome, ENROLLMENT_CODE_TTL, EnrollmentStore, OIDC_AUTHORIZATION_TTL, OIDC_DEVICE_TTL,
@@ -34,8 +37,8 @@ use super::ids::{
     UploadId, UserId,
 };
 use super::upload::{
-    AcceptedChunk, FinalizeClaim, LIFETIME_CAP, UploadSessionRecord, UploadSessionStatus,
-    UploadSessionStore,
+    CommittedRange, FinalizeClaim, LIFETIME_CAP, UnclaimedDiscard, UploadSessionRecord,
+    UploadSessionStatus, UploadSessionStore,
 };
 use super::{Clock, StoreError, StoreFuture, deadline};
 
@@ -113,6 +116,7 @@ impl<T> Entry<T> {
 pub struct InMemoryAuthState {
     clock: Arc<dyn Clock>,
     ttl: SignedDuration,
+    hard_cap: SignedDuration,
     state: Mutex<AuthState>,
 }
 
@@ -167,27 +171,36 @@ impl AuthState {
 }
 
 impl InMemoryAuthState {
-    /// A store on `clock` with the given session lifetime.
+    /// A store on `clock` with the given sliding window and [`DEFAULT_SESSION_HARD_CAP`].
     pub fn new(clock: Arc<dyn Clock>, ttl: SignedDuration) -> Self {
         Self {
             clock,
             ttl,
+            hard_cap: DEFAULT_SESSION_HARD_CAP,
             state: Mutex::new(AuthState::default()),
         }
+    }
+
+    /// The same store with its hard cap set to `hard_cap`.
+    #[must_use]
+    pub fn with_hard_cap(mut self, hard_cap: SignedDuration) -> Self {
+        self.hard_cap = hard_cap;
+        self
     }
 
     /// A store on `clock` with [`DEFAULT_SESSION_TTL`].
     pub fn with_default_ttl(clock: Arc<dyn Clock>) -> Self {
         Self::new(clock, DEFAULT_SESSION_TTL)
     }
-}
 
-impl AuthStateStore for InMemoryAuthState {
-    fn ttl(&self) -> SignedDuration {
-        self.ttl
-    }
-
-    fn open_session(&self, record: SessionRecord) -> StoreFuture<'_, ()> {
+    /// Store `record` until `expires_at`, indexed under its user: the one write both
+    /// [`AuthStateStore::open_session`] and [`AuthStateStore::restore_session`] make.
+    fn store_session(
+        &self,
+        record: SessionRecord,
+        expires_at: Timestamp,
+        verb: &'static str,
+    ) -> StoreFuture<'_, ()> {
         Box::pin(async move {
             let now = self.clock.now();
             let mut state = lock(&self.state);
@@ -195,10 +208,7 @@ impl AuthStateStore for InMemoryAuthState {
 
             let session_id = record.session_id.clone();
             let user_id = record.user_id.clone();
-            let entry = Entry {
-                record,
-                expires_at: deadline(now, self.ttl),
-            };
+            let entry = Entry { record, expires_at };
             // Re-opening an id that already named a *different* user must not leave the old
             // user's listing pointing at a session that is now someone else's.
             if let Some(previous) = state.sessions.insert(session_id.clone(), entry)
@@ -212,9 +222,29 @@ impl AuthStateStore for InMemoryAuthState {
                 .or_default()
                 .insert(session_id.clone());
 
-            tracing::debug!(%session_id, %user_id, "opened session");
+            tracing::debug!(%session_id, %user_id, %expires_at, verb, "stored session");
             Ok(())
         })
+    }
+}
+
+impl AuthStateStore for InMemoryAuthState {
+    fn ttl(&self) -> SignedDuration {
+        self.ttl
+    }
+
+    fn hard_cap(&self) -> SignedDuration {
+        self.hard_cap
+    }
+
+    fn open_session(&self, record: SessionRecord) -> StoreFuture<'_, ()> {
+        let expires_at = self.expires_at(&record, self.clock.now());
+        self.store_session(record, expires_at, "opened")
+    }
+
+    fn restore_session(&self, record: SessionRecord) -> StoreFuture<'_, ()> {
+        let expires_at = self.expires_at(&record, record.created_at);
+        self.store_session(record, expires_at, "restored")
     }
 
     fn read_session<'a>(
@@ -341,21 +371,11 @@ pub struct InMemoryUploadSessions {
 #[derive(Debug, Default)]
 struct UploadState {
     sessions: BTreeMap<UploadId, Entry<UploadSessionRecord>>,
-    chunks: BTreeMap<UploadId, BTreeMap<u64, AcceptedChunk>>,
 }
 
 impl UploadState {
     fn purge(&mut self, now: Timestamp) {
-        let expired: Vec<UploadId> = self
-            .sessions
-            .iter()
-            .filter(|(_, entry)| !entry.is_live_at(now))
-            .map(|(id, _)| id.clone())
-            .collect();
-        for id in expired {
-            self.sessions.remove(&id);
-            self.chunks.remove(&id);
-        }
+        self.sessions.retain(|_, entry| entry.is_live_at(now));
     }
 
     /// A live, still-active session, or `None`.
@@ -443,74 +463,34 @@ impl UploadSessionStore for InMemoryUploadSessions {
         })
     }
 
-    fn record_progress<'a>(
+    fn record_range<'a>(
         &'a self,
         upload: &'a UploadId,
-        chunk: AcceptedChunk,
+        range: CommittedRange,
     ) -> StoreFuture<'a, Option<UploadSessionRecord>> {
         Box::pin(async move {
             let now = self.clock.now();
             let mut state = lock(&self.state);
             state.purge(now);
             let Some(record) = state.active_mut(upload) else {
-                tracing::debug!(%upload, "progress found no active session");
+                tracing::debug!(%upload, "a range found no active session to record against");
                 return Ok(None);
             };
-            record.received_bytes = chunk.next_offset;
-            record.last_progress_at = chunk.accepted_at;
+            record.committed = record.committed.with_range(range.start, range.end);
+            record.last_progress_at = range.accepted_at;
             if record.status == UploadSessionStatus::Pending {
                 record.status = UploadSessionStatus::Uploading;
             }
             let updated = record.clone();
-            state
-                .chunks
-                .entry(upload.clone())
-                .or_default()
-                .insert(chunk.offset, chunk);
             tracing::debug!(
                 %upload,
-                received_bytes = updated.received_bytes,
-                "accepted chunk"
+                start = range.start,
+                end = range.end,
+                fragments = updated.committed.fragments(),
+                prefix = updated.committed.prefix(),
+                "recorded a committed range"
             );
             Ok(Some(updated))
-        })
-    }
-
-    fn chunk_at<'a>(
-        &'a self,
-        upload: &'a UploadId,
-        offset: u64,
-    ) -> StoreFuture<'a, Option<AcceptedChunk>> {
-        Box::pin(async move {
-            let now = self.clock.now();
-            let mut state = lock(&self.state);
-            state.purge(now);
-            let found = state
-                .chunks
-                .get(upload)
-                .and_then(|chunks| chunks.get(&offset))
-                .cloned();
-            tracing::trace!(%upload, offset, hit = found.is_some(), "chunk replay lookup");
-            Ok(found)
-        })
-    }
-
-    fn reconcile_received_bytes<'a>(
-        &'a self,
-        upload: &'a UploadId,
-        on_disk: u64,
-    ) -> StoreFuture<'a, Option<UploadSessionRecord>> {
-        Box::pin(async move {
-            let now = self.clock.now();
-            let mut state = lock(&self.state);
-            state.purge(now);
-            let Some(entry) = state.sessions.get_mut(upload) else {
-                return Ok(None);
-            };
-            let was = entry.record.received_bytes;
-            entry.record.received_bytes = on_disk;
-            tracing::info!(%upload, was, now = on_disk, "reconciled received bytes to disk");
-            Ok(Some(entry.record.clone()))
         })
     }
 
@@ -528,6 +508,25 @@ impl UploadSessionStore for InMemoryUploadSessions {
             };
             entry.record.status = status;
             tracing::debug!(%upload, status = status.as_str(), "set upload status");
+            Ok(Some(entry.record.clone()))
+        })
+    }
+
+    fn fail_processing<'a>(
+        &'a self,
+        upload: &'a UploadId,
+        failure_code: &'a str,
+    ) -> StoreFuture<'a, Option<UploadSessionRecord>> {
+        Box::pin(async move {
+            let now = self.clock.now();
+            let mut state = lock(&self.state);
+            state.purge(now);
+            let Some(entry) = state.sessions.get_mut(upload) else {
+                return Ok(None);
+            };
+            entry.record.status = UploadSessionStatus::FailedProcessing;
+            entry.record.failure_code = Some(failure_code.to_owned());
+            tracing::debug!(%upload, failure_code, "failed an upload session");
             Ok(Some(entry.record.clone()))
         })
     }
@@ -585,10 +584,37 @@ impl UploadSessionStore for InMemoryUploadSessions {
             let now = self.clock.now();
             let mut state = lock(&self.state);
             state.purge(now);
-            state.chunks.remove(upload);
             let removed = state.sessions.remove(upload).map(|entry| entry.record);
             tracing::info!(%upload, hit = removed.is_some(), "discarded upload session");
             Ok(removed)
+        })
+    }
+
+    fn discard_unclaimed<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, UnclaimedDiscard> {
+        Box::pin(async move {
+            let now = self.clock.now();
+            let mut state = lock(&self.state);
+            state.purge(now);
+            let Some(entry) = state.sessions.get(upload) else {
+                tracing::debug!(%upload, "an unclaimed discard found no session");
+                return Ok(UnclaimedDiscard::NotFound);
+            };
+            if !matches!(
+                entry.record.status,
+                UploadSessionStatus::Pending | UploadSessionStatus::Uploading
+            ) {
+                tracing::debug!(
+                    %upload,
+                    status = entry.record.status.as_str(),
+                    "an unclaimed discard found the session claimed"
+                );
+                return Ok(UnclaimedDiscard::Claimed);
+            }
+            let Some(removed) = state.sessions.remove(upload) else {
+                return Ok(UnclaimedDiscard::NotFound);
+            };
+            tracing::info!(%upload, "discarded an unclaimed upload session");
+            Ok(UnclaimedDiscard::Discarded(Box::new(removed.record)))
         })
     }
 
@@ -617,6 +643,25 @@ impl UploadSessionStore for InMemoryUploadSessions {
                 .collect();
             matches.sort();
             Ok(matches.first().map(|id| (*id).clone()))
+        })
+    }
+
+    fn live_for_address<'a>(&'a self, expected_hash: &'a str) -> StoreFuture<'a, Vec<UploadId>> {
+        Box::pin(async move {
+            let now = self.clock.now();
+            let mut state = lock(&self.state);
+            state.purge(now);
+            // A scan, as for `pending_for_address`; a real adapter indexes `expected_hash`.
+            let mut matches: Vec<UploadId> = state
+                .sessions
+                .values()
+                .map(|entry| &entry.record)
+                .filter(|record| record.status.is_active() && record.expected_hash == expected_hash)
+                .map(|record| record.upload_id.clone())
+                .collect();
+            matches.sort();
+            tracing::debug!(count = matches.len(), "listed live sessions for an address");
+            Ok(matches)
         })
     }
 
@@ -1454,6 +1499,10 @@ impl super::conformance::Harness for InMemoryStores {
 
     fn oidc_devices(&self) -> &dyn OidcDeviceStore {
         &self.oidc_devices
+    }
+
+    fn now(&self) -> Timestamp {
+        self.clock.now()
     }
 }
 

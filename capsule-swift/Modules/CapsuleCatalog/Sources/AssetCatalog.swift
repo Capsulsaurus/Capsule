@@ -25,9 +25,11 @@ import Foundation
 /// throws `CatalogError.ViewLocked` until ``unlockView(_:using:)`` mints a
 /// grant, which then covers a short grace window (5 minutes, per-view). Grants
 /// never cross views — one for Hidden does not open Recently Deleted.
-/// ``expiredTrash(olderThanSeconds:)`` is deliberately *ungated*: it is the
-/// unattended retention sweep's input, with no user present to authenticate.
-/// Do not build a user-facing listing on it.
+///
+/// ### The trash is read here, written through the workspace
+/// No conformer writes the trash. Deleting, restoring and purging an asset,
+/// and the retention sweep, are ``ManagedWorkspace`` verbs: each is a signed
+/// record the index row projects, so it syncs and survives an index rebuild.
 ///
 /// The gate is view-time UX protection against a borrowed-unlocked-phone snoop;
 /// it is **not** a cryptographic boundary.
@@ -53,17 +55,6 @@ public protocol AssetCatalog: Sendable {
     /// A windowed page of the timeline. See *Timeline semantics* above.
     func timeline(filter: TimelineFilter, offset: Int, limit: Int) async throws -> [CatalogAsset]
 
-    /// Soft-delete an asset: mark it `isDeleted` with `deletedAt`, removing it
-    /// from the timeline. The row and its file are retained until purged.
-    func softDeleteAsset(id: String, deletedAt: Int64) async throws
-
-    /// Restore a soft-deleted asset back into the timeline.
-    func restoreAsset(id: String) async throws
-
-    /// Soft-deleted assets whose `deletedAt` is older than `olderThanSeconds`
-    /// before now — the trash-purge candidate set.
-    func expiredTrash(olderThanSeconds: Int64) async throws -> [CatalogAsset]
-
     /// A windowed page of the trash — every soft-deleted asset, most-recently-
     /// deleted first. The Recently Deleted listing.
     ///
@@ -71,9 +62,6 @@ public protocol AssetCatalog: Sendable {
     /// ``unlockView(_:using:)`` has minted a live ``GatedView/recentlyDeleted``
     /// grant. See *Gated views* below.
     func trash(offset: Int, limit: Int) async throws -> [CatalogAsset]
-
-    /// Permanently remove an asset row. The on-disk file is the caller's concern.
-    func purgeAsset(id: String) async throws
 
     /// Set (or, with `nil`, clear) an asset's caption register, read back as
     /// ``CatalogAsset/caption``.

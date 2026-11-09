@@ -23,36 +23,57 @@
 //! - [`peers`] — [`PeerStore`], the peers whose signing keys an operator has pinned and the
 //!   blocklist, which is a column on the same row; and [`PeerAdministration`], the operator's
 //!   `capsule-server peer …` acts on it, a block's cascade over the issued grants included.
+//! - [`pull`] — the egress pull worker's engine: each job's schedule, the lease that keeps two
+//!   replicas off one job, the per-peer circuit, and the failure policy that drives them.
+//! - [`hints`] — the pull hint a home server may push on the low-trust channel: its signed
+//!   claim, and [`HintReceiver`], the port the route hands a verified hint
+//!   to (the [`PullWorker`](pull::PullWorker) in production).
+//! - [`rejected_hashes`] — [`RejectedHashes`](rejected_hashes::RejectedHashes), the bounded
+//!   soft-fail table: the hash of every federated event a pull refused, so this server's view
+//!   does not silently diverge from a peer that accepted it.
+//! - [`breadcrumbs`] — [`BreadcrumbIndex`](breadcrumbs::BreadcrumbIndex), the lightweight
+//!   per-asset breadcrumb of each pulled album, read from the entries a pull committed.
+//! - [`subscriptions`] — [`SubscriptionStore`], the receiving half's record of which album this
+//!   server pulls from which peer for which local member, under the capability that member's
+//!   client posted; and [`SubscriptionJobs`], the pull worker's production job source.
 //! - [`memory`] — the deterministic doubles; [`conformance`] — the suite every adapter passes.
 //!
 //! # A peer is not an account
 //!
 //! A [`PeerId`] is a server's canonical origin (`other.tld`), never a user id, and the types
 //! keep them apart everywhere the two could be confused: the sync cursor's scope byte, the
-//! blob authority's principal, the counter key. Nothing here holds a user list, and nothing
-//! published here names a user — the registry's no-enumeration rule holds at this layer too.
+//! blob authority's principal, the counter key. The only accounts held here are this server's
+//! own subscribers, and nothing published here names a user — the registry's no-enumeration
+//! rule holds at this layer too.
 
 use std::fmt;
 use std::sync::Arc;
 
+pub mod breadcrumbs;
 pub mod capability;
 pub mod conformance;
+pub mod hints;
 pub mod memory;
 pub mod peers;
 pub mod postgres;
+pub mod pull;
+pub mod rejected_hashes;
 pub mod report;
 pub mod scheme;
 pub mod store;
+pub mod subscriptions;
 
 pub use self::capability::{
     ALBUM_URN_PREFIX, CapabilityCodec, CapabilityError, CapabilityGrant, MintError, MintRequest,
-    Minted, Scope, album_from_urn, album_urn,
+    Minted, Scope, album_from_urn, album_urn, verify_received,
 };
+pub use self::hints::{HintClaim, HintError, HintReceiver, RecordingHints};
 pub use self::memory::{InMemoryCapabilities, InMemoryPeers};
 pub use self::peers::{
     BlockOutcome, Blocked, InvalidSigningKey, PeerAdministration, PeerRecord, PeerStore,
     PinOutcome, UnblockOutcome, parse_signing_key, revoke_grants_of,
 };
+use self::pull::pulled::PulledAlbumReads;
 pub use self::report::{
     REPORT_FRESHNESS, REPORT_NONCE_WINDOW, ReportClaim, ReportError, verify_signed_report,
 };
@@ -60,6 +81,10 @@ pub use self::scheme::{Principal, ReadBearer, VerifiedCapability};
 pub use self::store::{
     CapabilityFilter, CapabilityRecord, CapabilityStore, MAX_GRANT_LIFETIME, RefreshOutcome,
     RevokeOutcome,
+};
+pub use self::subscriptions::{
+    CapabilityToken, InMemorySubscriptions, PutOutcome, Subscription, SubscriptionJobs,
+    SubscriptionStore,
 };
 use crate::counter::{CounterContext, CounterKey, budgets};
 use crate::store::Clock;
@@ -151,12 +176,17 @@ pub struct FederationCollaborators {
     pub capabilities: Arc<dyn CapabilityStore>,
     /// The peers this server has pinned or blocked.
     pub peers: Arc<dyn PeerStore>,
+    /// The albums this server pulls from peers for its own members.
+    pub subscriptions: Arc<dyn SubscriptionStore>,
+    /// What the pull worker committed for those members, as their clients read it: the same
+    /// store the worker writes.
+    pub pulled: Arc<dyn PulledAlbumReads>,
     /// The clock every record and every deadline is stamped from.
     pub clock: Arc<dyn Clock>,
     /// Whether this deployment federates at all (`FEDERATION_ENABLED`, #509).
     ///
-    /// Off is the default, and off means the federation surface is not there: the four
-    /// federation operations answer `404` before any credential, budget or store is touched,
+    /// Off is the default, and off means the federation surface is not there: the federation
+    /// operations answer `404` before any credential, budget or store is touched,
     /// and [`ReadBearer`] refuses every capability on the two read primitives. See
     /// [`FederationSetting`] for why this is a port rather than a `bool`.
     pub enabled: Arc<dyn FederationSetting>,
@@ -195,8 +225,11 @@ pub struct FederationContext {
     codec: Arc<CapabilityCodec>,
     capabilities: Arc<dyn CapabilityStore>,
     peers: Arc<dyn PeerStore>,
+    subscriptions: Arc<dyn SubscriptionStore>,
+    pulled: Arc<dyn PulledAlbumReads>,
     clock: Arc<dyn Clock>,
     enabled: Arc<dyn FederationSetting>,
+    hints: Option<Arc<dyn HintReceiver>>,
 }
 
 impl FederationContext {
@@ -206,6 +239,8 @@ impl FederationContext {
             codec,
             capabilities,
             peers,
+            subscriptions,
+            pulled,
             clock,
             enabled,
         } = collaborators;
@@ -213,9 +248,37 @@ impl FederationContext {
             codec,
             capabilities,
             peers,
+            subscriptions,
+            pulled,
             clock,
             enabled,
+            hints: None,
         }
+    }
+
+    /// Hand every verified pull hint to `receiver`: the [`PullWorker`](pull::PullWorker) where
+    /// the deployment federates.
+    ///
+    /// Without one a verified hint is answered exactly as it is with one, and acts on nothing.
+    #[must_use]
+    pub fn with_hints(mut self, receiver: Arc<dyn HintReceiver>) -> Self {
+        self.hints = Some(receiver);
+        self
+    }
+
+    /// What acts on a verified pull hint, where something does.
+    pub fn hints(&self) -> Option<&dyn HintReceiver> {
+        self.hints.as_deref()
+    }
+
+    /// The albums this server pulls from peers for its own members.
+    pub fn subscriptions(&self) -> &dyn SubscriptionStore {
+        self.subscriptions.as_ref()
+    }
+
+    /// What the pull worker committed, as a subscriber's client reads it.
+    pub fn pulled(&self) -> &dyn PulledAlbumReads {
+        self.pulled.as_ref()
     }
 
     /// The codec capabilities are minted with and read by.
@@ -333,6 +396,31 @@ impl PeerTier {
             Self::Probation => budgets::PEER_KIBIBYTES_PROBATION,
             Self::Established => budgets::PEER_KIBIBYTES,
         }
+    }
+
+    /// The egress pull worker's error budget for a source peer in this tier (#964).
+    pub fn pull_errors(self) -> crate::counter::Budget {
+        match self {
+            Self::Probation => budgets::PEER_PULL_ERRORS_PROBATION,
+            Self::Established => budgets::PEER_PULL_ERRORS,
+        }
+    }
+
+    /// The egress pull worker's validation-time budget, in milliseconds, for a source peer in
+    /// this tier (#964).
+    pub fn pull_cpu_millis(self) -> crate::counter::Budget {
+        match self {
+            Self::Probation => budgets::PEER_PULL_CPU_MILLIS_PROBATION,
+            Self::Established => budgets::PEER_PULL_CPU_MILLIS,
+        }
+    }
+
+    /// Whether a hint from a peer in this tier may move a pull earlier.
+    ///
+    /// A peer on probation has its hints ignored (design/federation.md, Per-Peer
+    /// Compartmentalization): its jobs run on the schedule alone.
+    pub fn honours_hints(self) -> bool {
+        matches!(self, Self::Established)
     }
 
     /// The name this tier travels under, for a log field.

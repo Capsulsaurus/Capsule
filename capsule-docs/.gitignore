@@ -12,6 +12,8 @@ src/content/docs/reference/api/
 # scripts/reference-groups.mjs marks it), so only the generated binding pages are ignored.
 src/content/docs/reference/sdk/*
 !src/content/docs/reference/sdk/rust.md
+# The OpenAPI document the REST pages were generated from, served for download.
+public/openapi.json
 # generated types
 .astro/
 
@@ -31,3 +33,6 @@ pnpm-debug.log*
 
 # macOS-specific files
 .DS_Store
+
+# wrangler pages dev state (bun run preview)
+.wrangler/

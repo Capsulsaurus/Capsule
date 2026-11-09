@@ -7211,6 +7211,10 @@
     "message": "Capsule konnte deinen Identitätsanbieter gerade nicht erreichen. Bitte versuche es erneut.",
     "origin": "machine"
   },
+  "error.auth.password_disabled": {
+    "message": "Dieser Server akzeptiert die Anmeldung nur über Single Sign-On.",
+    "origin": "machine"
+  },
   "error.auth.password_invalid": {
     "message": "Dieses Passwort kann nicht verwendet werden.",
     "origin": "machine"
@@ -7225,6 +7229,10 @@
   },
   "error.auth.rate_limited": {
     "message": "Zu viele Versuche. Bitte warten Sie und versuchen Sie es erneut.",
+    "origin": "machine"
+  },
+  "error.auth.registration_at_capacity": {
+    "message": "Dieser Server verarbeitet gerade zu viele Registrierungen. Bitte versuche es in Kürze erneut.",
     "origin": "machine"
   },
   "error.auth.registration_invalid": {
@@ -7463,8 +7471,28 @@
     "message": "Diese Quelle wird nach wiederholten Fehlern vorübergehend zurückgestellt.",
     "origin": "machine"
   },
+  "error.federation.hint_at_capacity": {
+    "message": "Dieser Server verarbeitet gerade zu viele Aktualisierungsmeldungen. Bitte warten Sie und versuchen Sie es erneut.",
+    "origin": "machine"
+  },
+  "error.federation.hint_malformed": {
+    "message": "Diese Aktualisierungsmeldung ist ungültig.",
+    "origin": "machine"
+  },
+  "error.federation.hint_rate_limited": {
+    "message": "Zu viele Aktualisierungsmeldungen von diesem Server. Bitte warten Sie und versuchen Sie es erneut.",
+    "origin": "machine"
+  },
+  "error.federation.hint_unsigned": {
+    "message": "Die Aktualisierungsmeldung konnte nicht verifiziert werden.",
+    "origin": "machine"
+  },
   "error.federation.member_not_on_roster": {
     "message": "Diese Person steht nicht auf der Mitgliederliste dieses Albums.",
+    "origin": "machine"
+  },
+  "error.federation.mint_at_capacity": {
+    "message": "Dieser Server verarbeitet gerade zu viele Zugriffsberechtigungen. Bitte versuche es in Kürze erneut.",
     "origin": "machine"
   },
   "error.federation.not_configured": {
@@ -7487,12 +7515,20 @@
     "message": "Diese Zugriffsberechtigung deckt den angeforderten Inhalt nicht ab.",
     "origin": "machine"
   },
+  "error.federation.subscription_limit": {
+    "message": "Du hast die maximale Anzahl geteilter Alben von anderen Servern erreicht, denen du folgen kannst. Entferne eines, um ein weiteres hinzuzufügen.",
+    "origin": "machine"
+  },
   "error.federation.unavailable": {
     "message": "Capsule konnte die Föderationsdaten nicht erreichen. Bitte versuche es erneut.",
     "origin": "machine"
   },
   "error.moderation.account_suspended": {
     "message": "Ihr Konto ist gesperrt. Sie können nichts hochladen oder teilen, bis es wiederhergestellt ist.",
+    "origin": "machine"
+  },
+  "error.moderation.report_at_capacity": {
+    "message": "Dieser Server verarbeitet gerade zu viele Meldungen. Bitte warten Sie und versuchen Sie es erneut.",
     "origin": "machine"
   },
   "error.moderation.report_malformed": {
@@ -7569,6 +7605,10 @@
   },
   "error.request.range_not_satisfiable": {
     "message": "Capsule konnte diesen Teil der Datei nicht senden.",
+    "origin": "machine"
+  },
+  "error.request.too_early": {
+    "message": "Diese Anfrage wurde zu früh gesendet. Bitte versuche es erneut.",
     "origin": "machine"
   },
   "error.request.too_large": {
@@ -7763,6 +7803,10 @@
     "message": "Sie können nicht im Namen dieses Benutzers hochladen.",
     "origin": "machine"
   },
+  "error.upload.range_conflict": {
+    "message": "Ein Teil dieses Uploads ist bereits unterwegs. Wird fortgesetzt…",
+    "origin": "machine"
+  },
   "error.upload.rate_limited": {
     "message": "Das Hochladen ist kurz pausiert. Es wird automatisch fortgesetzt.",
     "origin": "machine"
@@ -7791,6 +7835,10 @@
     "message": "Der Upload hat mehr Daten gesendet als angegeben.",
     "origin": "machine"
   },
+  "error.upload.source_changed": {
+    "message": "Diese Datei hat sich während des Uploads geändert, daher wurde der Upload angehalten.",
+    "origin": "machine"
+  },
   "error.upload.stale_revival": {
     "message": "Diese Änderung basiert auf einer veralteten Version des Elements.",
     "origin": "machine"
@@ -7805,6 +7853,14 @@
   },
   "error.upload.timestamp_out_of_range": {
     "message": "Die Uhr Ihres Geräts scheint falsch zu sein. Überprüfen Sie Datum und Uhrzeit.",
+    "origin": "machine"
+  },
+  "error.upload.too_fragmented": {
+    "message": "Dieser Upload hat zu viele Lücken. Sie werden gefüllt…",
+    "origin": "machine"
+  },
+  "error.upload.too_many_in_flight": {
+    "message": "Zu viele Teile dieses Uploads werden gleichzeitig gesendet. Wird verlangsamt…",
     "origin": "machine"
   },
   "error.upload.unavailable": {

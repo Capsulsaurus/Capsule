@@ -322,6 +322,7 @@ fn the_summary_names_every_object_left_on_the_camera() {
             model: "ILCE-7M4".into(),
             serial_number: "1".into(),
         },
+        discovered: None,
         initiator: Pairing {
             guid: uuid::Uuid::new_v4(),
             name: "Capsule".into(),

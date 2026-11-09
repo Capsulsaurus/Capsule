@@ -5,8 +5,10 @@
 //! The browser only reads. Opening a library unlocks it once, through the port, which takes a
 //! [`Catalogue`] snapshot and closes the workspace again; every move after that is a pure
 //! transition over the snapshot. The preview is the one other effect: the port decodes the
-//! selected asset's original through `capsule-core::media` (Rawshift) and downscales it, one at
-//! a time, latest selection wins.
+//! selected asset through `capsule-core::media` (Rawshift) and downscales it, one at a time,
+//! latest selection wins. What it decodes is the render ladder's choice
+//! (`capsule_sdk::fetch::render_step`): a RAW original's embedded preview where it covers the
+//! pane, else the original.
 //!
 //! Drawing the preview needs it encoded in the terminal's graphics protocol for the pane's
 //! size, which only a frame knows. A [`PreviewCanvas`] notes the encode a frame found missing,
@@ -21,12 +23,16 @@
 
 pub mod catalogue;
 
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use capsule_core::media::{self, Decoder};
 use capsule_core::sidecar::StackRole;
+use capsule_sdk::fetch::{
+    LocalHoldings, PixelSize, RenderRequest, Rendition, Representation, RungSource, render_step,
+};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect, Size};
 use ratatui::style::{Color, Modifier, Style, Stylize};
@@ -121,6 +127,10 @@ pub fn previewable(ext: &str) -> Result<(), String> {
 /// a hostile original costs the preview, never the TUI. A format with no codec in this build
 /// is the reason the pane shows.
 ///
+/// The source is the render ladder's ([`preview_source`]): a RAW original's embedded preview
+/// where it covers the pane, which shows at once without developing the RAW, and otherwise the
+/// original itself.
+///
 /// # Errors
 ///
 /// The media module's reason the original does not decode.
@@ -131,7 +141,90 @@ pub fn decode_preview(
     ext: &str,
     max_edge: u32,
 ) -> Result<PreviewImage, String> {
+    let embedded = media::extract_embedded_preview(bytes, ext).unwrap_or_else(|error| {
+        tracing::debug!(%error, "the original's embedded preview does not read; decoding the original");
+        None
+    });
+    decode_preview_from(decoder, embedded.as_ref(), bytes, ext, max_edge)
+}
+
+/// Where a preview pane's pixels come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreviewSource {
+    /// The original's embedded preview, which covers the pane.
+    Embedded,
+    /// The original, decoded and downscaled.
+    Original,
+}
+
+/// The render ladder's answer for a pane of `max_edge` pixels on a device that holds the
+/// original, and an embedded preview where `embedded` says one extracted.
+///
+/// The pane asks for Preview. Where the embedded preview fills it, that is what shows. Otherwise
+/// the ladder shows a lower rung and names generating the Preview from the original as its next
+/// step; the pane shows one image per selection, so the port takes that step before answering
+/// rather than drawing the lower rung first.
+pub fn preview_source(embedded: Option<&media::EmbeddedPreview>, max_edge: u32) -> PreviewSource {
+    let request = RenderRequest {
+        intent: Representation::Preview,
+        surface: PixelSize {
+            width: max_edge,
+            height: max_edge,
+        },
+    };
+    let local = LocalHoldings {
+        held: BTreeSet::from([Representation::Original]),
+        embedded_preview: embedded.map(|preview| PixelSize {
+            width: preview.width,
+            height: preview.height,
+        }),
+    };
+    let step = render_step(&request, None, &local, &BTreeSet::new());
+    let filled_by_embedded = Rendition {
+        rung: Representation::Preview,
+        source: RungSource::Embedded,
+    };
+    if step.show == filled_by_embedded {
+        PreviewSource::Embedded
+    } else {
+        PreviewSource::Original
+    }
+}
+
+/// [`decode_preview`] with the embedded preview already extracted. An embedded preview the
+/// ladder picks but that does not decode falls back to the original.
+///
+/// # Errors
+///
+/// As [`decode_preview`].
+pub fn decode_preview_from(
+    decoder: &dyn Decoder,
+    embedded: Option<&media::EmbeddedPreview>,
+    bytes: &[u8],
+    ext: &str,
+    max_edge: u32,
+) -> Result<PreviewImage, String> {
+    let source = preview_source(embedded, max_edge);
+    tracing::debug!(
+        ?source,
+        max_edge,
+        "preview: the render ladder picked its source"
+    );
+    if let (PreviewSource::Embedded, Some(preview)) = (source, embedded) {
+        match media::decode_embedded_preview(preview) {
+            Ok(decoded) => return downscaled(&decoded, max_edge),
+            Err(error) => tracing::warn!(
+                %error,
+                "preview: the embedded preview did not decode; decoding the original"
+            ),
+        }
+    }
     let decoded = media::decode_guarded(decoder, bytes, ext).map_err(|e| e.to_string())?;
+    downscaled(&decoded, max_edge)
+}
+
+/// Downscale a decoded frame to `max_edge`, behind the unwind guard.
+fn downscaled(decoded: &media::DecodedImage, max_edge: u32) -> Result<PreviewImage, String> {
     let image = media::guarded("preview downscale", || {
         Ok(media::downscale_rgba8(&decoded.image, max_edge))
     })

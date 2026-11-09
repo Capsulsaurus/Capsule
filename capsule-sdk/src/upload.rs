@@ -10,13 +10,32 @@
 //! - the **normative** adaptive chunk-size algorithm ([`AdaptiveChunkSizeStrategy`]),
 //!   clamped to `[PROTOCOL_MIN_CHUNK, PROTOCOL_MAX_CHUNK]` with 4 KiB alignment
 //!   guaranteed *by construction*;
-//! - the code-driven recovery matrix ([`UploadClient::upload`]): `offset_mismatch`
-//!   → HEAD re-align; `session_not_found` → re-create; `duplicate_blob` → merge
+//! - the range scheduler ([`UploadClient::with_ranges_window`]): up to P ranges of one session
+//!   in flight, each planned from the server's committed set ([`committed`]) by filling the
+//!   lowest gap first, so a sequential transfer is the case P = 1. A session-level step (a wait,
+//!   a `HEAD`, a re-create) is taken only once every range in flight has returned, so no wait
+//!   ever stalls a request still sending;
+//! - the code-driven recovery matrix ([`UploadClient::upload`]): `range_conflict` → re-plan
+//!   from the committed set it carries (or `HEAD`), after its `Retry-After`; `too_fragmented` →
+//!   let the ranges in flight finish, wait, re-plan; `too_many_in_flight` → wait, narrow P to the
+//!   session's advertised `ranges`; a lost answer (a reset, or no response) → `HEAD` before
+//!   anything is re-sent; `offset_mismatch` (an older server) → re-align;
+//!   `session_not_found` → re-create; `duplicate_blob` → merge
 //!   (success carrying the existing asset ref); `426` → abort-with-upgrade;
-//!   `checksum_mismatch` → re-send the chunk; `rate_limited`, `unavailable` and
-//!   `storage_full` → wait out `Retry-After`, then resume from HEAD. The client
-//!   switches on the stable `error.*` code (from `capsule_i18n::error_codes`),
-//!   never on the bare status.
+//!   `checksum_mismatch` → re-send the chunk; `chunk_timeout` → re-send at the
+//!   same offset, shorter; `content_hash_mismatch` at finalization → a typed
+//!   [`UploadError::SourceChanged`] when the source changed, one re-created session when it
+//!   affirms it is unchanged, else the refusal;
+//!   `rate_limited`, `unavailable`, `storage_full` and every
+//!   other answer the retry classification marks retryable (any `5xx`, `408`, `425`)
+//!   → wait out `Retry-After` (else the retry engine's backoff), then resume from
+//!   HEAD. The client switches on the stable `error.*` code (from
+//!   `capsule_i18n::error_codes`); the status decides only for an answer whose code
+//!   names no action;
+//! - per-request stall bounds ([`RequestBounds`]): a chunk body is cut when no bytes move for
+//!   the stall bound, the wait for a response once the body is sent runs under a separate,
+//!   longer bound, and nothing bounds a request's total duration — a slow but live link is
+//!   never cut. A client-cut chunk is re-sent at the same offset, shorter, like a `408`.
 //!
 //! Tokens stay SDK-owned: an upload composes with the SDK session — build the
 //! transport with [`UploadTransport::with_session`] and every request runs through
@@ -36,8 +55,62 @@ use serde::{Deserialize, Serialize};
 
 use crate::events::{RetryReason, TransferEvent, TransferEvents, millis};
 use crate::net::{
-    ConnectionClass, RetryClass, RetryDecision, RetryEngine, Sleeper, TokioSleeper, negotiation,
+    ConnectionClass, ExchangeProgress, LaneRetries, PacedBody, RequestBounds, RequestCut,
+    RetryClass, RetryDecision, RetryEngine, RetryVerdict, Sleeper, TokioSleeper, negotiation,
+    within_bounds,
 };
+
+pub mod advice;
+pub mod committed;
+pub mod queue;
+
+use self::advice::{ServerAdvice, SessionExpiry};
+use self::committed::{CommittedSet, next_range};
+use self::queue::{MAX_RANGES_WINDOW, RangeId};
+
+/// The scheduler a gated transfer runs under ([`UploadClient::upload_gated`]): it holds the
+/// memory each range in flight needs and hears the server's advice. The push driver implements
+/// it over the device's [`UploadQueue`](queue::UploadQueue), so every range any session sends
+/// reserves its length against the one shared byte budget.
+pub trait TransferGate: Sync {
+    /// Wait until the shared budget and the session's ranges window can hold one more range of
+    /// `len` bytes, and reserve it. `None` means the gate holds no session for this transfer any
+    /// more (it was revoked); the range is then sent unreserved and the caller's own report on
+    /// the session decides what happens to it.
+    fn reserve(
+        &self,
+        len: u64,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<RangeId>> + Send + '_>>;
+
+    /// The range `range` returned (answered, refused or cut): give its bytes back.
+    fn release(&self, range: RangeId);
+
+    /// The server sent `advice` on this transfer's session create or `HEAD`.
+    fn advised(&self, advice: &ServerAdvice);
+}
+
+/// One range's reservation, given back however the request ends: answered, refused, cut, or an
+/// early return that drops it.
+struct RangeHold<'g> {
+    gate: &'g dyn TransferGate,
+    range: Option<RangeId>,
+}
+
+impl<'g> RangeHold<'g> {
+    async fn reserve(gate: Option<&'g dyn TransferGate>, len: u64) -> Option<Self> {
+        let gate = gate?;
+        let range = gate.reserve(len).await;
+        Some(Self { gate, range })
+    }
+}
+
+impl Drop for RangeHold<'_> {
+    fn drop(&mut self) {
+        if let Some(range) = self.range.take() {
+            self.gate.release(range);
+        }
+    }
+}
 
 // Constants for chunk sizes (4KB aligned)
 const KB: u64 = 1024;
@@ -53,21 +126,22 @@ const ALIGNMENT: u64 = 4096;
 /// outside them (400 / 413).
 pub const PROTOCOL_MIN_CHUNK: u64 = 4096;
 pub const PROTOCOL_MAX_CHUNK: u64 = CHUNK_SIZE_16MB;
-/// Window size for throughput measurements
-const THROUGHPUT_WINDOW_SECS: f64 = 30.0;
-/// Minimum bytes before scaling chunk size
-const MIN_BYTES_BEFORE_SCALING: u64 = 8 * 1024 * 1024; // 8MB
-/// Minimum chunks before scaling chunk size
-const MIN_CHUNKS_BEFORE_SCALING: u32 = 5;
-/// Maximum number of recent chunks to keep in history
-const MAX_RECENT_CHUNKS: usize = 1000;
 
 /// Upper bound on recovery actions (re-align / re-create / re-send) for a single
 /// blob transfer. A live server drives progress well inside this; hitting it
-/// means a stuck peer, so the transfer fails loudly ([`UploadError::RetriesExhausted`])
+/// means a stuck peer, so the transfer fails loudly ([`UploadError::RetriesExhausted`], or
+/// [`UploadError::WaitsExhausted`] carrying the answer when it was waiting out the server)
 /// rather than hot-looping (transfer upload doc, §Session Lifetime and Discard:
 /// "retrying with backoff and halting after a bounded number of attempts").
 const MAX_RECOVERIES: u32 = 64;
+
+/// Upper bound on shrinking cuts — a stalled or unanswered chunk re-sent at the same offset,
+/// shorter — between two accepted chunks. Unlike [`MAX_RECOVERIES`] this refills on every
+/// accepted chunk: a long upload over a link that slows down again and again cuts afresh each
+/// time, and only a link that never lands a chunk is a stuck peer. Twelve halvings take the
+/// 16 MiB ceiling to the protocol minimum, so a live link stays well inside it; it bounds a
+/// size that is re-grown (a re-created session) without anything landing.
+const MAX_CUTS_SINCE_PROGRESS: u32 = 32;
 
 /// The longest single wait a server's `Retry-After` is honoured for.
 ///
@@ -78,106 +152,161 @@ const MAX_RECOVERIES: u32 = 64;
 /// each one a HEAD that re-learns the offset and charges the recovery budget.
 const MAX_SERVER_BACKOFF: Duration = Duration::from_mins(5);
 
+/// How long one chunk request should take at the measured goodput, on an ordinary link: eight
+/// seconds.
+///
+/// Long enough that a round trip and the server's write are a small share of each request; short
+/// enough that a request lost to a reset or a stall costs seconds, not minutes.
+pub const TARGET_REQUEST_DURATION: Duration = Duration::from_secs(8);
+
+/// How long one chunk request should take under an [`ConnectionClass::Adverse`] link: two
+/// seconds, so a request usually completes between the resets that made the link adverse.
+pub const ADVERSE_TARGET_REQUEST_DURATION: Duration = Duration::from_secs(2);
+
+/// The sliding window goodput is measured over.
+const GOODPUT_WINDOW: Duration = Duration::from_secs(30);
+/// Maximum number of recent chunks to keep in history.
+const MAX_RECENT_CHUNKS: usize = 1000;
+/// Chunks measured at one size before the strategy grows it. Shrinking needs one: a chunk that
+/// took far longer than the target is evidence enough.
+const WARMUP_CHUNKS: u32 = 5;
+/// Successful chunks after a stall before the size may grow again: the link has to show it
+/// recovered first.
+const GROW_BACK_AFTER_SUCCESSES: u32 = 4;
+
 /// Chunk size strategy for adaptive upload.
 ///
-/// Normative for `capsule-sdk` (transfer upload doc, §Adaptive Chunk Sizing):
-/// warm-up before adjusting, double above 5 MB/s, halve below 1 MB/s, clamp to
-/// the file-size tier's range — and every tier range sits inside the protocol
-/// bounds `[256 KiB, 16 MiB]` for non-final chunks.
+/// Normative for `capsule-sdk` (transfer upload doc, §Adaptive Chunk Sizing): the size is the
+/// one that completes in a [target request duration](TARGET_REQUEST_DURATION) at the goodput
+/// measured over a sliding window — shorter under an adverse link. Because the server cuts a
+/// chunk only when it stalls, never for its total duration, a chunk's size never has to fit a
+/// deadline: a slow link gets chunks that take the target time at its own rate, a fast one
+/// chunks up to the file-size tier's ceiling.
+///
+/// It starts from the server's advised size, clamped to `[PROTOCOL_MIN_CHUNK, tier ceiling]`.
+/// After each chunk it moves towards the target size: down to it at once when the target is
+/// half the current size or less, up by doubling after a warm-up when it is twice or more.
+/// Every candidate is aligned down to 4 KiB and clamped, so the size is aligned and within the
+/// protocol bounds by construction.
+///
+/// A stall — the server's `408 error.upload.chunk_timeout`, or the client's own stall cut —
+/// re-sends the same offset at half the stalled length ([`shrink_after_stall`]), and the size
+/// does not grow again until a run of successes shows the link recovered. A chunk that got no
+/// answer within the response wait is shrunk the same way: its tail may have been too slow to
+/// drain out of the send buffers in time.
+///
+/// [`shrink_after_stall`]: Self::shrink_after_stall
 #[derive(Debug, Clone)]
 pub struct AdaptiveChunkSizeStrategy {
-    /// Current chunk size
+    /// Current chunk size.
     pub current_size: u64,
-    /// Minimum allowed chunk size based on file size tier
-    pub min_size: u64,
-    /// Maximum allowed chunk size based on file size tier
+    /// The file-size tier's ceiling: no chunk is larger.
     pub max_size: u64,
-    /// Number of successful chunks at current size
+    /// Successful chunks measured since the size last changed.
     pub successful_chunks: u32,
-    /// Total bytes uploaded
+    /// Total bytes uploaded.
     pub bytes_uploaded: u64,
-    /// Total time spent uploading
+    /// Total time spent uploading.
     pub total_upload_time: Duration,
-    /// Recent chunk records for windowed throughput (bytes, duration, timestamp)
-    /// Using VecDeque for efficient sliding window
+    /// Recent chunk records for windowed goodput: (bytes, duration, when recorded).
     recent_chunks: VecDeque<(u64, Duration, std::time::Instant)>,
-    /// Pinned to the tier floor under `adverse` (the connection class's chunk-size floor):
-    /// while set, the size stays at `min_size` and adaptive scaling is suppressed,
-    /// so each request is small enough to usually complete between mid-transfer
-    /// resets (networking doc, "Bounded transfer windows under `adverse`").
-    pinned_floor: bool,
+    /// How long one chunk request should take at the measured goodput.
+    target: Duration,
+    /// Successes still owed after a stall before the size may grow.
+    hold_growth: u32,
 }
 
 impl AdaptiveChunkSizeStrategy {
-    /// Create a new chunk size strategy based on total file size
+    /// Create a new chunk size strategy based on total file size: the tier names the starting
+    /// size and the ceiling.
     pub fn for_file_size(total_size: u64) -> Self {
-        let (min_size, max_size, current_size) = if total_size < 10 * 1024 * KB {
-            // < 10MB: 256KB - 1MB chunks
-            (CHUNK_SIZE_256KB, CHUNK_SIZE_1MB, CHUNK_SIZE_256KB)
+        let (current_size, max_size) = if total_size < 10 * 1024 * KB {
+            // < 10 MiB: start at 256 KiB, at most 1 MiB.
+            (CHUNK_SIZE_256KB, CHUNK_SIZE_1MB)
         } else if total_size < 100 * 1024 * KB {
-            // < 100MB: 1MB - 4MB chunks
-            (CHUNK_SIZE_1MB, CHUNK_SIZE_4MB, CHUNK_SIZE_1MB)
+            // < 100 MiB: start at 1 MiB, at most 4 MiB.
+            (CHUNK_SIZE_1MB, CHUNK_SIZE_4MB)
         } else {
-            // >= 100MB: 4MB - 16MB chunks
-            (CHUNK_SIZE_4MB, CHUNK_SIZE_16MB, CHUNK_SIZE_4MB)
+            // >= 100 MiB: start at 4 MiB, at most 16 MiB.
+            (CHUNK_SIZE_4MB, CHUNK_SIZE_16MB)
         };
 
         Self {
             current_size,
-            min_size,
             max_size,
             successful_chunks: 0,
             bytes_uploaded: 0,
             total_upload_time: Duration::ZERO,
             recent_chunks: VecDeque::with_capacity(32),
-            pinned_floor: false,
+            target: TARGET_REQUEST_DURATION,
+            hold_growth: 0,
         }
     }
 
-    /// Couple the chunk size to a detected [`ConnectionClass`]. On
-    /// [`ConnectionClass::Adverse`] the strategy pins to the tier floor
-    /// (`min_size`) and suppresses adaptive growth for the rest of the transfer;
-    /// any other class releases the pin and lets the normative adaptive algorithm
-    /// run. The floor is still 4 KiB-aligned and within the protocol bounds by
-    /// construction (it is the tier minimum).
+    /// `size` aligned down to 4 KiB and clamped into `[PROTOCOL_MIN_CHUNK, max_size]`.
+    fn bounded(&self, size: u64) -> u64 {
+        ((size / ALIGNMENT) * ALIGNMENT).clamp(PROTOCOL_MIN_CHUNK, self.max_size)
+    }
+
+    /// Shrink after a chunk of `stalled` bytes stalled — the server answered
+    /// `408 error.upload.chunk_timeout`, or the client cut it: the next chunk, sent at the same
+    /// offset, is half that, 4 KiB-aligned down, and at least [`PROTOCOL_MIN_CHUNK`]. The size
+    /// then holds until a run of chunks succeeds.
+    ///
+    /// Returns `false` when `stalled` is already at or below the protocol minimum, so nothing
+    /// smaller can be sent; the size is then left as it is.
+    pub fn shrink_after_stall(&mut self, stalled: u64) -> bool {
+        self.hold_growth = GROW_BACK_AFTER_SUCCESSES;
+        self.successful_chunks = 0;
+        if stalled <= PROTOCOL_MIN_CHUNK {
+            return false;
+        }
+        self.current_size = self.bounded(stalled / 2);
+        debug_assert!(self.current_size.is_multiple_of(ALIGNMENT));
+        true
+    }
+
+    /// Couple the chunk size to a detected [`ConnectionClass`]: under
+    /// [`ConnectionClass::Adverse`] each request targets
+    /// [`ADVERSE_TARGET_REQUEST_DURATION`], otherwise [`TARGET_REQUEST_DURATION`].
     #[must_use]
-    pub fn with_connection_class(mut self, class: crate::net::ConnectionClass) -> Self {
+    pub fn with_connection_class(mut self, class: ConnectionClass) -> Self {
         self.apply_connection_class(class);
         self
     }
 
-    /// Apply the connection-class chunk-floor coupling in place (see
+    /// Apply the connection-class coupling in place (see
     /// [`with_connection_class`](Self::with_connection_class)).
-    pub fn apply_connection_class(&mut self, class: crate::net::ConnectionClass) {
-        if class == crate::net::ConnectionClass::Adverse {
-            self.pinned_floor = true;
-            self.current_size = self.min_size;
+    pub fn apply_connection_class(&mut self, class: ConnectionClass) {
+        self.target = if class == ConnectionClass::Adverse {
+            ADVERSE_TARGET_REQUEST_DURATION
         } else {
-            self.pinned_floor = false;
-        }
+            TARGET_REQUEST_DURATION
+        };
     }
 
-    /// Seed the starting chunk size from the server's `X-Capsule-Suggested-Chunk-Size`.
+    /// How long one chunk request should take at the measured goodput.
+    pub fn target_duration(&self) -> Duration {
+        self.target
+    }
+
+    /// Seed the starting chunk size from the server's suggestion: the `chunk` member of
+    /// `X-Capsule-Advice`, or the create body's `suggested_chunk_size` from a server that
+    /// sends no advice.
     ///
-    /// The suggestion is a *starting point only* (transfer upload doc, §Adaptive
-    /// Chunk Sizing): 4 KiB-aligned down and clamped into this tier's range, so
-    /// the invariant "current size is aligned and within the tier" (hence within
-    /// the protocol bounds) still holds by construction.
+    /// The suggestion is a *starting point only* (transfer upload doc, §Adaptive Chunk Sizing):
+    /// 4 KiB-aligned down and clamped into `[PROTOCOL_MIN_CHUNK, tier ceiling]`, so the size
+    /// is aligned and within the protocol bounds by construction.
     pub fn seeded_from_suggested(mut self, suggested: u64) -> Self {
-        let aligned_down = (suggested / ALIGNMENT) * ALIGNMENT;
-        self.current_size = aligned_down.clamp(self.min_size, self.max_size);
-        // Clamp can only land on aligned tier bounds or an aligned-down value;
-        // never below the tier minimum.
+        self.current_size = self.bounded(suggested);
         debug_assert!(self.current_size.is_multiple_of(ALIGNMENT));
         self
     }
 
-    /// Calculate current throughput in bytes per second (windowed)
+    /// Goodput in bytes per second over the sliding window.
     pub fn throughput_bytes_per_second(&self) -> f64 {
         let now = std::time::Instant::now();
-        let window_start = now
-            .checked_sub(Duration::from_secs_f64(THROUGHPUT_WINDOW_SECS))
-            .unwrap_or(now);
+        let window_start = now.checked_sub(GOODPUT_WINDOW).unwrap_or(now);
 
         let (bytes, time) = self
             .recent_chunks
@@ -193,68 +322,71 @@ impl AdaptiveChunkSizeStrategy {
         bytes as f64 / time.as_secs_f64()
     }
 
-    /// Record a successful chunk upload and potentially adjust chunk size
+    /// The size that completes in the target duration at the measured goodput, aligned and
+    /// clamped; `None` before anything was measured.
+    pub fn target_size(&self) -> Option<u64> {
+        let goodput = self.throughput_bytes_per_second();
+        (goodput > 0.0).then(|| self.bounded((goodput * self.target.as_secs_f64()) as u64))
+    }
+
+    /// Record a successful chunk upload and move the size towards the target.
     pub fn record_chunk(&mut self, chunk_size: u64, upload_duration: Duration) {
         self.successful_chunks += 1;
         self.bytes_uploaded += chunk_size;
         self.total_upload_time += upload_duration;
+        self.hold_growth = self.hold_growth.saturating_sub(1);
 
-        // Record for windowed throughput
         let now = std::time::Instant::now();
         self.recent_chunks
             .push_back((chunk_size, upload_duration, now));
-
-        // Enforce max size (circular buffer behavior)
         if self.recent_chunks.len() > MAX_RECENT_CHUNKS {
             self.recent_chunks.pop_front();
         }
-
-        // Cleanup old chunks (older than window)
-        // Since it's sorted by time, we can just pop from front until we see a new enough one
-        if let Some(window_start) = now.checked_sub(Duration::from_secs_f64(THROUGHPUT_WINDOW_SECS))
-        {
-            while let Some((_, _, timestamp)) = self.recent_chunks.front() {
-                if *timestamp < window_start {
-                    self.recent_chunks.pop_front();
-                } else {
-                    break;
-                }
+        if let Some(window_start) = now.checked_sub(GOODPUT_WINDOW) {
+            // Sorted by time, so the stale records are all at the front.
+            while self
+                .recent_chunks
+                .front()
+                .is_some_and(|(_, _, timestamp)| *timestamp < window_start)
+            {
+                self.recent_chunks.pop_front();
             }
         }
 
-        // Under the adverse floor pin, scaling is suppressed: the size stays at the
-        // tier minimum so each request stays small across a hostile path.
-        if self.pinned_floor {
-            self.current_size = self.min_size;
+        let Some(target) = self.target_size() else {
             return;
-        }
-
-        // Adaptive scaling based on throughput
-        if self.bytes_uploaded >= MIN_BYTES_BEFORE_SCALING
-            || self.successful_chunks >= MIN_CHUNKS_BEFORE_SCALING
+        };
+        let current = self.current_size;
+        let next = if target.saturating_mul(2) <= current {
+            // Far above the target: down to it at once, since every chunk at this size costs
+            // more than the target to lose.
+            target
+        } else if target >= current.saturating_mul(2)
+            && self.successful_chunks >= WARMUP_CHUNKS
+            && self.hold_growth == 0
         {
-            let throughput = self.throughput_bytes_per_second();
-
-            // If throughput is high (> 5 MB/s) and we're not at max, double chunk size
-            if throughput > 5.0 * 1024.0 * 1024.0 && self.current_size < self.max_size {
-                self.current_size = (self.current_size * 2).min(self.max_size);
-                self.successful_chunks = 0; // Reset counter after scaling
-            }
-            // If throughput is low (< 1 MB/s) and we're not at min, halve chunk size
-            else if throughput < 1.0 * 1024.0 * 1024.0 && self.current_size > self.min_size {
-                self.current_size = (self.current_size / 2).max(self.min_size);
-                self.successful_chunks = 0;
-            }
+            self.bounded(current.saturating_mul(2))
+        } else {
+            current
+        };
+        if next != current {
+            tracing::debug!(
+                from = current,
+                to = next,
+                target_bytes = target,
+                target_ms = self.target.as_millis(),
+                "chunk size moved towards the target request duration"
+            );
+            self.current_size = next;
+            self.successful_chunks = 0;
         }
     }
 
     /// Get the next chunk size to use.
     ///
-    /// Alignment is a hard guarantee by construction: every candidate size is a
-    /// doubling/halving of a 4 KiB-aligned tier bound, so this can never return
-    /// an unaligned size — the debug_assert is a tripwire for future edits, not
-    /// a runtime dependency. The size is likewise always within the protocol
-    /// bounds because every tier range is.
+    /// Alignment is a hard guarantee by construction: every candidate is aligned down and
+    /// clamped by one function, so this can never return an unaligned size — the
+    /// debug_assert is a tripwire for future edits, not a runtime dependency.
     pub fn next_chunk_size(&self) -> u64 {
         debug_assert!(
             self.current_size.is_multiple_of(ALIGNMENT),
@@ -292,12 +424,15 @@ enum UploadAuth {
 }
 
 /// The authorized HTTP transport for one upload endpoint: base URL, the pinned
-/// protocol date sent as `X-Capsule-Protocol`, and the authorization seam.
+/// protocol date sent as `X-Capsule-Protocol`, the authorization seam, and the stall bounds
+/// every request runs under.
 #[derive(Clone)]
 pub struct UploadTransport {
     base_url: String,
     protocol_version: String,
     auth: UploadAuth,
+    /// The per-request stall and response-wait bounds ([`crate::net::within_bounds`]).
+    bounds: RequestBounds,
 }
 
 impl UploadTransport {
@@ -318,6 +453,7 @@ impl UploadTransport {
             base_url: base_url.into().trim_end_matches('/').to_string(),
             protocol_version: protocol_version.into(),
             auth: UploadAuth::Session(session),
+            bounds: RequestBounds::default(),
         }
     }
 
@@ -339,14 +475,89 @@ impl UploadTransport {
                 http,
                 token: token.0,
             },
+            bounds: RequestBounds::default(),
         }
     }
 
-    /// Send an authorized request. `build` constructs the un-authenticated
-    /// request (method, URL, headers, body) from the transport's HTTP client;
-    /// the seam adds the bearer. `build` may be invoked twice on the session
-    /// path (the `401` refresh-and-replay), so it must be reconstructible.
+    /// Run every request under `bounds` instead of [`RequestBounds::default`].
+    #[must_use]
+    pub fn with_request_bounds(mut self, bounds: RequestBounds) -> Self {
+        self.bounds = bounds;
+        self
+    }
+
+    /// Send an authorized request whose body is small enough to be sent at once: the
+    /// response-wait bound runs from the start, then the stall bound over the response body.
     async fn send<F>(&self, build: F) -> Result<reqwest::Response, UploadError>
+    where
+        F: Fn(&reqwest::Client) -> reqwest::RequestBuilder,
+    {
+        self.send_tracked(&ExchangeProgress::waiting(), build)
+            .await?
+            .map_err(|cut| UploadError::Transport(cut.to_string()))
+    }
+
+    /// Send an authorized request under the transport's [`RequestBounds`], reading its whole
+    /// response body before handing it back, so no read after this one can hang.
+    ///
+    /// `progress` is the exchange's: a request that streams a large body hands it to its
+    /// [`PacedBody`] in `build`, so the stall bound runs while the body is sent and the
+    /// response-wait bound once it is all sent. The inner `Err` is the [`RequestCut`] that ended
+    /// it, kept apart so a chunk can tell a stalled link from any other transport failure.
+    async fn send_tracked<F>(
+        &self,
+        progress: &ExchangeProgress,
+        build: F,
+    ) -> Result<Result<reqwest::Response, RequestCut>, UploadError>
+    where
+        F: Fn(&reqwest::Client) -> reqwest::RequestBuilder,
+    {
+        // Boxed: the send is the largest future in the upload state machine, and every caller
+        // up to the CLI's dispatch would otherwise carry it inline.
+        let send = Box::pin(self.send_unbounded(build));
+        let response = match within_bounds(self.bounds, progress, send).await {
+            Ok(response) => response?,
+            Err(cut) => return Ok(Err(self.cut(cut, "request"))),
+        };
+        progress.on_received();
+        let status = response.status();
+        let version = response.version();
+        let headers = response.headers().clone();
+        let mut response = response;
+        let mut body = Vec::new();
+        loop {
+            let piece = match within_bounds(self.bounds, progress, response.chunk()).await {
+                Ok(piece) => piece?,
+                Err(cut) => return Ok(Err(self.cut(cut, "response body"))),
+            };
+            let Some(piece) = piece else { break };
+            progress.on_received();
+            body.extend_from_slice(&piece);
+        }
+        let mut rebuilt = http::Response::new(body);
+        *rebuilt.status_mut() = status;
+        *rebuilt.version_mut() = version;
+        *rebuilt.headers_mut() = headers;
+        Ok(Ok(reqwest::Response::from(rebuilt)))
+    }
+
+    /// Log a cut request, and hand the cut back.
+    fn cut(&self, cut: RequestCut, during: &str) -> RequestCut {
+        tracing::info!(
+            ?cut,
+            during,
+            stall_ms = millis(self.bounds.stall),
+            response_wait_ms = millis(self.bounds.response_wait),
+            "an upload request was cut"
+        );
+        cut
+    }
+
+    /// Send an authorized request with no bound of its own. `build` constructs the
+    /// un-authenticated request (method, URL, headers, body) from the transport's HTTP client;
+    /// the seam adds the bearer. `build` may be invoked twice on the session path (the `401`
+    /// refresh-and-replay), so it must be reconstructible.
+    async fn send_unbounded<F>(&self, build: F) -> Result<reqwest::Response, UploadError>
     where
         F: Fn(&reqwest::Client) -> reqwest::RequestBuilder,
     {
@@ -495,19 +706,40 @@ pub struct CreateSessionResponse {
     pub id: String,
     /// Server-reported upload URL (advisory; the client builds its own paths).
     pub upload_url: String,
-    /// The server's starting chunk-size suggestion.
+    /// The server's starting chunk-size suggestion. The fallback for a server that sends no
+    /// `X-Capsule-Advice`; where both are present the advice's `chunk` member is used.
     pub suggested_chunk_size: u64,
+}
+
+impl CreateSessionResponse {
+    /// The starting chunk size: the advice's `chunk` member while it holds, otherwise the body's
+    /// suggestion. Read at receipt, so the advice is never stale here.
+    fn starting_chunk(&self, advice: &ServerAdvice) -> u64 {
+        advice
+            .chunk(Duration::ZERO)
+            .unwrap_or(self.suggested_chunk_size)
+    }
 }
 
 /// A `HEAD /upload/{id}` result: the resumption primitive.
 #[derive(Debug, Clone)]
 pub struct HeadInfo {
-    /// Next expected byte (authoritative received-byte count).
+    /// The committed prefix (`X-Capsule-Offset`): where a client sending in order resumes.
     pub offset: u64,
+    /// The full committed set (`X-Capsule-Committed`), what a client re-plans from. Absent from
+    /// an older server, and when the header is malformed; the prefix is then all there is.
+    pub committed: Option<CommittedSet>,
     /// Declared total size, when known.
     pub total_size: Option<u64>,
     /// Session state (`X-Capsule-Upload-Status`).
     pub status: String,
+    /// The server's advice (`X-Capsule-Advice`), already clamped; absent from an older server.
+    pub advice: ServerAdvice,
+    /// The session's remaining lifetime, relative to this response.
+    pub expiry: SessionExpiry,
+    /// For a `failed_processing` session, the `error.*` code finalization failed with
+    /// (`X-Capsule-Upload-Error`). Absent for every other state, and from an older server.
+    pub error_code: Option<String>,
 }
 
 /// A row from `GET /upload/sessions` — the subset the resuming client needs.
@@ -516,12 +748,21 @@ pub struct HeadInfo {
 pub struct SessionSummary {
     /// Upload session ID.
     pub id: String,
+    /// The asset the session's blob belongs to, so a client can find every session of one
+    /// asset (the redaction a delete makes). Empty when the server named none.
+    #[serde(default)]
+    pub asset_id: String,
     /// Bytes the server has received so far.
     pub received_bytes: u64,
     /// Declared total size.
     pub total_size: u64,
     /// Session state (serialized enum variant name).
     pub status: String,
+    /// For a `failed_processing` session, the `error.*` code finalization failed with — the
+    /// code `HEAD` carries in `X-Capsule-Upload-Error`. Absent otherwise, and from an older
+    /// server.
+    #[serde(default)]
+    pub error_code: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -537,6 +778,18 @@ struct ApiErrorBody {
     error: String,
     #[serde(default)]
     code: Option<String>,
+    /// A `409 duplicate_blob`'s structured name for the asset that already holds the bytes.
+    #[serde(default)]
+    existing_asset: Option<String>,
+}
+
+/// A non-success answer, read: its stable code, English detail, headers, and the structured
+/// `existing_asset` a `duplicate_blob` carries.
+struct ErrorAnswer {
+    code: Option<String>,
+    message: String,
+    headers: reqwest::header::HeaderMap,
+    existing_asset: Option<String>,
 }
 
 // ─── Outcomes ───────────────────────────────────────────────────────────────
@@ -553,6 +806,18 @@ pub enum CreateOutcome {
         response: CreateSessionResponse,
         /// Where the transfer continues from (bytes the server already holds).
         resume_offset: u64,
+        /// The resumed session's full committed set (`X-Capsule-Committed`) on a `200`. Absent
+        /// on a fresh session, from an older server, and when the header is malformed.
+        committed: Option<CommittedSet>,
+        /// The server's advice (`X-Capsule-Advice`), already clamped; absent from an older
+        /// server.
+        advice: ServerAdvice,
+        /// The session's remaining lifetime, relative to this response.
+        expiry: SessionExpiry,
+        /// The resumed session's state (`X-Capsule-Upload-Status`) on a `200`:
+        /// `waiting_for_processing` once a duplicate create has started the finalization of a
+        /// full session. Absent on a fresh session, and from an older server.
+        status: Option<String>,
     },
     /// The server already holds this exact ciphertext (`duplicate_blob`): resolve
     /// as a [merge](https://docs/design/transfer/upload/#deduplication-and-merge),
@@ -566,7 +831,13 @@ pub enum CreateOutcome {
 /// How a full [`UploadClient::upload`] resolved.
 #[derive(Debug, Clone)]
 pub enum UploadOutcome {
-    /// Every declared byte was transferred; the server has begun finalization.
+    /// Every declared byte was transferred and the server finalized the session: `HEAD` reported
+    /// it `completed`. From an older server, which finalized before it answered the completing
+    /// chunk and so never answered `waiting_for_processing`, the accepted final chunk is the
+    /// outcome.
+    ///
+    /// A session finalization refused is not this: it is [`UploadError::Rejected`] carrying the
+    /// `error.*` code `HEAD` reported in `X-Capsule-Upload-Error`.
     Completed {
         /// The session that was driven to completion.
         session_id: String,
@@ -590,6 +861,12 @@ pub enum UploadError {
     Transport(String),
     /// A typed server rejection carrying its stable `error.*` code and status.
     /// Non-recoverable at this layer — surfaced to the caller.
+    ///
+    /// A finalization the server refused is reported the same way, with the code `HEAD` carried
+    /// in `X-Capsule-Upload-Error` (`content_hash_mismatch`, `envelope_rejected`,
+    /// `replace_incomplete`, `stale_revival`, …) and the `200` of the `HEAD` that read it: no
+    /// request waits on finalization, so its refusal is read, never answered. A caller switches
+    /// on the code, as it always has.
     #[error("upload rejected (HTTP {status}, code {code:?}): {message}")]
     Rejected {
         /// HTTP status.
@@ -624,6 +901,26 @@ pub enum UploadError {
     /// budget — the peer is stuck; fail loudly rather than hot-loop.
     #[error("upload gave up after exhausting the recovery budget: {0}")]
     RetriesExhausted(String),
+    /// The server kept answering with a retryable status (any `5xx`, `408`, `425`, `429`, or
+    /// a wait code) and the transfer gave up waiting it out once its recovery budget, the
+    /// lane's shared retry budget or the retry engine's backoff was spent; or it was still
+    /// finalizing the session when the finalization poll's deadline passed. Carries the last
+    /// answer's status and stable `error.*` code, so a caller still localizes what the server
+    /// said. Transient: a later run may find the server recovered.
+    #[error(
+        "upload gave up waiting out the server (last answer HTTP {status}, code {code:?}: \
+         {message}): {reason}"
+    )]
+    WaitsExhausted {
+        /// The last answer's HTTP status.
+        status: u16,
+        /// The last answer's stable `error.*` code, when the server supplied one.
+        code: Option<String>,
+        /// The last answer's English detail message.
+        message: String,
+        /// Which budget ran out, in English.
+        reason: String,
+    },
     /// A server response was missing a required header or otherwise unparsable.
     #[error("malformed server response: {0}")]
     MalformedResponse(String),
@@ -632,6 +929,69 @@ pub enum UploadError {
     /// interactive re-authentication.
     #[error("authentication error: {0}")]
     Auth(#[from] crate::auth::AuthError),
+    /// The source the blob is read from no longer matches what its bundle was built from, so
+    /// nothing more of it is sent: a re-derived range would put different bytes under the
+    /// nonces the first derivation spent. The session is cancelled; the asset is pushed again
+    /// once its bundle is rebuilt. Its code is `error.upload.source_changed`, which the client
+    /// mints itself: no server answer carries it.
+    #[error(transparent)]
+    SourceChanged(#[from] SourceChanged),
+}
+
+impl UploadError {
+    /// The stable `error.*` code of the answer this error reports: a refusal's, or the last
+    /// answer of a wait the transfer gave up on; for a changed source, the client's own
+    /// `error.upload.source_changed`.
+    #[must_use]
+    pub fn error_code(&self) -> Option<&str> {
+        match self {
+            Self::Rejected { code, .. } | Self::WaitsExhausted { code, .. } => code.as_deref(),
+            Self::SourceChanged(_) => Some(error_codes::UPLOAD_SOURCE_CHANGED),
+            _ => None,
+        }
+    }
+
+    /// A failed read of the source: [`Self::SourceChanged`] when the source said so through
+    /// the [`SourceChanged`] it carried, [`Self::Io`] otherwise.
+    fn of_read(error: std::io::Error) -> Self {
+        let carries_change = match error.get_ref() {
+            Some(inner) => inner.is::<SourceChanged>(),
+            None => false,
+        };
+        if !carries_change {
+            return Self::Io(error);
+        }
+        let kind = error.kind();
+        match error.into_inner() {
+            Some(inner) => match inner.downcast::<SourceChanged>() {
+                Ok(changed) => Self::SourceChanged(*changed),
+                Err(inner) => Self::Io(std::io::Error::new(kind, inner)),
+            },
+            None => Self::Io(kind.into()),
+        }
+    }
+}
+
+/// The source of a blob no longer matches what its bundle was built from.
+///
+/// A source reports it from [`UploadSource::check_unchanged`], or from a read by carrying it as
+/// the inner error of the [`std::io::Error`] it returns (`io::Error::other(changed)`), so a
+/// source that verifies what it re-derives (a re-read chunk's authentication tag against the
+/// one first recorded) can refuse the read itself.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("the upload source changed since its bundle was built: {reason}")]
+pub struct SourceChanged {
+    /// What changed, in English, for logs.
+    pub reason: String,
+}
+
+impl SourceChanged {
+    /// A changed source, described by `reason`.
+    pub fn new(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+        }
+    }
 }
 
 /// The bytes of one blob, read a chunk at a time.
@@ -643,7 +1003,52 @@ pub enum UploadError {
 pub trait UploadSource: Sync {
     /// The bytes `[offset, offset + len)`. Fewer than `len` bytes is a source error: the
     /// declared size is the blob's, and a short read means the source changed under the upload.
+    /// A source that finds what it re-derived differs from what it first sealed returns an
+    /// error carrying [`SourceChanged`], which ends the transfer typed.
     fn read_at(&self, offset: u64, len: usize) -> std::io::Result<Cow<'_, [u8]>>;
+
+    /// The cheap check that the source is still what the bundle was built from (its size,
+    /// modification time and file id), run before every window is read and when finalization
+    /// refuses the blob's hash.
+    ///
+    /// [`SourceIdentity::Affirmed`] is a positive claim that every byte the source returns is
+    /// the byte it returned before; only then is a range this transfer already read sent again
+    /// (a lost answer, a re-plan, a re-created or resumed session) or a refused hash answered
+    /// with a re-created session. A source that cannot say — the default — answers
+    /// [`SourceIdentity::Unknown`], and its transfer ends at the first such re-send: ranges that
+    /// may now seal to different ciphertexts under the same nonces would hand the server two
+    /// ciphertexts per nonce. Bytes held in memory cannot change, so they affirm.
+    ///
+    /// # Errors
+    ///
+    /// [`SourceChanged`] naming what differs.
+    fn check_unchanged(&self) -> Result<SourceIdentity, SourceChanged> {
+        Ok(SourceIdentity::Unknown)
+    }
+
+    /// Whether every window this source returns is checked against the bytes it first
+    /// produced, so a window it returns again is byte-identical or refused with
+    /// [`SourceChanged`]: bytes in memory cannot change, and an original re-derives every
+    /// STREAM chunk a window touches and compares its tag with the one recorded when the bundle
+    /// was built.
+    ///
+    /// Only such a source is sent with more than one range of a session in flight. A parallel
+    /// schedule re-sends ranges far more often (a refused overlap, a lost answer, a cut), and a
+    /// source that only answers [`check_unchanged`](Self::check_unchanged) can miss a change
+    /// that keeps its identity, which a re-derived range would then put under nonces the first
+    /// read spent. A source that cannot say — the default — is sent one range at a time.
+    fn verifies_rederived(&self) -> bool {
+        false
+    }
+}
+
+/// What [`UploadSource::check_unchanged`] can say about a source it found no change in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceIdentity {
+    /// The source positively affirms it returns the same bytes it did before.
+    Affirmed,
+    /// The source found no change but cannot affirm there was none.
+    Unknown,
 }
 
 impl UploadSource for [u8] {
@@ -659,11 +1064,27 @@ impl UploadSource for [u8] {
                 )
             })
     }
+
+    fn check_unchanged(&self) -> Result<SourceIdentity, SourceChanged> {
+        Ok(SourceIdentity::Affirmed)
+    }
+
+    fn verifies_rederived(&self) -> bool {
+        true
+    }
 }
 
 impl UploadSource for Vec<u8> {
     fn read_at(&self, offset: u64, len: usize) -> std::io::Result<Cow<'_, [u8]>> {
         self.as_slice().read_at(offset, len)
+    }
+
+    fn check_unchanged(&self) -> Result<SourceIdentity, SourceChanged> {
+        Ok(SourceIdentity::Affirmed)
+    }
+
+    fn verifies_rederived(&self) -> bool {
+        true
     }
 }
 
@@ -671,11 +1092,27 @@ impl<const N: usize> UploadSource for [u8; N] {
     fn read_at(&self, offset: u64, len: usize) -> std::io::Result<Cow<'_, [u8]>> {
         self.as_slice().read_at(offset, len)
     }
+
+    fn check_unchanged(&self) -> Result<SourceIdentity, SourceChanged> {
+        Ok(SourceIdentity::Affirmed)
+    }
+
+    fn verifies_rederived(&self) -> bool {
+        true
+    }
 }
 
 impl<T: UploadSource + ?Sized> UploadSource for &T {
     fn read_at(&self, offset: u64, len: usize) -> std::io::Result<Cow<'_, [u8]>> {
         (**self).read_at(offset, len)
+    }
+
+    fn check_unchanged(&self) -> Result<SourceIdentity, SourceChanged> {
+        (**self).check_unchanged()
+    }
+
+    fn verifies_rederived(&self) -> bool {
+        (**self).verifies_rederived()
     }
 }
 
@@ -712,13 +1149,16 @@ fn chunk_checksum(chunk: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// Best-effort extraction of the existing asset id from a `duplicate_blob` detail
-/// message (`"This content is already stored as asset {id}"`).
+/// The existing asset a `duplicate_blob` names: the structured `existing_asset` member the
+/// server sends, which a typed client switches on.
 ///
-/// The current server exposes the reference only in the English detail, not as a
-/// structured field/header; this parses it
-/// out while falling back to the whole message so nothing is lost.
-fn duplicate_asset_ref(message: &str) -> String {
+/// An older server named it only in the English detail (`"This content is already stored as
+/// asset {id}"`), so without the member the id is parsed out of that, falling back to the whole
+/// message so nothing is lost.
+fn duplicate_asset_ref(existing_asset: Option<&str>, message: &str) -> String {
+    if let Some(id) = existing_asset.map(str::trim).filter(|id| !id.is_empty()) {
+        return id.to_string();
+    }
     message
         .rsplit_once("asset ")
         .map(|(_, id)| id.trim().to_string())
@@ -729,8 +1169,39 @@ fn duplicate_asset_ref(message: &str) -> String {
 /// The outcome of a single `PATCH` attempt, folded into the recovery matrix.
 #[derive(Debug)]
 enum ChunkAck {
-    /// Accepted; the new authoritative offset.
-    Accepted(u64),
+    /// Accepted: the range is committed (written now, or already). Carries what the answer said
+    /// the session holds, and its state (`X-Capsule-Upload-Status`; absent from an older server).
+    Accepted {
+        /// The committed prefix after the chunk (`X-Capsule-Offset`), when the answer named it.
+        offset: Option<u64>,
+        /// The full committed set (`X-Capsule-Committed`), when the answer carried a usable one.
+        committed: Option<CommittedSet>,
+        /// `uploading`, or `waiting_for_processing` once the chunk completed the session.
+        status: Option<String>,
+    },
+    /// `range_conflict` — the range overlaps one in flight or is partly committed, and nothing
+    /// was written. Re-plan from the committed set it carries (or `HEAD`), after its
+    /// `Retry-After` when it names one.
+    RangeConflict {
+        /// The committed set the refusal carried, when usable.
+        committed: Option<CommittedSet>,
+        /// The `Retry-After` it named: the overlap is with a range still in flight.
+        after: Option<Duration>,
+    },
+    /// `too_fragmented` — admitting the range could leave too many committed fragments, and
+    /// nothing was written. Let the ranges in flight finish, wait its `Retry-After` when it
+    /// names one, then re-plan.
+    TooFragmented {
+        /// The `Retry-After` it named.
+        after: Option<Duration>,
+    },
+    /// `too_many_in_flight` — the session already has its cap of ranges in flight (one may be a
+    /// request this client abandoned). Wait its `Retry-After`, narrow the window to the
+    /// session's advertised `ranges`, then continue.
+    TooManyInFlight {
+        /// The `Retry-After` it named.
+        after: Option<Duration>,
+    },
     /// `offset_mismatch` — re-align to the authoritative offset (from the 409's
     /// `X-Capsule-Offset` when present, else a follow-up HEAD).
     Realign(Option<u64>),
@@ -738,10 +1209,24 @@ enum ChunkAck {
     Recreate,
     /// `checksum_mismatch` — nothing was persisted; re-send the same chunk.
     Resend,
-    /// `rate_limited`, `unavailable` or `storage_full` — the server asked the
-    /// client to wait (for the `Retry-After` it sent, when it sent one) and then
-    /// resume from HEAD. Nothing of the refused chunk was kept.
-    Backoff(Option<Duration>),
+    /// `chunk_timeout` — the server cut the body for stalling, and nothing of it was
+    /// written; re-send at the same offset, shorter.
+    TimedOut,
+    /// The client cut the body for stalling: no bytes moved for the stall bound. Nothing of a
+    /// chunk that did not arrive whole is written, so the same answer as [`Self::TimedOut`].
+    Stalled,
+    /// The client handed the whole body off and no response head came within the response
+    /// wait. The tail may still have been in the HTTP stack's or the kernel's send buffer on a
+    /// link too slow to drain it, or the server may have kept the chunk and never answered:
+    /// re-send at the same offset, shorter — so a slow link converges on a chunk it drains in
+    /// time, and a `409 offset_mismatch` re-aligns where the server did keep it. A cut that
+    /// shrinks is charged as a stall re-send; only one at the protocol minimum backs off as for
+    /// a reset.
+    Unanswered,
+    /// A retryable answer: `rate_limited`, `unavailable` or `storage_full`, or any other `5xx`,
+    /// `408` or `425` — wait (for the `Retry-After` the server sent, when it sent one) and then
+    /// resume from HEAD, which says whether anything of the chunk was kept.
+    Backoff(WaitAsked),
 }
 
 /// Whether `code` is one of the three answers that mean "wait, then resume".
@@ -751,16 +1236,43 @@ fn asks_to_wait(code: &str) -> bool {
         || code == error_codes::UPLOAD_STORAGE_FULL
 }
 
-/// Whether a non-success answer asks the client to wait.
+/// Whether the client recovery matrix names an action for `code` that the upload loop takes
+/// itself: re-align, re-create, re-send (a checksum refusal or a server stall cut), merge, or
+/// re-plan (a range the block grid's admission refused).
+fn recovery_names_action(code: &str) -> bool {
+    code == error_codes::UPLOAD_OFFSET_MISMATCH
+        || code == error_codes::UPLOAD_SESSION_NOT_FOUND
+        || code == error_codes::UPLOAD_CHECKSUM_MISMATCH
+        || code == error_codes::UPLOAD_CHUNK_TIMEOUT
+        || code == error_codes::UPLOAD_DUPLICATE_BLOB
+        || code == error_codes::UPLOAD_RANGE_CONFLICT
+        || code == error_codes::UPLOAD_TOO_FRAGMENTED
+        || code == error_codes::UPLOAD_TOO_MANY_IN_FLIGHT
+}
+
+/// What a non-success upload answer (to a create, a chunk or a `HEAD`) permits, classified
+/// before anything is retried (networking doc, Retry Policy Classes).
 ///
-/// The code decides whenever the server sent one. A `HEAD` answer has no body by
-/// HTTP's rules, so it can carry no code: there the status names the three wait
-/// answers (`429`, `503`, `507`), which the server sends only with those codes.
-fn answer_asks_to_wait(status: u16, code: Option<&str>) -> bool {
+/// A code the recovery matrix names an action for keeps that action ([`RetryVerdict::Recover`]),
+/// whatever the status. A code that asks for a wait (`rate_limited`, `unavailable`,
+/// `storage_full`) is [`RetryVerdict::Retryable`] whatever the status. Every other answer is
+/// classified by its status: any `5xx`, `408`, `425` and `429` are retryable, coded or not —
+/// a proxy's bare `502`, or a `500 storage_inconsistent` alike — and every other `4xx` ends the
+/// transfer. A `HEAD` answer has no body by HTTP's rules, so there the status is all there is.
+fn upload_answer_verdict(status: u16, code: Option<&str>) -> RetryVerdict {
     match code {
-        Some(code) => asks_to_wait(code),
-        None => matches!(status, 429 | 503 | 507),
+        Some(code) if recovery_names_action(code) => RetryVerdict::Recover,
+        Some(code) if asks_to_wait(code) => RetryVerdict::Retryable,
+        _ => RetryVerdict::of_status(status, false),
     }
+}
+
+/// Whether a non-success answer asks the client to wait, then ask again: its verdict is
+/// [`RetryVerdict::Retryable`]. The transfer loop waits it out — the `Retry-After` the server
+/// named, else the retry engine's backoff — under the transfer's recovery cap and the lane's
+/// shared retry budget.
+fn answer_asks_to_wait(status: u16, code: Option<&str>) -> bool {
+    upload_answer_verdict(status, code) == RetryVerdict::Retryable
 }
 
 /// A single request the server answered with "wait, then ask again".
@@ -776,6 +1288,19 @@ struct WaitAsked {
     after: Option<Duration>,
 }
 
+impl WaitAsked {
+    /// The error a transfer ends with when it gives up waiting this answer out: it keeps the
+    /// answer's status and code, and `reason` says which budget ran out.
+    fn gave_up(self, reason: String) -> UploadError {
+        UploadError::WaitsExhausted {
+            status: self.status,
+            code: self.code,
+            message: self.message,
+            reason,
+        }
+    }
+}
+
 impl From<WaitAsked> for UploadError {
     fn from(wait: WaitAsked) -> Self {
         UploadError::Rejected {
@@ -787,48 +1312,341 @@ impl From<WaitAsked> for UploadError {
 }
 
 /// The bounded recovery state one transfer shares across every request it makes:
-/// the recovery budget, and the shared retry engine's backoff schedule.
-struct Recovery {
+/// the recovery budget, the shared retry engine's backoff schedule, the lane's shared retry
+/// budget, and the gate its ranges reserve memory through.
+struct Recovery<'g> {
     /// Recovery actions taken so far, bounded by [`MAX_RECOVERIES`].
     count: u32,
+    /// Shrinking cuts since the last accepted chunk, bounded by [`MAX_CUTS_SINCE_PROGRESS`].
+    cuts: u32,
     /// The shared retry engine, `bulk-transfer` class: exponential backoff with
     /// full jitter, bounded give-up. It governs mid-transfer transport resets and
     /// server-asked waits that name no `Retry-After`.
     engine: RetryEngine,
+    /// The server lane's retry budget, shared with every other transfer to that server: each
+    /// retry or recovery action spends from it besides this transfer's own caps, and each
+    /// answered create, answered `HEAD` and accepted chunk earns toward it.
+    lane: LaneRetries,
+    /// Where each range reserves its memory and the server's advice is reported, when the
+    /// transfer runs under a scheduler.
+    gate: Option<&'g dyn TransferGate>,
+    /// Every byte this transfer has read for a request, in any of its sessions. A range that
+    /// overlaps it is a re-send, and is read again only from a source that affirms it is
+    /// unchanged (see [`UploadClient::fly`]).
+    sent: CommittedSet,
 }
 
-impl Recovery {
-    fn new() -> Self {
+impl<'g> Recovery<'g> {
+    fn new(lane: LaneRetries, gate: Option<&'g dyn TransferGate>) -> Self {
         Self {
             count: 0,
+            cuts: 0,
             engine: RetryClass::BulkTransfer.engine(),
+            lane,
+            gate,
+            sent: CommittedSet::empty(),
         }
     }
 
-    /// Charge one recovery action, failing loudly once the budget is spent.
+    /// An accepted chunk is real progress: it refills the shrinking-cut budget and the
+    /// transient-reset backoff budget, and earns toward the lane's shared retry budget. The
+    /// per-transfer [`MAX_RECOVERIES`] budget is not refilled.
+    fn on_progress(&mut self) {
+        self.cuts = 0;
+        self.engine.reset();
+        self.lane.record_success();
+    }
+
+    /// Charge one shrinking cut, failing loudly once a run of them lands nothing or the
+    /// lane's shared retry budget is spent: a cut is a retry like any other to the lane.
+    fn charge_cut(&mut self, action: &str) -> Result<(), UploadError> {
+        self.cuts += 1;
+        if self.cuts > MAX_CUTS_SINCE_PROGRESS {
+            return Err(UploadError::RetriesExhausted(format!(
+                "{action}: exceeded {MAX_CUTS_SINCE_PROGRESS} shrinking cuts without an accepted chunk"
+            )));
+        }
+        self.spend_lane(action)
+    }
+
+    /// Charge one recovery action, failing loudly once this transfer's budget or its lane's
+    /// shared retry budget is spent.
     fn charge(&mut self, action: &str) -> Result<(), UploadError> {
         self.count += 1;
-        guard_budget(self.count, action)
+        guard_budget(self.count, action)?;
+        self.spend_lane(action)
+    }
+
+    /// Spend one retry from the lane's shared budget.
+    fn spend_lane(&self, action: &str) -> Result<(), UploadError> {
+        if self.lane.try_spend() {
+            return Ok(());
+        }
+        tracing::warn!(
+            action,
+            "the server lane's shared retry budget is spent; giving up"
+        );
+        Err(UploadError::RetriesExhausted(format!(
+            "{action}: the retry budget shared by every upload to this server is spent"
+        )))
+    }
+
+    /// Report advice the server sent to the gate, when there is one.
+    fn advised(&self, advice: &ServerAdvice) {
+        if let Some(gate) = self.gate {
+            gate.advised(advice);
+        }
     }
 
     /// Charge a server-asked wait and resolve how long to wait: the server's
     /// `Retry-After` up to [`MAX_SERVER_BACKOFF`], else the engine's schedule.
-    fn server_wait(
-        &mut self,
-        asked: Option<Duration>,
-        action: &str,
-    ) -> Result<Duration, UploadError> {
-        self.charge(action)?;
-        match asked {
-            Some(asked) => Ok(asked.min(MAX_SERVER_BACKOFF)),
+    ///
+    /// Giving up ends the transfer with [`UploadError::WaitsExhausted`], carrying the answer
+    /// waited on, so its stable code still reaches the caller.
+    fn server_wait(&mut self, asked: WaitAsked, action: &str) -> Result<Duration, UploadError> {
+        match self.charge(action) {
+            Ok(()) => {}
+            Err(UploadError::RetriesExhausted(reason)) => return Err(asked.gave_up(reason)),
+            Err(other) => return Err(other),
+        }
+        match asked.after {
+            Some(after) => Ok(after.min(MAX_SERVER_BACKOFF)),
             None => match self.engine.next_backoff(None) {
                 RetryDecision::Retry { after } => Ok(after),
-                RetryDecision::GiveUp => Err(UploadError::RetriesExhausted(format!(
-                    "{action}: the server kept asking for a wait without naming one"
+                RetryDecision::GiveUp => Err(asked.gave_up(format!(
+                    "{action}: the backoff for retryable answers that name no Retry-After is spent"
                 ))),
             },
         }
     }
+}
+
+/// The first wait between two `HEAD`s while the server finalizes a session.
+const FINALIZE_POLL_FIRST: Duration = Duration::from_millis(100);
+
+/// The longest wait between two `HEAD`s while the server finalizes a session. Each wait doubles
+/// the one before it up to this.
+const FINALIZE_POLL_MAX: Duration = Duration::from_secs(5);
+
+/// How long, in waits summed, the client polls a finalizing session before it gives up.
+///
+/// The server drives every claim to a terminal state — across its own restarts — so the poll
+/// ends; this bound only stops a client from polling a server that never says so. Half an hour
+/// re-hashes a 4 GiB blob on a disk slower than any the server is deployed on.
+const FINALIZE_POLL_DEADLINE: Duration = Duration::from_mins(30);
+
+/// The session states the server reports while, and once, it finalizes.
+const STATUS_WAITING: &str = "waiting_for_processing";
+const STATUS_COMPLETED: &str = "completed";
+const STATUS_FAILED: &str = "failed_processing";
+
+/// What the finalization poll found.
+enum Settled {
+    /// The session is terminal: completed, or the transfer ends here.
+    Done(UploadOutcome),
+    /// The server holds fewer bytes than declared after all; the transfer re-plans from the
+    /// committed set it reported.
+    Resume(CommittedSet),
+    /// Finalization refused the blob's hash (`content_hash_mismatch`): the source decides
+    /// between a typed source change and one re-created session. Carries the refusal, which
+    /// ends the transfer when neither applies — and whenever the source cannot affirm its
+    /// identity.
+    HashMismatch(UploadError),
+    /// The session went away (`404`) before it reached finalization: re-create it, as for
+    /// `session_not_found`.
+    Lost,
+}
+
+/// What opening a session for a blob found.
+enum Opened {
+    /// A session to transfer into: its id, chunk strategy, and where it starts.
+    Session(String, AdaptiveChunkSizeStrategy, Start),
+    /// The blob is already stored (`duplicate_blob`), under this existing asset.
+    Merged(String),
+}
+
+/// Where a transfer starts on a session: what the server holds, its state as last reported, and
+/// the session's ranges window.
+struct Start {
+    /// The session's committed set, as last reported.
+    committed: CommittedSet,
+    /// The session's state as last reported, when one was.
+    state: Option<String>,
+    /// P: the ranges this session may hold in flight.
+    window: u32,
+    /// The advice the session's create or `HEAD` carried.
+    advice: ServerAdvice,
+}
+
+/// Whether `held` still holds every byte of `acknowledged`.
+fn holds_all(held: &CommittedSet, acknowledged: &CommittedSet) -> bool {
+    acknowledged
+        .ranges()
+        .iter()
+        .all(|&(start, end)| held.contains(start, end))
+}
+
+/// How far along the state machine a reported session state is, so the answers of ranges that
+/// return out of order never move it backwards: the completing range's `waiting_for_processing`
+/// is not undone by an `uploading` answered before it.
+fn state_rank(state: Option<&str>) -> u8 {
+    match state {
+        None => 0,
+        Some(STATUS_COMPLETED | STATUS_FAILED) => 3,
+        Some(STATUS_WAITING) => 2,
+        Some(_) => 1,
+    }
+}
+
+/// The session's state once an answer reported `next`: `next` when it is as far along as
+/// `current`, else `current`. An answer that reports no state is an older server's, which
+/// finalized before it answered, so the state it leaves is none.
+fn later_state(current: Option<String>, next: Option<String>) -> Option<String> {
+    match next {
+        None => None,
+        Some(next) if state_rank(Some(&next)) >= state_rank(current.as_deref()) => Some(next),
+        Some(_) => current,
+    }
+}
+
+/// The session-level step the scheduler takes once every range in flight has returned. Ranges
+/// are not sent while one is pending: a wait taken while a request is still sending would
+/// starve that request's stall timer, and a `HEAD` read while ranges are in flight would
+/// describe a session they are still changing.
+#[derive(Debug, Default)]
+struct PendingStep {
+    /// Stop planning until the ranges in flight return.
+    quiesce: bool,
+    /// Wait this long first.
+    wait: Option<Duration>,
+    /// Then read the session's state from `HEAD` and re-plan from it.
+    head: bool,
+    /// The `HEAD` re-aligns an older server's `offset_mismatch` that named no offset.
+    realign: bool,
+    /// Or re-create the session.
+    recreate: bool,
+    /// Narrow the ranges window: the server refused a range for its in-flight cap. Taken as
+    /// soon as the refusal lands, not with the step.
+    narrow: bool,
+    /// The range (offset, length) whose answer first asked for the step, for the events it
+    /// publishes.
+    range: (u64, u64),
+}
+
+impl PendingStep {
+    fn is_set(&self) -> bool {
+        self.quiesce || self.wait.is_some() || self.head || self.recreate
+    }
+
+    /// Record the range that asked for the step, unless an earlier one already did.
+    fn cause(&mut self, offset: u64, len: u64) {
+        if !self.is_set() {
+            self.range = (offset, len);
+        }
+    }
+
+    /// Wait at least `wait` before the step.
+    fn wait_at_least(&mut self, wait: Duration) {
+        self.quiesce = true;
+        self.wait = Some(self.wait.map_or(wait, |w| w.max(wait)));
+    }
+
+    /// Read the session's state from `HEAD` before anything is sent again.
+    fn read_state(&mut self) {
+        self.quiesce = true;
+        self.head = true;
+    }
+}
+
+/// One session's transfer as the scheduler drives it.
+struct Cursor {
+    /// The session.
+    session_id: String,
+    /// What the server holds: the last committed set `HEAD` or a create reported, with every
+    /// accepted range and every set an answer carried since added.
+    committed: CommittedSet,
+    /// The session's state, as far along as any answer reported it.
+    state: Option<String>,
+    /// P: the ranges this session may hold in flight.
+    window: u32,
+    /// The advice the session's create or last `HEAD` carried, for its `ranges`.
+    advice: ServerAdvice,
+    /// Until when each request this client abandoned (cut, or reset) may still hold a claim on
+    /// the server: a claim lives until its write returns.
+    abandoned: Vec<std::time::Instant>,
+    /// The session-level step the ranges in flight are waited out for.
+    step: PendingStep,
+}
+
+impl Cursor {
+    fn new(session_id: String, start: Start) -> Self {
+        Self {
+            session_id,
+            committed: start.committed,
+            state: start.state,
+            window: start.window.max(1),
+            advice: start.advice,
+            abandoned: Vec::new(),
+            step: PendingStep::default(),
+        }
+    }
+
+    /// Count a request this client just abandoned as holding a server claim for `bound`, the
+    /// response-wait bound past which its write has surely returned.
+    fn abandon(&mut self, bound: Duration) {
+        self.abandoned.push(std::time::Instant::now() + bound);
+    }
+
+    /// The abandoned requests that may still hold a claim.
+    fn abandoned_claims(&mut self) -> usize {
+        let now = std::time::Instant::now();
+        self.abandoned.retain(|until| *until > now);
+        self.abandoned.len()
+    }
+}
+
+/// How a session's ranges ended.
+enum Transferred {
+    /// Every byte was sent, or the server reported the session finalizing: settle it.
+    Sent,
+    /// A re-created session found the blob already stored (`duplicate_blob`): merge.
+    Merged(String),
+}
+
+/// What a session-level step led to.
+enum StepTaken {
+    /// Keep sending.
+    Continue,
+    /// `HEAD` reported the session finalizing or finalized: settle it.
+    Settle,
+    /// A re-create found the blob already stored: merge.
+    Merged(String),
+}
+
+/// The next range of `flights` to return, removed from it. `flights` must not be empty.
+async fn next_landed<F: std::future::Future<Output = Flight>>(
+    flights: &mut Vec<std::pin::Pin<Box<F>>>,
+) -> Flight {
+    std::future::poll_fn(|cx| {
+        for at in 0..flights.len() {
+            if let std::task::Poll::Ready(flight) = flights[at].as_mut().poll(cx) {
+                drop(flights.swap_remove(at));
+                return std::task::Poll::Ready(flight);
+            }
+        }
+        std::task::Poll::Pending
+    })
+    .await
+}
+
+/// One range's request, returned.
+struct Flight {
+    /// The half-open byte range it carried.
+    range: (u64, u64),
+    /// When its bytes started out, after its reservation and its read.
+    started: std::time::Instant,
+    /// How it ended.
+    sent: Result<ChunkAck, UploadError>,
 }
 
 /// The wait a `Retry-After` header names, in its delta-seconds form.
@@ -844,25 +1662,84 @@ fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
 pub struct UploadClient {
     transport: UploadTransport,
     /// The detected connection class, coupling the chunk strategy to the network: under
-    /// [`ConnectionClass::Adverse`] the transfer pins to the tier
-    /// chunk floor. Defaults to [`ConnectionClass::Unmetered`].
+    /// [`ConnectionClass::Adverse`] each chunk targets the shorter
+    /// [`ADVERSE_TARGET_REQUEST_DURATION`]. Defaults to [`ConnectionClass::Unmetered`].
     connection: ConnectionClass,
     /// The backoff sleeper for the shared retry engine's transient-reset retries.
     /// Real in production; kept as a seam for determinism.
     sleeper: TokioSleeper,
     /// Where each transfer step is published ([`crate::events`]); disabled by default.
     events: TransferEvents,
+    /// The retry budget every transfer this client (and each clone of it) drives spends from:
+    /// one server's lane.
+    lane: LaneRetries,
+    /// P: the most ranges of one session this client holds in flight, before the session's
+    /// advertised `ranges` narrows it. [`DEFAULT_CLIENT_RANGES`] unless set.
+    ranges: u32,
 }
 
+/// The ranges of one session a client holds in flight unless told otherwise: the lane's default
+/// P ([`queue::DEFAULT_RANGES_WINDOW`]).
+///
+/// It applies only to a source that verifies what it re-derives
+/// ([`UploadSource::verifies_rederived`]): bytes in memory, and an original that checks every
+/// re-derived STREAM chunk against the tag its bundle recorded. A parallel schedule re-sends
+/// ranges far more often (a refused overlap, a lost answer, a cut), so any other source is sent
+/// one range at a time, whatever this window, and a source changed mid-upload never puts two
+/// ciphertexts under one nonce on the wire. [`UploadClient::with_ranges_window`] narrows or
+/// widens it per client.
+pub const DEFAULT_CLIENT_RANGES: u32 = queue::DEFAULT_RANGES_WINDOW;
+
 impl UploadClient {
-    /// Build a client over an authorized [`UploadTransport`], on an unmetered link.
+    /// Build a client over an authorized [`UploadTransport`], on an unmetered link, with a
+    /// lane retry budget of its own that every clone shares.
     pub fn new(transport: UploadTransport) -> Self {
         Self {
             transport,
             connection: ConnectionClass::Unmetered,
             sleeper: TokioSleeper,
             events: TransferEvents::disabled(),
+            lane: LaneRetries::default(),
+            ranges: DEFAULT_CLIENT_RANGES,
         }
+    }
+
+    /// Hold up to `ranges` ranges of each session in flight (P), clamped into
+    /// `1..=`[`MAX_RANGES_WINDOW`]. A session's advertised `ranges` narrows it further, and so
+    /// does a `too_many_in_flight`; under a [scheduler](Self::upload_gated) each range also
+    /// waits for the scheduler's own window and byte budget.
+    #[must_use]
+    pub fn with_ranges_window(mut self, ranges: u32) -> Self {
+        self.ranges = ranges.clamp(1, MAX_RANGES_WINDOW);
+        self
+    }
+
+    /// P: the most ranges of one session this client holds in flight.
+    #[must_use]
+    pub fn ranges_window(&self) -> u32 {
+        self.ranges
+    }
+
+    /// P for a session whose create or `HEAD` advised `advice`.
+    fn window_for(&self, advice: &ServerAdvice) -> u32 {
+        advice
+            .ranges_window(self.ranges)
+            .clamp(1, MAX_RANGES_WINDOW)
+    }
+
+    /// Spend retries from `lane` — the budget the upload queue holds for this client's server
+    /// ([`UploadQueue::lane_retries`](queue::UploadQueue::lane_retries)) — so every transfer to
+    /// the server, and the queue's own retries, share one bound.
+    #[must_use]
+    pub fn with_lane_retries(mut self, lane: LaneRetries) -> Self {
+        self.lane = lane;
+        self
+    }
+
+    /// The lane retry budget this client spends from.
+    #[must_use]
+    pub fn lane_retries(&self) -> &LaneRetries {
+        &self.lane
     }
 
     /// Publish every transfer this client drives to `events` (session, chunk, retry,
@@ -879,12 +1756,26 @@ impl UploadClient {
         &self.events
     }
 
-    /// Set the detected connection class (the chunk-size floor follows it). On an
-    /// [`ConnectionClass::Adverse`] link the adaptive strategy pins to the tier
-    /// chunk floor for every transfer this client drives.
+    /// Set the detected connection class (the target request duration follows it). On an
+    /// [`ConnectionClass::Adverse`] link every transfer this client drives sizes its chunks to
+    /// the shorter [`ADVERSE_TARGET_REQUEST_DURATION`].
     #[must_use]
     pub fn with_connection_class(mut self, class: ConnectionClass) -> Self {
         self.connection = class;
+        self
+    }
+
+    /// The connection class this client sizes its chunks for.
+    #[must_use]
+    pub fn connection_class(&self) -> ConnectionClass {
+        self.connection
+    }
+
+    /// Run every request this client sends under `bounds` instead of
+    /// [`RequestBounds::default`].
+    #[must_use]
+    pub fn with_request_bounds(mut self, bounds: RequestBounds) -> Self {
+        self.transport = self.transport.with_request_bounds(bounds);
         self
     }
 
@@ -894,8 +1785,9 @@ impl UploadClient {
     /// on `duplicate_blob` (the merge trigger). A `426` returns
     /// [`UploadError::UpgradeRequired`] — the session is never created.
     ///
-    /// This is one request: `rate_limited`, `unavailable` and `storage_full` come
-    /// back as [`UploadError::Rejected`]. [`UploadClient::upload`] waits those out.
+    /// This is one request: a retryable answer (`rate_limited`, `unavailable`,
+    /// `storage_full`, any `5xx`, `408`, `425`) comes back as [`UploadError::Rejected`].
+    /// [`UploadClient::upload`] waits those out.
     #[tracing::instrument(level = "debug", skip(self, request), fields(size = request.size, hash = %request.hash))]
     pub async fn create_session(
         &self,
@@ -923,21 +1815,33 @@ impl UploadClient {
             // 201: fresh session (offset 0). 200: the idempotent re-create — the
             // existing active session, whose X-Capsule-Offset says where to resume.
             let resume_offset = header_u64(resp.headers(), "X-Capsule-Offset").unwrap_or(0);
+            let committed = committed_of(resp.headers(), request.size);
+            let (advice, expiry) = advice_of(resp.headers());
+            let session_status = header_str(resp.headers(), "X-Capsule-Upload-Status");
             let body: CreateSessionResponse = resp.json().await?;
-            tracing::debug!(session_id = %body.id, resume_offset, "upload session created");
+            tracing::debug!(session_id = %body.id, resume_offset, ?committed, ?session_status, ?advice, ?expiry, "upload session created");
             return Ok(Ok(CreateOutcome::Created {
                 response: body,
                 resume_offset,
+                committed,
+                advice,
+                expiry,
+                status: session_status,
             }));
         }
 
         let after = retry_after(resp.headers());
-        let (code, message, headers) = read_error(resp).await?;
+        let ErrorAnswer {
+            code,
+            message,
+            headers,
+            existing_asset,
+        } = read_error(resp).await?;
         if is_upgrade_required(status, code.as_deref()) {
             return Err(self.transport.upgrade_required(&headers, message));
         }
         if code.as_deref() == Some(error_codes::UPLOAD_DUPLICATE_BLOB) {
-            let asset_ref = duplicate_asset_ref(&message);
+            let asset_ref = duplicate_asset_ref(existing_asset.as_deref(), &message);
             tracing::info!(%asset_ref, "duplicate_blob — resolving as a merge");
             return Ok(Ok(CreateOutcome::AlreadyStored { asset_ref }));
         }
@@ -960,8 +1864,8 @@ impl UploadClient {
     /// Query progress (`HEAD /upload/{id}`). `Ok(None)` means the session is gone
     /// (`404`) — a discarded/expired/never-existent session is uniform.
     ///
-    /// This is one request: a `429`, `503` or `507` comes back as
-    /// [`UploadError::Rejected`]. The transfer loop waits those out.
+    /// This is one request: a retryable answer (any `5xx`, `408`, `425`, `429`) comes
+    /// back as [`UploadError::Rejected`]. The transfer loop waits those out.
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn head(&self, session_id: &str) -> Result<Option<HeadInfo>, UploadError> {
         Ok(self.try_head(session_id).await??)
@@ -986,7 +1890,12 @@ impl UploadClient {
         }
         if !(200..300).contains(&status) {
             let after = retry_after(resp.headers());
-            let (code, message, headers) = read_error(resp).await?;
+            let ErrorAnswer {
+                code,
+                message,
+                headers,
+                ..
+            } = read_error(resp).await?;
             // A HEAD answer carries no body, so the bare `426` is all there is to switch on;
             // it is the same refusal a create or a chunk gets, and surfaces as the same error.
             if is_upgrade_required(status, code.as_deref()) {
@@ -1013,26 +1922,42 @@ impl UploadClient {
             UploadError::MalformedResponse("HEAD response missing X-Capsule-Offset".into())
         })?;
         let total_size = header_u64(headers, "X-Capsule-Content-Length");
+        // Without a declared length the set is only checked against itself.
+        let committed = committed_of(headers, total_size.unwrap_or(u64::MAX));
         let statusv = header_str(headers, "X-Capsule-Upload-Status").unwrap_or_default();
+        let error_code = header_str(headers, "X-Capsule-Upload-Error");
+        let (advice, expiry) = advice_of(headers);
         Ok(Ok(Some(HeadInfo {
             offset,
+            committed,
             total_size,
             status: statusv,
+            advice,
+            expiry,
+            error_code,
         })))
     }
 
-    /// `POST /upload`, waiting out every `rate_limited`, `unavailable` and
-    /// `storage_full` answer under the transfer's recovery budget.
+    /// `POST /upload`, waiting out every retryable answer under the transfer's recovery
+    /// budget and the lane's shared retry budget.
     async fn create_waiting(
         &self,
         request: &CreateUploadRequest,
-        recovery: &mut Recovery,
+        recovery: &mut Recovery<'_>,
     ) -> Result<CreateOutcome, UploadError> {
         loop {
             match self.try_create(request).await? {
-                Ok(outcome) => return Ok(outcome),
+                Ok(outcome) => {
+                    // An answered create is a success the lane earns back from, so a server
+                    // that paces creates with `Retry-After` does not drain the lane.
+                    recovery.lane.record_success();
+                    if let CreateOutcome::Created { advice, .. } = &outcome {
+                        recovery.advised(advice);
+                    }
+                    return Ok(outcome);
+                }
                 Err(asked) => {
-                    let wait = recovery.server_wait(asked.after, "session create")?;
+                    let wait = recovery.server_wait(asked, "session create")?;
                     tracing::debug!(?wait, "waiting as the server asked, then creating again");
                     self.sleeper.sleep(wait).await;
                 }
@@ -1040,18 +1965,26 @@ impl UploadClient {
         }
     }
 
-    /// `HEAD /upload/{id}`, waiting out every `429`, `503` and `507` answer under
-    /// the transfer's recovery budget.
+    /// `HEAD /upload/{id}`, waiting out every retryable answer under the transfer's
+    /// recovery budget and the lane's shared retry budget.
     async fn head_waiting(
         &self,
         session_id: &str,
-        recovery: &mut Recovery,
+        recovery: &mut Recovery<'_>,
     ) -> Result<Option<HeadInfo>, UploadError> {
         loop {
             match self.try_head(session_id).await? {
-                Ok(info) => return Ok(info),
+                Ok(info) => {
+                    // An answered `HEAD` (the finalization poll's included) earns toward the
+                    // lane's shared budget, as an accepted chunk does.
+                    recovery.lane.record_success();
+                    if let Some(info) = &info {
+                        recovery.advised(&info.advice);
+                    }
+                    return Ok(info);
+                }
                 Err(asked) => {
-                    let wait = recovery.server_wait(asked.after, "progress query")?;
+                    let wait = recovery.server_wait(asked, "progress query")?;
                     tracing::debug!(?wait, "waiting as the server asked, then asking HEAD again");
                     self.sleeper.sleep(wait).await;
                 }
@@ -1061,7 +1994,10 @@ impl UploadClient {
 
     /// Cancel a session (`DELETE /upload/{id}`). Idempotent for the caller: a
     /// `404` (already gone) resolves as `Ok(())`; a `409` (finalization running,
-    /// not interruptible) surfaces as [`UploadError::Rejected`].
+    /// not interruptible, or the session already finished) surfaces as
+    /// [`UploadError::Rejected`] with `error.upload.session_not_active`.
+    /// [`push::redact_asset`](crate::push::redact_asset) reads that answer as a
+    /// session that finalized during the abort.
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn delete(&self, session_id: &str) -> Result<(), UploadError> {
         let resp = self
@@ -1076,7 +2012,7 @@ impl UploadClient {
         if (200..300).contains(&status) || status == 404 {
             return Ok(());
         }
-        let (code, message, _) = read_error(resp).await?;
+        let ErrorAnswer { code, message, .. } = read_error(resp).await?;
         Err(UploadError::Rejected {
             status,
             code,
@@ -1099,7 +2035,7 @@ impl UploadClient {
 
         let status = resp.status().as_u16();
         if !(200..300).contains(&status) {
-            let (code, message, _) = read_error(resp).await?;
+            let ErrorAnswer { code, message, .. } = read_error(resp).await?;
             return Err(UploadError::Rejected {
                 status,
                 code,
@@ -1108,6 +2044,30 @@ impl UploadClient {
         }
         let body: ListSessionsBody = resp.json().await?;
         Ok(body.sessions)
+    }
+
+    /// The chunk `PATCH` carrying `bytes` at `offset` on `http`, its body paced into `progress`.
+    /// Built afresh per invocation over the same bytes: the session path may rebuild the request
+    /// for its one 401 refresh-and-replay.
+    fn chunk_request(
+        &self,
+        http: &reqwest::Client,
+        session_id: &str,
+        offset: u64,
+        checksum: &str,
+        bytes: &bytes::Bytes,
+        progress: &ExchangeProgress,
+    ) -> reqwest::RequestBuilder {
+        let request = http
+            .patch(self.transport.session_url(session_id))
+            .header("X-Capsule-Protocol", &self.transport.protocol_version)
+            .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+            .header("X-Capsule-Offset", offset.to_string())
+            .header("X-Capsule-Checksum", checksum)
+            .body(PacedBody::new(bytes.clone(), progress.clone()));
+        // A chunk is addressed by offset and checked by checksum, so it is safe to send twice:
+        // under `http3` it may ride QUIC.
+        crate::net::replayable(request, bytes.clone(), progress)
     }
 
     /// Append one chunk at `offset` (`PATCH /upload/{id}`), sending the required
@@ -1119,37 +2079,73 @@ impl UploadClient {
         session_id: &str,
         chunk: &[u8],
         offset: u64,
+        size: u64,
     ) -> Result<ChunkAck, UploadError> {
         let checksum = chunk_checksum(chunk);
+        let bytes = bytes::Bytes::copy_from_slice(chunk);
+        // The stall bound runs while the body is sent, the response-wait bound once it is all
+        // sent: a slow link is never cut, a stalled one is.
+        let progress = ExchangeProgress::waiting();
         let resp = self
             .transport
-            .send(|http| {
-                http.patch(self.transport.session_url(session_id))
-                    .header("X-Capsule-Protocol", &self.transport.protocol_version)
-                    .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
-                    .header("X-Capsule-Offset", offset.to_string())
-                    .header("X-Capsule-Checksum", &checksum)
-                    // The body is cloned per invocation: the session path may
-                    // rebuild the request for its one 401 refresh-and-replay.
-                    .body(chunk.to_vec())
+            .send_tracked(&progress, |http| {
+                self.chunk_request(http, session_id, offset, &checksum, &bytes, &progress)
             })
             .await?;
+        let resp = match resp {
+            Ok(resp) => resp,
+            // The link stopped moving: nothing of the chunk can have been kept, so it is the
+            // same answer as the server's own stall cut.
+            Err(RequestCut::Stalled) => return Ok(ChunkAck::Stalled),
+            // The body was handed off whole and no answer came: either the server never
+            // answered, or the link is too slow to drain the tail the stack still buffers.
+            Err(RequestCut::NoResponse) => return Ok(ChunkAck::Unanswered),
+        };
 
         let status = resp.status().as_u16();
         if (200..300).contains(&status) {
-            let new_offset = header_u64(resp.headers(), "X-Capsule-Offset")
-                .unwrap_or(offset + chunk.len() as u64);
-            return Ok(ChunkAck::Accepted(new_offset));
+            let prefix = header_u64(resp.headers(), "X-Capsule-Offset");
+            let committed = committed_of(resp.headers(), size);
+            let session_status = header_str(resp.headers(), "X-Capsule-Upload-Status");
+            return Ok(ChunkAck::Accepted {
+                offset: prefix,
+                committed,
+                status: session_status,
+            });
         }
 
-        // The 409 offset_mismatch carries the authoritative offset in the header;
-        // capture it before consuming the body.
+        // The 409 offset_mismatch carries the authoritative offset in the header, and a
+        // range_conflict the committed set; capture them before consuming the body.
         let authoritative = header_u64(resp.headers(), "X-Capsule-Offset");
+        let committed = committed_of(resp.headers(), size);
         let wait = retry_after(resp.headers());
-        let (code, message, headers) = read_error(resp).await?;
+        let ErrorAnswer {
+            code,
+            message,
+            headers,
+            ..
+        } = read_error(resp).await?;
 
         // Recovery matrix — switch on the stable error.* code, never the status.
         match code.as_deref() {
+            Some(c) if c == error_codes::UPLOAD_RANGE_CONFLICT => {
+                tracing::debug!(?committed, ?wait, "range_conflict — re-planning");
+                Ok(ChunkAck::RangeConflict {
+                    committed,
+                    after: wait,
+                })
+            }
+            Some(c) if c == error_codes::UPLOAD_TOO_FRAGMENTED => {
+                tracing::debug!(
+                    ?wait,
+                    "too_fragmented — letting the ranges in flight finish"
+                );
+                Ok(ChunkAck::TooFragmented { after: wait })
+            }
+            Some(c) if c == error_codes::UPLOAD_TOO_MANY_IN_FLIGHT => {
+                tracing::debug!(?wait, "too_many_in_flight — narrowing the window");
+                Ok(ChunkAck::TooManyInFlight { after: wait })
+            }
             Some(c) if c == error_codes::UPLOAD_OFFSET_MISMATCH => {
                 tracing::debug!(?authoritative, "offset_mismatch — re-aligning");
                 Ok(ChunkAck::Realign(authoritative))
@@ -1162,12 +2158,29 @@ impl UploadClient {
                 tracing::debug!("checksum_mismatch — re-sending chunk");
                 Ok(ChunkAck::Resend)
             }
-            Some(c) if asks_to_wait(c) => {
-                tracing::debug!(code = c, ?wait, "the server asked for a wait — backing off");
-                Ok(ChunkAck::Backoff(wait))
+            Some(c) if c == error_codes::UPLOAD_CHUNK_TIMEOUT => {
+                tracing::debug!("chunk_timeout — re-sending smaller");
+                Ok(ChunkAck::TimedOut)
             }
             _ if is_upgrade_required(status, code.as_deref()) => {
                 Err(self.transport.upgrade_required(&headers, message))
+            }
+            // Every retryable answer — a wait the server asked for, any `5xx`, `408`, `425` —
+            // waits and resumes from `HEAD`: a `5xx` may have kept the chunk (a completing
+            // chunk's `500 storage_inconsistent` included), so only the server knows the offset.
+            _ if answer_asks_to_wait(status, code.as_deref()) => {
+                tracing::debug!(
+                    status,
+                    ?code,
+                    ?wait,
+                    "a retryable answer to a chunk — backing off"
+                );
+                Ok(ChunkAck::Backoff(WaitAsked {
+                    status,
+                    code,
+                    message,
+                    after: wait,
+                }))
             }
             _ => Err(UploadError::Rejected {
                 status,
@@ -1181,19 +2194,46 @@ impl UploadClient {
     /// code-driven recovery matrix, starting from a fresh session.
     ///
     /// `data` is the ciphertext's source (opaque bytes); the client reads it one
-    /// chunk window at a time — never whole — and checksums each chunk. The transfer completes exactly when the received-byte count
-    /// reaches the declared size, at which point the server finalizes.
+    /// chunk window at a time — never whole — and checksums each chunk. Every byte is sent when
+    /// the received-byte count reaches the declared size, at which point the server finalizes.
+    /// The server answers the completing chunk `waiting_for_processing` without waiting for
+    /// finalization, so the client then polls `HEAD` with backoff until the session is
+    /// `completed` — the outcome — or `failed_processing`, which is an
+    /// [`UploadError::Rejected`] carrying the `X-Capsule-Upload-Error` code.
     ///
-    /// A `rate_limited`, `unavailable` or `storage_full` answer to any request it
-    /// makes — the create, a chunk, or a `HEAD` — is waited out, each wait charging
-    /// the one recovery budget the transfer shares.
+    /// A retryable answer to any request it makes — the create, a chunk, or a `HEAD` —
+    /// is waited out, each wait charging the one recovery budget the transfer shares and
+    /// the lane's shared retry budget. That is `rate_limited`, `unavailable`,
+    /// `storage_full`, and every other `5xx`, `408` or `425`; a chunk's wait resumes from
+    /// `HEAD`, so a completing chunk answered `500 storage_inconsistent` settles on what
+    /// the server says it holds.
     #[tracing::instrument(level = "debug", skip(self, data), fields(size = request.size, blob_role = ?request.blob_role))]
     pub async fn upload<S: UploadSource + ?Sized>(
         &self,
         request: &CreateUploadRequest,
         data: &S,
     ) -> Result<UploadOutcome, UploadError> {
-        self.upload_with(request, data, &mut Recovery::new()).await
+        self.upload_with(request, data, &mut Recovery::new(self.lane.clone(), None))
+            .await
+    }
+
+    /// [`UploadClient::upload`] under a scheduler: every range the transfer sends first
+    /// reserves its length through `gate` and gives it back once the request ends, and the
+    /// advice the server sends on the session's create and `HEAD`s is reported to it. This is
+    /// how a lane's sessions in flight share the device's one byte budget.
+    #[tracing::instrument(level = "debug", skip(self, data, gate), fields(size = request.size, blob_role = ?request.blob_role))]
+    pub async fn upload_gated<S: UploadSource + ?Sized>(
+        &self,
+        request: &CreateUploadRequest,
+        data: &S,
+        gate: &dyn TransferGate,
+    ) -> Result<UploadOutcome, UploadError> {
+        self.upload_with(
+            request,
+            data,
+            &mut Recovery::new(self.lane.clone(), Some(gate)),
+        )
+        .await
     }
 
     /// [`UploadClient::upload`] over a recovery budget the caller may already have
@@ -1202,33 +2242,57 @@ impl UploadClient {
         &self,
         request: &CreateUploadRequest,
         data: &S,
-        recovery: &mut Recovery,
+        recovery: &mut Recovery<'_>,
     ) -> Result<UploadOutcome, UploadError> {
-        let (session, suggested, start_offset) =
-            match self.create_waiting(request, recovery).await? {
-                CreateOutcome::Created {
-                    response,
-                    resume_offset,
-                } => (response.id, response.suggested_chunk_size, resume_offset),
-                CreateOutcome::AlreadyStored { asset_ref } => {
-                    self.emit_merged(request, &asset_ref);
-                    return Ok(UploadOutcome::AlreadyStored { asset_ref });
-                }
-            };
-        self.emit_created(request, &session, start_offset);
+        match self.open(request, recovery).await? {
+            Opened::Session(session, mut strategy, start) => {
+                self.drive(session, request, data, &mut strategy, start, recovery)
+                    .await
+            }
+            Opened::Merged(asset_ref) => Ok(self.merged(request, asset_ref)),
+        }
+    }
 
-        let mut strategy = AdaptiveChunkSizeStrategy::for_file_size(request.size)
-            .seeded_from_suggested(suggested)
-            .with_connection_class(self.connection);
-        self.drive(
-            session,
-            request,
-            data,
-            &mut strategy,
-            start_offset,
-            recovery,
-        )
-        .await
+    /// Open a session for `request` — a fresh one, or the active one the server returns for
+    /// the same blob — with its chunk strategy and where it starts; or learn the blob is already
+    /// stored.
+    async fn open(
+        &self,
+        request: &CreateUploadRequest,
+        recovery: &mut Recovery<'_>,
+    ) -> Result<Opened, UploadError> {
+        match self.create_waiting(request, recovery).await? {
+            CreateOutcome::Created {
+                response,
+                resume_offset,
+                committed,
+                advice,
+                status,
+                ..
+            } => {
+                let strategy = AdaptiveChunkSizeStrategy::for_file_size(request.size)
+                    .seeded_from_suggested(response.starting_chunk(&advice))
+                    .with_connection_class(self.connection);
+                let committed = committed
+                    .unwrap_or_else(|| CommittedSet::prefix(resume_offset.min(request.size)));
+                self.emit_created(request, &response.id, committed.prefix_end());
+                let start = Start {
+                    committed,
+                    state: status,
+                    window: self.window_for(&advice),
+                    advice,
+                };
+                Ok(Opened::Session(response.id, strategy, start))
+            }
+            CreateOutcome::AlreadyStored { asset_ref } => Ok(Opened::Merged(asset_ref)),
+        }
+    }
+
+    /// The merge a `duplicate_blob` on a create resolved to: success, carrying the existing
+    /// asset.
+    fn merged(&self, request: &CreateUploadRequest, asset_ref: String) -> UploadOutcome {
+        self.emit_merged(request, &asset_ref);
+        UploadOutcome::AlreadyStored { asset_ref }
     }
 
     /// Resume an existing session: HEAD for the authoritative offset, then
@@ -1242,23 +2306,38 @@ impl UploadClient {
         request: &CreateUploadRequest,
         data: &S,
     ) -> Result<UploadOutcome, UploadError> {
-        let mut recovery = Recovery::new();
+        let mut recovery = Recovery::new(self.lane.clone(), None);
+        // The session predates this transfer, so any byte of the blob may already have been
+        // sent: every read is a re-send, from a source that must affirm it is unchanged.
+        recovery.sent = CommittedSet::prefix(request.size);
         if let Some(info) = self.head_waiting(session_id, &mut recovery).await? {
-            let mut strategy = AdaptiveChunkSizeStrategy::for_file_size(request.size)
-                .with_connection_class(self.connection);
-            tracing::debug!(offset = info.offset, "resuming from authoritative offset");
+            let mut strategy = AdaptiveChunkSizeStrategy::for_file_size(request.size);
+            if let Some(chunk) = info.advice.chunk(Duration::ZERO) {
+                strategy = strategy.seeded_from_suggested(chunk);
+            }
+            let mut strategy = strategy.with_connection_class(self.connection);
+            let committed = info
+                .committed
+                .unwrap_or_else(|| CommittedSet::prefix(info.offset.min(request.size)));
+            tracing::debug!(offset = info.offset, committed = %committed.to_header(), "resuming from the server's committed set");
             self.events.emit(|| TransferEvent::SessionResumed {
                 blob: request.hash.clone(),
                 session_id: session_id.to_string(),
                 size: request.size,
                 offset: info.offset,
             });
+            let start = Start {
+                committed,
+                state: Some(info.status),
+                window: self.window_for(&info.advice),
+                advice: info.advice,
+            };
             self.drive(
                 session_id.to_string(),
                 request,
                 data,
                 &mut strategy,
-                info.offset,
+                start,
                 &mut recovery,
             )
             .await
@@ -1268,200 +2347,690 @@ impl UploadClient {
         }
     }
 
-    /// The chunk loop with the recovery matrix. `offset` is the starting
-    /// authoritative offset (0 for a fresh session, the HEAD offset on resume).
+    /// The range scheduler with the recovery matrix, then the finalization poll, on the session
+    /// `session_id` starting from `start`.
+    ///
+    /// Finalization refusing the blob's hash (`content_hash_mismatch`) is the source's to
+    /// explain: a changed source ends the transfer with [`UploadError::SourceChanged`]; one that
+    /// affirms it is unchanged ([`SourceIdentity::Affirmed`]) gets one re-created session, and a
+    /// second refusal ends the transfer. One that cannot affirm it ends the transfer with the
+    /// refusal, sending nothing again.
     async fn drive<S: UploadSource + ?Sized>(
         &self,
-        mut session_id: String,
+        session_id: String,
         request: &CreateUploadRequest,
         data: &S,
         strategy: &mut AdaptiveChunkSizeStrategy,
-        mut offset: u64,
-        recovery: &mut Recovery,
+        start: Start,
+        recovery: &mut Recovery<'_>,
     ) -> Result<UploadOutcome, UploadError> {
         let size = request.size;
-        // The recovery's shared retry engine governs mid-transfer *transport
-        // resets* (the adverse-network steady state); the code-driven recovery
-        // matrix below stays switched on `error.*` codes.
+        let mut cursor = Cursor::new(session_id, start);
+        let mut recreated_after_mismatch = false;
+        loop {
+            if let Transferred::Merged(asset_ref) = self
+                .transfer(&mut cursor, request, data, strategy, recovery)
+                .await?
+            {
+                return Ok(self.merged(request, asset_ref));
+            }
+            let session_id = cursor.session_id.clone();
+            tracing::info!(%session_id, size, "every byte sent — server finalizing");
+            self.events.emit(|| TransferEvent::Finalize {
+                blob: request.hash.clone(),
+                session_id: session_id.clone(),
+                size,
+            });
+            match self
+                .settle(&session_id, size, cursor.state.as_deref(), recovery)
+                .await?
+            {
+                Settled::Done(outcome) => return Ok(outcome),
+                Settled::Resume(held) => {
+                    // A server that keeps losing a range it acknowledged would otherwise loop
+                    // here forever: each resume is a recovery like any other.
+                    recovery.charge("resume after a lost range record")?;
+                    tracing::info!(%session_id, committed = %held.to_header(), size, "the server holds fewer bytes than declared; resuming");
+                    cursor.committed = held;
+                    cursor.state = None;
+                }
+                Settled::Lost => {
+                    recovery.charge("session re-create")?;
+                    cursor.step.cause(0, size);
+                    cursor.step.recreate = true;
+                    if let StepTaken::Merged(asset_ref) = self
+                        .take_step(&mut cursor, request, strategy, recovery)
+                        .await?
+                    {
+                        return Ok(self.merged(request, asset_ref));
+                    }
+                }
+                Settled::HashMismatch(refusal) => {
+                    match data.check_unchanged() {
+                        Err(changed) => {
+                            tracing::warn!(%session_id, reason = %changed.reason, "finalization refused the hash and the source changed");
+                            return Err(changed.into());
+                        }
+                        Ok(SourceIdentity::Unknown) => {
+                            // Sending the blob again could seal changed bytes under the nonces
+                            // already used: only a source that affirms its identity is re-sent.
+                            tracing::warn!(%session_id, "finalization refused the hash of a source that cannot affirm it is unchanged; not re-sending");
+                            return Err(refusal);
+                        }
+                        Ok(SourceIdentity::Affirmed) => {}
+                    }
+                    if recreated_after_mismatch {
+                        tracing::warn!(%session_id, "finalization refused the hash of a re-created session too");
+                        return Err(refusal);
+                    }
+                    recreated_after_mismatch = true;
+                    recovery.charge("re-create after a refused hash")?;
+                    tracing::warn!(%session_id, "finalization refused the hash of an unchanged source; re-creating the session once");
+                    match self.open(request, recovery).await? {
+                        Opened::Session(id, fresh, start) => {
+                            *strategy = fresh;
+                            cursor = Cursor::new(id, start);
+                        }
+                        Opened::Merged(asset_ref) => return Ok(self.merged(request, asset_ref)),
+                    }
+                }
+            }
+        }
+    }
 
-        while offset < size {
-            let remaining = size - offset;
-            // Non-final chunks are exactly the adaptive size (4 KiB-aligned by
-            // construction); the final chunk is the remainder (alignment-exempt).
-            let want = strategy.next_chunk_size().min(remaining);
-            // Read exactly this window — a re-send or a re-align reads it again — so the
-            // client holds one chunk of the blob, never the blob.
-            let chunk = data.read_at(offset, want as usize)?;
-            if chunk.len() as u64 != want {
+    /// Send every byte of the cursor's session the server does not hold, up to the session's
+    /// window of ranges at once.
+    ///
+    /// Each range is planned by [`next_range`] from the committed set the server last reported
+    /// and the ranges already in flight: the lowest gap first, so a window of one is the
+    /// sequential schedule. An accepted range adds what its answer says is committed. A refusal
+    /// that needs a session-level step (a wait, a `HEAD`, a re-create) stops the planning until
+    /// every range in flight has returned, then the step is taken once. Every refusal charges
+    /// the transfer's bounded recovery budgets as it always did, so a server that never lets the
+    /// transfer progress ends it. Returns once every byte is committed, or the server reported
+    /// the session finalizing.
+    async fn transfer<S: UploadSource + ?Sized>(
+        &self,
+        cursor: &mut Cursor,
+        request: &CreateUploadRequest,
+        data: &S,
+        strategy: &mut AdaptiveChunkSizeStrategy,
+        recovery: &mut Recovery<'_>,
+    ) -> Result<Transferred, UploadError> {
+        let size = request.size;
+        let gate = recovery.gate;
+        let mut flights = Vec::new();
+        let mut flying: Vec<(u64, u64)> = Vec::new();
+        // A source that does not check what it re-derives is sent one range at a time, the
+        // schedule that re-sends least (`UploadSource::verifies_rederived`).
+        let sequential = !data.verifies_rederived();
+        if sequential && cursor.window > 1 {
+            tracing::debug!(session_id = %cursor.session_id, window = cursor.window, "the source does not verify what it re-derives; sending one range at a time");
+        }
+        loop {
+            if !cursor.step.is_set() {
+                let window = if sequential {
+                    1
+                } else {
+                    cursor.window as usize
+                };
+                // A request this client abandoned may still hold a claim on the server until its
+                // write returns: it counts against the window, but never fills it.
+                let ghosts = cursor.abandoned_claims().min(window - 1);
+                while flying.len() + ghosts < window {
+                    let want = strategy.next_chunk_size();
+                    let Some(range) = next_range(&cursor.committed, &flying, size, want) else {
+                        break;
+                    };
+                    flying.push(range);
+                    let resend = recovery.sent.overlaps(range.0, range.1);
+                    recovery.sent.insert(range.0, range.1);
+                    flights.push(Box::pin(self.fly(
+                        cursor.session_id.clone(),
+                        request,
+                        data,
+                        gate,
+                        range,
+                        resend,
+                    )));
+                }
+            }
+            if flights.is_empty() {
+                if !cursor.step.is_set() {
+                    // Nothing in flight and nothing left to plan: every byte is committed.
+                    return Ok(Transferred::Sent);
+                }
+                match self.take_step(cursor, request, strategy, recovery).await? {
+                    StepTaken::Continue => continue,
+                    StepTaken::Settle => return Ok(Transferred::Sent),
+                    StepTaken::Merged(asset_ref) => return Ok(Transferred::Merged(asset_ref)),
+                }
+            }
+            let flight = next_landed(&mut flights).await;
+            flying.retain(|range| *range != flight.range);
+            if let Err(error) = self.land(flight, cursor, request, strategy, recovery) {
+                // The transfer ends here: the ranges still in flight are dropped, which cancels
+                // their requests; the server releases each claim once its write returns.
+                flights.clear();
+                if let UploadError::SourceChanged(changed) = &error {
+                    self.cancel_after_source_change(&cursor.session_id, changed)
+                        .await;
+                }
+                return Err(error);
+            }
+            if std::mem::take(&mut cursor.step.narrow) {
+                // The server held its cap of claims while this client had `flying` ranges
+                // besides the refused one: the cap is no more than those, and no more than the
+                // session's advertised `ranges`.
+                let in_flight = u32::try_from(flying.len()).unwrap_or(u32::MAX).max(1);
+                let narrowed = cursor
+                    .window
+                    .min(self.window_for(&cursor.advice))
+                    .min(in_flight);
+                tracing::info!(session_id = %cursor.session_id, from = cursor.window, to = narrowed, "ranges window narrowed after too_many_in_flight");
+                cursor.window = narrowed;
+            }
+        }
+    }
+
+    /// Send one planned range: reserve its bytes under the scheduler, check the source, read
+    /// exactly that window — a re-send reads it again, so the client holds a window of the
+    /// blob, never the blob — and `PATCH` it.
+    ///
+    /// A `resend` overlaps bytes this transfer already read for a request (a lost answer, a
+    /// re-plan after `range_conflict`, a re-created or resumed session, a lost range record).
+    /// Its window is re-derived only from a source whose check, made just before the read,
+    /// affirms it is unchanged ([`SourceIdentity::Affirmed`]): re-deriving changed bytes would
+    /// put a second ciphertext under the nonces the first read spent. Any other source ends the
+    /// transfer with [`UploadError::SourceChanged`] and sends nothing again.
+    async fn fly<S: UploadSource + ?Sized>(
+        &self,
+        session_id: String,
+        request: &CreateUploadRequest,
+        data: &S,
+        gate: Option<&dyn TransferGate>,
+        range: (u64, u64),
+        resend: bool,
+    ) -> Flight {
+        let (offset, end) = range;
+        let len = end - offset;
+        // Under a scheduler the range's bytes are reserved against the shared budget before
+        // they are read, and given back once its request ends, however it ends.
+        let hold = RangeHold::reserve(gate, len).await;
+        let mut started = std::time::Instant::now();
+        let sent = async {
+            let identity = data.check_unchanged()?;
+            if resend && identity != SourceIdentity::Affirmed {
+                tracing::warn!(%session_id, offset, len, "a range already sent would be read again from a source that cannot affirm it is unchanged; not re-sending");
+                return Err(UploadError::SourceChanged(SourceChanged::new(
+                    "the source cannot affirm it is unchanged, so a range already sent is not \
+                     read and sent again",
+                )));
+            }
+            let window = data
+                .read_at(offset, usize::try_from(len).unwrap_or(usize::MAX))
+                .map_err(UploadError::of_read)?;
+            if window.len() as u64 != len {
                 return Err(UploadError::Io(std::io::Error::new(
                     std::io::ErrorKind::UnexpectedEof,
                     format!(
-                        "upload source returned {} of {want} bytes at offset {offset}",
-                        chunk.len()
+                        "upload source returned {} of {len} bytes at offset {offset}",
+                        window.len()
                     ),
                 )));
             }
-
-            let attempt_start = std::time::Instant::now();
+            started = std::time::Instant::now();
             self.events.emit(|| TransferEvent::ChunkSent {
                 blob: request.hash.clone(),
                 session_id: session_id.clone(),
                 offset,
-                len: want,
+                len,
             });
-            let ack = match self.send_patch(&session_id, &chunk, offset).await {
-                Ok(ack) => ack,
-                // A mid-transfer connection reset / silent black-hole: back off
-                // through the shared engine and resume from the SAME offset (the
-                // server holds nothing new, so no bytes are re-sent beyond this
-                // chunk). Bounded give-up prevents a hot loop on a dead path.
-                Err(UploadError::Transport(reason)) => match recovery.engine.next_backoff(None) {
-                    RetryDecision::GiveUp => {
-                        return Err(UploadError::RetriesExhausted(format!(
-                            "transport reset unrecovered after {} retries: {reason}",
-                            recovery.engine.policy().max_retries
-                        )));
-                    }
-                    RetryDecision::Retry { after } => {
-                        tracing::debug!(offset, ?after, %reason, "mid-transfer reset — backing off and resuming");
-                        self.emit_retried(
-                            request,
-                            &session_id,
-                            offset,
-                            want,
-                            RetryReason::TransportReset {
-                                wait_ms: millis(after),
-                            },
-                        );
-                        self.sleeper.sleep(after).await;
-                        continue;
-                    }
-                },
-                Err(other) => return Err(other),
-            };
-            match ack {
-                ChunkAck::Accepted(new_offset) => {
-                    strategy.record_chunk(want, attempt_start.elapsed());
-                    // Real progress resets the transient-reset backoff budget.
-                    recovery.engine.reset();
-                    self.events.emit(|| TransferEvent::ChunkAcked {
-                        blob: request.hash.clone(),
-                        session_id: session_id.clone(),
-                        offset,
-                        len: want,
-                        acked_offset: new_offset,
-                    });
-                    offset = new_offset;
+            self.send_patch(&session_id, &window, offset, request.size)
+                .await
+        }
+        .await;
+        // The range's request is over: its bytes go back before anything waits on its answer.
+        drop(hold);
+        Flight {
+            range,
+            started,
+            sent,
+        }
+    }
+
+    /// Fold one returned range into the cursor: what it committed, or the recovery its refusal
+    /// asks for. A range that needs nothing more than a re-send is simply left unplanned, so the
+    /// next plan picks it up again.
+    fn land(
+        &self,
+        flight: Flight,
+        cursor: &mut Cursor,
+        request: &CreateUploadRequest,
+        strategy: &mut AdaptiveChunkSizeStrategy,
+        recovery: &mut Recovery<'_>,
+    ) -> Result<(), UploadError> {
+        let Flight {
+            range: (offset, end),
+            started,
+            sent,
+        } = flight;
+        let len = end - offset;
+        let size = request.size;
+        let session_id = cursor.session_id.clone();
+        let response_wait = self.transport.bounds.response_wait;
+        let ack = match sent {
+            Ok(ack) => ack,
+            // A connection reset or a silent black-hole: the server may or may not have kept the
+            // range, so its state is read from `HEAD` before anything is sent again (a lost
+            // ACK), after the shared engine's backoff. Bounded give-up keeps a dead path from
+            // becoming a hot loop.
+            Err(UploadError::Transport(reason)) => {
+                cursor.abandon(response_wait);
+                cursor.step.cause(offset, len);
+                if cursor.step.wait.is_none() {
+                    let wait =
+                        self.reset_backoff(recovery, request, &session_id, (offset, len), &reason)?;
+                    cursor.step.wait_at_least(wait);
                 }
-                ChunkAck::Realign(authoritative) => {
-                    recovery.charge("offset re-align")?;
-                    let realigned = match authoritative {
-                        Some(o) => Some(o),
-                        None => self
-                            .head_waiting(&session_id, recovery)
-                            .await?
-                            .map(|info| info.offset),
-                    };
-                    if let Some(to) = realigned {
-                        self.emit_retried(
-                            request,
-                            &session_id,
-                            offset,
-                            want,
-                            RetryReason::OffsetRealign { to },
-                        );
-                        offset = to;
-                    } else {
-                        // Vanished mid-realign → recreate from zero.
-                        self.emit_retried(
-                            request,
-                            &session_id,
-                            offset,
-                            want,
-                            RetryReason::SessionLost,
-                        );
-                        session_id = self.recreate(request, recovery).await?;
-                        *strategy = AdaptiveChunkSizeStrategy::for_file_size(size);
-                        offset = 0;
+                cursor.step.read_state();
+                return Ok(());
+            }
+            Err(other) => return Err(other),
+        };
+        match ack {
+            ChunkAck::Accepted {
+                offset: prefix,
+                committed,
+                status,
+            } => {
+                match (&committed, prefix) {
+                    // A block-grid server: the range is committed, and so is the set it names.
+                    (Some(held), _) => {
+                        cursor.committed.insert(offset, end);
+                        cursor.committed.union(held);
                     }
-                }
-                ChunkAck::Recreate => {
-                    recovery.charge("session re-create")?;
-                    self.emit_retried(request, &session_id, offset, want, RetryReason::SessionLost);
-                    match self.create_waiting(request, recovery).await? {
-                        CreateOutcome::Created {
-                            response,
-                            resume_offset,
-                        } => {
-                            session_id = response.id;
-                            *strategy = AdaptiveChunkSizeStrategy::for_file_size(size)
-                                .seeded_from_suggested(response.suggested_chunk_size);
-                            offset = resume_offset;
-                            self.emit_created(request, &session_id, offset);
-                        }
-                        // A blob that finalized between our attempts → merge.
-                        CreateOutcome::AlreadyStored { asset_ref } => {
-                            self.emit_merged(request, &asset_ref);
-                            return Ok(UploadOutcome::AlreadyStored { asset_ref });
-                        }
+                    // An older server holds a prefix and names it: that is all it holds,
+                    // however much of the range it kept.
+                    (None, Some(prefix)) => {
+                        cursor.committed = CommittedSet::prefix(prefix.min(size));
                     }
+                    (None, None) => cursor.committed.insert(offset, end),
                 }
-                ChunkAck::Resend => {
-                    recovery.charge("chunk re-send")?;
-                    self.events.emit(|| TransferEvent::ChecksumRejected {
-                        blob: request.hash.clone(),
-                        session_id: session_id.clone(),
-                        offset,
-                        len: want,
-                    });
-                    // Offset unchanged; the loop re-sends the same chunk.
+                cursor.state = later_state(cursor.state.take(), status);
+                strategy.record_chunk(len, started.elapsed());
+                // Real progress refills the shrinking-cut and transient-reset budgets, and
+                // earns toward the lane's shared one.
+                recovery.on_progress();
+                let acked_offset = prefix.unwrap_or_else(|| cursor.committed.prefix_end());
+                self.events.emit(|| TransferEvent::ChunkAcked {
+                    blob: request.hash.clone(),
+                    session_id: session_id.clone(),
+                    offset,
+                    len,
+                    acked_offset,
+                });
+            }
+            ChunkAck::RangeConflict { committed, after } => {
+                recovery.charge("range conflict re-plan")?;
+                cursor.step.cause(offset, len);
+                match &committed {
+                    Some(held) => cursor.committed.union(held),
+                    None => cursor.step.read_state(),
                 }
-                ChunkAck::Backoff(asked) => {
-                    let wait = recovery.server_wait(asked, "server-requested wait")?;
-                    tracing::debug!(
-                        offset,
-                        ?wait,
-                        "waiting as the server asked, then resuming from HEAD"
-                    );
-                    self.emit_retried(
-                        request,
-                        &session_id,
-                        offset,
-                        want,
-                        RetryReason::ServerWait {
-                            wait_ms: millis(wait),
-                        },
-                    );
-                    self.sleeper.sleep(wait).await;
-                    // The refused chunk left nothing behind, but anything may have moved
-                    // while we waited: the authoritative offset is HEAD's. A HEAD that
-                    // is itself asked to wait (an outage outlasting one wait) waits
-                    // again under the same budget rather than failing the transfer.
-                    offset = if let Some(info) = self.head_waiting(&session_id, recovery).await? {
-                        info.offset
-                    } else {
-                        self.emit_retried(
-                            request,
-                            &session_id,
-                            offset,
-                            want,
-                            RetryReason::SessionLost,
-                        );
-                        session_id = self.recreate(request, recovery).await?;
-                        *strategy = AdaptiveChunkSizeStrategy::for_file_size(size);
-                        0
-                    };
+                if let Some(after) = after {
+                    self.wait_asked(cursor, request, (offset, len), after);
+                }
+                tracing::info!(%session_id, offset, len, committed = ?committed.map(|c| c.to_header()), ?after, "a range overlapped one committed or in flight — re-planning");
+            }
+            ChunkAck::TooFragmented { after } => {
+                recovery.charge("too fragmented re-plan")?;
+                cursor.step.cause(offset, len);
+                cursor.step.quiesce = true;
+                if let Some(after) = after {
+                    self.wait_asked(cursor, request, (offset, len), after);
+                }
+                tracing::info!(%session_id, offset, len, ?after, "the committed set would fragment — letting the ranges in flight finish, then re-planning");
+            }
+            ChunkAck::TooManyInFlight { after } => {
+                recovery.charge("too many ranges in flight")?;
+                cursor.step.cause(offset, len);
+                cursor.step.quiesce = true;
+                cursor.step.narrow = true;
+                tracing::info!(%session_id, offset, len, ?after, "the session's ranges window was full — narrowing it");
+                if let Some(after) = after {
+                    self.wait_asked(cursor, request, (offset, len), after);
                 }
             }
+            ChunkAck::Realign(Some(to)) => {
+                recovery.charge("offset re-align")?;
+                self.emit_retried(
+                    request,
+                    &session_id,
+                    offset,
+                    len,
+                    RetryReason::OffsetRealign { to },
+                );
+                cursor.committed = CommittedSet::prefix(to.min(size));
+                cursor.state = None;
+            }
+            ChunkAck::Realign(None) => {
+                recovery.charge("offset re-align")?;
+                cursor.step.cause(offset, len);
+                cursor.step.realign = true;
+                cursor.step.read_state();
+            }
+            ChunkAck::Recreate => {
+                recovery.charge("session re-create")?;
+                cursor.step.cause(offset, len);
+                cursor.step.quiesce = true;
+                cursor.step.recreate = true;
+            }
+            ChunkAck::Resend => {
+                recovery.charge("chunk re-send")?;
+                self.events.emit(|| TransferEvent::ChecksumRejected {
+                    blob: request.hash.clone(),
+                    session_id: session_id.clone(),
+                    offset,
+                    len,
+                });
+                // Left unplanned: the next plan re-sends the same range.
+            }
+            ack @ (ChunkAck::TimedOut | ChunkAck::Stalled) => {
+                // Nothing of a range that did not arrive whole is written, so it is re-planned
+                // at the same offset, shorter. No wait either, since the link just spent a whole
+                // stall bound on it. A cut that shrank is charged to the budget progress refills;
+                // one at the minimum to the per-transfer one. A client-cut request may still hold
+                // its claim on the server for a while.
+                if matches!(ack, ChunkAck::Stalled) {
+                    cursor.abandon(response_wait);
+                }
+                let shrunk = strategy.shrink_after_stall(len);
+                if shrunk {
+                    recovery.charge_cut("stalled chunk re-send")?;
+                } else {
+                    recovery.charge("stalled chunk re-send")?;
+                }
+                tracing::info!(
+                    %session_id,
+                    offset,
+                    stalled_len = len,
+                    next_len = strategy.next_chunk_size().min(size - offset),
+                    shrunk,
+                    cut_by = if matches!(ack, ChunkAck::Stalled) { "client" } else { "server" },
+                    "a chunk stalled — re-sending at the same offset, shorter"
+                );
+            }
+            ChunkAck::Unanswered => {
+                // The whole body went out and no answer came: the server may have kept the
+                // range, so `HEAD` is read before anything is sent again, and the range is
+                // re-planned shorter only once it says the range is still missing. Shrink first:
+                // a link too slow to drain the buffered tail inside the response wait would
+                // otherwise be cut at the same size until the retries ran out.
+                cursor.abandon(response_wait);
+                cursor.step.cause(offset, len);
+                let shrunk = strategy.shrink_after_stall(len);
+                tracing::info!(
+                    %session_id,
+                    offset,
+                    unanswered_len = len,
+                    next_len = strategy.next_chunk_size().min(size - offset),
+                    shrunk,
+                    "a chunk got no answer — reading the session's state, then re-sending shorter where it can be"
+                );
+                if shrunk {
+                    // A cut that shrank is a stall re-send, charged like one: to the budget
+                    // each accepted chunk refills, so a long upload that slows down again and
+                    // again is not failed by the per-transfer ceiling. No wait either, since the
+                    // link just spent a whole response wait.
+                    recovery.charge_cut("unanswered chunk re-send")?;
+                } else if cursor.step.wait.is_none() {
+                    // Nothing smaller can be sent: an unanswered minimum chunk is a dead path
+                    // until shown otherwise, and backs off under the reset budget.
+                    let wait = self.reset_backoff(
+                        recovery,
+                        request,
+                        &session_id,
+                        (offset, len),
+                        &RequestCut::NoResponse.to_string(),
+                    )?;
+                    cursor.step.wait_at_least(wait);
+                }
+                cursor.step.read_state();
+            }
+            ChunkAck::Backoff(asked) => {
+                // One wait per step: the ranges refused alongside this one are waited out by
+                // the same wait, so P ranges refused together charge the budgets once.
+                let wait = match cursor.step.wait {
+                    None => recovery.server_wait(asked, "server-requested wait")?,
+                    Some(_) => asked.after.unwrap_or_default().min(MAX_SERVER_BACKOFF),
+                };
+                cursor.step.cause(offset, len);
+                tracing::debug!(
+                    offset,
+                    ?wait,
+                    "waiting as the server asked, then resuming from HEAD"
+                );
+                self.wait_asked(cursor, request, (offset, len), wait);
+                // The refused chunk left nothing behind, but anything may have moved while we
+                // waited: the authoritative committed set is HEAD's.
+                cursor.step.read_state();
+            }
         }
+        Ok(())
+    }
 
-        tracing::info!(%session_id, size, "upload complete — server finalizing");
-        self.events.emit(|| TransferEvent::Finalize {
-            blob: request.hash.clone(),
-            session_id: session_id.clone(),
-            size,
-        });
-        Ok(UploadOutcome::Completed { session_id })
+    /// Schedule the wait a refusal named, capped at [`MAX_SERVER_BACKOFF`], and publish it.
+    fn wait_asked(
+        &self,
+        cursor: &mut Cursor,
+        request: &CreateUploadRequest,
+        (offset, len): (u64, u64),
+        wait: Duration,
+    ) {
+        let wait = wait.min(MAX_SERVER_BACKOFF);
+        self.emit_retried(
+            request,
+            &cursor.session_id,
+            offset,
+            len,
+            RetryReason::ServerWait {
+                wait_ms: millis(wait),
+            },
+        );
+        cursor.step.wait_at_least(wait);
+    }
+
+    /// Take the session-level step every range in flight has returned for: wait, then read the
+    /// session's state from `HEAD`, or re-create the session (also when `HEAD` finds it gone).
+    async fn take_step(
+        &self,
+        cursor: &mut Cursor,
+        request: &CreateUploadRequest,
+        strategy: &mut AdaptiveChunkSizeStrategy,
+        recovery: &mut Recovery<'_>,
+    ) -> Result<StepTaken, UploadError> {
+        let size = request.size;
+        let mut step = std::mem::take(&mut cursor.step);
+        let (offset, len) = step.range;
+        if let Some(wait) = step.wait {
+            tracing::debug!(session_id = %cursor.session_id, ?wait, "every range returned — waiting before the next step");
+            self.sleeper.sleep(wait).await;
+        }
+        if step.head && !step.recreate {
+            match self.head_waiting(&cursor.session_id, recovery).await? {
+                Some(info) => {
+                    let held = info
+                        .committed
+                        .unwrap_or_else(|| CommittedSet::prefix(info.offset.min(size)));
+                    // A server that lost ranges it acknowledged would otherwise have the
+                    // client re-send them forever, each round refilling every budget that
+                    // progress refills: a `HEAD` holding less than was acknowledged is a
+                    // recovery like a lost range record at finalization. A re-align already
+                    // charged for the `HEAD` it reads.
+                    if !step.realign && !holds_all(&held, &cursor.committed) {
+                        tracing::warn!(session_id = %cursor.session_id, acknowledged = %cursor.committed.to_header(), committed = %held.to_header(), "HEAD reports fewer bytes than the server acknowledged; re-planning from it");
+                        recovery.charge("re-plan after the server lost acknowledged ranges")?;
+                    }
+                    if step.realign {
+                        self.emit_retried(
+                            request,
+                            &cursor.session_id,
+                            offset,
+                            len,
+                            RetryReason::OffsetRealign {
+                                to: held.prefix_end(),
+                            },
+                        );
+                    }
+                    tracing::debug!(session_id = %cursor.session_id, committed = %held.to_header(), status = %info.status, "re-planning from HEAD");
+                    cursor.committed = held;
+                    cursor.window = cursor.window.min(self.window_for(&info.advice));
+                    cursor.advice = info.advice;
+                    let finalizing = matches!(
+                        info.status.as_str(),
+                        STATUS_WAITING | STATUS_COMPLETED | STATUS_FAILED
+                    );
+                    cursor.state = Some(info.status);
+                    if finalizing {
+                        return Ok(StepTaken::Settle);
+                    }
+                }
+                // Vanished while recovering: re-create.
+                None => step.recreate = true,
+            }
+        }
+        if step.recreate {
+            self.emit_retried(
+                request,
+                &cursor.session_id,
+                offset,
+                len,
+                RetryReason::SessionLost,
+            );
+            match self.open(request, recovery).await? {
+                Opened::Session(id, fresh, start) => {
+                    *strategy = fresh;
+                    *cursor = Cursor::new(id, start);
+                }
+                Opened::Merged(asset_ref) => return Ok(StepTaken::Merged(asset_ref)),
+            }
+        }
+        Ok(StepTaken::Continue)
+    }
+
+    /// Cancel a session whose source changed: nothing more of it can be sent, and its committed
+    /// bytes can never finalize to the declared hash. Best effort — a session the server already
+    /// discarded or is finalizing is left to its own end.
+    async fn cancel_after_source_change(&self, session_id: &str, changed: &SourceChanged) {
+        tracing::warn!(%session_id, reason = %changed.reason, "the upload source changed; cancelling its session");
+        if let Err(error) = self.delete(session_id).await {
+            tracing::warn!(%session_id, %error, "the session of a changed source could not be cancelled; it expires on its own");
+        }
+    }
+
+    /// Wait for the server to finish finalizing `session_id`, polling `HEAD` with backoff.
+    ///
+    /// `state` is the session's state as the answers reported it. An older server finalized
+    /// before it answered the completing chunk and sends no state, so its accepted final chunk
+    /// is the outcome, and `completed` is one too. Every other state is polled: a session still
+    /// `uploading` once every range was answered may have lost a record the client was told it
+    /// held, and `HEAD` either starts its finalization or names what to send again. A `HEAD` the
+    /// server asks to wait is waited out under the transfer's
+    /// recovery budget; the poll itself charges nothing and is bounded by
+    /// [`FINALIZE_POLL_DEADLINE`], past which it gives up with [`UploadError::WaitsExhausted`]:
+    /// a server that answered every poll is slow, not a stuck link.
+    async fn settle(
+        &self,
+        session_id: &str,
+        size: u64,
+        state: Option<&str>,
+        recovery: &mut Recovery<'_>,
+    ) -> Result<Settled, UploadError> {
+        if matches!(state, None | Some(STATUS_COMPLETED)) {
+            tracing::debug!(%session_id, ?state, "no finalization to wait for");
+            return Ok(Settled::Done(UploadOutcome::Completed {
+                session_id: session_id.to_owned(),
+            }));
+        }
+        let mut wait = FINALIZE_POLL_FIRST;
+        let mut waited = Duration::ZERO;
+        let mut polls: u32 = 0;
+        // Whether the session is known to have reached finalization: a session that goes away
+        // before that is one to re-create, after it a failure.
+        let mut finalizing = matches!(state, Some(STATUS_WAITING | STATUS_FAILED));
+        loop {
+            polls += 1;
+            let Some(info) = self.head_waiting(session_id, recovery).await? else {
+                if !finalizing {
+                    tracing::info!(%session_id, polls, "the session went away before it finalized; re-creating");
+                    return Ok(Settled::Lost);
+                }
+                tracing::warn!(%session_id, polls, "the session went away while it finalized");
+                return Err(UploadError::Rejected {
+                    status: 404,
+                    code: Some(error_codes::UPLOAD_SESSION_NOT_FOUND.to_owned()),
+                    message: format!("session {session_id} went away while it finalized"),
+                });
+            };
+            match info.status.as_str() {
+                STATUS_COMPLETED => {
+                    tracing::info!(%session_id, polls, waited_ms = millis(waited), "the server finalized the upload");
+                    return Ok(Settled::Done(UploadOutcome::Completed {
+                        session_id: session_id.to_owned(),
+                    }));
+                }
+                STATUS_FAILED => {
+                    tracing::warn!(%session_id, polls, code = ?info.error_code, "the server refused the upload at finalization");
+                    let message = format!(
+                        "the server refused session {session_id} at finalization ({})",
+                        info.error_code.as_deref().unwrap_or("no code given")
+                    );
+                    let hash_refused = info.error_code.as_deref()
+                        == Some(error_codes::UPLOAD_CONTENT_HASH_MISMATCH);
+                    let refusal = UploadError::Rejected {
+                        status: 200,
+                        code: info.error_code,
+                        message,
+                    };
+                    if hash_refused {
+                        return Ok(Settled::HashMismatch(refusal));
+                    }
+                    return Err(refusal);
+                }
+                STATUS_WAITING => finalizing = true,
+                // Full and not yet claimed: this `HEAD` started its finalization, and the next
+                // one reads how it went. Short of full, the transfer re-plans from what it holds.
+                _ => {
+                    let held = info
+                        .committed
+                        .clone()
+                        .unwrap_or_else(|| CommittedSet::prefix(info.offset.min(size)));
+                    if !held.covers(size) {
+                        return Ok(Settled::Resume(held));
+                    }
+                    finalizing = true;
+                }
+            }
+            if waited >= FINALIZE_POLL_DEADLINE {
+                // The server answered every poll; it is slow to finalize, not unreachable. That
+                // is a wait the server asked for, never a stuck link.
+                tracing::warn!(%session_id, polls, waited_ms = millis(waited), status = %info.status, "the server was still finalizing at the poll deadline; giving up waiting");
+                return Err(UploadError::WaitsExhausted {
+                    status: 200,
+                    code: None,
+                    message: format!("session {session_id} is still {}", info.status),
+                    reason: format!(
+                        "the finalization poll gave up after {polls} polls over {}s",
+                        waited.as_secs()
+                    ),
+                });
+            }
+            tracing::debug!(%session_id, polls, ?wait, status = %info.status, "finalizing; polling HEAD again");
+            self.sleeper.sleep(wait).await;
+            waited += wait;
+            wait = (wait * 2).min(FINALIZE_POLL_MAX);
+        }
     }
 
     fn emit_created(&self, request: &CreateUploadRequest, session_id: &str, resume_offset: u64) {
@@ -1480,6 +3049,45 @@ impl UploadClient {
         });
     }
 
+    /// The backoff after a mid-transfer transport reset — or a chunk at the protocol minimum that
+    /// got no answer — through the shared retry engine. The scheduler waits it out once every
+    /// range in flight has returned, then reads `HEAD` before it sends anything again. The
+    /// `(offset, len)` pair names the chunk that was cut.
+    ///
+    /// # Errors
+    ///
+    /// [`UploadError::RetriesExhausted`] once the engine gives up, or the server lane's shared
+    /// retry budget is spent: a bounded give-up keeps a dead path from becoming a hot loop.
+    fn reset_backoff(
+        &self,
+        recovery: &mut Recovery<'_>,
+        request: &CreateUploadRequest,
+        session_id: &str,
+        (offset, len): (u64, u64),
+        reason: &str,
+    ) -> Result<Duration, UploadError> {
+        recovery.spend_lane("transport reset")?;
+        match recovery.engine.next_backoff(None) {
+            RetryDecision::GiveUp => Err(UploadError::RetriesExhausted(format!(
+                "transport reset unrecovered after {} retries: {reason}",
+                recovery.engine.policy().max_retries
+            ))),
+            RetryDecision::Retry { after } => {
+                tracing::debug!(offset, ?after, %reason, "mid-transfer reset — backing off, then reading HEAD");
+                self.emit_retried(
+                    request,
+                    session_id,
+                    offset,
+                    len,
+                    RetryReason::TransportReset {
+                        wait_ms: millis(after),
+                    },
+                );
+                Ok(after)
+            }
+        }
+    }
+
     fn emit_retried(
         &self,
         request: &CreateUploadRequest,
@@ -1495,28 +3103,6 @@ impl UploadClient {
             len,
             reason,
         });
-    }
-
-    /// Re-create a session and return its id, mapping a racing `duplicate_blob`
-    /// into a transport error the caller resolves as a merge one level up. A create
-    /// the server asks to wait is waited out under the transfer's recovery budget.
-    async fn recreate(
-        &self,
-        request: &CreateUploadRequest,
-        recovery: &mut Recovery,
-    ) -> Result<String, UploadError> {
-        match self.create_waiting(request, recovery).await? {
-            // The caller drives a re-created session from zero, so that is where it starts.
-            CreateOutcome::Created { response, .. } => {
-                self.emit_created(request, &response.id, 0);
-                Ok(response.id)
-            }
-            CreateOutcome::AlreadyStored { asset_ref } => Err(UploadError::Rejected {
-                status: 409,
-                code: Some(error_codes::UPLOAD_DUPLICATE_BLOB.to_string()),
-                message: format!("blob already stored as {asset_ref}"),
-            }),
-        }
     }
 }
 
@@ -1537,12 +3123,10 @@ fn guard_budget(recoveries: u32, action: &str) -> Result<(), UploadError> {
     }
 }
 
-/// Read an error response into `(code, message, headers)` — the headers for the window an
-/// upgrade refusal carries. Tolerates a non-JSON (plain-text) body — such responses simply
-/// carry no code.
-async fn read_error(
-    resp: reqwest::Response,
-) -> Result<(Option<String>, String, reqwest::header::HeaderMap), UploadError> {
+/// Read an error response into its code, message and headers — the headers for the window an
+/// upgrade refusal carries — and a `duplicate_blob`'s structured `existing_asset`. Tolerates a
+/// non-JSON (plain-text) body — such responses simply carry no code.
+async fn read_error(resp: reqwest::Response) -> Result<ErrorAnswer, UploadError> {
     let headers = resp.headers().clone();
     let text = resp.text().await?;
     match serde_json::from_str::<ApiErrorBody>(&text) {
@@ -1552,10 +3136,31 @@ async fn read_error(
             } else {
                 body.error
             };
-            Ok((body.code, message, headers))
+            Ok(ErrorAnswer {
+                code: body.code,
+                message,
+                headers,
+                existing_asset: body.existing_asset,
+            })
         }
-        Err(_) => Ok((None, text, headers)),
+        Err(_) => Ok(ErrorAnswer {
+            code: None,
+            message: text,
+            headers,
+            existing_asset: None,
+        }),
     }
+}
+
+/// The committed set an answer carries on `X-Capsule-Committed`, for a session of `size` bytes.
+/// Absent from an older server; a malformed one is ignored, never planned from.
+fn committed_of(headers: &reqwest::header::HeaderMap, size: u64) -> Option<CommittedSet> {
+    let raw = header_str(headers, "X-Capsule-Committed")?;
+    let parsed = CommittedSet::parse(&raw, size);
+    if parsed.is_none() {
+        tracing::warn!(header = %raw, size, "ignoring a malformed X-Capsule-Committed");
+    }
+    parsed
 }
 
 fn header_str(headers: &reqwest::header::HeaderMap, name: &str) -> Option<String> {
@@ -1567,6 +3172,17 @@ fn header_str(headers: &reqwest::header::HeaderMap, name: &str) -> Option<String
 
 fn header_u64(headers: &reqwest::header::HeaderMap, name: &str) -> Option<u64> {
     header_str(headers, name).and_then(|s| s.parse().ok())
+}
+
+/// The advice and the relative expiry a session create or `HEAD` carries, read leniently: a
+/// server that sends neither, or sends them malformed, leaves the client on its own defaults.
+fn advice_of(headers: &reqwest::header::HeaderMap) -> (ServerAdvice, SessionExpiry) {
+    let advice = ServerAdvice::parse(header_str(headers, advice::ADVICE_HEADER).as_deref());
+    let expiry = SessionExpiry::parse(
+        header_str(headers, advice::EXPIRES_IN_HEADER).as_deref(),
+        header_str(headers, advice::IDLE_EXPIRES_IN_HEADER).as_deref(),
+    );
+    (advice, expiry)
 }
 
 #[cfg(test)]

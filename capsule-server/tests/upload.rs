@@ -15,6 +15,7 @@ mod support;
 
 use std::time::{Duration, Instant};
 
+use capsule_server::upload::ChunkPace;
 use kynos::http::StatusCode;
 use support::{
     Fixture, PROTOCOL_VERSION, album, checksum, create_request, declare_bytes, device, owner,
@@ -68,7 +69,18 @@ async fn a_session_opens_and_says_where_to_send_bytes() {
         "an 8 KiB blob is in the smallest tier"
     );
     response.assert_header("location", &format!("/v1/upload/{id}"));
-    response.assert_header("x-capsule-suggested-chunk-size", "262144");
+    response.assert_header(
+        "x-capsule-advice",
+        "chunk=262144, sessions=4, ranges=1, ttl=300",
+    );
+    // A fresh session has the whole 24-hour cap and the whole one-hour survival floor, in
+    // seconds remaining rather than as an instant a skewed client clock would misread.
+    response.assert_header("x-capsule-session-expires-in", "86400");
+    response.assert_header("x-capsule-session-idle-expires-in", "3600");
+    assert!(
+        response.header("x-capsule-suggested-chunk-size").is_none(),
+        "the advice dictionary replaced the single-valued header"
+    );
 
     // The session the server actually opened, read from the store rather than from the body.
     let record = fixture
@@ -77,7 +89,7 @@ async fn a_session_opens_and_says_where_to_send_bytes() {
         .await
         .expect("the session is in the store");
     assert_eq!(record.total_size, whole.len() as u64);
-    assert_eq!(record.received_bytes, 0);
+    assert!(record.committed.ranges().is_empty());
     assert_eq!(record.expected_hash, checksum(&whole));
     assert_eq!(record.album_id.as_ref(), Some(&album()));
     assert_eq!(record.owner_id, owner());
@@ -114,6 +126,12 @@ async fn a_duplicate_create_returns_the_active_session_and_its_offset() {
         .await;
     response.assert_status(StatusCode::OK);
     response.assert_header("x-capsule-offset", "4096");
+    response.assert_header(
+        "x-capsule-advice",
+        "chunk=262144, sessions=4, ranges=1, ttl=300",
+    );
+    response.assert_header("x-capsule-session-expires-in", "86400");
+    response.assert_header("x-capsule-session-idle-expires-in", "3600");
 
     let body: serde_json::Value = response.json();
     assert_eq!(
@@ -442,18 +460,16 @@ async fn a_full_upload_finalizes_and_the_bytes_become_a_blob() {
     let ack = fixture.chunk(&id, 0, &first, &bearer).send().await;
     ack.assert_status(StatusCode::NO_CONTENT);
     ack.assert_header("x-capsule-offset", "4096");
+    ack.assert_header("x-capsule-upload-status", "uploading");
 
+    // The completing chunk is answered once it holds the claim, not once finalization ends.
     let done = fixture.chunk(&id, 4096, &second, &bearer).send().await;
     done.assert_status(StatusCode::NO_CONTENT);
     done.assert_header("x-capsule-offset", "8192");
+    done.assert_header("x-capsule-upload-status", "waiting_for_processing");
 
     // The session is terminal and successful…
-    let record = fixture
-        .uploads
-        .read_for_test(&id)
-        .await
-        .expect("the session survives as a receipt");
-    assert_eq!(record.status.as_str(), "completed");
+    assert_eq!(terminal_status(&fixture, &id).await, "completed");
 
     // …the stage is gone…
     assert_eq!(fixture.blobs.staged_len_for_test(&id).await, None);
@@ -548,10 +564,8 @@ async fn a_manifest_whose_signature_does_not_verify_under_its_signer_is_refused(
         .send()
         .await
         .assert_status(StatusCode::NO_CONTENT);
-    let refused = fixture.chunk(&id, 4096, &second, &bearer).send().await;
-    refused.assert_status(StatusCode::BAD_REQUEST);
     assert_eq!(
-        code(&refused.json::<serde_json::Value>()),
+        refused_at_finalization(&fixture, &bearer, &id, 4096, &second).await,
         "error.upload.envelope_rejected"
     );
     assert_eq!(fixture.blobs.blob_for_test(&checksum(&forged)).await, None);
@@ -582,10 +596,8 @@ async fn bytes_that_are_not_a_signed_manifest_are_refused_as_a_provenance_blob()
         .send()
         .await
         .assert_status(StatusCode::NO_CONTENT);
-    let refused = fixture.chunk(&id, 4096, &second, &bearer).send().await;
-    refused.assert_status(StatusCode::BAD_REQUEST);
     assert_eq!(
-        code(&refused.json::<serde_json::Value>()),
+        refused_at_finalization(&fixture, &bearer, &id, 4096, &second).await,
         "error.upload.envelope_rejected"
     );
 }
@@ -603,10 +615,8 @@ async fn a_manifest_naming_a_revoked_device_is_refused() {
         .await
         .assert_status(StatusCode::NO_CONTENT);
     fixture.authority.revoke_device(&user(), device());
-    let refused = fixture.chunk(&id, 4096, &second, &bearer).send().await;
-    refused.assert_status(StatusCode::BAD_REQUEST);
     assert_eq!(
-        code(&refused.json::<serde_json::Value>()),
+        refused_at_finalization(&fixture, &bearer, &id, 4096, &second).await,
         "error.upload.envelope_rejected"
     );
     assert_eq!(fixture.blobs.blob_for_test(&checksum(&whole)).await, None);
@@ -723,10 +733,8 @@ async fn a_create_below_the_albums_epoch_is_refused_at_finalization() {
         .send()
         .await
         .assert_status(StatusCode::NO_CONTENT);
-    let refused = fixture.chunk(&id, 4096, &second, &bearer).send().await;
-    refused.assert_status(StatusCode::BAD_REQUEST);
     assert_eq!(
-        code(&refused.json::<serde_json::Value>()),
+        refused_at_finalization(&fixture, &bearer, &id, 4096, &second).await,
         "error.upload.envelope_rejected"
     );
 
@@ -1185,16 +1193,32 @@ async fn every_chunk_rule_is_refused_with_its_status_and_code() {
         "error.upload.unsupported_media_type"
     );
 
-    // A gapped offset names the authoritative one.
+    // An offset off the 4 KiB grid, even for the range that ends the blob.
+    let response = fixture
+        .chunk(&id, 100, &second[100..], &bearer)
+        .send()
+        .await;
+    response.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(
+        code(&response.json::<serde_json::Value>()),
+        "error.upload.chunk_not_aligned"
+    );
+
+    // A range past a gap commits where it lies: the prefix stays at zero, and the set says so.
     let response = fixture.chunk(&id, 4096, &second, &bearer).send().await;
-    response.assert_status(StatusCode::CONFLICT);
-    let body: serde_json::Value = response.json();
-    assert_eq!(code(&body), "error.upload.offset_mismatch");
-    assert_eq!(body["offset"], 0, "the offset to resume from");
+    response.assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(response.header("x-capsule-offset"), Some("0"));
+    assert_eq!(response.header("x-capsule-committed"), Some("4096-8191"));
+    assert_eq!(
+        response.header("x-capsule-upload-status"),
+        Some("uploading")
+    );
 }
 
+/// A committed range sent again is a duplicate whatever its bytes: nothing is written, nothing
+/// compared, and a committed byte is never touched (transfer/upload.md, admission).
 #[tokio::test]
-async fn the_same_offset_with_different_bytes_is_a_conflict() {
+async fn a_committed_range_sent_again_writes_nothing_whatever_its_bytes() {
     let fixture = Fixture::working();
     let bearer = fixture.bearer().await;
     let (first, second, whole) = blob();
@@ -1206,12 +1230,54 @@ async fn the_same_offset_with_different_bytes_is_a_conflict() {
         .await
         .assert_status(StatusCode::NO_CONTENT);
 
-    // Offset 0 again, with different bytes: a client retrying with garbage, not a replay.
+    // Offset 0 again, with different bytes: answered as the duplicate it is, and dropped.
     let response = fixture.chunk(&id, 0, &second, &bearer).send().await;
-    response.assert_status(StatusCode::CONFLICT);
+    response.assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(response.header("x-capsule-offset"), Some("4096"));
+    assert_eq!(response.header("x-capsule-committed"), Some("0-4095"));
+
+    // The rest lands, and the blob finalizes from the bytes that first committed.
+    fixture
+        .chunk(&id, 4096, &second, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
     assert_eq!(
-        code(&response.json::<serde_json::Value>()),
-        "error.upload.chunk_conflict"
+        terminal_status(&fixture, &id).await,
+        "completed",
+        "the duplicate's bytes never reached the stage"
+    );
+}
+
+/// A range that is partly committed is refused with the set to re-plan from, on the body and on
+/// `X-Capsule-Committed`, and writes nothing; it carries no wait, because nothing is in flight.
+#[tokio::test]
+async fn a_partly_committed_range_is_a_range_conflict_carrying_the_committed_set() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, _, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    let response = fixture.chunk(&id, 0, &whole, &bearer).send().await;
+    response.assert_status(StatusCode::CONFLICT);
+    assert_eq!(response.header("x-capsule-committed"), Some("0-4095"));
+    assert!(
+        response.header("retry-after").is_none(),
+        "a conflict with committed bytes is not waited out"
+    );
+    let body: serde_json::Value = response.json();
+    assert_eq!(code(&body), "error.upload.range_conflict");
+    assert_eq!(body["committed"], "0-4095");
+    assert_eq!(
+        fixture.blobs.staged_len_for_test(&id).await,
+        Some(4096),
+        "nothing of the refused range was written"
     );
 }
 
@@ -1306,7 +1372,11 @@ async fn a_foreign_session_is_indistinguishable_from_an_unknown_one() {
         let never = ask(unknown).send().await;
         foreign.assert_status(StatusCode::NOT_FOUND);
         never.assert_status(StatusCode::NOT_FOUND);
-        assert_eq!(foreign.bytes(), never.bytes(), "{method} tells them apart");
+        assert_eq!(
+            support::masked_request_id(foreign.bytes()),
+            support::masked_request_id(never.bytes()),
+            "{method} tells them apart"
+        );
         if method != "HEAD" {
             assert_eq!(
                 code(&foreign.json::<serde_json::Value>()),
@@ -1389,10 +1459,8 @@ async fn bytes_that_do_not_hash_to_the_declaration_fail_the_session() {
         .assert_status(StatusCode::NO_CONTENT);
 
     let substituted = payload(b'z', 4096);
-    let response = fixture.chunk(&id, 4096, &substituted, &bearer).send().await;
-    response.assert_status(StatusCode::BAD_REQUEST);
     assert_eq!(
-        code(&response.json::<serde_json::Value>()),
+        refused_at_finalization(&fixture, &bearer, &id, 4096, &substituted).await,
         "error.upload.content_hash_mismatch"
     );
 
@@ -1423,10 +1491,8 @@ async fn finalization_re_checks_the_envelope_against_the_present() {
     // directory that carried it; finalization must not.
     fixture.authority.revoke_device(&support::user(), device());
 
-    let response = fixture.chunk(&id, 4096, &second, &bearer).send().await;
-    response.assert_status(StatusCode::BAD_REQUEST);
     assert_eq!(
-        code(&response.json::<serde_json::Value>()),
+        refused_at_finalization(&fixture, &bearer, &id, 4096, &second).await,
         "error.upload.envelope_rejected"
     );
     assert_eq!(
@@ -1450,10 +1516,8 @@ async fn a_closed_album_stops_a_transfer_that_was_already_in_flight() {
         .assert_status(StatusCode::NO_CONTENT);
     fixture.authority.close_album(&owner(), &album());
 
-    let response = fixture.chunk(&id, 4096, &second, &bearer).send().await;
-    response.assert_status(StatusCode::BAD_REQUEST);
     assert_eq!(
-        code(&response.json::<serde_json::Value>()),
+        refused_at_finalization(&fixture, &bearer, &id, 4096, &second).await,
         "error.upload.envelope_rejected"
     );
 }
@@ -1479,10 +1543,8 @@ async fn unsharing_a_member_stops_a_transfer_that_was_already_in_flight() {
         .authority
         .unshare(&album(), &capsule_server::store::UserId::new(BOB));
 
-    let response = fixture.chunk(&id, 4096, &second, &bearer).send().await;
-    response.assert_status(StatusCode::BAD_REQUEST);
     assert_eq!(
-        code(&response.json::<serde_json::Value>()),
+        refused_at_finalization(&fixture, &bearer, &id, 4096, &second).await,
         "error.upload.envelope_rejected"
     );
     assert_eq!(
@@ -1514,6 +1576,52 @@ async fn losing_the_finalize_claim_is_a_race_rather_than_a_failure() {
     let response = fixture.chunk(&id, 4096, &second, &bearer).send().await;
     response.assert_status(StatusCode::NO_CONTENT);
     response.assert_header("x-capsule-offset", "8192");
+    response.assert_header("x-capsule-upload-status", "waiting_for_processing");
+}
+
+/// The completing `PATCH` and `HEAD` are answered within a bound that does not depend on the
+/// blob: a re-hash that never ends — a stage whose every read is parked — holds up neither, and
+/// the finalization they started still reaches `Completed` once the disk answers.
+#[tokio::test]
+async fn neither_the_completing_chunk_nor_head_waits_for_the_re_hash() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    // Every read of the stage parks: the re-hash is as slow as a 4 GiB blob on a slow disk.
+    let hold = fixture.blobs.hold_staged_reads();
+    let bound = Duration::from_secs(5);
+    let done = tokio::time::timeout(bound, fixture.chunk(&id, 4096, &second, &bearer).send())
+        .await
+        .expect("the completing chunk is answered while the re-hash is parked");
+    done.assert_status(StatusCode::NO_CONTENT);
+    done.assert_header("x-capsule-upload-status", "waiting_for_processing");
+    tokio::time::timeout(bound, hold.entered.notified())
+        .await
+        .expect("the detached finalization reached the re-hash");
+
+    let polled = tokio::time::timeout(bound, head(&fixture, &bearer, &id))
+        .await
+        .expect("HEAD is answered while the re-hash is parked");
+    polled.assert_status(StatusCode::OK);
+    polled.assert_header("x-capsule-offset", "8192");
+    polled.assert_header("x-capsule-upload-status", "waiting_for_processing");
+    assert_eq!(polled.header("x-capsule-upload-error"), None);
+
+    // The disk answers; the finalization nobody is waiting on finishes.
+    // One permit is enough: each parked read gives it back as it goes on.
+    hold.release.add_permits(1);
+    assert_eq!(terminal_status(&fixture, &id).await, "completed");
+    head(&fixture, &bearer, &id)
+        .await
+        .assert_header("x-capsule-upload-status", "completed");
+    assert_indexed_and_durable(&fixture, &bearer, &whole).await;
 }
 
 #[tokio::test]
@@ -1523,8 +1631,8 @@ async fn an_acknowledged_chunk_that_did_not_land_is_the_servers_inconsistency() 
     let (first, second, whole) = blob();
     let id = fixture.open_session(&whole, "original", &bearer).await;
 
-    // A crash between the durable append and the counter that records it: the acknowledgement
-    // stands, the bytes do not.
+    // The range is recorded and acknowledged, and the stage under it is lost: the committed set
+    // names bytes the server no longer holds, and no re-send can bring them back.
     fixture.blobs.swallow_next_append();
     fixture
         .chunk(&id, 0, &first, &bearer)
@@ -1534,9 +1642,18 @@ async fn an_acknowledged_chunk_that_did_not_land_is_the_servers_inconsistency() 
 
     let response = fixture.chunk(&id, 4096, &second, &bearer).send().await;
     response.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        response.header("retry-after").is_none(),
+        "a failure a retry cannot repair is never told to wait"
+    );
     assert_eq!(
         code(&response.json::<serde_json::Value>()),
         "error.upload.storage_inconsistent"
+    );
+    assert_eq!(
+        fixture.blobs.staged_len_for_test(&id).await,
+        None,
+        "and the write recreated no stage"
     );
 }
 
@@ -1563,13 +1680,23 @@ async fn head_reports_the_authoritative_offset_and_state() {
     before.assert_header("x-capsule-content-length", "8192");
     before.assert_header("x-capsule-upload-status", "pending");
     before.assert_header("cache-control", "no-store");
+    before.assert_header(
+        "x-capsule-advice",
+        "chunk=262144, sessions=4, ranges=1, ttl=300",
+    );
+    before.assert_header("x-capsule-session-expires-in", "86400");
+    before.assert_header("x-capsule-session-idle-expires-in", "3600");
     assert!(before.bytes().is_empty(), "a HEAD carries no body");
 
+    // Time passes before the first chunk: the cap counts down from creation, and the floor
+    // restarts from the chunk.
+    fixture.clock.advance(jiff::SignedDuration::from_secs(600));
     fixture
         .chunk(&id, 0, &first, &bearer)
         .send()
         .await
         .assert_status(StatusCode::NO_CONTENT);
+    fixture.clock.advance(jiff::SignedDuration::from_secs(60));
 
     let after = fixture
         .client
@@ -1580,6 +1707,8 @@ async fn head_reports_the_authoritative_offset_and_state() {
         .await;
     after.assert_header("x-capsule-offset", "4096");
     after.assert_header("x-capsule-upload-status", "uploading");
+    after.assert_header("x-capsule-session-expires-in", "85740");
+    after.assert_header("x-capsule-session-idle-expires-in", "3540");
 }
 
 #[tokio::test]
@@ -1762,8 +1891,11 @@ async fn a_full_disk_at_creation_is_a_507_that_leaves_no_session() {
         .assert_status(StatusCode::CREATED);
 }
 
+/// A crash between a range's fsync and its record leaves bytes on the stage that the committed
+/// set does not cover. They are garbage: the client, never acknowledged, sends the range again,
+/// and it lands over them.
 #[tokio::test]
-async fn a_stage_left_ahead_of_its_session_is_cut_back_rather_than_wedging_it() {
+async fn a_range_written_but_never_recorded_is_simply_sent_again() {
     use capsule_server::blob::BlobStore as _;
 
     let fixture = Fixture::working();
@@ -1771,19 +1903,21 @@ async fn a_stage_left_ahead_of_its_session_is_cut_back_rather_than_wedging_it() 
     let (first, second, whole) = blob();
     let id = fixture.open_session(&whole, "original", &bearer).await;
 
-    // An append that landed and whose acknowledgement was lost before the session recorded it:
-    // the stage is a chunk ahead of the counter.
+    // Garbage where the first range belongs — a write that died mid-way, never recorded.
     fixture
         .blobs
-        .append(
+        .write_staged(
             &capsule_server::store::UploadId::new(id.as_str()),
             0,
-            &first,
+            &payload(b'z', 4096),
         )
         .await
         .expect("the stage takes the bytes");
+    let head = head(&fixture, &bearer, &id).await;
+    head.assert_header("x-capsule-offset", "0");
+    head.assert_header("x-capsule-committed", "");
 
-    // The client, never having been acknowledged, sends the chunk again at the counter.
+    // The client, never having been acknowledged, sends the range again.
     fixture
         .chunk(&id, 0, &first, &bearer)
         .send()
@@ -1805,54 +1939,212 @@ async fn a_stage_left_ahead_of_its_session_is_cut_back_rather_than_wedging_it() 
     );
 }
 
+/// Two requests for one range never write it at once. A range overlapping one in flight is a
+/// `range_conflict` with `Retry-After` at once, and writes nothing; a re-send of exactly the
+/// range in flight — the lost acknowledgement a current client re-sends after — waits for the
+/// first attempt and is answered as the duplicate it then is.
 #[tokio::test]
-async fn concurrent_chunks_at_one_offset_land_exactly_once() {
+async fn a_range_sent_while_it_is_in_flight_waits_or_conflicts() {
     let fixture = Fixture::working();
     let bearer = fixture.bearer().await;
     let (first, _, whole) = blob();
     let id = fixture.open_session(&whole, "original", &bearer).await;
 
-    // Park the first append inside the blob store, so the second request arrives while the
-    // first holds the session — the interleaving an un-serialised append raced on.
+    // Park the first write inside the blob store, so the later requests arrive while the
+    // first holds its claim.
+    let hold = fixture.blobs.hold_appends();
+    let racing = async {
+        let one = fixture.chunk(&id, 0, &first, &bearer).send();
+        let rest = async {
+            hold.entered.notified().await;
+            let overlap = fixture.chunk(&id, 0, &whole, &bearer).send().await;
+            let resend = fixture.chunk(&id, 0, &first, &bearer).send();
+            let release = async {
+                assert!(
+                    tokio::time::timeout(
+                        std::time::Duration::from_millis(50),
+                        hold.entered.notified()
+                    )
+                    .await
+                    .is_err(),
+                    "neither later request reached the blob store"
+                );
+                hold.release.add_permits(1);
+            };
+            let (resend, ()) = tokio::join!(resend, release);
+            (overlap, resend)
+        };
+        tokio::join!(one, rest)
+    };
+    let (one, (overlap, resend)) = racing.await;
+    one.assert_status(StatusCode::NO_CONTENT);
+    one.assert_header("x-capsule-offset", "4096");
+
+    overlap.assert_status(StatusCode::CONFLICT);
+    overlap.assert_header("x-capsule-committed", "");
+    assert!(
+        overlap.header("retry-after").is_some(),
+        "a conflict with a range in flight is waited out"
+    );
+    let body: serde_json::Value = overlap.json();
+    assert_eq!(code(&body), "error.upload.range_conflict");
+
+    resend.assert_status(StatusCode::NO_CONTENT);
+    resend.assert_header("x-capsule-committed", "0-4095");
+    assert_eq!(
+        fixture.blobs.staged_len_for_test(&id).await,
+        Some(4096),
+        "the range was written exactly once"
+    );
+}
+
+/// A session's in-flight cap is fixed at creation and advertised as `ranges`; one range more,
+/// even a disjoint one, is `too_many_in_flight` with `Retry-After`, and writes nothing.
+#[tokio::test]
+async fn a_range_past_the_in_flight_cap_is_refused_with_a_wait() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    let head = head(&fixture, &bearer, &id).await;
+    assert!(
+        head.header("x-capsule-advice")
+            .is_some_and(|advice| advice.contains("ranges=1")),
+        "a new session is advertised its cap of one"
+    );
+
     let hold = fixture.blobs.hold_appends();
     let racing = async {
         let one = fixture.chunk(&id, 0, &first, &bearer).send();
         let two = async {
             hold.entered.notified().await;
-            let second = fixture.chunk(&id, 0, &first, &bearer).send();
-            tokio::pin!(second);
-            // Give the second request every chance to reach the store before the first lands.
-            assert!(
-                tokio::time::timeout(std::time::Duration::from_millis(50), &mut second)
-                    .await
-                    .is_err(),
-                "the second chunk waits for the first rather than racing it"
-            );
-            assert!(
-                tokio::time::timeout(
-                    std::time::Duration::from_millis(50),
-                    hold.entered.notified()
-                )
-                .await
-                .is_err(),
-                "and it waits before the blob store, not inside it"
-            );
-            hold.release.add_permits(2);
-            second.await
+            let refused = fixture.chunk(&id, 4096, &second, &bearer).send().await;
+            hold.release.add_permits(1);
+            refused
         };
         tokio::join!(one, two)
     };
     let (one, two) = racing.await;
     one.assert_status(StatusCode::NO_CONTENT);
-    one.assert_header("x-capsule-offset", "4096");
-    two.assert_status(StatusCode::NO_CONTENT);
-    two.assert_header("x-capsule-offset", "4096");
-
-    assert_eq!(
-        fixture.blobs.staged_len_for_test(&id).await,
-        Some(4096),
-        "the second chunk was answered as the replay it is, and wrote nothing"
+    two.assert_status(StatusCode::CONFLICT);
+    assert!(two.header("retry-after").is_some());
+    assert!(
+        two.header("x-capsule-committed").is_none(),
+        "only a range conflict carries the set"
     );
+    assert_eq!(code(&two.json()), "error.upload.too_many_in_flight");
+
+    hold.release.add_permits(8);
+    fixture
+        .chunk(&id, 4096, &second, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(terminal_status(&fixture, &id).await, "completed");
+}
+
+/// The committed set holds at most 64 fragments: a range that would make a 65th is
+/// `too_fragmented` and writes nothing, while a range that fills a gap is still admitted.
+#[tokio::test]
+async fn a_range_past_the_fragment_bound_is_refused_and_a_gap_fill_is_not() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let blocks = 130;
+    let whole = payload(b'f', blocks * CHUNK);
+    let block = |index: usize| &whole[index * CHUNK..(index + 1) * CHUNK];
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+
+    // Every other block: 64 fragments, with a gap after each.
+    for index in (0..128).step_by(2) {
+        fixture
+            .chunk(&id, (index * CHUNK) as u64, block(index), &bearer)
+            .send()
+            .await
+            .assert_status(StatusCode::NO_CONTENT);
+    }
+    let refused = fixture
+        .chunk(&id, (129 * CHUNK) as u64, block(129), &bearer)
+        .send()
+        .await;
+    refused.assert_status(StatusCode::CONFLICT);
+    assert!(
+        refused.header("retry-after").is_none(),
+        "nothing is in flight, so there is nothing to wait out"
+    );
+    assert_eq!(code(&refused.json()), "error.upload.too_fragmented");
+
+    let filled = fixture
+        .chunk(&id, CHUNK as u64, block(1), &bearer)
+        .send()
+        .await;
+    filled.assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(filled.header("x-capsule-offset"), Some("12288"));
+    assert_eq!(
+        filled
+            .header("x-capsule-committed")
+            .map(|set| set.split(',').count()),
+        Some(63),
+        "a gap fill joins two fragments into one"
+    );
+}
+
+/// A claim is released only once its write has returned, whether or not the request that took
+/// it is still there: a client that gives up on a slow write and retries is refused until that
+/// write lands, so the abandoned write can never overwrite the retry. The retry waits the
+/// server's bound for that write first; time is paused so the bound passes at once.
+#[tokio::test(start_paused = true)]
+async fn an_abandoned_write_keeps_its_claim_until_it_returns() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+
+    let hold = fixture.blobs.hold_appends();
+    {
+        // The client's request reaches the blob store, and the client gives up on it.
+        let abandoned = fixture.chunk(&id, 0, &first, &bearer).send();
+        tokio::pin!(abandoned);
+        tokio::select! {
+            _ = &mut abandoned => panic!("the write is parked; the request cannot finish"),
+            () = hold.entered.notified() => {}
+        }
+    }
+
+    // Its retry, with the same range, finds the claim still held by the write nobody awaits,
+    // and still held once the wait for it is over.
+    let retry = fixture.chunk(&id, 0, &first, &bearer).send().await;
+    retry.assert_status(StatusCode::CONFLICT);
+    assert_eq!(code(&retry.json()), "error.upload.range_conflict");
+    assert!(retry.header("retry-after").is_some());
+
+    // The abandoned write returns, records, and releases its claim.
+    hold.release.add_permits(1);
+    let settled = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let record = fixture
+                .uploads
+                .read_for_test(&id)
+                .await
+                .expect("the session is live");
+            if record.committed.prefix() == 4096 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert!(settled.is_ok(), "the abandoned write ran to its record");
+
+    // From here the retry is the duplicate it is, and the session finishes normally.
+    hold.release.add_permits(8);
+    let again = fixture.chunk(&id, 0, &first, &bearer).send().await;
+    again.assert_status(StatusCode::NO_CONTENT);
+    fixture
+        .chunk(&id, 4096, &second, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(terminal_status(&fixture, &id).await, "completed");
 }
 
 #[tokio::test]
@@ -2120,24 +2412,24 @@ async fn finalization_crash_between_rename_and_commit_leaves_no_dangling_referen
         .await
         .assert_status(StatusCode::NO_CONTENT);
 
-    // The last chunk completes the declared size, so this request is the one that finalizes.
+    // The last chunk completes the declared size, so this request is the one that claims
+    // finalization. The index call fails inside the detached finalization, never in the request.
     fixture.index_fault.arm();
-    let crashed = fixture.chunk(&id, 4096, &second, &bearer).send().await;
-    crashed.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    let accepted = fixture.chunk(&id, 4096, &second, &bearer).send().await;
+    accepted.assert_status(StatusCode::NO_CONTENT);
+    accepted.assert_header("x-capsule-upload-status", "waiting_for_processing");
+
+    // 1. Terminal and failed. A claimed session that is never driven anywhere is the state the
+    //    finalization state machine exists to make unreachable.
+    assert_eq!(terminal_status(&fixture, &id).await, "failed_processing");
     assert_eq!(
         fixture.index_fault.fired(),
         1,
         "the fault never fired, so everything below is describing an ordinary upload"
     );
-
-    // 1. Terminal and failed. A claimed session that is never driven anywhere is the state the
-    //    finalization state machine exists to make unreachable.
-    let record = fixture
-        .uploads
-        .read_for_test(&id)
+    head(&fixture, &bearer, &id)
         .await
-        .expect("the session survives as a receipt");
-    assert_eq!(record.status.as_str(), "failed_processing");
+        .assert_header("x-capsule-upload-error", "error.upload.unavailable");
 
     // 2. Custody was taken: the rename happened before the index call that was lost.
     assert_eq!(
@@ -2290,6 +2582,56 @@ async fn terminal_status(fixture: &Fixture, id: &str) -> &'static str {
     .expect("a claimed session reaches a terminal status")
 }
 
+/// Send the chunk that completes `id`, whose finalization is going to refuse it, and return the
+/// `error.*` code `HEAD` reports for it.
+///
+/// The completing chunk is accepted — `204`, `waiting_for_processing` — because it never waits
+/// for finalization. The refusal is read the way a client reads it: from `HEAD` once the session
+/// is terminal, in `X-Capsule-Upload-Error`, and from the session list.
+async fn refused_at_finalization(
+    fixture: &Fixture,
+    bearer: &str,
+    id: &str,
+    offset: u64,
+    chunk: &[u8],
+) -> String {
+    let accepted = fixture.chunk(id, offset, chunk, bearer).send().await;
+    accepted.assert_status(StatusCode::NO_CONTENT);
+    accepted.assert_header("x-capsule-upload-status", "waiting_for_processing");
+    assert_eq!(terminal_status(fixture, id).await, "failed_processing");
+
+    let reported = head(fixture, bearer, id).await;
+    reported.assert_status(StatusCode::OK);
+    reported.assert_header("x-capsule-upload-status", "failed_processing");
+    let code = reported
+        .header("x-capsule-upload-error")
+        .expect("a failed session names why")
+        .to_owned();
+
+    let listed: serde_json::Value = fixture
+        .client
+        .get("/v1/upload/sessions")
+        .header("authorization", bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    let session = listed["sessions"]
+        .as_array()
+        .expect("a session list")
+        .iter()
+        .find(|session| session["id"] == id)
+        .expect("the failed session is listed");
+    assert_eq!(session["status"], "failed_processing");
+    assert_eq!(
+        session["error_code"].as_str(),
+        Some(code.as_str()),
+        "the list carries the code HEAD does"
+    );
+    code
+}
+
 /// The default asset's original is indexed at `whole`'s address, and `/storage/verify` says the
 /// server durably holds it — the two facts a client converging on its upload reads.
 async fn assert_indexed_and_durable(fixture: &Fixture, bearer: &str, whole: &[u8]) {
@@ -2341,19 +2683,18 @@ async fn a_client_that_disconnects_mid_finalize_does_not_strand_its_session() {
         .await
         .assert_status(StatusCode::NO_CONTENT);
 
-    // The last chunk claims finalization; park it after its commit has landed, then drop the
-    // request there — the client went away between the commit and the index write.
+    // The last chunk claims finalization and is answered at once; its finalization is parked
+    // after its commit has landed, with nobody left waiting on it — the client is gone between
+    // the commit and the index write.
     let hold = fixture.blobs.hold_commits();
-    {
-        let finalizing = fixture.chunk(&id, 4096, &second, &bearer).send();
-        tokio::pin!(finalizing);
-        tokio::select! {
-            response = &mut finalizing => {
-                panic!("the request answered before its commit was parked: {}", response.status());
-            }
-            () = hold.entered.notified() => {}
-        }
-    }
+    let answered = fixture.chunk(&id, 4096, &second, &bearer).send().await;
+    answered.assert_status(StatusCode::NO_CONTENT);
+    answered.assert_header("x-capsule-upload-status", "waiting_for_processing");
+    drop(answered);
+    tokio::time::timeout(Duration::from_secs(10), hold.entered.notified())
+        .await
+        .expect("the detached finalization reaches its commit");
+
     assert_eq!(
         fixture.blobs.staged_len_for_test(&id).await,
         None,
@@ -2405,27 +2746,26 @@ async fn strand(fixture: &Fixture, id: &str, second: &[u8], whole: &[u8], commit
 /// the session is left full and unclaimed, as a request lost before its claim leaves it.
 async fn record_last_chunk(fixture: &Fixture, id: &str, second: &[u8]) {
     use capsule_server::blob::BlobStore as _;
-    use capsule_server::store::{AcceptedChunk, Clock as _, UploadId, UploadSessionStore as _};
+    use capsule_server::store::{Clock as _, CommittedRange, UploadId, UploadSessionStore as _};
 
     let upload = UploadId::new(id);
     fixture
         .blobs
-        .append(&upload, 4096, second)
+        .write_staged(&upload, 4096, second)
         .await
-        .expect("the stage appends");
+        .expect("the stage takes the range");
     fixture
         .uploads
-        .record_progress(
+        .record_range(
             &upload,
-            AcceptedChunk {
-                offset: 4096,
-                chunk_hash: checksum(second),
-                next_offset: 8192,
+            CommittedRange {
+                start: 4096,
+                end: 8192,
                 accepted_at: fixture.clock.now(),
             },
         )
         .await
-        .expect("the store records progress")
+        .expect("the store records the range")
         .expect("the session is live");
 }
 
@@ -2447,7 +2787,7 @@ async fn a_full_session_nobody_finalized_is_finalized_by_the_replay_of_its_last_
         .await
         .expect("the session is live");
     assert_eq!(
-        (stranded.received_bytes, stranded.status.as_str()),
+        (stranded.committed.prefix(), stranded.status.as_str()),
         (8192, "uploading"),
         "full, and nobody has claimed its finalization"
     );
@@ -2482,7 +2822,7 @@ async fn a_replay_on_a_session_still_short_of_its_size_finalizes_nothing() {
         .await
         .expect("the session is live");
     assert_eq!(
-        (record.received_bytes, record.status.as_str()),
+        (record.committed.prefix(), record.status.as_str()),
         (4096, "uploading"),
         "a replay mid-upload claims nothing"
     );
@@ -2550,16 +2890,21 @@ async fn a_duplicate_create_finalizes_a_full_session_nobody_claimed() {
     let response = create_again(&fixture, &bearer, &whole).await;
     response.assert_status(StatusCode::OK);
     response.assert_header("x-capsule-offset", "8192");
+    // Started, never awaited: the answer is the claimed session as it stands.
+    response.assert_header("x-capsule-upload-status", "waiting_for_processing");
+    // The expiry is the claimed session's: a claimed session is never discarded under pressure
+    // and lives to the cap, so the idle count is the cap's, not the survival floor's.
+    let expires_in = response
+        .header("x-capsule-session-expires-in")
+        .expect("the cap is stated")
+        .to_owned();
+    assert_ne!(expires_in, "3600", "the cap, not the floor");
+    response.assert_header("x-capsule-session-idle-expires-in", &expires_in);
     let body: serde_json::Value = response.json();
     assert_eq!(body["id"].as_str(), Some(id.as_str()), "the same session");
 
-    // Finished before the answer, with no chunk replayed.
-    let record = fixture
-        .uploads
-        .read_for_test(&id)
-        .await
-        .expect("the session survives as a receipt");
-    assert_eq!(record.status.as_str(), "completed");
+    // Finished after the answer, with no chunk replayed.
+    assert_eq!(terminal_status(&fixture, &id).await, "completed");
     assert_indexed_and_durable(&fixture, &bearer, &whole).await;
 
     // Asked again, the bytes are held: the finalized tuple is the duplicate it always was.
@@ -2575,17 +2920,26 @@ async fn head_finalizes_a_full_session_nobody_claimed_and_reports_it_completed()
     let (first, second, whole) = blob();
     let id = leave_full_and_unclaimed(&fixture, &bearer, &first, &second, &whole).await;
 
+    // HEAD takes the claim and answers the state as it stands; it never waits for the outcome.
     let response = head(&fixture, &bearer, &id).await;
     response.assert_status(StatusCode::OK);
     response.assert_header("x-capsule-offset", "8192");
     response.assert_header("x-capsule-content-length", "8192");
-    response.assert_header("x-capsule-upload-status", "completed");
+    response.assert_header("x-capsule-upload-status", "waiting_for_processing");
+    assert_eq!(response.header("x-capsule-upload-error"), None);
+
+    // The client polls; the finalization HEAD started reaches its end without it.
+    assert_eq!(terminal_status(&fixture, &id).await, "completed");
     assert_indexed_and_durable(&fixture, &bearer, &whole).await;
 
-    // A second HEAD reads the terminal state and finalizes nothing twice.
-    head(&fixture, &bearer, &id)
-        .await
-        .assert_header("x-capsule-upload-status", "completed");
+    // A later HEAD reads the terminal state and finalizes nothing twice.
+    let settled = head(&fixture, &bearer, &id).await;
+    settled.assert_header("x-capsule-upload-status", "completed");
+    assert_eq!(
+        settled.header("x-capsule-upload-error"),
+        None,
+        "a completed session carries no failure code"
+    );
 }
 
 #[tokio::test]
@@ -2598,7 +2952,14 @@ async fn head_reports_a_full_session_whose_bytes_do_not_hash_as_failed() {
 
     head(&fixture, &bearer, &id)
         .await
-        .assert_header("x-capsule-upload-status", "failed_processing");
+        .assert_header("x-capsule-upload-status", "waiting_for_processing");
+    assert_eq!(terminal_status(&fixture, &id).await, "failed_processing");
+    let failed = head(&fixture, &bearer, &id).await;
+    failed.assert_header("x-capsule-upload-status", "failed_processing");
+    failed.assert_header(
+        "x-capsule-upload-error",
+        "error.upload.content_hash_mismatch",
+    );
     assert_eq!(
         fixture.blobs.staged_len_for_test(&id).await,
         None,
@@ -2615,12 +2976,24 @@ async fn a_duplicate_create_whose_full_session_will_not_finalize_opens_a_fresh_o
     let id =
         leave_full_and_unclaimed(&fixture, &bearer, &first, &payload(b'x', 4096), &whole).await;
 
+    // The duplicate create starts the finalization and hands the claimed session back.
+    let response = create_again(&fixture, &bearer, &whole).await;
+    response.assert_status(StatusCode::OK);
+    response.assert_header("x-capsule-upload-status", "waiting_for_processing");
+    let body: serde_json::Value = response.json();
+    assert_eq!(body["id"].as_str(), Some(id.as_str()));
+    assert_eq!(terminal_status(&fixture, &id).await, "failed_processing");
+    head(&fixture, &bearer, &id).await.assert_header(
+        "x-capsule-upload-error",
+        "error.upload.content_hash_mismatch",
+    );
+
+    // Refused, the session is terminal, so the client's next create opens a fresh one.
     let response = create_again(&fixture, &bearer, &whole).await;
     response.assert_status(StatusCode::CREATED);
     let body: serde_json::Value = response.json();
     let fresh = body["id"].as_str().expect("a session id").to_owned();
     assert_ne!(fresh, id, "the refused session is not handed back");
-    assert_eq!(terminal_status(&fixture, &id).await, "failed_processing");
 
     // The client sends its bytes again, and they land.
     let (first, second, _) = blob();
@@ -2783,6 +3156,104 @@ async fn a_claim_whose_process_died_before_its_commit_is_recovered_at_boot() {
     assert_indexed_and_durable(&fixture, &bearer, &whole).await;
 }
 
+/// A finalizer whose reservation was swept before its commit, and whose ledger then cannot
+/// charge the committed bytes, leaves the session claimed rather than `Completed` with the
+/// bytes charged to nobody; the re-driven claim charges them and completes (#1059).
+#[tokio::test]
+async fn a_completion_whose_bytes_cannot_be_charged_stays_claimed_until_they_are() {
+    use capsule_server::blob::ContentAddress;
+    use capsule_server::quota::QuotaStore as _;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    strand(&fixture, &id, &second, &whole, true).await;
+    let address = ContentAddress::parse(&checksum(&whole)).expect("the digest is an address");
+    // The sweep released the reservation before the commit landed.
+    let (uploader, size) = fixture
+        .quotas
+        .release_attribution(&address)
+        .await
+        .expect("the ledger answers")
+        .expect("the session reserved its bytes");
+    fixture.quotas.set_charges_unavailable(true);
+
+    let recovery = recover_at_boot(&fixture).await;
+    assert!(recovery.completed.is_empty(), "{recovery:?}");
+    assert_eq!(
+        fixture
+            .uploads
+            .read_for_test(&id)
+            .await
+            .expect("the session survives")
+            .status
+            .as_str(),
+        "waiting_for_processing",
+        "a completion nobody is charged for is not written"
+    );
+
+    fixture.quotas.set_charges_unavailable(false);
+    let recovery = recover_at_boot(&fixture).await;
+    assert_eq!(recovery.completed.len(), 1, "{recovery:?}");
+    assert_eq!(terminal_status(&fixture, &id).await, "completed");
+    assert_eq!(
+        fixture
+            .quotas
+            .usage(&uploader)
+            .await
+            .expect("the ledger answers")
+            .used,
+        size,
+        "the committed bytes are charged to their uploader"
+    );
+}
+
+/// A finalizer whose reservation is still held, and whose ledger then cannot settle it,
+/// completes: the reservation still charges the uploader, and the sweep settles it on finding
+/// the blob (#1059).
+#[tokio::test]
+async fn a_completion_whose_reservation_cannot_be_settled_completes_still_charged() {
+    use capsule_server::quota::QuotaStore as _;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    strand(&fixture, &id, &second, &whole, true).await;
+    fixture.quotas.set_settles_unavailable(true);
+
+    let recovery = recover_at_boot(&fixture).await;
+    assert_eq!(recovery.completed.len(), 1, "{recovery:?}");
+    assert_eq!(terminal_status(&fixture, &id).await, "completed");
+    fixture.quotas.set_settles_unavailable(false);
+    let record = fixture
+        .uploads
+        .read_for_test(&id)
+        .await
+        .expect("the session survives");
+    assert_eq!(
+        fixture
+            .quotas
+            .usage(&record.upload_user_id)
+            .await
+            .expect("the ledger answers")
+            .used,
+        whole.len() as u64,
+        "the unsettled reservation still charges the uploader"
+    );
+}
+
 #[tokio::test]
 async fn a_recovered_claim_with_neither_stage_nor_blob_fails_rather_than_completing() {
     let fixture = Fixture::working();
@@ -2833,12 +3304,23 @@ async fn die_mid_finalize(fixture: &Fixture, bearer: &str, died: DiedAfter) -> (
         DiedAfter::IndexWrite => fixture.index_fault.arm_after_commit(),
     }
     fixture.uploads.refuse_status_writes(true);
+    let refused_before = fixture.uploads.refused_status_writes();
+    // The request is answered once it holds the claim; the finalization it started dies later,
+    // detached, at its refused terminal write.
     fixture
         .chunk(&id, 4096, &second, bearer)
         .send()
         .await
-        .assert_status(StatusCode::SERVICE_UNAVAILABLE);
+        .assert_status(StatusCode::NO_CONTENT);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while fixture.uploads.refused_status_writes() == refused_before {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the detached finalization reaches its terminal write");
     fixture.uploads.refuse_status_writes(false);
+
     assert_eq!(
         fixture.index_fault.fired(),
         1,
@@ -2969,6 +3451,158 @@ async fn a_claim_whose_process_died_after_ledgering_custody_completes_at_boot() 
 #[tokio::test]
 async fn a_claim_whose_process_died_after_its_index_write_completes_at_boot() {
     recover_past_the_commit(DiedAfter::IndexWrite).await;
+}
+
+// ===========================================================================================
+// The startup scrub (transfer/upload.md, Session Lifetime and Discard)
+// ===========================================================================================
+
+/// Run the startup scrub over the fixture's stores, as a restarted process does before recovery.
+async fn scrub_at_boot(fixture: &Fixture) -> capsule_server::upload::scrub::StartupScrub {
+    use capsule_server::upload::UploadContext;
+    use kynos::di::Provides as _;
+
+    let upload: UploadContext = fixture.app().provide();
+    let drops: capsule_server::drop::DropContext = fixture.app().provide();
+    capsule_server::upload::scrub::startup(&upload, drops.drops()).await
+}
+
+/// Stage bytes under `id` with no session, as a creation that died after its stage leaves.
+async fn plant_orphan_stage(fixture: &Fixture, id: &str) {
+    use capsule_server::blob::BlobStore as _;
+
+    fixture
+        .blobs
+        .begin(&capsule_server::store::UploadId::new(id))
+        .await
+        .expect("the in-memory store stages");
+}
+
+#[tokio::test]
+async fn a_boot_turns_a_lost_stage_into_the_uniform_404_and_drops_orphaned_stages() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    // The range is recorded and its stage is lost: until a boot, every write is a `500`.
+    fixture.blobs.swallow_next_append();
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let orphan = "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e01";
+    plant_orphan_stage(&fixture, orphan).await;
+    // A claimed session without a stage is finalization's, never the scrub's.
+    let claimed = fixture
+        .open_session(&payload(b'c', CHUNK * 2), "derivative", &bearer)
+        .await;
+    fixture.uploads.claim_for_test(&claimed).await;
+    {
+        use capsule_server::blob::BlobStore as _;
+        fixture
+            .blobs
+            .abandon(&capsule_server::store::UploadId::new(claimed.as_str()))
+            .await
+            .expect("the in-memory store abandons");
+    }
+
+    let report = scrub_at_boot(&fixture).await;
+    assert_eq!(
+        report
+            .abandoned
+            .iter()
+            .map(capsule_server::store::UploadId::as_str)
+            .collect::<Vec<_>>(),
+        vec![orphan],
+        "{report:?}"
+    );
+    assert_eq!(
+        report
+            .discarded
+            .iter()
+            .map(capsule_server::store::UploadId::as_str)
+            .collect::<Vec<_>>(),
+        vec![id.as_str()],
+        "{report:?}"
+    );
+    assert_eq!(fixture.blobs.staged_len_for_test(orphan).await, None);
+    assert_eq!(
+        fixture
+            .uploads
+            .read_for_test(&claimed)
+            .await
+            .map(|record| record.status.as_str()),
+        Some("waiting_for_processing"),
+        "the claim is left to boot recovery"
+    );
+
+    // The client reads the uniform 404 and re-creates, and the bytes land.
+    let response = fixture.chunk(&id, 4096, &second, &bearer).send().await;
+    response.assert_status(StatusCode::NOT_FOUND);
+    assert_eq!(
+        code(&response.json::<serde_json::Value>()),
+        "error.upload.session_not_found"
+    );
+    let recreated = create_again(&fixture, &bearer, &whole).await;
+    recreated.assert_status(StatusCode::CREATED);
+    let fresh = recreated.json::<serde_json::Value>()["id"]
+        .as_str()
+        .expect("the session id")
+        .to_owned();
+    assert_ne!(fresh, id, "a fresh session");
+    for (offset, chunk) in [(0, &first), (4096, &second)] {
+        fixture
+            .chunk(&fresh, offset, chunk, &bearer)
+            .send()
+            .await
+            .assert_status(StatusCode::NO_CONTENT);
+    }
+    assert_eq!(terminal_status(&fixture, &fresh).await, "completed");
+
+    // A second boot has nothing left to repair.
+    assert_eq!(
+        scrub_at_boot(&fixture).await,
+        capsule_server::upload::scrub::StartupScrub::default()
+    );
+}
+
+#[tokio::test]
+async fn a_session_store_that_cannot_answer_keeps_every_stage_and_session() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, _, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    fixture.blobs.swallow_next_append();
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let orphan = "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e02";
+    plant_orphan_stage(&fixture, orphan).await;
+
+    fixture.uploads.set_unavailable(true);
+    let report = scrub_at_boot(&fixture).await;
+    fixture.uploads.set_unavailable(false);
+
+    assert_eq!(
+        report,
+        capsule_server::upload::scrub::StartupScrub::default(),
+        "nothing it could not read is repaired"
+    );
+    assert!(
+        fixture.blobs.staged_len_for_test(orphan).await.is_some(),
+        "a stage whose session could not be read is kept"
+    );
+    assert!(
+        fixture.uploads.read_for_test(&id).await.is_some(),
+        "a session the store could not list is kept"
+    );
+    // The next boot, with the store answering, repairs both.
+    let report = scrub_at_boot(&fixture).await;
+    assert_eq!(report.abandoned.len(), 1, "{report:?}");
+    assert_eq!(report.discarded.len(), 1, "{report:?}");
 }
 
 // ===========================================================================================
@@ -3131,6 +3765,11 @@ async fn a_reader_a_former_member_and_a_stranger_get_the_one_album_refusal() {
     let (fixture, bearer) = with_bob(None).await;
     let stranger = refused(&fixture, &bearer).await;
 
+    let (reader, former, stranger) = (
+        support::without_request_id(reader),
+        support::without_request_id(former),
+        support::without_request_id(stranger),
+    );
     assert_eq!(reader, former, "one body for every refusal");
     assert_eq!(former, stranger, "one body for every refusal");
 }
@@ -3459,7 +4098,7 @@ async fn a_ledger_that_cannot_append_fails_finalization_before_the_index() {
 }
 
 // ===========================================================================================
-// The chunk read deadline, on a socket (#717)
+// The chunk read pace, on a socket (#717, #1041)
 // ===========================================================================================
 
 /// A `PATCH` head for `chunk` at `offset`, declaring the whole chunk's length.
@@ -3503,10 +4142,10 @@ fn chunk_frame(piece: &[u8]) -> Vec<u8> {
     frame
 }
 
-/// A fixture with `deadline` on its chunk reads, serving on a socket, and an open session.
-async fn deadline_fixture(deadline: Duration) -> (Fixture, std::net::SocketAddr, String, String) {
+/// A fixture with `pace` on its chunk reads, serving on a socket, and an open session.
+async fn paced_fixture(pace: ChunkPace) -> (Fixture, std::net::SocketAddr, String, String) {
     let fixture = Fixture::working();
-    fixture.chunk_deadline.set(deadline);
+    fixture.chunk_pace.set(pace);
     let bearer = fixture.bearer().await;
     let (_, _, whole) = blob();
     let id = fixture.open_session(&whole, "original", &bearer).await;
@@ -3516,8 +4155,8 @@ async fn deadline_fixture(deadline: Duration) -> (Fixture, std::net::SocketAddr,
 
 #[tokio::test]
 async fn a_chunk_body_that_stalls_is_refused_and_the_connection_closed() {
-    let deadline = Duration::from_millis(300);
-    let (fixture, address, id, bearer) = deadline_fixture(deadline).await;
+    let stall = Duration::from_millis(300);
+    let (fixture, address, id, bearer) = paced_fixture(ChunkPace::new(stall, 0)).await;
     let (first, _, _) = blob();
 
     let mut stream = TcpStream::connect(address).await.expect("it connects");
@@ -3533,8 +4172,8 @@ async fn a_chunk_body_that_stalls_is_refused_and_the_connection_closed() {
     assert!(answer.starts_with("HTTP/1.1 408"), "{answer}");
     assert!(answer.contains("error.upload.chunk_timeout"), "{answer}");
     assert!(
-        started.elapsed() >= deadline,
-        "refused before the deadline passed"
+        started.elapsed() >= stall,
+        "refused before the stall bound passed"
     );
 
     // Nothing of the chunk was kept, so the client's retry at the same offset is the right one.
@@ -3543,22 +4182,23 @@ async fn a_chunk_body_that_stalls_is_refused_and_the_connection_closed() {
         .read_for_test(&id)
         .await
         .expect("the session survives");
-    assert_eq!(record.received_bytes, 0);
+    assert_eq!(record.committed.prefix(), 0);
     assert_eq!(fixture.blobs.staged_len_for_test(&id).await, Some(0));
 }
 
 #[tokio::test]
-async fn a_chunk_body_that_trickles_past_the_deadline_is_refused() {
-    let deadline = Duration::from_millis(300);
-    let (fixture, address, id, bearer) = deadline_fixture(deadline).await;
+async fn a_chunk_body_that_trickles_below_the_minimum_rate_is_refused() {
+    // A floor of 64 KiB/s owed after a 300 ms grace.
+    let pace = ChunkPace::new(Duration::from_millis(300), 64 * 1024);
+    let (fixture, address, id, bearer) = paced_fixture(pace).await;
     let (first, _, _) = blob();
 
     let stream = TcpStream::connect(address).await.expect("it connects");
     let (mut reader, mut writer) = stream.into_split();
     let head = chunk_head(&id, 0, &first, &bearer);
-    // Every byte arrives, steadily — just too slowly: eight pieces a tenth of a second apart is
-    // most of a second for a body the deadline gives three tenths. Write errors are expected
-    // once the server has answered and stopped reading.
+    // Bytes keep arriving, so the body never stalls — but at 5 KiB/s, far below the floor:
+    // eight pieces a tenth of a second apart. Write errors are expected once the server has
+    // answered and stopped reading.
     let trickle = tokio::spawn(async move {
         if writer.write_all(head.as_bytes()).await.is_err() {
             return;
@@ -3594,36 +4234,37 @@ async fn a_chunk_body_that_trickles_past_the_deadline_is_refused() {
         .await
         .expect("the session survives");
     assert_eq!(
-        record.received_bytes, 0,
+        record.committed.prefix(),
+        0,
         "nothing of a refused chunk is kept"
     );
 }
 
 /// A chunk that declares no length is read by the body-size cap before any extractor runs, so
-/// it is timed outside that cap: trickled in with chunked coding, it is still refused.
+/// it is paced outside that cap: stalled part-way with chunked coding, it is still refused.
 #[tokio::test]
-async fn a_length_less_chunk_body_that_trickles_past_the_deadline_is_refused() {
-    let deadline = Duration::from_millis(300);
-    let (fixture, address, id, bearer) = deadline_fixture(deadline).await;
+async fn a_length_less_chunk_body_that_stalls_is_refused() {
+    let stall = Duration::from_millis(300);
+    let (fixture, address, id, bearer) = paced_fixture(ChunkPace::new(stall, 0)).await;
     let (first, _, _) = blob();
 
     let stream = TcpStream::connect(address).await.expect("it connects");
     let (mut reader, mut writer) = stream.into_split();
     let head = chunked_head(&id, 0, &first, &bearer);
     let started = Instant::now();
-    // Sixteen frames a tenth of a second apart, then the terminator: over a second and a half for
-    // a body the deadline gives three tenths. Write errors are expected once the server answered.
+    // Four frames, then nothing — the connection held open, no terminator. Without the pace the
+    // body-size cap would wait on it for ever. The writer is kept until the answer is read.
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let trickle = tokio::spawn(async move {
         if writer.write_all(head.as_bytes()).await.is_err() {
             return;
         }
-        for piece in first.chunks(256) {
+        for piece in first.chunks(256).take(4) {
             if writer.write_all(&chunk_frame(piece)).await.is_err() {
                 return;
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        let _ = writer.write_all(b"0\r\n\r\n").await;
+        let _ = stopped.await;
     });
 
     let mut received = Vec::new();
@@ -3641,11 +4282,8 @@ async fn a_length_less_chunk_body_that_trickles_past_the_deadline_is_refused() {
     let answer = String::from_utf8_lossy(&received);
     assert!(answer.starts_with("HTTP/1.1 408"), "{answer}");
     assert!(answer.contains("error.upload.chunk_timeout"), "{answer}");
-    assert!(started.elapsed() >= deadline, "refused before the deadline");
-    assert!(
-        started.elapsed() < Duration::from_millis(1400),
-        "answered only once the whole trickle had arrived: the deadline did not bound it"
-    );
+    assert!(started.elapsed() >= stall, "refused before the stall bound");
+    let _ = stop.send(());
     trickle.await.expect("the writer ends");
 
     let record = fixture
@@ -3654,29 +4292,38 @@ async fn a_length_less_chunk_body_that_trickles_past_the_deadline_is_refused() {
         .await
         .expect("the session survives");
     assert_eq!(
-        record.received_bytes, 0,
+        record.committed.prefix(),
+        0,
         "nothing of a refused chunk is kept"
     );
 }
 
-/// The same length-less chunk, arriving inside the deadline, is handed on whole and lands.
+/// The pace the socket tests read under: a 300 ms stall bound and a 1 KiB/s floor.
+fn trickle_pace() -> ChunkPace {
+    ChunkPace::new(Duration::from_millis(300), 1024)
+}
+
+/// A length-less chunk that keeps arriving lands however long it takes in total: sixteen frames
+/// a tenth of a second apart is over five stall bounds end to end.
 #[tokio::test]
-async fn a_length_less_chunk_body_under_the_deadline_lands() {
-    let (fixture, address, id, bearer) = deadline_fixture(Duration::from_secs(5)).await;
+async fn a_length_less_chunk_body_that_trickles_past_the_stall_bound_lands() {
+    let (fixture, address, id, bearer) = paced_fixture(trickle_pace()).await;
     let (first, _, _) = blob();
 
     let mut stream = TcpStream::connect(address).await.expect("it connects");
+    let started = Instant::now();
     stream
         .write_all(chunked_head(&id, 0, &first, &bearer).as_bytes())
         .await
         .expect("the head writes");
-    for piece in first.chunks(1024) {
+    for piece in first.chunks(256) {
         stream
             .write_all(&chunk_frame(piece))
             .await
             .expect("it writes");
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    assert!(started.elapsed() > 4 * trickle_pace().stall);
     stream.write_all(b"0\r\n\r\n").await.expect("it writes");
 
     let answer = support::read_response(&mut stream).await;
@@ -3686,23 +4333,27 @@ async fn a_length_less_chunk_body_under_the_deadline_lands() {
         .read_for_test(&id)
         .await
         .expect("the session survives");
-    assert_eq!(record.received_bytes, 4096);
+    assert_eq!(record.committed.prefix(), 4096);
 }
 
+/// A chunk is never cut for its total duration: a slow but steady body, above the floor and
+/// never silent for the stall bound, lands after several stall bounds end to end.
 #[tokio::test]
-async fn a_slow_but_steady_chunk_body_under_the_deadline_lands() {
-    let (fixture, address, id, bearer) = deadline_fixture(Duration::from_secs(5)).await;
+async fn a_slow_but_steady_chunk_body_past_the_stall_bound_lands() {
+    let (fixture, address, id, bearer) = paced_fixture(trickle_pace()).await;
     let (first, _, _) = blob();
 
     let mut stream = TcpStream::connect(address).await.expect("it connects");
+    let started = Instant::now();
     stream
         .write_all(chunk_head(&id, 0, &first, &bearer).as_bytes())
         .await
         .expect("the head writes");
-    for piece in first.chunks(1024) {
+    for piece in first.chunks(256) {
         stream.write_all(piece).await.expect("it writes");
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    assert!(started.elapsed() > 4 * trickle_pace().stall);
 
     let answer = support::read_response(&mut stream).await;
     assert!(answer.starts_with("HTTP/1.1 204"), "{answer}");
@@ -3717,5 +4368,5 @@ async fn a_slow_but_steady_chunk_body_under_the_deadline_lands() {
         .read_for_test(&id)
         .await
         .expect("the session survives");
-    assert_eq!(record.received_bytes, 4096);
+    assert_eq!(record.committed.prefix(), 4096);
 }

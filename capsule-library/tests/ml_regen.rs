@@ -104,7 +104,7 @@ fn regenerate_rejects_a_detection_task() {
     assert!(matches!(err, RegenError::NotAnEmbeddingTask { .. }));
 }
 
-/// The in-module *orchestration* shape of Module Map **E2E case 10** ("Model regen after
+/// The in-module *orchestration* shape of **E2E case 10** ("Model regen after
 /// version bump"), driven by the deterministic embedder: bump the canonical model version →
 /// stale embeddings excluded from queries → regen produces fresh embeddings per-asset →
 /// queries return correct results post-regen. The end-to-end proof — a real `Workspace`, real

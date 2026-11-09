@@ -64,9 +64,10 @@ public final class StorageSettingsModel {
         }
     }
 
-    /// The tiers this device is spending disk on, cheapest rung first.
+    /// The tiers this device is spending disk on, in their declared order,
+    /// cheapest first.
     public var tiers: [RepresentationTier] {
-        RepresentationTier.allCases.sorted()
+        RepresentationTier.allCases
     }
 
     public func bytes(for tier: RepresentationTier) -> UInt64 {
@@ -119,7 +120,6 @@ public final class StorageSettingsModel {
 public extension RepresentationTier {
     var titleKey: String {
         switch self {
-        case .dominantColour: "app.settings.storage.tier.dominant_colour"
         case .lqip: "app.settings.storage.tier.lqip"
         case .thumbnail: "app.settings.storage.tier.thumbnail"
         case .preview: "app.settings.storage.tier.preview"

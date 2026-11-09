@@ -4,9 +4,9 @@ description: The CBOR sidecar schema v1, the CRDT semantics for collaborative me
 status: draft
 ---
 
-The CBOR sidecar is the canonical, plaintext-local-only metadata record for every asset (see [Filesystem — Client](/design/filesystem/client/)). This doc is its **single source of truth**: every implementation must encode it byte-for-byte as specified, or cross-peer signatures break. Other docs reference fields by name and never re-declare them.
+The CBOR sidecar is the canonical metadata record for every asset, plaintext and local only ([](/design/filesystem/client/)). This page is its **single source of truth**: every implementation must encode it byte-for-byte as specified, or cross-peer signatures break. Other docs name fields and never re-declare them.
 
-Rawshift extracts media metadata; Capsule maps it into these fields. Chromahash is called directly, never through Rawshift.
+Rawshift extracts media metadata and Capsule maps it into these fields. Chromahash is called directly, never through Rawshift.
 
 ## Sidecar Schema v1
 
@@ -61,63 +61,50 @@ Region {
 }
 ```
 
-`tags_user` holds the asset's user **labels**; `regions` holds labelled image regions. Both,
-and the stack and album label records, are specified in [Organization — Labels](/design/organization/#labels).
-`regions` is added without a `sidecar_schema` bump: older readers keep it verbatim as an
-unknown key.
+`tags_user` holds the asset's user **labels** and `regions` its labelled image regions. [](/design/organization/#labels) specifies both, with the stack and album label records. `regions` was added without a `sidecar_schema` bump: older readers keep it verbatim as an unknown key.
 
 ### As-Imported and User Values
 
-Capture time and location each have two fields: the value the import recorded and the user's
-correction.
+Capture time and location each have two fields: the value the import recorded and the user's correction.
 
-- `capture_timestamp` and `gps` hold what the original said when it entered the library: its own
-  EXIF, else the exporter record folded with it. A user edit never overwrites them.
-- `capture_timestamp_user` and `gps_user` are LWW registers holding the user's correction. Both
-  are wire-absent until first written, so an uncorrected sidecar encodes byte-identically to one
-  written before they existed; older readers keep them verbatim as unknown keys. A `gps_user`
-  value always has `source = manual`. A stamped `None` means "no location": it hides the imported
-  fix without erasing it.
-- The **effective** value is the user's register when it was ever written, else the as-imported
-  field. The timeline, search and every client view use the effective value.
-- The `media/{YYYY}/{YYYY-MM}` shard is fixed at import from `capture_timestamp`. A correction
-  does not move the bundle.
-- Re-deriving the as-imported value from the original (the capture-time repair for libraries
-  imported before EXIF dates were read) rewrites `capture_timestamp` only, and never touches the
-  user's register.
+- `capture_timestamp` and `gps` hold what the original said when it entered the library: its own EXIF, else the exporter record folded with it. A user edit never overwrites them.
+- `capture_timestamp_user` and `gps_user` are LWW registers holding the user's correction. Both are wire-absent until first written, so an uncorrected sidecar encodes byte-identically to one written before they existed, and older readers keep them verbatim as unknown keys. A `gps_user` value always has `source = manual`. A stamped `None` means "no location": it hides the imported fix without erasing it.
+- The **effective** value is the user's register if ever written, else the as-imported field. The timeline, search and every client view use it.
+- The `media/{YYYY}/{YYYY-MM}` shard is fixed at import from `capture_timestamp`; a correction does not move the bundle.
+- Re-deriving the as-imported value from the original (the capture-time repair for libraries imported before EXIF dates were read) rewrites `capture_timestamp` only and never touches the user's register.
 
 ### Schema Versioning Rules
 
 - `sidecar_schema` is CBOR field 0 under deterministic key order, so a reader knows the schema before parsing the rest.
-- A client whose `max_known_sidecar_schema < sidecar_schema` **refuses to write** the sidecar; reading only in opted-in read-only mode ([refuse-by-default](/design/threat-model/)). An old client cannot strip-and-resign a newer sidecar.
+- A client whose `max_known_sidecar_schema < sidecar_schema` **refuses to write** the sidecar and reads it only in opted-in read-only mode ([refuse-by-default](/design/threat-model/)), so an old client cannot strip-and-resign a newer sidecar.
 - The signature covers `_unknown`, so stripping unknown fields is detectable.
-- An album's pinned protocol version constrains which sidecar schemas may be written into it ([Versioning](/design/versioning/#album-protocol-version-pinning)).
+- An album's pinned protocol version constrains which sidecar schemas may be written into it ([](/design/versioning/#album-protocol-version-pinning)).
 
 ### Closed Enum Value Sets
 
 These value sets are closed ([Schema Rules](/design/threat-model/schema-rules/)); adding a value requires a new, later-dated `protocol_version`.
 
-- **`content_type`** — exactly one canonical MIME value per format (never an alias such as `image/jpg`):
+- **`content_type`**: exactly one canonical MIME value per format, never an alias such as `image/jpg`.
   - images: `image/jpeg`, `image/png`, `image/webp`, `image/gif`, `image/tiff`, `image/heic`, `image/avif`, `image/jxl`, `image/x-adobe-dng`
   - video: `video/mp4`, `video/quicktime`, `video/x-matroska`, `video/webm`
-- **`gps.source`** — `exif` | `manual` | `inferred`. An `inferred` value is written to `gps` only on explicit user confirmation (the same promotion rule as `tags_ai` → `tags_user`).
-- **`gps.datum`** — `wgs84` | `gcj02`, stored **verbatim** as supplied, never converted at rest (GCJ-02 → WGS-84 has no exact inverse). BD-09 is never stored: it is folded to GCJ-02 at the input edge with an error-bounded iterative inverse (sub-meter). `datum` is wire-absent when `wgs84`, so pre-`datum` sidecars stay byte-identical; it is an additive key within schema v1. `gps` merges as one atomic value.
+- **`gps.source`**: `exif` | `manual` | `inferred`. An `inferred` value is written to `gps` only on explicit user confirmation, the same promotion rule as `tags_ai` → `tags_user`.
+- **`gps.datum`**: `wgs84` | `gcj02`, stored **verbatim** as supplied and never converted at rest, since GCJ-02 → WGS-84 has no exact inverse. BD-09 is never stored: it is folded to GCJ-02 at the input edge with an error-bounded (sub-meter) iterative inverse. `datum` is an additive key within schema v1, wire-absent when `wgs84`, so pre-`datum` sidecars stay byte-identical. `gps` merges as one atomic value.
 
 ### Canonical CBOR Encoding
 
-The sidecar and the [encrypted metadata blob](/design/cryptography/encryption/#metadata-encryption) (whose plaintext is this document) MUST serialize byte-identically in every implementation, because the [signed manifest](/design/cryptography/provenance/#asset-manifest) commits to the bytes. RFC 8949 §4.2 deterministic encoding:
+The sidecar and the [encrypted metadata blob](/design/cryptography/encryption/#metadata-encryption), whose plaintext is this document, MUST serialize byte-identically in every implementation because the [signed manifest](/design/cryptography/provenance/#asset-manifest) commits to the bytes. Encoding is RFC 8949 §4.2 deterministic:
 
 - Definite-length encoding only.
 - Shortest-form integers.
-- Bignums (tags 2 and 3) in preferred form (RFC 8949 §3.4.3): one whose magnitude fits in 64 bits is the plain integer, and the byte string carries no leading zeros. Canonicalization refuses a negative bignum below -2^127.
-- Map keys sorted by bytewise order of their encoded form, no duplicates — including `_unknown`, which is re-sorted on write so round-trips are byte-stable.
+- Bignums (tags 2 and 3) in preferred form (RFC 8949 §3.4.3): a magnitude that fits in 64 bits is the plain integer, and the byte string carries no leading zeros. Canonicalization refuses a negative bignum below -2^127.
+- Map keys sorted by bytewise order of their encoded form, no duplicates. This includes `_unknown`, re-sorted on write so round-trips are byte-stable.
 - Floats in the shortest IEEE-754 form that round-trips exactly; canonical quiet NaN. Prefer integers or strings in signed structures.
 
-Conformance is a **blocking cross-language gate** against shared known-answer vectors (the same fixtures [Encryption](/design/cryptography/encryption/#metadata-blob-wire-format) uses).
+Conformance is a **blocking cross-language gate** against shared known-answer vectors, the same fixtures [Encryption](/design/cryptography/encryption/#metadata-blob-wire-format) uses.
 
 ### Local and Server Metadata Equivalence
 
-The server's encrypted metadata blob plaintext *is* this signed `SidecarV1`, the same bytes the client stores at `media/{uuid}.cbor`:
+The plaintext of the server's encrypted metadata blob *is* this signed `SidecarV1`, the same bytes the client stores at `media/{uuid}.cbor`:
 
 - The [signed manifest](/design/cryptography/provenance/#asset-manifest) commits to `metadata_blob_hash` on every `create`, `replace` and `metadata-update`.
 - A client that decrypts the blob MUST find it byte-identical to its locally stored signed sidecar, and the blob's content hash MUST equal `metadata_blob_hash`.
@@ -126,32 +113,32 @@ A client never persists a sidecar that does not round-trip to the committed hash
 
 ### Provenance Binding and Sealing Order
 
-`provenance_chain_hash` references the **prior** chain head, never the write that seals this sidecar (that manifest commits to the sidecar's hash, so referencing it would be circular). **`sidecar.provenance_chain_hash` MUST equal the sealing manifest's `prior_provenance_hash`** (both absent on `create`); divergence is quarantined.
+`provenance_chain_hash` references the **prior** chain head, never the write that seals this sidecar: that manifest commits to the sidecar's hash, so referencing it would be circular. **`sidecar.provenance_chain_hash` MUST equal the sealing manifest's `prior_provenance_hash`**, both absent on `create`; divergence is quarantined.
 
 Sealing order:
 
 1. Fix the prior head `H` (`None` on `create`).
 2. Author and sign the sidecar with `provenance_chain_hash = H`.
-3. Seal it into the [metadata blob](/design/cryptography/encryption/#metadata-blob-wire-format); compute its content hash.
+3. Seal it into the [metadata blob](/design/cryptography/encryption/#metadata-blob-wire-format) and compute its content hash.
 4. Build and sign the manifest with `prior_provenance_hash = H` and that `metadata_blob_hash`; append it as the new head.
 
 ### Add-id Binding
 
-`add_id = (device_id: UUIDv4, monotonic_counter: u64)`, the counter incremented per device per (asset, OR-set). Every OR-set remove targets a specific `add_id`; a remove naming an `add_id` the receiver never observed is **rejected**, not a no-op ([Threat Model](/design/threat-model/scenarios/)).
+`add_id = (device_id: UUIDv4, monotonic_counter: u64)`, the counter incremented per device per (asset, OR-set). Every OR-set remove targets a specific `add_id`. A remove naming an `add_id` the receiver never observed is **rejected**, not a no-op ([Threat Model](/design/threat-model/scenarios/)).
 
-**Counter durability.** A counter MUST never repeat for a `(device_id, asset, OR-set)` once it reached a written sidecar, or two adds alias. It is persisted in the local [index](/design/filesystem/client/#desktop-library-layout) and on restart is reseeded to one past the maximum counter found in the device's own signed sidecars (fetched from the server if not held locally). It resets to zero only when no sidecar bears the `device_id` — in practice a reinstall enrolls a new `device_id`.
+**Counter durability.** A counter MUST never repeat for a `(device_id, asset, OR-set)` once it reached a written sidecar, or two adds alias. It is persisted in the local [index](/design/filesystem/client/#desktop-library-layout) and on restart reseeded to one past the maximum counter in the device's own signed sidecars, fetched from the server if not held locally. It resets to zero only when no sidecar bears the `device_id`; in practice a reinstall enrolls a new `device_id`.
 
 ## Identifiers
 
-The sidecar `uuid`, manifest `file_id`, provenance/server `asset_id` and metadata-key-salt `blob_id` are **the same UUIDv7**, minted once at import and never re-minted; validators assert equality. `session_id`, `stack_id` and `import_id` are UUIDv7; `device_id` is UUIDv4 so it leaks no creation order.
+The sidecar `uuid`, manifest `file_id`, provenance/server `asset_id` and metadata-key-salt `blob_id` are **the same UUIDv7**, minted once at import and never re-minted; validators assert equality. `session_id`, `stack_id` and `import_id` are UUIDv7. `device_id` is UUIDv4 so it leaks no creation order.
 
-- **`camera_id`** — device model plus a per-device identifier (e.g. serial).
-- **`device_id`** — generated on the importing device.
-- **`session_id`** — the authenticated import session ([Session Management](/design/authentication/#session-id)).
+- **`camera_id`**: device model plus a per-device identifier such as the serial.
+- **`device_id`**: generated on the importing device.
+- **`session_id`**: the authenticated import session ([Session Management](/design/authentication/#session-id)).
 
 ## Privacy on Export
 
-When an asset crosses a trust boundary — a [share link](/design/share-links/) for a non-member, an external backup handed off, or a [federated](/design/federation/) peer outside the owner's home server — these fields are stripped unless the user opts in **per export**:
+When an asset crosses a trust boundary (a [share link](/design/share-links/) for a non-member, an external backup handed off, or a [federated](/design/federation/) peer outside the owner's home server), these fields are stripped unless the user opts in **per export**:
 
 | Field | Default on export | Opt-in retains |
 | --- | --- | --- |
@@ -163,26 +150,27 @@ When an asset crosses a trust boundary — a [share link](/design/share-links/) 
 | Personal contact tags (faces matched to a known person) | Stripped with `regions`, the only field that names a face | Retained |
 | Image regions and their labels (`regions`) | Stripped | Retained |
 
-Keys the exporting reader does not know (`_unknown`) are always dropped, under every opt-in: a key a newer schema added may itself be a boundary-crossing field. A copy with anything stripped is unsigned, because the library signature covered what was removed.
+- Keys the exporting reader does not know (`_unknown`) are always dropped, under every opt-in: a key a newer schema added may itself be a boundary-crossing field.
+- A copy with anything stripped is unsigned, because the library signature covered what was removed.
+- Stripping applies to the exported copy only; the library sidecar is untouched. The opt-in is chosen for one export and never stored. Syncing the same user's own devices is not a boundary crossing.
+- Stripping is the **issuing client's** obligation, since the server holds no key. The server's half is containment: a share serves only the content addresses its record enumerates.
 
-Stripping applies to the exported copy only; the library sidecar is untouched. The opt-in is chosen for one export and never stored. Syncing the same user's own devices is not a boundary crossing. Stripping is the **issuing client's** obligation (the server holds no key); the server's half is containment — a share serves only the content addresses its record enumerates.
-
-A share link carries each covered asset's stripped sidecar inside its sealed record ([Share Links — The share metadata record](/design/share-links/#the-share-metadata-record)), so the blob the server stores is already stripped. The external-backup crossing waits on a post-v1 client export command, which applies the same strip.
+A share link carries each covered asset's stripped sidecar inside its sealed record ([](/design/share-links/#the-share-metadata-record)), so the blob the server stores is already stripped. The external-backup crossing waits on a post-v1 client export command, which applies the same strip.
 
 ## Collaborative Metadata
 
 User-editable fields may be edited concurrently and offline, so they are CRDTs:
 
-- **Tags:** OR-sets with [`add_id` binding](#add-id-binding).
-- **Single-value fields** (`caption_lww`, `rating_lww`, `capture_timestamp_user`, `gps_user`, `stack_membership`, `cull`, `hidden`): LWW registers ordered by signed timestamp, `device_id` as lexicographic tiebreaker. `stack_membership` includes a stamped `None`, so join, move and leave are all one LWW write.
+- **Tags**: OR-sets with [`add_id` binding](#add-id-binding).
+- **Single-value fields** (`caption_lww`, `rating_lww`, `capture_timestamp_user`, `gps_user`, `stack_membership`, `cull`, `hidden`): LWW registers ordered by signed timestamp, with `device_id` as lexicographic tiebreaker. `stack_membership` admits a stamped `None`, so join, move and leave are each one LWW write.
 
 ### Surfacing Concurrent Edits
 
-The losing value of a concurrent caption edit is appended to `superseded_captions` (≤ 16, oldest evicted) with author and time, so the UI can offer restore. Ratings keep no log. Clients must never strip `superseded_captions` ([Forbidden Client Behaviors](/design/threat-model/schema-rules/#forbidden-client-behaviors)).
+The losing value of a concurrent caption edit is appended to `superseded_captions` (≤ 16, oldest evicted) with author and time, so the UI can offer restore. Ratings keep no log. Clients must never strip `superseded_captions` ([](/design/threat-model/schema-rules/#forbidden-client-behaviors)).
 
 ### How Operations Travel
 
-Capsule encrypts **operations**, not state; merges are commutative and associative, so arrival order and stale replays do not matter. Operations reconcile into the sidecar, which stays the source of truth. Operations name **known fields only** (unknown-field ops are version-gated), and reconciliation re-emits `_unknown` verbatim. Each operation carries the `prior_provenance_hash` chain link like any [lifecycle action](/design/authorization/#the-closed-action-set).
+Capsule encrypts **operations**, not state. Merges are commutative and associative, so arrival order and stale replays do not matter. Operations reconcile into the sidecar, which stays the source of truth. They name **known fields only** (unknown-field ops are version-gated), and reconciliation re-emits `_unknown` verbatim. Each operation carries the `prior_provenance_hash` chain link like any [lifecycle action](/design/authorization/#the-closed-action-set).
 
 The same path carries each album's [album-group assertion](/design/federation/#the-album-group-assertion) and the per-owner [library-settings document](#the-library-settings-document). The [default-album](/design/organization/#the-default-album) designation is separate: a non-secret server-side pointer.
 
@@ -201,16 +189,16 @@ LibrarySettingsV1 {
 }
 ```
 
-This doc owns the envelope, keying, versioning and merge; section value schemas are owned by [Organization](/design/organization/#smart-album-definition-schema), [Scope Grammar](/design/organization/#scope-grammar-local-source--album-mapping) and [Federation](/design/federation/#membership-and-rendering). An absent or `None` cover falls back to the newest constituent asset.
+This page owns the envelope, keying, versioning and merge. [Organization](/design/organization/#smart-album-definition-schema), [Scope Grammar](/design/organization/#scope-grammar-local-source--album-mapping) and [Federation](/design/federation/#membership-and-rendering) own the section value schemas. An absent or `None` cover falls back to the newest constituent asset.
 
-- **Shape.** Every section is a keyed map of LWW registers over `Option<value>`; a stamped `None` is a tombstone. The document has no `signature` field — each mutation is a signed operation.
-- **Keying.** Readable by the owner's devices and owner-set members, by **no** album co-member, so it is keyed under the OGK, not an AMK. `settings_doc_id` is an identifier (not a key) derived from the [account master key](/design/cryptography/keys/#key-chain) under a dedicated label. Operations use the [metadata-blob wire format](/design/cryptography/encryption/#metadata-blob-wire-format) with key `HKDF-SHA512(ikm = OGK_v{n}, salt = settings_doc_id || nonce, info = "library-settings/v1", length = 32)` and a server-visible big-endian `u32` `ogk_version` before the nonce. A fresh nonce per write re-rolls key and nonce; a reused nonce is refused. Rewrites use the current epoch; removed owner-set members derive no future epoch.
-- **Versioning.** [Canonical CBOR](#canonical-cbor-encoding); refuse-to-write when `max_known_settings_schema < settings_schema`, as for sidecars. A `SmartAlbumDefinition` with a newer `predicate_schema` is preserved verbatim and never evaluated or stripped.
+- **Shape.** Every section is a keyed map of LWW registers over `Option<value>`; a stamped `None` is a tombstone. The document has no `signature` field: each mutation is a signed operation.
+- **Keying.** Readable by the owner's devices and owner-set members and by **no** album co-member, so it is keyed under the OGK, not an AMK. `settings_doc_id` is an identifier, not a key, derived from the [account master key](/design/cryptography/keys/#key-chain) under a dedicated label. Operations use the [metadata-blob wire format](/design/cryptography/encryption/#metadata-blob-wire-format) with key `HKDF-SHA512(ikm = OGK_v{n}, salt = settings_doc_id || nonce, info = "library-settings/v1", length = 32)` and a server-visible big-endian `u32` `ogk_version` before the nonce. A fresh nonce per write re-rolls key and nonce; a reused nonce is refused. Rewrites use the current epoch, and removed owner-set members derive no future epoch.
+- **Versioning.** [Canonical CBOR](#canonical-cbor-encoding), with refuse-to-write when `max_known_settings_schema < settings_schema`, as for sidecars. A `SmartAlbumDefinition` with a newer `predicate_schema` is preserved verbatim and never evaluated or stripped.
 - **Merge.** Each mutation is a device-signed, OGK-sealed `(section, key, stamped value)` operation with the `prior_provenance_hash` link. Merge is field-wise LWW on `(ts, device_id)` with no cross-field invariants. The server sees only ciphertext and `ogk_version`.
 
 ### Grouping Convergence (Requirement)
 
-**Every grouping operation — manual or AI — is idempotent and order-independent**, by construction:
+**Every grouping operation, manual or AI, is idempotent and order-independent** by construction:
 
 | Structure | Mechanism | Why it converges |
 | --- | --- | --- |
@@ -226,22 +214,39 @@ Album membership is not a CRDT: [MLS](/design/cryptography/mls/) commits already
 
 User and AI tags are **structurally separate** OR-sets (`tags_user`, `tags_ai`), so an AI tag can never overwrite user intent.
 
-- Every `tags_ai` entry carries `model_id` and `model_version` ([AI — Embedding Provenance](/design/ai/#embedding-provenance)). When the canonical model changes, old tags are stale; cross-model comparison is forbidden ([client-side invariants](/design/threat-model/validation/#client-side-validation-invariants)).
-- **Promote:** an explicit, signed user action copies the entry to `tags_user` with a fresh `add_id`; never automatic.
-- **Dismiss:** an OR-set remove on `tags_ai` by the original `add_id`.
+- Every `tags_ai` entry carries `model_id` and `model_version` ([](/design/ai/#embedding-provenance)). When the canonical model changes, old tags are stale; cross-model comparison is forbidden ([client-side invariants](/design/threat-model/validation/#client-side-validation-invariants)).
+- **Promote**: an explicit, signed user action, never automatic, copies the entry to `tags_user` with a fresh `add_id`.
+- **Dismiss**: an OR-set remove on `tags_ai` by the original `add_id`.
 
 Any future ML field overlaying a user-editable one (face labels, location guesses) uses the same dual namespace.
 
 ## Geolocation
 
-GPS is stored in the datum the source supplied ([`gps.datum`](#closed-enum-value-sets)): WGS-84 by default, or GCJ-02 for coordinates from Chinese maps. Datum conversion for display or search is deterministic and client-side, with GCJ-02 → WGS-84 marked approximate; display-side conversion is unscheduled. BD-09 exists only at the input edge. Map-provider choice is a client concern. A user's location edit lands in `gps_user` beside the imported fix ([As-Imported and User Values](#as-imported-and-user-values)), stored verbatim in the datum the user entered it in.
+GPS is stored in the datum the source supplied ([`gps.datum`](#closed-enum-value-sets)): WGS-84 by default, or GCJ-02 for coordinates from Chinese maps. BD-09 exists only at the input edge. Datum conversion for display or search is deterministic and client-side, with GCJ-02 → WGS-84 marked approximate; display-side conversion is unscheduled. Map-provider choice is a client concern. A user's location edit lands in `gps_user` beside the imported fix ([](#as-imported-and-user-values)), stored verbatim in the datum the user entered it in.
+
+## Failure Modes
+
+| Failure | Detected / contained by | Recovery |
+| --- | --- | --- |
+| CBOR non-determinism | [Canonical encoding](#canonical-cbor-encoding) | Byte-identical re-encode |
+| Old client strips unknown sidecar fields | Signature covers all bytes; writes above the client's max `sidecar_schema` refused | Quarantine |
 
 ## Validation
 
-Each MUST above is a unit test; the canonical-CBOR known-answer vectors are a **blocking cross-language gate**. Notable cases: add-id reseed never reuses a counter; OR-set and library-settings merges converge byte-identically in every permutation; a remove of an unobserved `add_id` is rejected; a near-simultaneous caption loser lands in `superseded_captions`; a capture-time or location edit keeps the as-imported value through a re-import, a reopen and an index rebuild; each privacy-table row strips by default and leaves the local sidecar unchanged; a WGS-84 sidecar encodes byte-identically to the pre-`datum` vector; a one-byte local mutation fails the local–server equivalence check.
+Each MUST above is a unit test, and the canonical-CBOR known-answer vectors are a **blocking cross-language gate**. Notable cases:
+
+- Add-id reseed never reuses a counter.
+- OR-set and library-settings merges converge byte-identically in every permutation.
+- A remove of an unobserved `add_id` is rejected.
+- A near-simultaneous caption loser lands in `superseded_captions`.
+- A capture-time or location edit keeps the as-imported value through a re-import, a reopen and an index rebuild.
+- Each privacy-table row strips by default and leaves the local sidecar unchanged.
+- A WGS-84 sidecar encodes byte-identically to the pre-`datum` vector.
+- A one-byte local mutation fails the local–server equivalence check.
+- A sidecar round-trips between schema v1 and v2 readers.
 
 ## Related
 
-- [Asset Organization](/design/organization/) — consumes `stack_membership`, `cull`, `hidden`.
-- [AI/ML Integrations](/design/ai/) — models behind `tags_ai`.
-- [Thumbnails and Previews](/design/thumbnails/) — the LQIP scheme in `lqip`.
+- [](/design/organization/): consumes `stack_membership`, `cull`, `hidden`.
+- [](/design/ai/): models behind `tags_ai`.
+- [](/design/thumbnails/): the LQIP scheme in `lqip`.

@@ -115,12 +115,24 @@ async fn adopt_in_place(server: &Server) -> AdoptedInPlace {
         .await
         .expect("the exempt chunk operation admits the bytes");
 
-    // The owner's inbox shows the drop, and the bytes are filed at their content address.
-    let inbox = generated
-        .list_inbox(PROTOCOL_VERSION, None)
-        .await
-        .expect("the inbox answers")
-        .into_inner();
+    // The owner's inbox shows the drop, and the bytes are filed at their content address. The
+    // completing chunk is answered as soon as the deposit starts, never once it ends, so the
+    // inbox is read until the detached deposit has filed it.
+    let inbox = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let inbox = generated
+                .list_inbox(PROTOCOL_VERSION, None)
+                .await
+                .expect("the inbox answers")
+                .into_inner();
+            if !inbox.drops.is_empty() {
+                return inbox;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the detached deposit files the drop");
     assert_eq!(inbox.drops.len(), 1);
     let pending = &inbox.drops[0];
     assert_eq!(pending.opaque_id, opaque_id);

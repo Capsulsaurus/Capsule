@@ -25,6 +25,8 @@
 
 use std::sync::Arc;
 
+use capsule_core::crypto::keys::HardwareSignerError;
+
 use super::*;
 // One mock server for the whole crate, not one per module: `testmock` replays the real
 // wire — statuses, headers, and the `ApiError` JSON with its stable `error.*` codes — and is
@@ -641,6 +643,47 @@ async fn ffi_enroll_album_seal_upload_sync_apply_round_trip() {
     }
 }
 
+/// #998: `albums()` hands every app the one album order, so no app sorts its own: the album
+/// with the most recent visible asset first, an empty album by its UUIDv7 creation time, and
+/// the derived default album (whose id carries no time) last while it is empty.
+#[test]
+fn ffi_albums_are_listed_by_their_most_recent_asset() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let minted_at =
+        |secs| uuid::Uuid::new_v7(uuid::Timestamp::from_unix(uuid::NoContext, secs, 0)).to_string();
+    let older = workspace
+        .ensure_album(minted_at(1_000_000_000), "Older".into())
+        .unwrap();
+    let newer = workspace
+        .ensure_album(minted_at(1_100_000_000), "Newer".into())
+        .unwrap();
+    let default = workspace
+        .ensure_album(workspace.default_album_id().unwrap(), "Camera Roll".into())
+        .unwrap();
+    let order = |ws: &FfiWorkspace| -> Vec<String> {
+        ws.albums()
+            .unwrap()
+            .into_iter()
+            .map(|a| a.album_id)
+            .collect()
+    };
+    assert_eq!(
+        order(&workspace),
+        vec![newer.clone(), older.clone(), default.clone()]
+    );
+
+    // An asset without EXIF is dated by the import clock, later than either album's creation.
+    workspace
+        .seal_asset(
+            older.clone(),
+            "shot.jpg".into(),
+            b"\xFF\xD8\xFF order".to_vec(),
+        )
+        .unwrap();
+    assert_eq!(order(&workspace), vec![older, newer, default]);
+}
+
 /// A tampered original quarantines with the chokepoint's own reason code rather than
 /// erroring — one hostile feed row must not abort a sync page.
 #[tokio::test]
@@ -852,13 +895,20 @@ async fn ffi_push_asset_streams_the_original_in_bounded_windows() {
         };
 
         let received = chunks.lock().unwrap().clone();
-        let original_chunks: Vec<&ReceivedChunk> = received
+        let mut original_chunks: Vec<&ReceivedChunk> = received
             .iter()
             .filter(|(s, _, _)| s == session_id)
             .collect();
+        // An original verifies what it re-derives, so its ranges go out several at once and
+        // may arrive in any order; ordered by offset they must tile the ciphertext exactly.
+        original_chunks.sort_by_key(|(_, offset, _)| *offset);
         let mut reassembled = Vec::new();
         for (_, offset, body) in &original_chunks {
-            assert_eq!(*offset, reassembled.len() as u64, "chunks arrive in order");
+            assert_eq!(
+                *offset,
+                reassembled.len() as u64,
+                "the ranges tile the ciphertext with no gap or overlap"
+            );
             reassembled.extend_from_slice(body);
         }
         let largest = original_chunks
@@ -888,6 +938,145 @@ async fn ffi_push_asset_streams_the_original_in_bounded_windows() {
     }
 }
 
+/// **The path the app reports plans the push.** On a metered cellular path the push is staged:
+/// the index tier publishes the asset and the original waits, where the hard-coded unmetered
+/// class used to send it. Back on an unmetered path the next push sends the original.
+#[tokio::test]
+async fn ffi_push_asset_plans_from_the_reported_path() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let album = workspace
+        .ensure_album(workspace.default_album_id().unwrap(), "Camera Roll".into())
+        .unwrap();
+    let chunks = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let server = recording_upload_server(chunks.clone()).await;
+    let session = login(&server).await;
+
+    let desktop = FfiPathSnapshot {
+        cost: FfiPathCost::Unmetered,
+        reachable: true,
+        interface: FfiPathInterface::Other,
+        power: FfiPowerState::External,
+        thermal: FfiThermalState::Nominal,
+        background_deadline_ms: None,
+    };
+    assert_eq!(
+        session.set_path(desktop),
+        1,
+        "the default path is unchanged"
+    );
+    let cellular = FfiPathSnapshot {
+        cost: FfiPathCost::Metered,
+        interface: FfiPathInterface::Cellular,
+        ..desktop
+    };
+    assert_eq!(
+        session.set_path(cellular),
+        2,
+        "a new path is a new generation"
+    );
+    assert_eq!(
+        session.set_path(FfiPathSnapshot {
+            power: FfiPowerState::Battery,
+            ..cellular
+        }),
+        2,
+        "a power change is the same path"
+    );
+
+    let asset = workspace
+        .seal_asset(album, "IMG_0043.JPG".into(), original_plaintext(64 * 1024))
+        .unwrap();
+    let report = session
+        .push_asset(workspace.clone(), asset.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        report
+            .pushed
+            .iter()
+            .map(|b| b.tier.as_str())
+            .collect::<Vec<_>>(),
+        vec!["index", "index"],
+        "the original waits for an unmetered path"
+    );
+    assert_eq!(report.deferred, 1);
+    assert!(
+        has_upload_guard(&workspace, &asset),
+        "a deferred original keeps its source guard: it is still to be sent under its nonces"
+    );
+
+    assert_eq!(session.set_path(desktop), 3);
+    let report = session
+        .push_asset(workspace.clone(), asset.clone())
+        .await
+        .unwrap();
+    assert!(
+        report.pushed.iter().any(|b| b.tier == "original"),
+        "the original goes once the path allows it"
+    );
+    assert_eq!(report.deferred, 0);
+    assert!(
+        !has_upload_guard(&workspace, &asset),
+        "a push with every blob completed and none deferred releases the source guard"
+    );
+}
+
+/// Whether `asset`'s original has an upload source guard recorded in `workspace`'s catalog.
+fn has_upload_guard(workspace: &FfiWorkspace, asset: &str) -> bool {
+    let asset_id = uuid::Uuid::parse_str(asset).unwrap();
+    workspace
+        .with(|ws| Ok(ws.has_upload_guard(&asset_id)?))
+        .unwrap()
+}
+
+/// **`upload_blobs` leaves no guard behind.** It materialises every blob, so nothing
+/// re-derives the original from that bundle again, and the guard its build recorded is
+/// released before the blobs are returned.
+#[tokio::test]
+async fn ffi_upload_blobs_releases_the_source_guard() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let album = workspace.create_album("Trip".into()).unwrap();
+    let asset = workspace
+        .seal_asset(album, "shot.jpg".into(), original_plaintext(64 * 1024))
+        .unwrap();
+    workspace.bundle(&asset).unwrap();
+    assert!(
+        has_upload_guard(&workspace, &asset),
+        "building a bundle records the guard"
+    );
+
+    let blobs = workspace.upload_blobs(asset.clone()).unwrap();
+    assert!(blobs.iter().any(|blob| blob.tier == "original"));
+    assert!(
+        !has_upload_guard(&workspace, &asset),
+        "the materialised blobs need no guard"
+    );
+}
+
+/// **The upload client sizes chunks for the plan's class.** Once the detector promotes the
+/// link to `adverse`, every upload client the session builds targets the shorter chunk
+/// request duration.
+#[tokio::test]
+async fn ffi_upload_client_follows_the_plans_class() {
+    let chunks = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let server = recording_upload_server(chunks).await;
+    let session = login(&server).await;
+    assert_eq!(
+        session.upload_client().connection_class(),
+        ConnectionClass::Unmetered
+    );
+    for _ in 0..3 {
+        session.path.record(crate::net::TransferSignal::Reset);
+    }
+    assert_eq!(
+        session.upload_client().connection_class(),
+        ConnectionClass::Adverse,
+        "a promoted link shortens the chunk requests"
+    );
+}
+
 /// An unknown asset is refused before any request, and a malformed id is the caller's.
 #[tokio::test]
 async fn ffi_push_asset_refuses_an_unknown_asset() {
@@ -914,6 +1103,335 @@ async fn ffi_push_asset_refuses_an_unknown_asset() {
     assert!(
         chunks.lock().unwrap().is_empty(),
         "nothing reached the wire"
+    );
+}
+
+// ─── Pushing several assets through one lane ────────────────────────────────
+
+/// One request the lane mock received: a session's create or one of its chunks, and the asset
+/// (`manifest_envelope.file_id`) the session is for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LaneRequest {
+    Create(String),
+    Chunk(String),
+}
+
+/// An upload mock that opens a distinct session per create, acknowledges every chunk whole, and
+/// records each request in arrival order. Every create answers only after `create_delay`, so
+/// creates sent together all land before any of their sessions moves a byte. A blob of the
+/// asset `refuse` names is refused at finalization with `error.upload.envelope_rejected` — the
+/// answer a stale-epoch create meets.
+async fn lane_upload_server(
+    create_delay: std::time::Duration,
+    refuse: Option<String>,
+) -> (MockServer, Arc<std::sync::Mutex<Vec<LaneRequest>>>) {
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = log.clone();
+    let sessions: std::sync::Mutex<std::collections::HashMap<String, (String, u64)>> =
+        std::sync::Mutex::default();
+    let server = MockServer::start(move |req: &MockRequest| {
+        match (req.method.as_str(), req.path.as_str()) {
+            ("POST", "/auth/login") => MockResponse::new(200, "OK").json_body(token_json()),
+            ("POST", "/upload") => {
+                let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+                let asset = body["manifest_envelope"]["file_id"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned();
+                let size = body["size"].as_u64().unwrap();
+                let mut sessions = sessions.lock().unwrap();
+                let id = format!("sess-{}", sessions.len());
+                sessions.insert(id.clone(), (asset.clone(), size));
+                seen.lock().unwrap().push(LaneRequest::Create(asset));
+                MockResponse::new(201, "Created")
+                    .header("X-Capsule-Offset", "0")
+                    .json_body(
+                        serde_json::json!({
+                            "id": id,
+                            "upload_url": format!("/upload/{id}"),
+                            "suggested_chunk_size": 262_144,
+                        })
+                        .to_string(),
+                    )
+                    .after(create_delay)
+            }
+            ("PATCH", path) if path.starts_with("/upload/sess-") => {
+                let id = path.trim_start_matches("/upload/");
+                let (asset, size) = sessions.lock().unwrap()[id].clone();
+                seen.lock().unwrap().push(LaneRequest::Chunk(asset.clone()));
+                let offset: u64 = req
+                    .header("X-Capsule-Offset")
+                    .and_then(|o| o.parse().ok())
+                    .unwrap_or(0);
+                let next = offset + req.body.len() as u64;
+                if next == size && refuse.as_deref() == Some(asset.as_str()) {
+                    return MockResponse::api_error(
+                        400,
+                        "Bad Request",
+                        capsule_i18n::error_codes::UPLOAD_ENVELOPE_REJECTED,
+                        "the manifest envelope did not survive re-validation at finalization",
+                    );
+                }
+                MockResponse::new(204, "No Content").header("X-Capsule-Offset", next.to_string())
+            }
+            _ => MockResponse::new(404, "Not Found").json_body(r#"{"error":"no route"}"#),
+        }
+    })
+    .await;
+    (server, log)
+}
+
+/// Seal `count` small assets into `workspace`'s default album, returning their ids.
+fn seal_assets(workspace: &FfiWorkspace, count: usize) -> Vec<String> {
+    let album = workspace
+        .ensure_album(workspace.default_album_id().unwrap(), "Camera Roll".into())
+        .unwrap();
+    (0..count)
+        .map(|at| {
+            workspace
+                .seal_asset(
+                    album.clone(),
+                    format!("IMG_{at:04}.JPG"),
+                    original_plaintext(32 * 1024 + at),
+                )
+                .unwrap()
+        })
+        .collect()
+}
+
+/// **Several assets, one lane, W sessions at once** (issue #1126). `push_assets` drives every
+/// asset's bundle through one run of the server's lane: the creates of different assets reach
+/// the server before any session sends a byte, so more than one session is open at once, which
+/// a sequence of single-asset pushes never does. Each asset's result comes back in the order
+/// asked, and a malformed id fails only its own slot.
+#[tokio::test]
+async fn ffi_push_assets_runs_several_sessions_at_once_and_answers_in_order() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let sealed = seal_assets(&workspace, 3);
+    let (server, log) = lane_upload_server(std::time::Duration::from_millis(200), None).await;
+    let session = login(&server).await;
+
+    let asked = vec![
+        sealed[0].clone(),
+        "not-a-uuid".to_owned(),
+        sealed[1].clone(),
+        sealed[2].clone(),
+    ];
+    let results = session.push_assets(workspace, asked.clone()).await;
+
+    assert_eq!(results.len(), asked.len(), "one result per asset asked");
+    for (at, (asked, result)) in asked.iter().zip(&results).enumerate() {
+        match (at, result) {
+            (1, FfiPushAssetResult::Failed { asset_id, error }) => {
+                assert_eq!(asset_id, asked);
+                assert!(
+                    matches!(error, FfiError::InvalidArgument { .. }),
+                    "a malformed id is the caller's: {error:?}"
+                );
+            }
+            (_, FfiPushAssetResult::Pushed { report }) if at != 1 => {
+                assert_eq!(
+                    &report.asset_id, asked,
+                    "results come back in the order asked"
+                );
+                assert_eq!(
+                    report
+                        .pushed
+                        .iter()
+                        .map(|b| b.tier.as_str())
+                        .collect::<Vec<_>>(),
+                    vec!["index", "index", "original"],
+                    "each asset still drives its whole ladder"
+                );
+                assert_eq!(report.deferred, 0);
+            }
+            (at, FfiPushAssetResult::Failed { error, .. }) => {
+                panic!("asset {at} should have pushed: {error:?}")
+            }
+            (at, FfiPushAssetResult::Pushed { .. }) => panic!("asset {at} should have failed"),
+        }
+    }
+
+    let log = log.lock().unwrap().clone();
+    let opened_before_any_chunk: HashSet<&String> = log
+        .iter()
+        .take_while(|request| matches!(request, LaneRequest::Create(_)))
+        .map(|request| match request {
+            LaneRequest::Create(asset) | LaneRequest::Chunk(asset) => asset,
+        })
+        .collect();
+    assert!(
+        opened_before_any_chunk.len() > 1,
+        "more than one asset's session was open at once: {log:?}"
+    );
+    assert_eq!(
+        log.iter()
+            .filter(|request| matches!(request, LaneRequest::Create(_)))
+            .count(),
+        9,
+        "three blobs for each of the three sealed assets, and nothing for the malformed id"
+    );
+}
+
+/// **A refused create fails only its own asset** (issue #1126, keeping issue #822's
+/// handling). The server refuses one asset's create at finalization; this device holds no newer
+/// epoch to re-seal it at, so that asset fails with the server's code, exactly as `push_asset`
+/// would fail it, and the assets around it still push.
+#[tokio::test]
+async fn ffi_push_assets_fails_a_refused_create_in_its_own_slot() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let sealed = seal_assets(&workspace, 3);
+    let (server, log) =
+        lane_upload_server(std::time::Duration::ZERO, Some(sealed[1].clone())).await;
+    let session = login(&server).await;
+
+    let results = session.push_assets(workspace, sealed.clone()).await;
+
+    assert_eq!(results.len(), 3);
+    for (at, result) in results.iter().enumerate() {
+        match (at, result) {
+            (1, FfiPushAssetResult::Failed { asset_id, error }) => {
+                assert_eq!(asset_id, &sealed[1]);
+                match error {
+                    FfiError::Upload { code, detail } => {
+                        assert_eq!(code.as_deref(), Some("error.upload.envelope_rejected"));
+                        assert!(
+                            detail.contains("no newer epoch to re-seal it at"),
+                            "{detail}"
+                        );
+                    }
+                    other => panic!("expected the upload refusal, got {other:?}"),
+                }
+            }
+            (_, FfiPushAssetResult::Pushed { report }) if at != 1 => {
+                assert_eq!(report.asset_id, sealed[at]);
+            }
+            (at, _) => panic!("asset {at} ended the wrong way"),
+        }
+    }
+    let refused_creates = log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|request| **request == LaneRequest::Create(sealed[1].clone()))
+        .count();
+    assert_eq!(
+        refused_creates, 1,
+        "the refused asset stopped at its provenance blob and was not pushed again"
+    );
+}
+
+/// No ids is no request and no result.
+#[tokio::test]
+async fn ffi_push_assets_of_nothing_sends_nothing() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let (server, log) = lane_upload_server(std::time::Duration::ZERO, None).await;
+    let session = login(&server).await;
+
+    assert!(session.push_assets(workspace, Vec::new()).await.is_empty());
+    assert!(log.lock().unwrap().is_empty(), "nothing reached the wire");
+}
+
+/// **A list longer than one batch** comes back with one result per id, in the order asked,
+/// across the batch boundaries: five assets in batches of two run three lane runs, and every
+/// asset's session opens in exactly one of them.
+#[tokio::test]
+async fn ffi_push_assets_answers_in_order_across_batches() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let sealed = seal_assets(&workspace, 5);
+    let (server, log) = lane_upload_server(std::time::Duration::ZERO, None).await;
+    let session = login(&server).await;
+
+    let results = session.push_assets_in(&workspace, &sealed, 2).await;
+
+    assert_eq!(results.len(), sealed.len(), "one result per asset asked");
+    for (asked, result) in sealed.iter().zip(&results) {
+        match result {
+            FfiPushAssetResult::Pushed { report } => assert_eq!(
+                &report.asset_id, asked,
+                "results come back in the order asked, across batches"
+            ),
+            FfiPushAssetResult::Failed { error, .. } => {
+                panic!("{asked} should have pushed: {error:?}")
+            }
+        }
+    }
+    let log = log.lock().unwrap().clone();
+    for asset in &sealed {
+        assert_eq!(
+            log.iter()
+                .filter(|request| **request == LaneRequest::Create(asset.clone()))
+                .count(),
+            3,
+            "each asset's three blobs were created once, in one batch: {log:?}"
+        );
+    }
+    // Batches run one after another: no session of a later batch opens before every create of
+    // an earlier batch has been sent.
+    let first_create = |asset: &String| {
+        log.iter()
+            .position(|request| *request == LaneRequest::Create(asset.clone()))
+            .unwrap()
+    };
+    let last_create = |asset: &String| {
+        log.iter()
+            .rposition(|request| *request == LaneRequest::Create(asset.clone()))
+            .unwrap()
+    };
+    for (earlier, later) in [(1, 2), (3, 4)] {
+        assert!(
+            last_create(&sealed[earlier]) < first_create(&sealed[later]),
+            "batch boundary between assets {earlier} and {later}: {log:?}"
+        );
+    }
+}
+
+/// **A repeated id pushes once.** Its first occurrence pushes as usual; each later occurrence
+/// fails its own slot with an invalid argument, so one asset never runs two sessions in one
+/// lane.
+#[tokio::test]
+async fn ffi_push_assets_refuses_a_repeated_id_in_its_own_slot() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let sealed = seal_assets(&workspace, 2);
+    let (server, log) = lane_upload_server(std::time::Duration::ZERO, None).await;
+    let session = login(&server).await;
+
+    let asked = vec![sealed[0].clone(), sealed[1].clone(), sealed[0].clone()];
+    let results = session.push_assets(workspace, asked.clone()).await;
+
+    assert_eq!(
+        results.len(),
+        3,
+        "one result per id asked, repeats included"
+    );
+    for (at, result) in results.iter().enumerate() {
+        match (at, result) {
+            (2, FfiPushAssetResult::Failed { asset_id, error }) => {
+                assert_eq!(asset_id, &sealed[0]);
+                assert!(
+                    matches!(error, FfiError::InvalidArgument { .. }),
+                    "a repeated id is the caller's: {error:?}"
+                );
+            }
+            (0 | 1, FfiPushAssetResult::Pushed { report }) => {
+                assert_eq!(report.asset_id, asked[at]);
+            }
+            (at, _) => panic!("slot {at} ended the wrong way"),
+        }
+    }
+    assert_eq!(
+        log.lock()
+            .unwrap()
+            .iter()
+            .filter(|request| **request == LaneRequest::Create(sealed[0].clone()))
+            .count(),
+        3,
+        "the repeated asset's three blobs were created once"
     );
 }
 
@@ -1112,6 +1630,70 @@ async fn ffi_fetch_blob_to_path_keeps_a_failing_refresh_transient() {
         other => panic!("expected a transient fetch error, got {other:?}"),
     }
     assert!(!path.exists());
+}
+
+/// **A metadata blob of unlisted size.** `fetch_metadata_blob` reads the blob a feed entry
+/// names by address only in bounded `Range` windows until the answer runs short, and returns
+/// exactly the bytes that hash to the address.
+#[tokio::test]
+async fn ffi_fetch_metadata_blob_reads_a_blob_of_unlisted_size_in_bounded_windows() {
+    // Two full windows and a short third: the fetch learns the end from the short answer.
+    let blob = original_plaintext(2 * crate::fetch::UNSIZED_WINDOW as usize + 1000);
+    let hash = capsule_core::crypto::hash::hash_bytes(&blob).to_hex();
+    let ranges = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let server = blob_server(blob.clone(), hash.clone(), ranges.clone()).await;
+    let session = login(&server).await;
+
+    let fetched = session
+        .fetch_metadata_blob(format!("{}/v1", server.base_url()), hash)
+        .await
+        .unwrap();
+
+    assert_eq!(fetched, blob);
+    let ranges = ranges.lock().unwrap().clone();
+    assert_eq!(ranges.len(), 3, "{ranges:?}");
+    assert!(
+        ranges
+            .iter()
+            .all(|len| len.is_some_and(|l| l <= crate::fetch::UNSIZED_WINDOW)),
+        "every request is a bounded window: {ranges:?}"
+    );
+}
+
+/// Bytes that do not hash to the requested address are refused, a blob the server does not
+/// serve is a fetch error, and a malformed address never reaches the network.
+#[tokio::test]
+async fn ffi_fetch_metadata_blob_refuses_what_does_not_verify() {
+    let blob = original_plaintext(4096);
+    let claimed = capsule_core::crypto::hash::hash_bytes(b"something else").to_hex();
+    let ranges = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let server = blob_server(blob, claimed.clone(), ranges.clone()).await;
+    let session = login(&server).await;
+    let base = format!("{}/v1", server.base_url());
+
+    match session.fetch_metadata_blob(base.clone(), claimed).await {
+        Err(FfiError::Fetch { detail, .. }) => assert!(detail.contains("integrity"), "{detail}"),
+        other => panic!("expected an integrity failure, got {other:?}"),
+    }
+    let absent = capsule_core::crypto::hash::hash_bytes(b"absent").to_hex();
+    match session.fetch_metadata_blob(base.clone(), absent).await {
+        Err(FfiError::Fetch { .. }) => {}
+        other => panic!("expected a fetch failure, got {other:?}"),
+    }
+
+    let requests = ranges.lock().unwrap().len();
+    match session
+        .fetch_metadata_blob(base, "../../etc/passwd".into())
+        .await
+    {
+        Err(FfiError::InvalidArgument { .. }) => {}
+        other => panic!("expected InvalidArgument, got {other:?}"),
+    }
+    assert_eq!(
+        ranges.lock().unwrap().len(),
+        requests,
+        "nothing was requested"
+    );
 }
 
 // ─── Bounded-memory apply and open of a synced original ─────────────────────
@@ -1598,7 +2180,9 @@ impl MockElement {
 
     fn guard(&self) -> Result<(), FfiHardwareSignerError> {
         match self.fails_with {
-            Some(_) => Err(FfiHardwareSignerError::Unavailable),
+            Some(detail) => Err(FfiHardwareSignerError::Unavailable {
+                detail: detail.into(),
+            }),
             None => Ok(()),
         }
     }
@@ -1633,7 +2217,9 @@ impl FfiHardwareSigner for MockElement {
     fn assert_non_exportable(&self, _key_alias: String) -> Result<(), FfiHardwareSignerError> {
         self.guard()?;
         if self.exportable {
-            Err(FfiHardwareSignerError::Exportable)
+            Err(FfiHardwareSignerError::Exportable {
+                detail: "mock key is exportable".into(),
+            })
         } else {
             Ok(())
         }
@@ -1730,6 +2316,102 @@ fn ffi_hardware_enrollment_failures_are_typed() {
         Err(other) => panic!("expected InvalidArgument for a short ml_seed, got {other:?}"),
         Ok(_) => panic!("a short ml_seed must not yield a workspace"),
     }
+}
+
+/// **Relaunch.** A library created on a hardware P-256 signing key reopens through
+/// `open_with_p256_hardware_signer` on the same key: the signed device directory it publishes is
+/// byte-identical across the relaunch and an asset sealed before it still verifies. Plain `open`
+/// and an element that cannot produce the key are refused, as typed workspace errors, rather
+/// than reopening the library on the software key.
+#[test]
+fn ffi_p256_hardware_signer_library_reopens_on_the_same_key() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let root = lib.path().to_string_lossy().into_owned();
+    let (directory, asset) = {
+        let workspace = FfiWorkspace::create_with_p256_hardware_signer(
+            root.clone(),
+            b"pw".to_vec(),
+            FfiDeviceTier::LowRam,
+            Arc::new(MockElement::new()),
+            "capsule-device-dsk".into(),
+            vec![9u8; 32],
+            client_build(),
+        )
+        .expect("a hardware-bound workspace enrolls");
+        let album = workspace.create_album("Trip".into()).unwrap();
+        let asset = workspace
+            .seal_asset(album, "hw.jpg".into(), b"\xFF\xD8\xFF hw bytes".to_vec())
+            .unwrap();
+        (workspace.signed_device_directory().unwrap(), asset)
+    };
+
+    match FfiWorkspace::open(
+        root.clone(),
+        b"pw".to_vec(),
+        FfiDeviceTier::LowRam,
+        client_build(),
+    ) {
+        Err(FfiError::Workspace { .. }) => {}
+        Err(other) => panic!("expected a typed workspace error, got {other:?}"),
+        Ok(_) => panic!("a hardware-signed library must not open on the software key"),
+    }
+    match FfiWorkspace::open_with_p256_hardware_signer(
+        root.clone(),
+        b"pw".to_vec(),
+        FfiDeviceTier::LowRam,
+        Arc::new(MockElement::unavailable()),
+        "capsule-device-dsk".into(),
+        client_build(),
+    ) {
+        Err(FfiError::Workspace { .. }) => {}
+        Err(other) => panic!("expected a typed workspace error, got {other:?}"),
+        Ok(_) => panic!("an unavailable element must not yield a workspace"),
+    }
+
+    let reopened = FfiWorkspace::open_with_p256_hardware_signer(
+        root,
+        b"pw".to_vec(),
+        FfiDeviceTier::LowRam,
+        Arc::new(MockElement::new()),
+        "capsule-device-dsk".into(),
+        client_build(),
+    )
+    .expect("the library reopens with its element");
+    assert_eq!(reopened.signed_device_directory().unwrap(), directory);
+    assert!(matches!(
+        reopened.verify_asset(asset).unwrap(),
+        FfiVerifyOutcome::Accept
+    ));
+}
+
+/// A library created on the software key opens through `open_with_p256_hardware_signer` on that
+/// key, its published directory unchanged: the library's own record decides, so an app may
+/// always pass its element on relaunch, including over a library from before the binding was
+/// recorded.
+#[test]
+fn ffi_p256_hardware_signer_open_keeps_a_software_library_on_its_software_key() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let root = lib.path().to_string_lossy().into_owned();
+    let directory = FfiWorkspace::create(
+        root.clone(),
+        b"pw".to_vec(),
+        FfiDeviceTier::LowRam,
+        client_build(),
+    )
+    .unwrap()
+    .signed_device_directory()
+    .unwrap();
+
+    let reopened = FfiWorkspace::open_with_p256_hardware_signer(
+        root,
+        b"pw".to_vec(),
+        FfiDeviceTier::LowRam,
+        Arc::new(MockElement::unavailable()),
+        "capsule-device-dsk".into(),
+        client_build(),
+    )
+    .expect("a software library ignores the element");
+    assert_eq!(reopened.signed_device_directory().unwrap(), directory);
 }
 
 // ─── Ed25519 hardware signer + hardware DEK (the harness surfaces, #424) ─────
@@ -1870,7 +2552,9 @@ impl FfiHardwareKeyAgreement for MockKeyAgreement {
     fn public_key(&self, _key_alias: String) -> Result<Vec<u8>, FfiHardwareSignerError> {
         use p256::elliptic_curve::sec1::ToEncodedPoint as _;
         if self.unavailable {
-            return Err(FfiHardwareSignerError::Unavailable);
+            return Err(FfiHardwareSignerError::Unavailable {
+                detail: "no secure element".into(),
+            });
         }
         Ok(self
             .sk
@@ -1885,8 +2569,11 @@ impl FfiHardwareKeyAgreement for MockKeyAgreement {
         _key_alias: String,
         peer_public: Vec<u8>,
     ) -> Result<Vec<u8>, FfiHardwareSignerError> {
-        let peer = p256::PublicKey::from_sec1_bytes(&peer_public)
-            .map_err(|e| FfiHardwareSignerError::Backend(e.to_string()))?;
+        let peer = p256::PublicKey::from_sec1_bytes(&peer_public).map_err(|e| {
+            FfiHardwareSignerError::Backend {
+                detail: e.to_string(),
+            }
+        })?;
         let shared = p256::ecdh::diffie_hellman(self.sk.to_nonzero_scalar(), peer.as_affine());
         let mut secret = shared.raw_secret_bytes().to_vec();
         if self.corrupt {
@@ -1939,6 +2626,199 @@ fn ffi_p256_hardware_dek_round_trip_tracks_the_element() {
             "unexpected enrollment error detail: {detail}"
         ),
         other => panic!("expected Workspace for a failing element enrollment, got {other:?}"),
+    }
+}
+
+// ─── foreign-thrown element errors (issue #1061) ─────────────────────────────
+
+/// What a [`ForeignStyleElement`] throws from every call.
+#[derive(Clone)]
+enum Thrown {
+    /// A declared `FfiHardwareSignerException` / `FfiHardwareSignerError`.
+    Declared(FfiHardwareSignerError),
+    /// Anything else the foreign side throws (an unchecked `KeyStoreException`, a Swift
+    /// error of another type): uniffi reports it as an unexpected error carrying its text.
+    Undeclared(&'static str),
+}
+
+/// An element whose every call fails **the way a foreign one does**: its error does not
+/// travel as a Rust value but as the call status a Kotlin or Swift implementation writes —
+/// the lowered error buffer for a declared error, an unexpected-error string otherwise —
+/// and is lifted back through the very uniffi path a generated foreign-trait call takes.
+/// A flat error panics in that lift ("Can't lift flat errors"); this element pins that it
+/// cannot again.
+struct ForeignStyleElement(Thrown);
+
+impl ForeignStyleElement {
+    fn call<R>(&self) -> Result<R, FfiHardwareSignerError>
+    where
+        R: uniffi::LiftReturn<crate::UniFfiTag>,
+        R::ReturnType: Default,
+    {
+        let status = match self.0.clone() {
+            Thrown::Declared(err) => uniffi::RustCallStatus {
+                code: uniffi::RustCallStatusCode::Error,
+                error_buf: std::mem::ManuallyDrop::new(
+                    <FfiHardwareSignerError as uniffi::LowerError<crate::UniFfiTag>>::lower_error(
+                        err,
+                    ),
+                ),
+            },
+            Thrown::Undeclared(text) => uniffi::RustCallStatus::error(text),
+        };
+        <Result<R, FfiHardwareSignerError> as uniffi::LiftReturn<crate::UniFfiTag>>::lift_foreign_return(
+            Default::default(),
+            status,
+        )
+    }
+}
+
+impl FfiHardwareSigner for ForeignStyleElement {
+    fn enroll(&self, _key_alias: String) -> Result<Vec<u8>, FfiHardwareSignerError> {
+        self.call()
+    }
+    fn classical_public_key(&self, _key_alias: String) -> Result<Vec<u8>, FfiHardwareSignerError> {
+        self.call()
+    }
+    fn sign_classical(
+        &self,
+        _key_alias: String,
+        _msg: Vec<u8>,
+    ) -> Result<Vec<u8>, FfiHardwareSignerError> {
+        self.call()
+    }
+    fn assert_non_exportable(&self, _key_alias: String) -> Result<(), FfiHardwareSignerError> {
+        self.call()
+    }
+}
+
+impl FfiHardwareKeyAgreement for ForeignStyleElement {
+    fn enroll(&self, _key_alias: String) -> Result<Vec<u8>, FfiHardwareSignerError> {
+        self.call()
+    }
+    fn public_key(&self, _key_alias: String) -> Result<Vec<u8>, FfiHardwareSignerError> {
+        self.call()
+    }
+    fn key_agreement(
+        &self,
+        _key_alias: String,
+        _peer_public: Vec<u8>,
+    ) -> Result<Vec<u8>, FfiHardwareSignerError> {
+        self.call()
+    }
+    fn assert_non_exportable(&self, _key_alias: String) -> Result<(), FfiHardwareSignerError> {
+        self.call()
+    }
+}
+
+/// Every variant an element can throw, each with a distinct detail.
+fn every_hardware_error() -> Vec<FfiHardwareSignerError> {
+    vec![
+        FfiHardwareSignerError::AuthCancelled {
+            detail: "biometric cancelled".into(),
+        },
+        FfiHardwareSignerError::Unavailable {
+            detail: "keystore refused".into(),
+        },
+        FfiHardwareSignerError::NotFound {
+            detail: "no StrongBox key for alias".into(),
+        },
+        FfiHardwareSignerError::Exportable {
+            detail: "software key is exportable".into(),
+        },
+        FfiHardwareSignerError::Backend {
+            detail: "keymint returned 7".into(),
+        },
+    ]
+}
+
+/// Each variant a foreign element throws is lifted back **as itself**, detail included, on
+/// both return shapes the seams use (bytes and unit), and core receives the matching variant.
+#[test]
+fn ffi_foreign_thrown_hardware_errors_lift_as_themselves() {
+    for thrown in every_hardware_error() {
+        let element = ForeignStyleElement(Thrown::Declared(thrown.clone()));
+        assert_eq!(
+            FfiHardwareSigner::enroll(&element, "a".into()).unwrap_err(),
+            thrown
+        );
+        assert_eq!(
+            FfiHardwareSigner::assert_non_exportable(&element, "a".into()).unwrap_err(),
+            thrown
+        );
+        let core = HardwareSignerError::from(thrown.clone());
+        let same = match (&thrown, &core) {
+            (FfiHardwareSignerError::AuthCancelled { .. }, HardwareSignerError::AuthCancelled)
+            | (FfiHardwareSignerError::Unavailable { .. }, HardwareSignerError::Unavailable)
+            | (FfiHardwareSignerError::NotFound { .. }, HardwareSignerError::NotFound)
+            | (FfiHardwareSignerError::Exportable { .. }, HardwareSignerError::Exportable) => true,
+            (
+                FfiHardwareSignerError::Backend { detail },
+                HardwareSignerError::Backend(core_detail),
+            ) => detail == core_detail,
+            _ => false,
+        };
+        assert!(same, "{thrown:?} reached core as {core:?}");
+    }
+}
+
+/// An element that throws something it never declared is lifted as a typed `Backend`
+/// failure carrying the foreign text, rather than panicking with the workspace lock held.
+#[test]
+fn ffi_undeclared_foreign_throw_lifts_as_backend() {
+    let element = ForeignStyleElement(Thrown::Undeclared("java.security.KeyStoreException"));
+    match FfiHardwareSigner::sign_classical(&element, "a".into(), b"m".to_vec()) {
+        Err(FfiHardwareSignerError::Backend { detail }) => assert!(
+            detail.contains("java.security.KeyStoreException"),
+            "the foreign text is lost: {detail}"
+        ),
+        other => panic!("expected Backend, got {other:?}"),
+    }
+}
+
+/// **Through the verbs.** Whatever a foreign element throws — each declared variant, and an
+/// undeclared exception — creating a workspace on it, on either signer constructor, and the
+/// key-agreement round trip all fail with a typed [`FfiError::Workspace`], never a panic.
+#[test]
+fn ffi_foreign_thrown_element_errors_fail_the_verbs_typed() {
+    let throws = every_hardware_error()
+        .into_iter()
+        .map(Thrown::Declared)
+        .chain([Thrown::Undeclared("java.lang.IllegalStateException")]);
+    for thrown in throws {
+        let lib = tempfile::TempDir::new().unwrap();
+        let root = lib.path().to_string_lossy().into_owned();
+        let element = Arc::new(ForeignStyleElement(thrown));
+        for created in [
+            FfiWorkspace::create_with_p256_hardware_signer(
+                root.clone(),
+                b"pw".to_vec(),
+                FfiDeviceTier::LowRam,
+                element.clone(),
+                "capsule-device-dsk".into(),
+                vec![9u8; 32],
+                client_build(),
+            ),
+            FfiWorkspace::create_with_hardware_signer(
+                root.clone(),
+                b"pw".to_vec(),
+                FfiDeviceTier::LowRam,
+                element.clone(),
+                "capsule-device-dsk".into(),
+                vec![9u8; 32],
+                client_build(),
+            ),
+        ] {
+            match created {
+                Err(FfiError::Workspace { .. }) => {}
+                Err(other) => panic!("expected a typed workspace error, got {other:?}"),
+                Ok(_) => panic!("a throwing element must not yield a workspace"),
+            }
+        }
+        match p256_hardware_dek_round_trip(element, "device-dek".into(), vec![9u8; 32]) {
+            Err(FfiError::Workspace { .. }) => {}
+            other => panic!("expected Workspace from a throwing key agreement, got {other:?}"),
+        }
     }
 }
 
@@ -2004,6 +2884,25 @@ fn a_refused_create_with_no_newer_epoch_does_not_claim_a_missing_key() {
             );
         }
         other => panic!("expected an Upload refusal, got {other:?}"),
+    }
+}
+
+/// A transfer that gave up waiting out a coded answer reaches the bindings with that code, so
+/// an app still localizes what the server said.
+#[test]
+fn a_given_up_wait_reaches_the_bindings_with_the_servers_code() {
+    let gave_up = UploadError::WaitsExhausted {
+        status: 500,
+        code: Some("error.upload.storage_inconsistent".into()),
+        message: "the staged upload and the session's byte count disagree".into(),
+        reason: "server-requested wait: exceeded 64 recovery attempts".into(),
+    };
+    match FfiError::from(gave_up) {
+        FfiError::Upload { code, detail } => {
+            assert_eq!(code.as_deref(), Some("error.upload.storage_inconsistent"));
+            assert!(detail.contains("HTTP 500"), "{detail}");
+        }
+        other => panic!("expected an Upload error, got {other:?}"),
     }
 }
 
@@ -2211,4 +3110,1031 @@ fn ffi_album_labels_round_trip() {
         ["Family"]
     );
     assert_eq!(workspace.labels(target).unwrap(), ["Family"]);
+}
+
+// ─── Trash ───────────────────────────────────────────────────────────────────
+
+fn trash_refusal<T: std::fmt::Debug>(
+    result: Result<T, FfiError>,
+) -> (FfiTrashRefusal, Option<String>, Option<String>) {
+    match result {
+        Err(FfiError::Trash {
+            refusal,
+            code,
+            retention_until,
+            ..
+        }) => (refusal, code, retention_until),
+        other => panic!("expected a trash refusal, got {other:?}"),
+    }
+}
+
+/// A drain whose feed lists `asset` at its current chain head (its `delete`, once trashed),
+/// with `changed_at` as the latest server clock reading it saw.
+fn drained(workspace: &FfiWorkspace, asset: &str, changed_at: Option<String>) -> FfiFeedDrain {
+    let head = workspace.provenance_head(asset.to_owned()).unwrap();
+    FfiFeedDrain {
+        latest_changed_at: changed_at,
+        server_heads: std::collections::HashMap::from([(asset.to_owned(), head)]),
+    }
+}
+
+/// The retention sweep judges a deadline only after a drain, by the server's latest
+/// `changed_at` alone, never expires a delete the server has not indexed, and refuses a stamp
+/// that is not RFC 3339.
+#[test]
+fn ffi_expired_trash_is_gated_on_a_drain_and_judged_by_the_server_clock() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let (workspace, _, asset) = labelled_fixture(lib.path());
+    let entry = workspace.delete_asset(asset.clone(), 0).unwrap();
+    let until = entry.retention_until.clone().unwrap();
+    let before: jiff::Timestamp = until.parse().unwrap();
+    let before = (before - jiff::SignedDuration::from_secs(1)).to_string();
+
+    assert!(workspace.expired_trash(None).unwrap().is_empty());
+    assert!(
+        workspace
+            .expired_trash(Some(drained(&workspace, &asset, None)))
+            .unwrap()
+            .is_empty(),
+        "no server clock reading, though this device's clock is past the window"
+    );
+    assert!(
+        workspace
+            .expired_trash(Some(drained(&workspace, &asset, Some(before))))
+            .unwrap()
+            .is_empty(),
+        "the server's clock has not reached the window"
+    );
+    let expired = workspace
+        .expired_trash(Some(drained(&workspace, &asset, Some(until.clone()))))
+        .unwrap();
+    assert_eq!(
+        expired
+            .iter()
+            .map(|e| e.asset_id.clone())
+            .collect::<Vec<_>>(),
+        vec![asset.clone()]
+    );
+    assert!(!expired[0].restorable, "judged at the server's instant");
+
+    let mut held = drained(&workspace, &asset, Some(until.clone()));
+    held.server_heads.clear();
+    held.server_heads
+        .insert("not-a-uuid".into(), b"ignored".to_vec());
+    assert!(
+        workspace.expired_trash(Some(held)).unwrap().is_empty(),
+        "a held delete never expires"
+    );
+    let mut no_record = drained(&workspace, &asset, Some(until));
+    no_record.server_heads.insert(asset, Vec::new());
+    assert!(
+        workspace.expired_trash(Some(no_record)).unwrap().is_empty(),
+        "an entry with no record is no evidence the delete was indexed"
+    );
+    assert!(matches!(
+        workspace.expired_trash(Some(FfiFeedDrain {
+            latest_changed_at: Some("yesterday".into()),
+            server_heads: std::collections::HashMap::new(),
+        })),
+        Err(FfiError::InvalidArgument { .. })
+    ));
+}
+
+/// Delete, restore and purge go through the workspace's signed records: a retried delete keeps
+/// its window, a restore leaves the trash, and an early purge hands back the signed re-issue
+/// the server needs before the asset leaves the workspace.
+#[test]
+fn ffi_trash_verbs_delete_restore_and_purge_through_signed_records() {
+    use capsule_core::crypto::provenance::{Action, ProvenanceRecord};
+
+    let lib = tempfile::TempDir::new().unwrap();
+    let (workspace, _, asset) = labelled_fixture(lib.path());
+    assert!(workspace.trash().unwrap().is_empty());
+
+    let entry = workspace.delete_asset(asset.clone(), 30).unwrap();
+    let head: ProvenanceRecord =
+        capsule_core::cbor::from_slice(&workspace.provenance_head(asset.clone()).unwrap()).unwrap();
+    assert_eq!(
+        head.manifest.core.action,
+        Action::Delete,
+        "the provenance head is the chain's head, not the create an upload carries"
+    );
+    assert_eq!(entry.asset_id, asset);
+    assert!(entry.restorable);
+    assert!(entry.retention_until.is_some());
+    assert_eq!(workspace.trash().unwrap(), vec![entry.clone()]);
+    let signed_at = Some(entry.deleted_at.clone());
+    assert!(
+        workspace
+            .expired_trash(Some(drained(&workspace, &asset, signed_at)))
+            .unwrap()
+            .is_empty(),
+        "the window is open at the instant the delete was signed"
+    );
+    assert_eq!(
+        workspace.delete_asset(asset.clone(), 1).unwrap(),
+        entry,
+        "a retried delete signs nothing and keeps the first window"
+    );
+
+    workspace.restore_asset(asset.clone()).unwrap();
+    assert!(workspace.trash().unwrap().is_empty());
+    assert_eq!(
+        trash_refusal(workspace.restore_asset(asset.clone())).0,
+        FfiTrashRefusal::NotInTrash
+    );
+    assert_eq!(
+        trash_refusal(workspace.purge_asset(asset.clone())).0,
+        FfiTrashRefusal::NotInTrash,
+        "a purge never skips the trash"
+    );
+
+    workspace.delete_asset(asset.clone(), 30).unwrap();
+    let purged = workspace.purge_asset(asset.clone()).unwrap();
+    assert_eq!(purged.asset_id, asset);
+    let record: ProvenanceRecord = capsule_core::cbor::from_slice(
+        purged
+            .reissue_record
+            .as_deref()
+            .expect("an early purge re-issues"),
+    )
+    .unwrap();
+    assert_eq!(record.manifest.core.action, Action::Delete);
+    assert_eq!(
+        workspace.purged_record(asset.clone()).unwrap(),
+        purged.reissue_record,
+        "a re-issue whose delivery failed can be resent from the kept chain"
+    );
+    assert!(!workspace.asset_ids().unwrap().contains(&asset));
+    assert!(workspace.trash().unwrap().is_empty());
+    assert_eq!(
+        trash_refusal(workspace.purge_asset(asset)).0,
+        FfiTrashRefusal::NotFound
+    );
+}
+
+/// A feed entry for an asset this device purged is refused with the stable `Purged` code and
+/// the asset id as its detail, so a catalog never upserts a purged asset back.
+#[test]
+fn ffi_sync_apply_refuses_an_asset_this_device_purged() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let blobs = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let album = workspace.create_album("Trip".into()).unwrap();
+    let synced = synced_original(&workspace, &album, original_plaintext(1024), blobs.path());
+    let apply = || {
+        workspace
+            .apply_sync_entry_from_file(synced.head.clone(), path_string(&synced.ciphertext_path))
+            .unwrap()
+    };
+    assert!(matches!(apply(), FfiSyncApplyOutcome::Applied { .. }));
+
+    workspace.delete_asset(synced.asset.clone(), 30).unwrap();
+    workspace.purge_asset(synced.asset.clone()).unwrap();
+    match apply() {
+        FfiSyncApplyOutcome::Quarantined { reason, detail } => {
+            assert_eq!(reason, "Purged");
+            assert_eq!(detail, Some(synced.asset.clone()));
+        }
+        other => panic!("expected the tombstone to refuse the entry, got {other:?}"),
+    }
+}
+
+/// A delete whose window has already closed is expired, refuses a restore with the server's
+/// own code and floor, and purges without a re-issue.
+#[test]
+fn ffi_trash_refuses_a_restore_after_retention_until() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let (workspace, _, asset) = labelled_fixture(lib.path());
+
+    let entry = workspace.delete_asset(asset.clone(), 0).unwrap();
+    assert!(!entry.restorable);
+    let server_now = Some(jiff::Timestamp::now().to_string());
+    assert_eq!(
+        workspace
+            .expired_trash(Some(drained(&workspace, &asset, server_now)))
+            .unwrap(),
+        vec![entry.clone()]
+    );
+    assert!(
+        workspace.expired_trash(None).unwrap().is_empty(),
+        "without a drained feed nothing has expired"
+    );
+
+    let (refusal, code, until) = trash_refusal(workspace.restore_asset(asset.clone()));
+    assert_eq!(refusal, FfiTrashRefusal::RetentionElapsed);
+    assert_eq!(
+        code.as_deref(),
+        Some(capsule_i18n::error_codes::UPLOAD_RETENTION_ELAPSED)
+    );
+    assert_eq!(until, entry.retention_until);
+    assert_eq!(workspace.trash().unwrap().len(), 1, "it stays in the trash");
+
+    assert!(
+        workspace
+            .purge_asset(asset)
+            .unwrap()
+            .reissue_record
+            .is_none()
+    );
+}
+
+/// Another device of this FFI workspace's account, as an enrolled second device is: a library
+/// workspace made from the account's master key that holds `album`'s keys, with a device
+/// directory listing both devices on each side.
+fn other_device(
+    workspace: &FfiWorkspace,
+    album: &str,
+    root: &std::path::Path,
+) -> capsule_library::lifecycle::Workspace {
+    use capsule_core::crypto::primitives::DeviceTier;
+    use capsule_library::lifecycle::Workspace;
+
+    let album = uuid::Uuid::parse_str(album).unwrap();
+    workspace
+        .with(|ws| {
+            let secret = b"a recovery secret for the other device";
+            let escrow = ws.escrow_master_key(secret, DeviceTier::LowRam)?;
+            let master = capsule_core::backup::recover_master_key(&escrow, secret).unwrap();
+            let mut other = Workspace::create_from_master(
+                root,
+                b"other device",
+                DeviceTier::LowRam.params(),
+                capsule_core::crypto::keys::MasterKey::from_bytes(master),
+                ws.user_id(),
+                &ws.sealed_identity(),
+            )?;
+            other.adopt_album_key_escrows(&[(album, ws.album_key_escrow(&album)?)])?;
+            let entry = other
+                .device_directory()
+                .device(&other.device_id())
+                .unwrap()
+                .clone();
+            let both = ws.cross_sign_device(entry)?;
+            assert!(other.extend_account_directory(&both)?.is_none());
+            Ok(other)
+        })
+        .unwrap()
+}
+
+/// The feed head of `asset`'s latest record on `ws`, with its original ciphertext written to
+/// `dir` as `fetch_blob_to_path` would leave it.
+fn remote_head(
+    ws: &capsule_library::lifecycle::Workspace,
+    asset: uuid::Uuid,
+    local_chain_head: Option<Vec<u8>>,
+    dir: &std::path::Path,
+) -> (FfiSyncHead, std::path::PathBuf) {
+    let state = ws.asset(&asset).unwrap();
+    let head = state.chain.records().last().unwrap();
+    let metadata_blob = if head.manifest.core.action.binds_metadata_blob() {
+        state.metadata_blob.clone()
+    } else {
+        Vec::new()
+    };
+    let ciphertext = dir.join(format!("{}.blob", uuid::Uuid::now_v7()));
+    let original = ws.upload_bundle(&asset).unwrap().original.to_vec().unwrap();
+    std::fs::write(&ciphertext, original).unwrap();
+    (
+        FfiSyncHead {
+            album_id: state.album_id.as_bytes().to_vec(),
+            manifest_cbor: capsule_core::cbor::to_canonical_vec(head).unwrap(),
+            metadata_blob,
+            local_chain_head,
+        },
+        ciphertext,
+    )
+}
+
+/// **Synced assets are held.** A create another device of the account imported is opened and
+/// adopted: the facts say so, the user tag its create carries is in `asset_tags`, and the trash
+/// verbs work on it, the delete this device signs chaining onto the other device's head (which
+/// that device verifies). A delete the other device signs is adopted by the apply verb, after
+/// which this device purges the asset it never imported.
+#[test]
+fn ffi_a_synced_asset_is_adopted_and_takes_the_trash_verbs() {
+    use capsule_library::lifecycle::{SidecarEnrichment, SignedImportOptions};
+
+    let (lib, other_lib, blobs, out) = (
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+    );
+    let workspace = enroll(lib.path());
+    let album = workspace.create_album("Trip".into()).unwrap();
+    let mut other = other_device(&workspace, &album, other_lib.path());
+
+    let photo = blobs.path().join("IMG_0001.JPG");
+    std::fs::write(&photo, original_plaintext(4096)).unwrap();
+    let options = SignedImportOptions {
+        enrichment: Some(SidecarEnrichment {
+            tags: vec!["harbour".into()],
+            ..SidecarEnrichment::default()
+        }),
+        ..SignedImportOptions::default()
+    };
+    let asset = other
+        .import_asset_with(uuid::Uuid::parse_str(&album).unwrap(), &photo, &options)
+        .unwrap()
+        .asset_id;
+    let remote = other.asset(&asset).unwrap().chain.head().unwrap();
+
+    let (head, ciphertext) = remote_head(&other, asset, None, blobs.path());
+    let destination = out.path().join("staged");
+    let facts = match workspace
+        .open_synced_original(head, path_string(&ciphertext), path_string(&destination))
+        .unwrap()
+    {
+        FfiOpenedOriginal::Opened { facts } => facts,
+        other => panic!("expected the create to open, got {other:?}"),
+    };
+    assert!(facts.adopted, "the workspace holds the synced asset");
+    assert_eq!(facts.provenance_head, remote.as_bytes().to_vec());
+    assert_eq!(
+        workspace.read_plaintext(asset.to_string()).unwrap(),
+        original_plaintext(4096)
+    );
+    assert_eq!(
+        std::fs::read(&destination).unwrap(),
+        original_plaintext(4096),
+        "the opened original is still the caller's"
+    );
+    let tags = workspace
+        .with(|ws| Ok(ws.db().tags_for(&asset.to_string()).unwrap()))
+        .unwrap();
+    assert_eq!(tags, vec!["harbour".to_string()]);
+
+    workspace.delete_asset(asset.to_string(), 30).unwrap();
+    let delete = capsule_core::crypto::provenance::ProvenanceRecord::decode(
+        &workspace.provenance_head(asset.to_string()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(delete.prior_provenance_hash, Some(remote));
+    let ours = workspace
+        .with(|ws| Ok(remote_head(ws, asset, None, blobs.path())))
+        .unwrap()
+        .0;
+    let verdict = other
+        .apply_remote_entry(capsule_library::lifecycle::RemoteEntry {
+            album_id: uuid::Uuid::parse_str(&album).unwrap(),
+            manifest_cbor: &ours.manifest_cbor,
+            metadata_blob: &ours.metadata_blob,
+            original_ciphertext: &other
+                .upload_bundle(&asset)
+                .unwrap()
+                .original
+                .to_vec()
+                .unwrap(),
+            local_chain_head: Some(remote),
+        })
+        .unwrap();
+    assert!(
+        verdict.facts().is_some(),
+        "the other device verifies this device's delete: {verdict:?}"
+    );
+    workspace.restore_asset(asset.to_string()).unwrap();
+    assert!(workspace.trash().unwrap().is_empty());
+
+    // A delete the other device signs, adopted by the apply verb. On a fresh pair: this
+    // device's own delete and restore above moved its chain past the other device's.
+    let (lib2, other_lib2) = (
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+    );
+    let workspace = enroll(lib2.path());
+    let album = workspace.create_album("Trip".into()).unwrap();
+    let mut other = other_device(&workspace, &album, other_lib2.path());
+    let asset = other
+        .import_asset_with(uuid::Uuid::parse_str(&album).unwrap(), &photo, &options)
+        .unwrap()
+        .asset_id;
+    let (head, ciphertext) = remote_head(&other, asset, None, blobs.path());
+    let staged = out.path().join("staged-2");
+    assert!(matches!(
+        workspace
+            .open_synced_original(head, path_string(&ciphertext), path_string(&staged))
+            .unwrap(),
+        FfiOpenedOriginal::Opened { facts } if facts.adopted
+    ));
+    let create = other.asset(&asset).unwrap().chain.head().unwrap();
+    other.soft_delete(&asset, 30).unwrap();
+    let (head, ciphertext) = remote_head(
+        &other,
+        asset,
+        Some(create.as_bytes().to_vec()),
+        blobs.path(),
+    );
+    match workspace
+        .apply_sync_entry_from_file(head, path_string(&ciphertext))
+        .unwrap()
+    {
+        FfiSyncApplyOutcome::Applied { facts } => {
+            assert_eq!(facts.action, "delete");
+            assert!(facts.adopted, "the remote delete advanced the held chain");
+        }
+        other => panic!("expected the delete to apply, got {other:?}"),
+    }
+    assert_eq!(
+        workspace
+            .trash()
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.asset_id)
+            .collect::<Vec<_>>(),
+        vec![asset.to_string()]
+    );
+    workspace.purge_asset(asset.to_string()).unwrap();
+    assert!(workspace.read_plaintext(asset.to_string()).is_err());
+}
+
+/// **An asset first seen past its create is not adopted.** An entry whose record follows a
+/// create this workspace never held verifies (the caller's catalog kept the create's head) but
+/// cannot start a chain, so both the open and the apply verb answer it with `adopted == false`,
+/// and the workspace still does not hold the asset: the app's catalog writer must keep its row.
+#[test]
+fn ffi_an_entry_past_an_unheld_create_is_applied_but_not_adopted() {
+    use capsule_library::lifecycle::{SidecarEnrichment, SignedImportOptions};
+
+    let (lib, other_lib, blobs, out) = (
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+    );
+    let workspace = enroll(lib.path());
+    let album = workspace.create_album("Trip".into()).unwrap();
+    let mut other = other_device(&workspace, &album, other_lib.path());
+
+    let photo = blobs.path().join("IMG_0002.JPG");
+    std::fs::write(&photo, original_plaintext(4096)).unwrap();
+    let options = SignedImportOptions {
+        enrichment: Some(SidecarEnrichment {
+            tags: vec!["harbour".into()],
+            ..SidecarEnrichment::default()
+        }),
+        ..SignedImportOptions::default()
+    };
+    let asset = other
+        .import_asset_with(uuid::Uuid::parse_str(&album).unwrap(), &photo, &options)
+        .unwrap()
+        .asset_id;
+    let create = other.asset(&asset).unwrap().chain.head().unwrap();
+    other.tag_add(&asset, "dusk").unwrap();
+
+    let (head, ciphertext) = remote_head(
+        &other,
+        asset,
+        Some(create.as_bytes().to_vec()),
+        blobs.path(),
+    );
+    let destination = out.path().join("staged");
+    match workspace
+        .open_synced_original(
+            head.clone(),
+            path_string(&ciphertext),
+            path_string(&destination),
+        )
+        .unwrap()
+    {
+        FfiOpenedOriginal::Opened { facts } => {
+            assert!(!facts.adopted, "a chain cannot start past its create");
+        }
+        other => panic!("expected the edit to open, got {other:?}"),
+    }
+    assert_eq!(
+        std::fs::read(&destination).unwrap(),
+        original_plaintext(4096)
+    );
+
+    match workspace
+        .apply_sync_entry_from_file(head, path_string(&ciphertext))
+        .unwrap()
+    {
+        FfiSyncApplyOutcome::Applied { facts } => {
+            assert!(!facts.adopted, "the apply verb does not adopt it either");
+        }
+        other => panic!("expected the edit to apply, got {other:?}"),
+    }
+    assert!(
+        workspace.read_plaintext(asset.to_string()).is_err(),
+        "the workspace does not hold the asset"
+    );
+    assert!(workspace.provenance_head(asset.to_string()).is_err());
+}
+
+/// A mock serving each of `records` at `/v1/blob/{its content address}` by `Range`, as the
+/// server serves an asset's superseded provenance records, and `404` for anything else.
+async fn records_server(records: Vec<Vec<u8>>) -> MockServer {
+    let held: std::collections::HashMap<String, Vec<u8>> = records
+        .into_iter()
+        .map(|bytes| {
+            (
+                capsule_core::crypto::hash::hash_bytes(&bytes).to_hex(),
+                bytes,
+            )
+        })
+        .collect();
+    MockServer::start(move |req: &MockRequest| {
+        let blob = req
+            .path
+            .strip_prefix("/v1/blob/")
+            .and_then(|hash| held.get(hash));
+        match (req.method.as_str(), blob) {
+            ("POST", _) if req.path == "/auth/login" => {
+                MockResponse::new(200, "OK").json_body(token_json())
+            }
+            ("GET", Some(blob)) => {
+                let range = req
+                    .header("Range")
+                    .and_then(|r| r.strip_prefix("bytes="))
+                    .and_then(|r| r.split_once('-'))
+                    .unwrap_or(("0", ""));
+                let start: usize = range.0.parse().unwrap_or(0);
+                let end = range
+                    .1
+                    .parse::<usize>()
+                    .ok()
+                    .map_or(blob.len(), |e| (e + 1).min(blob.len()));
+                let mut response = MockResponse::new(206, "Partial Content")
+                    .header("Content-Type", "application/octet-stream");
+                response.body = blob[start.min(end)..end].to_vec();
+                response
+            }
+            _ => MockResponse::new(404, "Not Found").json_body(r#"{"error":"no route"}"#),
+        }
+    })
+    .await
+}
+
+/// **An asset first seen at a `delete` is adopted from its fetched history.** The session walks
+/// the delete's links back to the create through the blob route and fetches the live metadata
+/// blob the delete names without a size, and the workspace verifies the
+/// records in order, opens the original, and holds the asset from its create with its live
+/// sidecar: the asset is in this device's trash with the tags its edit added, and restores. A
+/// history missing its create is refused and places nothing, and a record the server will not
+/// serve is a fetch error naming it.
+#[tokio::test]
+async fn ffi_an_asset_first_seen_at_a_delete_is_adopted_from_its_fetched_history() {
+    use capsule_library::lifecycle::{SidecarEnrichment, SignedImportOptions};
+
+    let (lib, other_lib, blobs, out) = (
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+    );
+    let workspace = enroll(lib.path());
+    let album = workspace.create_album("Trip".into()).unwrap();
+    let mut other = other_device(&workspace, &album, other_lib.path());
+
+    let photo = blobs.path().join("IMG_0003.JPG");
+    std::fs::write(&photo, original_plaintext(4096)).unwrap();
+    let options = SignedImportOptions {
+        enrichment: Some(SidecarEnrichment {
+            tags: vec!["harbour".into()],
+            ..SidecarEnrichment::default()
+        }),
+        ..SignedImportOptions::default()
+    };
+    let asset = other
+        .import_asset_with(uuid::Uuid::parse_str(&album).unwrap(), &photo, &options)
+        .unwrap()
+        .asset_id;
+    other.tag_add(&asset, "dusk").unwrap();
+    other.soft_delete(&asset, 30).unwrap();
+    let records: Vec<Vec<u8>> = other
+        .asset(&asset)
+        .unwrap()
+        .chain
+        .records()
+        .iter()
+        .map(|record| capsule_core::cbor::to_canonical_vec(record).unwrap())
+        .collect();
+    let history = records[..records.len() - 1].to_vec();
+
+    // The feed entry of the delete names the asset's live metadata blob by address only; the
+    // server serves it, as it serves the superseded records, while the asset is in trash.
+    let (mut head, ciphertext) = remote_head(&other, asset, None, blobs.path());
+    let live_metadata = other.asset(&asset).unwrap().metadata_blob.clone();
+    let mut served = history.clone();
+    served.push(live_metadata.clone());
+
+    let server = records_server(served).await;
+    let session = login(&server).await;
+    head.metadata_blob = session
+        .fetch_metadata_blob(
+            format!("{}/v1", server.base_url()),
+            capsule_core::crypto::hash::hash_bytes(&live_metadata).to_hex(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        head.metadata_blob, live_metadata,
+        "the sidecar, byte for byte"
+    );
+    let fetched = session
+        .fetch_provenance_history(
+            format!("{}/v1", server.base_url()),
+            head.manifest_cbor.clone(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(fetched, history, "oldest first, byte for byte");
+
+    // Missing its create: refused, and nothing placed or held.
+    let destination = out.path().join("opened");
+    match workspace
+        .open_synced_history(
+            head.clone(),
+            fetched[1..].to_vec(),
+            path_string(&ciphertext),
+            path_string(&destination),
+        )
+        .unwrap()
+    {
+        FfiOpenedOriginal::Refused {
+            outcome: FfiSyncApplyOutcome::Quarantined { reason, .. },
+        } => assert_eq!(reason, "Rejected.ForgedChain"),
+        other => panic!("expected the history to be refused, got {other:?}"),
+    }
+    assert!(dir_names(out.path()).is_empty(), "nothing placed or staged");
+    assert!(workspace.provenance_head(asset.to_string()).is_err());
+
+    match workspace
+        .open_synced_history(
+            head.clone(),
+            fetched,
+            path_string(&ciphertext),
+            path_string(&destination),
+        )
+        .unwrap()
+    {
+        FfiOpenedOriginal::Opened { facts } => {
+            assert!(facts.adopted, "the asset is held from its create");
+            assert_eq!(facts.action, "delete");
+        }
+        other => panic!("expected the delete to open, got {other:?}"),
+    }
+
+    // Held now: the same entry is opened as `open_synced_original` opens it, against its own
+    // head, and a history that would not even decode is not read.
+    let again = out.path().join("again");
+    let held_entry = FfiSyncHead {
+        local_chain_head: Some(
+            capsule_core::crypto::hash::hash_bytes(&history[1])
+                .as_bytes()
+                .to_vec(),
+        ),
+        ..head
+    };
+    match workspace
+        .open_synced_history(
+            held_entry,
+            vec![b"not a record".to_vec()],
+            path_string(&ciphertext),
+            path_string(&again),
+        )
+        .unwrap()
+    {
+        FfiOpenedOriginal::Opened { facts } => {
+            assert!(facts.adopted, "the held chain already contains the delete");
+            assert_eq!(facts.action, "delete");
+        }
+        other => panic!("expected the held asset's entry to open, got {other:?}"),
+    }
+    assert_eq!(
+        std::fs::read(&destination).unwrap(),
+        original_plaintext(4096)
+    );
+    assert_eq!(
+        workspace.provenance_head(asset.to_string()).unwrap(),
+        records[records.len() - 1]
+    );
+    assert_eq!(
+        workspace
+            .trash()
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.asset_id)
+            .collect::<Vec<_>>(),
+        vec![asset.to_string()]
+    );
+    let tags = workspace
+        .with(|ws| Ok(ws.db().tags_for(&asset.to_string()).unwrap()))
+        .unwrap();
+    assert_eq!(tags, vec!["dusk".to_string(), "harbour".to_string()]);
+    workspace.restore_asset(asset.to_string()).unwrap();
+    assert!(workspace.trash().unwrap().is_empty());
+
+    // A record the server does not serve stops the walk, with the code that tells a permanent
+    // refusal from a transient one.
+    let server = records_server(history[1..].to_vec()).await;
+    let session = login(&server).await;
+    match session
+        .fetch_provenance_history(
+            format!("{}/v1", server.base_url()),
+            records[records.len() - 1].clone(),
+        )
+        .await
+    {
+        Err(FfiError::Fetch { code, detail }) => {
+            let create = capsule_core::crypto::hash::hash_bytes(&history[0]).to_hex();
+            assert!(detail.contains(&create), "{detail}");
+            assert_eq!(code.as_deref(), Some(capsule_i18n::error_codes::BLOB_GONE));
+        }
+        other => panic!("expected a fetch error, got {other:?}"),
+    }
+}
+
+/// **A device that first sees an asset at its `delete` on an album page adopts and restores
+/// it.** The album page's tombstone names no metadata blob and no blob, so the device walks the
+/// delete's history, names the live metadata blob (the newest record that binds one) and the
+/// original (the delete's commitment) from those records, fetches both through the blob route,
+/// and opens the entry from its history: the asset is held in trash with its edited tags and
+/// restores. The same entry with its metadata blob left empty is refused and places nothing.
+#[tokio::test]
+async fn ffi_an_asset_first_seen_deleted_on_an_album_page_is_adopted_from_its_named_sources() {
+    use capsule_library::lifecycle::{SidecarEnrichment, SignedImportOptions};
+
+    let (lib, other_lib, blobs, out) = (
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+    );
+    let workspace = enroll(lib.path());
+    let album = workspace.create_album("Trip".into()).unwrap();
+    let mut other = other_device(&workspace, &album, other_lib.path());
+
+    let photo = blobs.path().join("IMG_0004.JPG");
+    std::fs::write(&photo, original_plaintext(4096)).unwrap();
+    let options = SignedImportOptions {
+        enrichment: Some(SidecarEnrichment {
+            tags: vec!["harbour".into()],
+            ..SidecarEnrichment::default()
+        }),
+        ..SignedImportOptions::default()
+    };
+    let asset = other
+        .import_asset_with(uuid::Uuid::parse_str(&album).unwrap(), &photo, &options)
+        .unwrap()
+        .asset_id;
+    other.tag_add(&asset, "dusk").unwrap();
+    other.soft_delete(&asset, 30).unwrap();
+    let records: Vec<Vec<u8>> = other
+        .asset(&asset)
+        .unwrap()
+        .chain
+        .records()
+        .iter()
+        .map(|record| capsule_core::cbor::to_canonical_vec(record).unwrap())
+        .collect();
+    let history = records[..records.len() - 1].to_vec();
+
+    // The album page's tombstone: its delete record, and no metadata blob.
+    let (head, served_original) = remote_head(&other, asset, None, blobs.path());
+    assert!(head.metadata_blob.is_empty(), "an album page names none");
+    let live_metadata = other.asset(&asset).unwrap().metadata_blob.clone();
+    let ciphertext = std::fs::read(&served_original).unwrap();
+    let mut served = history.clone();
+    served.extend([live_metadata.clone(), ciphertext.clone()]);
+    let server = records_server(served).await;
+    let session = login(&server).await;
+    let blob_base = format!("{}/v1", server.base_url());
+
+    let fetched = session
+        .fetch_provenance_history(blob_base.clone(), head.manifest_cbor.clone())
+        .await
+        .unwrap();
+    assert_eq!(fetched, history);
+    let sources = synced_history_sources(head.manifest_cbor.clone(), fetched.clone()).unwrap();
+    assert_eq!(
+        sources.metadata_blob_hash,
+        capsule_core::crypto::hash::hash_bytes(&live_metadata).to_hex(),
+        "the live blob, not the create's"
+    );
+    assert_eq!(
+        sources.original.ciphertext_hash,
+        capsule_core::crypto::hash::hash_bytes(&ciphertext).to_hex()
+    );
+    assert_eq!(sources.original.size, ciphertext.len() as u64);
+    assert_eq!(sources.original.role, "original");
+
+    let metadata_blob = session
+        .fetch_metadata_blob(blob_base.clone(), sources.metadata_blob_hash.clone())
+        .await
+        .unwrap();
+    let original = out.path().join("original.blob");
+    session
+        .fetch_blob_to_path(
+            blob_base,
+            sources.original.ciphertext_hash.clone(),
+            sources.original.size,
+            path_string(&original),
+        )
+        .await
+        .unwrap();
+
+    // Left as the page served it, the entry's empty metadata blob binds to nothing.
+    let placed = out.path().join("placed");
+    std::fs::create_dir(&placed).unwrap();
+    let destination = placed.join("opened");
+    match workspace
+        .open_synced_history(
+            head.clone(),
+            fetched.clone(),
+            path_string(&original),
+            path_string(&destination),
+        )
+        .unwrap()
+    {
+        FfiOpenedOriginal::Refused { .. } => {}
+        other => panic!("expected an unbound metadata blob to be refused, got {other:?}"),
+    }
+    assert!(dir_names(&placed).is_empty(), "nothing placed or staged");
+    assert!(workspace.provenance_head(asset.to_string()).is_err());
+
+    let entry = FfiSyncHead {
+        metadata_blob,
+        ..head
+    };
+    match workspace
+        .open_synced_history(
+            entry,
+            fetched,
+            path_string(&original),
+            path_string(&destination),
+        )
+        .unwrap()
+    {
+        FfiOpenedOriginal::Opened { facts } => {
+            assert!(facts.adopted, "the asset is held from its create");
+            assert_eq!(facts.action, "delete");
+        }
+        other => panic!("expected the delete to open, got {other:?}"),
+    }
+    assert_eq!(
+        std::fs::read(&destination).unwrap(),
+        original_plaintext(4096)
+    );
+    assert_eq!(
+        workspace.provenance_head(asset.to_string()).unwrap(),
+        records[records.len() - 1]
+    );
+    let tags = workspace
+        .with(|ws| Ok(ws.db().tags_for(&asset.to_string()).unwrap()))
+        .unwrap();
+    assert_eq!(tags, vec!["dusk".to_string(), "harbour".to_string()]);
+    assert_eq!(
+        workspace
+            .trash()
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.asset_id)
+            .collect::<Vec<_>>(),
+        vec![asset.to_string()]
+    );
+    workspace.restore_asset(asset.to_string()).unwrap();
+    assert!(workspace.trash().unwrap().is_empty());
+}
+
+/// A head that does not decode names no sources: a sync error naming the head, with no network
+/// reached. (A chain binding no metadata blob is the SDK's `HistoryError::Unbound`, mapped the
+/// same way.)
+#[test]
+fn ffi_synced_history_sources_refuses_what_names_no_sources() {
+    match synced_history_sources(b"not a record".to_vec(), Vec::new()) {
+        Err(FfiError::Sync { detail, .. }) => assert!(detail.contains("head"), "{detail}"),
+        Err(other) => panic!("expected a sync error, got {other:?}"),
+        Ok(sources) => panic!("expected a sync error, got {}", sources.metadata_blob_hash),
+    }
+}
+
+/// **A tombstone's window is judged from its signed `retention_until`**: open strictly before
+/// it, closed from it on; a record that is not a delete has none. An instant that is not RFC
+/// 3339 is a bad argument and a head that does not decode a sync error.
+#[test]
+fn ffi_synced_retention_closed_reads_the_signed_window() {
+    let (lib, other_lib, blobs) = (
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+    );
+    let workspace = enroll(lib.path());
+    let album = workspace.create_album("Trip".into()).unwrap();
+    let mut other = other_device(&workspace, &album, other_lib.path());
+    let photo = blobs.path().join("IMG_0005.JPG");
+    std::fs::write(&photo, original_plaintext(4096)).unwrap();
+    let asset = other
+        .import_asset(uuid::Uuid::parse_str(&album).unwrap(), &photo)
+        .unwrap();
+    let (create, _) = remote_head(&other, asset, None, blobs.path());
+    other.soft_delete(&asset, 30).unwrap();
+    let (delete, _) = remote_head(&other, asset, None, blobs.path());
+    let until: jiff::Timestamp =
+        capsule_core::crypto::provenance::ProvenanceRecord::decode(&delete.manifest_cbor)
+            .unwrap()
+            .manifest
+            .core
+            .retention_until
+            .unwrap()
+            .parse()
+            .unwrap();
+    let before = (until - jiff::SignedDuration::from_secs(1)).to_string();
+
+    assert!(!synced_retention_closed(delete.manifest_cbor.clone(), before.clone()).unwrap());
+    assert!(synced_retention_closed(delete.manifest_cbor.clone(), until.to_string()).unwrap());
+    assert!(!synced_retention_closed(create.manifest_cbor, until.to_string()).unwrap());
+    assert!(matches!(
+        synced_retention_closed(delete.manifest_cbor, "yesterday".into()),
+        Err(FfiError::InvalidArgument { .. })
+    ));
+    assert!(matches!(
+        synced_retention_closed(b"not a record".to_vec(), before),
+        Err(FfiError::Sync { .. })
+    ));
+}
+
+/// **A held asset's album-page tombstone applies against the held original.** The page names
+/// no metadata blob and no blob, and none is fetched: the delete is verified against the held
+/// chain, adopted, and the asset is in this device's trash. A record of an asset this
+/// workspace does not hold is an error, and bytes that are not a record are quarantined.
+#[test]
+fn ffi_a_held_assets_album_page_tombstone_applies_without_a_fetch() {
+    let (lib, other_lib, blobs, out) = (
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+        tempfile::TempDir::new().unwrap(),
+    );
+    let workspace = enroll(lib.path());
+    let album = workspace.create_album("Trip".into()).unwrap();
+    let mut other = other_device(&workspace, &album, other_lib.path());
+    let photo = blobs.path().join("IMG_0006.JPG");
+    std::fs::write(&photo, original_plaintext(4096)).unwrap();
+    let album_id = uuid::Uuid::parse_str(&album).unwrap();
+    let asset = other.import_asset(album_id, &photo).unwrap();
+    let (head, ciphertext) = remote_head(&other, asset, None, blobs.path());
+    assert!(matches!(
+        workspace
+            .open_synced_original(
+                head,
+                path_string(&ciphertext),
+                path_string(&out.path().join("staged"))
+            )
+            .unwrap(),
+        FfiOpenedOriginal::Opened { facts } if facts.adopted
+    ));
+    let create = other.asset(&asset).unwrap().chain.head().unwrap();
+
+    // Not held: refused before anything is applied.
+    let second = blobs.path().join("IMG_0007.JPG");
+    std::fs::write(&second, original_plaintext(2048)).unwrap();
+    let stranger = other.import_asset(album_id, &second).unwrap();
+    let (unheld, _) = remote_head(&other, stranger, None, blobs.path());
+    assert!(matches!(
+        workspace.apply_held_sync_entry(unheld),
+        Err(FfiError::Workspace { .. })
+    ));
+
+    other.soft_delete(&asset, 30).unwrap();
+    let (tombstone, _) = remote_head(
+        &other,
+        asset,
+        Some(create.as_bytes().to_vec()),
+        blobs.path(),
+    );
+    assert!(
+        tombstone.metadata_blob.is_empty(),
+        "an album page names none"
+    );
+    let malformed = FfiSyncHead {
+        manifest_cbor: b"not a record".to_vec(),
+        ..tombstone.clone()
+    };
+    assert!(matches!(
+        workspace.apply_held_sync_entry(malformed).unwrap(),
+        FfiSyncApplyOutcome::Quarantined { .. }
+    ));
+    match workspace.apply_held_sync_entry(tombstone.clone()).unwrap() {
+        FfiSyncApplyOutcome::Applied { facts } => {
+            assert_eq!(facts.action, "delete");
+            assert!(facts.adopted, "the delete advanced the held chain");
+        }
+        other => panic!("expected the delete to apply, got {other:?}"),
+    }
+    assert_eq!(
+        workspace.provenance_head(asset.to_string()).unwrap(),
+        tombstone.manifest_cbor
+    );
+    assert_eq!(
+        workspace
+            .trash()
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.asset_id)
+            .collect::<Vec<_>>(),
+        vec![asset.to_string()]
+    );
 }

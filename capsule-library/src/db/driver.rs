@@ -1,10 +1,11 @@
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
 use capsule_core::domain::model_identity::TaskKind;
 use rusqlite::{Connection, params};
 
+use crate::db::album_order::AlbumRecency;
 use crate::db::migrate::{self, MigrationError};
 use crate::db::rows::{AlbumRow, AssetRow, AssetStackRow, CachedRepresentationRow, StackMemberRow};
 
@@ -317,22 +318,6 @@ impl DatabaseDriver {
         Ok(())
     }
 
-    pub fn query_expired_trash(
-        &self,
-        older_than_secs: i64,
-    ) -> Result<Vec<AssetRow>, rusqlite::Error> {
-        let threshold = now_secs() - older_than_secs;
-        let mut stmt = self.conn.prepare(
-            "SELECT uuid, asset_type, capture_timestamp, capture_utc, capture_tz_source,
-             import_timestamp, hash_sha256, width, height, duration_ms, stack_id, is_stack_hidden,
-             chromahash, dominant_color, album_id, rating, is_deleted, deleted_at, is_hidden,
-             caption, latitude, longitude
-             FROM assets WHERE is_deleted = 1 AND deleted_at IS NOT NULL AND deleted_at < ?1",
-        )?;
-        let rows = stmt.query_map(params![threshold], map_asset_row)?;
-        rows.collect()
-    }
-
     /// All currently soft-deleted assets — the Recently Deleted listing,
     /// most-recently-deleted first.
     pub fn query_trash(
@@ -406,11 +391,57 @@ impl DatabaseDriver {
         Ok(changed > 0)
     }
 
-    /// Permanently remove an asset row. The on-disk file is the caller's concern.
+    /// Permanently remove an asset's rows — its `assets` row, its indexed tags, its upload
+    /// source guard, its cached representations and its stack memberships — in one transaction, so no index row names
+    /// it afterwards. A stack whose primary or cover it was passes that role to its first
+    /// remaining member (by sequence, then id), and a stack it leaves empty is removed. An
+    /// album cover naming it is cleared. The on-disk files are the caller's concern
+    /// (`Workspace::purge` removes them first).
     pub fn purge_asset(&self, uuid: &str) -> Result<(), rusqlite::Error> {
-        self.conn
-            .execute("DELETE FROM assets WHERE uuid = ?1", params![uuid])?;
-        Ok(())
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM asset_tags WHERE uuid = ?1", params![uuid])?;
+        // A purged asset's bundle is abandoned: its source guard goes with it.
+        tx.execute(
+            "DELETE FROM upload_guards WHERE asset_id = ?1",
+            params![uuid],
+        )?;
+        tx.execute(
+            "DELETE FROM cached_representations WHERE uuid = ?1",
+            params![uuid],
+        )?;
+        tx.execute(
+            "DELETE FROM stack_members WHERE asset_id = ?1",
+            params![uuid],
+        )?;
+        // The successor is the first remaining member; a stack with none keeps the purged id
+        // only until the `DELETE` below removes it.
+        let successor = "(SELECT m.asset_id FROM stack_members m WHERE m.stack_id = asset_stacks.id
+                          ORDER BY m.sequence_order, m.asset_id LIMIT 1)";
+        tx.execute(
+            &format!(
+                "UPDATE asset_stacks SET primary_asset_id = COALESCE({successor}, primary_asset_id)
+                 WHERE primary_asset_id = ?1"
+            ),
+            params![uuid],
+        )?;
+        tx.execute(
+            &format!(
+                "UPDATE asset_stacks SET cover_asset_id = {successor} WHERE cover_asset_id = ?1"
+            ),
+            params![uuid],
+        )?;
+        tx.execute(
+            "DELETE FROM asset_stacks
+             WHERE primary_asset_id = ?1
+               AND NOT EXISTS (SELECT 1 FROM stack_members m WHERE m.stack_id = asset_stacks.id)",
+            params![uuid],
+        )?;
+        tx.execute(
+            "UPDATE albums SET cover_asset_id = NULL WHERE cover_asset_id = ?1",
+            params![uuid],
+        )?;
+        tx.execute("DELETE FROM assets WHERE uuid = ?1", params![uuid])?;
+        tx.commit()
     }
 
     // ── Albums ───────────────────────────────────────────────────────────────
@@ -461,13 +492,37 @@ impl DatabaseDriver {
         }
     }
 
+    /// Every album row, in the album order ([`AlbumRecency`]): most recent visible asset first,
+    /// an empty album by its id's creation time, ties by ascending id. The row's local
+    /// `created_at` is not consulted: it differs per device and across a rebuild.
+    #[tracing::instrument(level = "debug", skip_all)]
     pub fn list_albums(&self) -> Result<Vec<AlbumRow>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, created_at, modified_at, cover_asset_id
-             FROM albums ORDER BY created_at DESC",
+             FROM albums",
         )?;
-        let rows = stmt.query_map([], map_album_row)?;
-        rows.collect()
+        let mut rows = stmt
+            .query_map([], map_album_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        self.album_recency()?.sort(&mut rows, |row| row.id.clone());
+        tracing::debug!(albums = rows.len(), "albums listed in recency order");
+        Ok(rows)
+    }
+
+    /// The album order's input, read from the index: the latest effective capture among each
+    /// album's assets that are neither hidden nor trashed. Served by
+    /// `idx_assets_album_recency`; nothing is stored, so every write to an asset's album,
+    /// capture time, hidden or trashed state moves it with no extra bookkeeping.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub fn album_recency(&self) -> Result<AlbumRecency, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(ALBUM_RECENCY_SQL)?;
+        let latest = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?
+            .collect::<Result<HashMap<_, _>, _>>()?;
+        tracing::trace!(albums = latest.len(), "album recency read from the index");
+        Ok(AlbumRecency::from_latest_captures(latest))
     }
 
     /// Set (or clear, with `None`) the album an asset belongs to.
@@ -619,6 +674,14 @@ impl DatabaseDriver {
         rows.collect()
     }
 }
+
+/// The album order's index read: the latest effective capture per album over its assets that
+/// are neither hidden nor trashed. `INDEXED BY` makes a missing or unusable
+/// `idx_assets_album_recency` an error rather than a silent table scan.
+const ALBUM_RECENCY_SQL: &str = "SELECT album_id, MAX(COALESCE(capture_utc, capture_timestamp))
+     FROM assets INDEXED BY idx_assets_album_recency
+     WHERE album_id IS NOT NULL AND is_deleted = 0 AND is_hidden = 0
+     GROUP BY album_id";
 
 fn now_secs() -> i64 {
     std::time::SystemTime::now()

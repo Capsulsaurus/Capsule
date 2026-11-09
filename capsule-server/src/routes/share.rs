@@ -46,6 +46,7 @@ use kynos::response::range::served::{Conditions, Delivery, Served};
 use kynos::response::status::NoContent;
 use serde::{Deserialize, Serialize};
 
+use crate::activity::{ActivityContext, ActivityKind, Served as ServedTo};
 use crate::auth::AccessToken;
 use crate::blob::ContentAddress;
 use crate::client_addr::ClientAddr;
@@ -284,6 +285,7 @@ pub async fn issue_share(
     Auth(credential): Auth<AccessToken>,
     Inject(share): Inject<ShareContext>,
     Inject(quota): Inject<QuotaContext>,
+    Inject(activity): Inject<ActivityContext>,
     Json(request): Json<IssueShareRequest>,
 ) -> Result<IssueShareReply, IssueShareRejection> {
     let owner = UserId::new(credential.user.as_str());
@@ -395,6 +397,14 @@ pub async fn issue_share(
         ));
     }
 
+    activity
+        .record(
+            &owner,
+            ActivityKind::ShareLinkCreated,
+            Some(&credential.session),
+            Some(&request.opaque_id),
+        )
+        .await;
     Ok(IssueShareReply::Created(IssueShareResponse {
         opaque_id: request.opaque_id,
     }))
@@ -413,6 +423,7 @@ pub async fn issue_share(
 pub async fn revoke_share(
     Auth(credential): Auth<AccessToken>,
     Inject(share): Inject<ShareContext>,
+    Inject(activity): Inject<ActivityContext>,
     Path(path): Path<SharePath>,
 ) -> Result<NoContent, IssueShareRejection> {
     let owner = UserId::new(credential.user.as_str());
@@ -430,6 +441,18 @@ pub async fn revoke_share(
         })?;
 
     tracing::info!(%owner, revoked, "a share revocation was processed");
+    // Only a revocation that changed something is the owner's event; the answer stays the same
+    // either way, so this records nothing a caller can observe about somebody else's link.
+    if revoked {
+        activity
+            .record(
+                &owner,
+                ActivityKind::ShareLinkRevoked,
+                Some(&credential.session),
+                Some(&path.opaque_id),
+            )
+            .await;
+    }
     Ok(NoContent)
 }
 
@@ -482,6 +505,10 @@ pub async fn share_wrapped_secret(
 /// The membership check is the security property: a link serves the addresses its record
 /// enumerates and nothing else, so it cannot be walked sideways into the album's unstripped
 /// metadata. A blob the link does not name is the same `404` as a link that does not exist.
+///
+/// A delivery that carries bytes is recorded in the owner's activity log, aggregated: one
+/// `share_link.served` per link per window, naming the link and never the blob, and written
+/// off the response path so it neither slows nor refuses the serve.
 #[kynos::get(
     "/s/{opaque_id}/blob/{hash}",
     operation_id = "share_blob",
@@ -490,6 +517,7 @@ pub async fn share_wrapped_secret(
 pub async fn share_blob(
     Inject(share): Inject<ShareContext>,
     Inject(counters): Inject<CounterContext>,
+    Inject(activity): Inject<ActivityContext>,
     client: ClientAddr,
     Path(path): Path<ShareBlobPath>,
     conditions: Conditions,
@@ -515,7 +543,7 @@ pub async fn share_blob(
 
     let etag = ETag::strong(address.as_str());
     let source = BlobSource::new(share.blob_handle(), address, stat.size);
-    Served::<_, OctetStream>::new(source)
+    let delivery = Served::<_, OctetStream>::new(source)
         .etag(etag)
         // `private` even though the caller is anonymous: the bytes are one account's ciphertext,
         // the link is revocable, and a shared cache holding them would keep serving a share the
@@ -526,7 +554,12 @@ pub async fn share_blob(
         .map_err(|error| {
             tracing::error!(%error, "a shared blob vanished between resolution and delivery");
             ShareRejection::unavailable()
-        })
+        })?;
+    // A revalidation or a refused range sends none of the blob, so it is not a serve.
+    if super::blob::delivers_bytes(delivery.status()) {
+        activity.record_served(&record.owner_id, ServedTo::ShareLink(&record.opaque_id));
+    }
+    Ok(delivery)
 }
 
 /// Charge the contract's two limiters, and refuse if either is spent (#704).

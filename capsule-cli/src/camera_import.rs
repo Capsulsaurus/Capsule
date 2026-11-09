@@ -3,7 +3,8 @@
 //! The run is the camera source adapter ([`CameraAdapter`]) feeding the one import pipeline
 //! ([Import — Camera Import]):
 //!
-//! 1. **Connect** to the address the person gave (`ptpip::tcp::connect`), presenting the client's
+//! 1. **Connect** to the address the person gave, or the one camera discovery found
+//!    ([`crate::camera_discovery`]), through `ptpip::tcp::connect`, presenting the client's
 //!    persisted initiator identity ([`crate::camera_pairing`]), and start the event-channel reader
 //!    ([`ptpip::serve_events`]) on its own thread so the camera's keep-alive probes are answered
 //!    while a long transfer holds the command channel.
@@ -37,6 +38,7 @@ use ptpip::tcp::{DEFAULT_PORT, Timeouts};
 use ptpip::{DeviceInfo, EventsServed};
 use serde::Serialize;
 
+use crate::camera_discovery::DiscoveredCamera;
 use crate::camera_pairing::Pairing;
 use crate::import_report::{self, ImportReport};
 
@@ -154,6 +156,9 @@ pub struct EventsReport {
 pub struct CameraImportReport {
     /// The camera.
     pub camera: CameraSummary,
+    /// The discovery answer the camera was chosen from when no address was given; `None` when
+    /// the person gave one.
+    pub discovered: Option<DiscoveredCamera>,
     /// The initiator identity presented to it.
     pub initiator: Pairing,
     /// The receive phase.
@@ -359,8 +364,9 @@ impl EventReader {
 /// Connect to the camera at `address` as `pairing`, receive everything on it into the library
 /// `workspace` holds, import it, and close the session.
 ///
-/// `on_connected` is called once the camera answered, so a person sees which camera the run
-/// reached before the transfer starts.
+/// `discovered` is the discovery answer `address` came from, when the person gave none; it is
+/// carried into the report as is. `on_connected` is called once the camera answered, so a
+/// person sees which camera the run reached before the transfer starts.
 ///
 /// # Errors
 ///
@@ -368,6 +374,7 @@ impl EventReader {
 pub fn run(
     workspace: &mut Workspace,
     address: SocketAddr,
+    discovered: Option<DiscoveredCamera>,
     pairing: &Pairing,
     on_connected: impl FnOnce(&CameraSummary),
 ) -> Result<CameraImportReport> {
@@ -401,6 +408,7 @@ pub fn run(
     let (receive, import) = outcome?;
     Ok(CameraImportReport {
         camera: summary,
+        discovered,
         initiator: pairing.clone(),
         receive,
         import,

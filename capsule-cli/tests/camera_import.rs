@@ -352,6 +352,11 @@ fn a_camera_is_imported_under_a_stable_identity_and_a_second_run_fetches_nothing
 
     assert_eq!(report["camera"]["model"], "ILCE-7M4");
     assert_eq!(report["camera"]["address"], addr.to_string());
+    assert_eq!(
+        report["discovered"],
+        Value::Null,
+        "an address was given, so nothing was discovered"
+    );
     assert_eq!(report["receive"]["received"], 2, "{report:#}");
     assert_eq!(report["receive"]["failures"], Value::Array(vec![]));
     assert_eq!(report["import"]["imported"], 2, "{report:#}");

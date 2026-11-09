@@ -46,6 +46,8 @@
 //! | v3    | + `embeddings` + its two indexes (`09ae1d1`) |
 //! | v4    | + `assets.is_hidden`, `idx_assets_hidden`, widened `idx_assets_timeline` (`5d3ef26`) |
 //! | v5    | + `assets.caption`, `assets.latitude`, `assets.longitude` |
+//! | v6    | + `idx_assets_album_recency` |
+//! | v7    | + `upload_guards` |
 //!
 //! Two consequences the original plan did not anticipate, both handled below:
 //!
@@ -304,8 +306,56 @@ const STEP_4_TO_5: Step = Step {
     ],
 };
 
+/// v5 → v6. Adds `idx_assets_album_recency`, the covering index the album order reads: the
+/// latest effective capture among each album's assets that are neither hidden nor trashed.
+///
+/// Index-only: no column is added and no row is touched, so the step cannot lose or reorder
+/// anything a v5 catalog holds. Recency is derived from columns every v5 row already carries.
+const STEP_5_TO_6: Step = Step {
+    from: 5,
+    to: 6,
+    name: "v5_to_v6_album_recency_index",
+    ddl: &[Ddl::Always(
+        "CREATE INDEX IF NOT EXISTS idx_assets_album_recency
+             ON assets(album_id, is_deleted, is_hidden, capture_utc, capture_timestamp);",
+    )],
+};
+
+/// v6 → v7. Adds the `upload_guards` table: an original's source guard — its identity and
+/// every STREAM chunk's authentication tag — recorded when its upload bundle is built.
+///
+/// Additive: a new table, no row of an existing one touched. A v6 catalog holds no guard, and
+/// none is needed for it: every bundle re-records its guard in the hashing pass that builds it.
+const STEP_6_TO_7: Step = Step {
+    from: 6,
+    to: 7,
+    name: "v6_to_v7_upload_guards",
+    ddl: &[Ddl::Always(
+        "CREATE TABLE IF NOT EXISTS upload_guards (
+             asset_id        TEXT    PRIMARY KEY,
+             nonce_prefix    BLOB    NOT NULL,
+             plaintext_size  INTEGER NOT NULL,
+             source_len      INTEGER NOT NULL,
+             modified_ns     INTEGER,
+             file_dev        INTEGER,
+             file_ino        INTEGER,
+             ctime_secs      INTEGER,
+             ctime_nanos     INTEGER,
+             chunk_tags      BLOB    NOT NULL,
+             recorded_at     INTEGER NOT NULL
+         );",
+    )],
+};
+
 /// Every shipped step, in ascending order. Append only.
-pub(crate) const STEPS: &[Step] = &[STEP_1_TO_2, STEP_2_TO_3, STEP_3_TO_4, STEP_4_TO_5];
+pub(crate) const STEPS: &[Step] = &[
+    STEP_1_TO_2,
+    STEP_2_TO_3,
+    STEP_3_TO_4,
+    STEP_4_TO_5,
+    STEP_5_TO_6,
+    STEP_6_TO_7,
+];
 
 /// SHA-256 (hex) of each shipped step's canonical rendering, parallel to [`STEPS`].
 ///
@@ -322,6 +372,10 @@ const STEP_FINGERPRINTS: &[&str] = &[
     "420ac7077cf5dd3d5888ce07594263e8ace4558adc79f8972096d80ef9a6fe14",
     // v4 -> v5  v4_to_v5_caption_and_location
     "a11341c354995462fad47c5f15f02450d4a90d8d0ab3e69fa5cba55da5982004",
+    // v5 -> v6  v5_to_v6_album_recency_index
+    "249e75f76146b3efea9bb2b371937f45132872edade608b72272cd415f4ab747",
+    // v6 -> v7  v6_to_v7_upload_guards
+    "def046c476a8ce231351c0f2feb2dbba3bb3cf547675e11b01a576d317f28caf",
 ];
 
 // ── Errors ──────────────────────────────────────────────────────────────────

@@ -308,7 +308,7 @@ fn build_client(base_url: &str, session: Session) -> Result<Client, ClientError>
     // through the backend, so the executing client — and with it the TLS stack, the redirect
     // policy and the timeouts — is still `reqwest_client()`, one layer down.
     let backend: Arc<dyn rest::HttpBackend> = Arc::new(Negotiate::over(Arc::new(RefreshOn401 {
-        inner: Arc::new(rest::ReqwestBackend::new(reqwest_client())),
+        inner: crate::net::backend(reqwest_client()),
         session,
     })));
     let client = Client::with_backend(backend, base_url)
@@ -467,7 +467,7 @@ async fn coded_too_large(
 /// The error is the generated client's description of a `base_url` it cannot parse.
 pub(crate) fn negotiated_client(http: reqwest::Client, base_url: &str) -> Result<Client, String> {
     Client::with_backend(
-        Arc::new(Negotiate::over(Arc::new(rest::ReqwestBackend::new(http)))),
+        Arc::new(Negotiate::over(crate::net::backend(http))),
         base_url,
     )
     .map_err(|error| error.to_string())

@@ -86,6 +86,11 @@ pub struct AuthEndpoints {
     /// Endpoints only — never the issuer, never the client id, never anything user-scoped. The
     /// presence of the record is how a login chooser decides whether to offer the path at all.
     pub oidc: Option<OidcEndpoints>,
+    /// Whether this deployment refuses password registration and sign-in (#1004).
+    ///
+    /// `false` by default. When `true`, `login` is still published — the route exists and
+    /// answers `error.auth.password_disabled` — and a client hides its password form.
+    pub password_disabled: bool,
 }
 
 impl AuthEndpoints {
@@ -98,6 +103,7 @@ impl AuthEndpoints {
             refresh: format!("{base}/auth/refresh"),
             logout: format!("{base}/auth/logout"),
             oidc: None,
+            password_disabled: false,
         }
     }
 }
@@ -238,6 +244,17 @@ impl ServerInfo {
     #[must_use]
     pub fn with_oidc(mut self) -> Self {
         self.auth.oidc = Some(OidcEndpoints::under(&self.api_base_url));
+        self
+    }
+
+    /// Declare that this deployment refuses password registration and sign-in, so a client
+    /// offers only its identity provider.
+    ///
+    /// Absent by default; a deployment that sets it has an identity provider, because
+    /// configuration refuses the switch without one.
+    #[must_use]
+    pub fn without_passwords(mut self) -> Self {
+        self.auth.password_disabled = true;
         self
     }
 

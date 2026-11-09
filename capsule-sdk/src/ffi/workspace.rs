@@ -1,6 +1,7 @@
 //! The **workspace verbs** of the `capsule_sdk` uniffi namespace — enroll,
 //! create an album, seal + import an asset, verify, sync-apply, mint an escrow, publish a
-//! directory, label regions, stacks and albums — over `capsule-core`'s [`Workspace`].
+//! directory, label regions, stacks and albums, move assets through the trash — over
+//! `capsule-core`'s [`Workspace`].
 //!
 //! # What this layer is, and is not
 //!
@@ -32,13 +33,14 @@
 //! [`verify_asset`]: capsule_core::crypto::verify_asset::verify_asset
 //! [`Workspace`]: capsule_library::lifecycle::Workspace
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use capsule_core::crypto::hash::Hash32;
+use capsule_core::crypto::hash::{Hash32, hash_bytes};
 use capsule_core::crypto::keys::{
     HardwareBackedSigner, HardwareKeyAgreement, HardwareSigner, HardwareSignerError, P256HybridDek,
-    P256HybridSigningKey, Signer, encapsulate_to_p256_public,
+    Signer, encapsulate_to_p256_public,
 };
 use capsule_core::crypto::primitives::DeviceTier;
 use capsule_core::crypto::provenance::ProvenanceRecord;
@@ -47,9 +49,11 @@ use capsule_core::sidecar::{
     LabelError, Region, RegionError, RegionShape, SidecarV1, normalize_label,
 };
 use capsule_library::lifecycle::{
-    LifecycleError, QuarantineReason, RemoteAssetFacts, RemoteEntry, RemoteHead, RemoteOriginal,
-    SyncApplyOutcome, UploadBundle, Workspace, hash_ciphertext_from,
+    Adoption, FeedDrain, HardwareSignerBinding, LifecycleError, QuarantineReason, RemoteAssetFacts,
+    RemoteEntry, RemoteHead, RemoteOriginal, SyncApplyOutcome, TrashEntry, UploadBundle, Workspace,
+    hash_ciphertext_from,
 };
+use jiff::Timestamp;
 use uuid::Uuid;
 
 use super::{FfiError, FfiUploadRequest};
@@ -60,34 +64,68 @@ use crate::upload::UploadError;
 /// Failure surfaced by a foreign [`FfiHardwareSigner`]. Mirrors `capsule-core`'s
 /// `HardwareSignerError` variant for variant — it is the same contract, declared in the
 /// `capsule_sdk` namespace because core's own type carries no uniffi derive.
-#[derive(Debug, thiserror::Error, uniffi::Error)]
-#[uniffi(flat_error)]
+///
+/// The error is **thrown by foreign code** — it is the declared error of the
+/// [`FfiHardwareSigner`] and [`FfiHardwareKeyAgreement`] foreign traits — so Rust must *lift*
+/// it, and uniffi lifts only a non-flat error. Every variant therefore carries a named
+/// `detail` field (the element's own English diagnostic), which also gives the Kotlin
+/// exceptions and Swift cases the same `(detail)` shape. Core's error keeps `detail` only on
+/// [`Backend`](Self::Backend); for the other variants it is logged at the seam and dropped.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, uniffi::Error)]
 pub enum FfiHardwareSignerError {
     /// The user cancelled the biometric / the element refused authentication.
-    #[error("hardware authentication cancelled")]
-    AuthCancelled,
+    #[error("hardware authentication cancelled: {detail}")]
+    AuthCancelled {
+        /// The element's English diagnostic.
+        detail: String,
+    },
     /// No secure element is available on this device.
-    #[error("hardware secure element unavailable")]
-    Unavailable,
+    #[error("hardware secure element unavailable: {detail}")]
+    Unavailable {
+        /// The element's English diagnostic.
+        detail: String,
+    },
     /// No key exists for the requested alias.
-    #[error("hardware key not found")]
-    NotFound,
+    #[error("hardware key not found: {detail}")]
+    NotFound {
+        /// The element's English diagnostic.
+        detail: String,
+    },
     /// The private key was readable — non-exportability is violated (a failure).
-    #[error("hardware private key is exportable")]
-    Exportable,
+    #[error("hardware private key is exportable: {detail}")]
+    Exportable {
+        /// The element's English diagnostic.
+        detail: String,
+    },
     /// Any other backend error.
-    #[error("hardware backend error: {0}")]
-    Backend(String),
+    #[error("hardware backend error: {detail}")]
+    Backend {
+        /// The element's English diagnostic.
+        detail: String,
+    },
+}
+
+/// A foreign element that throws something other than [`FfiHardwareSignerError`] (an
+/// unchecked `KeyStoreException`, a Swift error of another type) or breaks the FFI contract
+/// reaches Rust as an *unexpected* callback error. Without this conversion uniffi panics on
+/// it — inside a workspace call, with the workspace lock held — so it is lifted as a typed
+/// [`Backend`](FfiHardwareSignerError::Backend) failure instead.
+impl From<uniffi::UnexpectedUniFFICallbackError> for FfiHardwareSignerError {
+    fn from(err: uniffi::UnexpectedUniFFICallbackError) -> Self {
+        tracing::warn!(reason = %err.reason, "ffi: hardware element threw an undeclared error");
+        Self::Backend { detail: err.reason }
+    }
 }
 
 impl From<FfiHardwareSignerError> for HardwareSignerError {
     fn from(err: FfiHardwareSignerError) -> Self {
+        tracing::debug!(error = %err, "ffi: hardware element refused");
         match err {
-            FfiHardwareSignerError::AuthCancelled => Self::AuthCancelled,
-            FfiHardwareSignerError::Unavailable => Self::Unavailable,
-            FfiHardwareSignerError::NotFound => Self::NotFound,
-            FfiHardwareSignerError::Exportable => Self::Exportable,
-            FfiHardwareSignerError::Backend(detail) => Self::Backend(detail),
+            FfiHardwareSignerError::AuthCancelled { .. } => Self::AuthCancelled,
+            FfiHardwareSignerError::Unavailable { .. } => Self::Unavailable,
+            FfiHardwareSignerError::NotFound { .. } => Self::NotFound,
+            FfiHardwareSignerError::Exportable { .. } => Self::Exportable,
+            FfiHardwareSignerError::Backend { detail } => Self::Backend(detail),
         }
     }
 }
@@ -97,7 +135,8 @@ impl From<FfiHardwareSignerError> for HardwareSignerError {
 ///
 /// The byte shapes are fixed by the constructor the element is handed to, not by the trait:
 ///
-/// - [`FfiWorkspace::create_with_p256_hardware_signer`] — the **P-256** shape shipping
+/// - [`FfiWorkspace::create_with_p256_hardware_signer`] and
+///   [`FfiWorkspace::open_with_p256_hardware_signer`] — the **P-256** shape shipping
 ///   elements actually provide: [`enroll`](Self::enroll) /
 ///   [`classical_public_key`](Self::classical_public_key) return a SEC1 public key and
 ///   [`sign_classical`](Self::sign_classical) a **DER-encoded ECDSA** signature over
@@ -515,6 +554,17 @@ pub struct FfiAssetFacts {
     /// `trash-restore`. Those are fully-verified entries that simply carry no metadata, so an
     /// app applies the lifecycle change and leaves the row's metadata as it stands.
     pub metadata: Option<FfiAssetMetadata>,
+    /// Whether this workspace now holds the asset at this entry's record: it adopted the
+    /// entry, writing the asset's chain, sidecar, sealed metadata and original under `media/`
+    /// and its index row and user tags into the library catalog, so the trash verbs and tag
+    /// edits work on it. When `true` the catalog already describes the asset and an app writes
+    /// nothing of its own for it; when `false` (an asset first seen past its create, a fork, or
+    /// a verb that applies without adopting) the facts are the app's to upsert. An asset first
+    /// seen past its create is adopted from its earlier records:
+    /// [`FfiSession::fetch_provenance_history`](crate::ffi::FfiSession::fetch_provenance_history),
+    /// then [`FfiWorkspace::open_synced_history`].
+    #[uniffi(default = false)]
+    pub adopted: bool,
 }
 
 /// The decrypted sidecar's facts, flattened for a catalog upsert.
@@ -577,7 +627,19 @@ impl From<RemoteAssetFacts> for FfiAssetFacts {
             created_by_device: facts.created_by_device.to_string(),
             provenance_head: facts.provenance_head.as_bytes().to_vec(),
             metadata: facts.sidecar.map(FfiAssetMetadata::from),
+            adopted: false,
         }
+    }
+}
+
+impl FfiSyncApplyOutcome {
+    /// This verdict with its facts marked [`adopted`](FfiAssetFacts::adopted) when `adoption`
+    /// left the workspace holding the asset.
+    fn adopted(mut self, adoption: Option<Adoption>) -> Self {
+        if let Self::Applied { facts } = &mut self {
+            facts.adopted = adoption.is_some_and(Adoption::holds);
+        }
+        self
     }
 }
 
@@ -605,9 +667,10 @@ pub enum FfiSyncApplyOutcome {
     Quarantined {
         /// A stable code, dotted where a sub-reason applies — e.g. `Rejected.ForgedChain`,
         /// `Binding.BlobHashMismatch`, `SidecarSignature`, `LegacyInheritedDevice` (a pre-fix
-        /// continuation attributed to the wrong device of the same account; not a forgery).
+        /// continuation attributed to the wrong device of the same account; not a forgery),
+        /// `Purged` (this device purged the asset; its tombstone refuses every later entry).
         reason: String,
-        /// English detail, when the refusal carries one (a parse message, an album id).
+        /// English detail, when the refusal carries one (a parse message, an album or asset id).
         detail: Option<String>,
     },
 }
@@ -652,6 +715,9 @@ impl From<SyncApplyOutcome> for FfiSyncApplyOutcome {
                         ("MalformedSidecar".to_string(), Some(detail))
                     }
                     QuarantineReason::SidecarSignature => ("SidecarSignature".to_string(), None),
+                    QuarantineReason::Purged(asset) => {
+                        ("Purged".to_string(), Some(asset.to_string()))
+                    }
                 };
                 Self::Quarantined { reason, detail }
             }
@@ -853,6 +919,134 @@ fn asset_regions(ws: &Workspace, asset_id: Uuid) -> Result<Vec<FfiRegion>, Lifec
         .collect())
 }
 
+// ─── Trash ───────────────────────────────────────────────────────────────────
+
+/// One asset in the trash, as its latest signed `delete` record describes it.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct FfiTrashEntry {
+    /// The trashed asset (UUID string).
+    pub asset_id: String,
+    /// When the `delete` was signed (RFC 3339, UTC).
+    pub deleted_at: String,
+    /// The signed retention floor (RFC 3339, UTC): a restore is refused at or after it. `None`
+    /// for a `delete` that carries no readable window, which never expires.
+    pub retention_until: Option<String>,
+    /// Whether a restore is accepted now, by this device's clock. Computed by the workspace so
+    /// no app re-implements the window; the server judges the same floor by its own clock.
+    pub restorable: bool,
+}
+
+impl FfiTrashEntry {
+    fn new(entry: &TrashEntry, now: Timestamp) -> Self {
+        Self {
+            asset_id: entry.asset_id.to_string(),
+            deleted_at: entry.deleted_at.to_string(),
+            retention_until: entry.retention_until.map(|until| until.to_string()),
+            restorable: entry.is_restorable_at(now),
+        }
+    }
+}
+
+/// What a [`FfiWorkspace::purge_asset`] did.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct FfiPurgeOutcome {
+    /// The purged asset (UUID string).
+    pub asset_id: String,
+    /// The signed shorter-retention `delete` an early purge appended, as the opaque canonical
+    /// CBOR provenance record [`FfiWorkspace::provenance_head`] would have returned. It goes to
+    /// the album's ops surface so the server may purge too, through
+    /// [`FfiSession::deliver_purge`](super::FfiSession::deliver_purge), which sends it with any
+    /// `delete` it chains onto that the server never saw; when that delivery fails,
+    /// [`FfiWorkspace::purged_record`] hands the same record back from the kept chain. `None`
+    /// when the window had closed.
+    pub reissue_record: Option<Vec<u8>>,
+}
+
+/// A sync that drained the feed to its head, the evidence [`FfiWorkspace::expired_trash`]
+/// needs before it judges a retention deadline.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct FfiFeedDrain {
+    /// The latest server `changed_at` the drain saw (RFC 3339), or `None` for a drain that saw
+    /// no entry. Deadlines are judged at it alone, never by this device's clock, so with
+    /// `None` nothing has expired.
+    pub latest_changed_at: Option<String>,
+    /// Every asset the server's feed lists, keyed by its id as the feed names it, with the
+    /// `manifest_cbor` of its latest entry (empty for an entry that carries no record). An
+    /// asset whose latest `delete` is not that head or before it is a held delete, which
+    /// never expires. Ids that are not UUIDs name no asset of this workspace and are ignored.
+    ///
+    /// The map must cover the whole feed: a drain from the feed's start (no cursor), or the
+    /// heads this app kept, entry by entry, across every cursored drain since one. A drain
+    /// resumed from a cursor lists only the assets that changed after it, so passing it alone
+    /// leaves out every asset whose `delete` an earlier sync indexed: each is judged held and
+    /// never expires, and the trash grows until the user empties it. That loses nothing, but
+    /// the sweep stops working.
+    pub server_heads: HashMap<String, Vec<u8>>,
+}
+
+impl FfiFeedDrain {
+    fn parse(&self) -> Result<FeedDrain, FfiError> {
+        let latest_changed_at = self
+            .latest_changed_at
+            .as_deref()
+            .map(str::parse::<Timestamp>)
+            .transpose()
+            .map_err(|e| FfiError::InvalidArgument {
+                detail: format!("latest_changed_at: not an RFC 3339 timestamp ({e})"),
+            })?;
+        let server_heads = self
+            .server_heads
+            .iter()
+            .filter_map(|(asset_id, head)| {
+                let asset_id = Uuid::parse_str(asset_id).ok()?;
+                let head = (!head.is_empty()).then(|| hash_bytes(head));
+                Some((asset_id, head))
+            })
+            .collect();
+        Ok(FeedDrain {
+            latest_changed_at,
+            server_heads,
+        })
+    }
+}
+
+/// Why a trash verb was refused ([`FfiError::Trash`]). Nothing was written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum FfiTrashRefusal {
+    /// The workspace holds no such asset.
+    NotFound,
+    /// The asset is not in the trash: a restore has nothing to undo, and a purge never skips
+    /// the trash.
+    NotInTrash,
+    /// The signed retention window has closed, so the asset can no longer be restored. It
+    /// stays in the trash until it is purged.
+    RetentionElapsed,
+}
+
+/// A trash verb's failure: the refusals a trash view names as [`FfiError::Trash`], everything
+/// else as the workspace failure it is.
+pub(super) fn trash_error(error: LifecycleError) -> FfiError {
+    let (refusal, code, retention_until) = match &error {
+        LifecycleError::NotFound(_) => (FfiTrashRefusal::NotFound, None, None),
+        LifecycleError::NotInTrash(_) => (FfiTrashRefusal::NotInTrash, None, None),
+        LifecycleError::RetentionElapsed {
+            retention_until, ..
+        } => (
+            FfiTrashRefusal::RetentionElapsed,
+            Some(capsule_i18n::error_codes::UPLOAD_RETENTION_ELAPSED.to_owned()),
+            Some(retention_until.clone()),
+        ),
+        _ => return error.into(),
+    };
+    tracing::debug!(?refusal, %error, "ffi: trash verb refused");
+    FfiError::Trash {
+        refusal,
+        code,
+        retention_until,
+        detail: error.to_string(),
+    }
+}
+
 // ─── The workspace object ────────────────────────────────────────────────────
 
 /// A Capsule workspace, callable from Swift/Kotlin: the durable library at a filesystem root
@@ -868,7 +1062,7 @@ pub struct FfiWorkspace {
 impl FfiWorkspace {
     /// Run `f` under the workspace lock, surfacing a poisoned lock as a typed error rather
     /// than a panic across the boundary.
-    fn with<T>(
+    pub(super) fn with<T>(
         &self,
         f: impl FnOnce(&mut Workspace) -> Result<T, FfiError>,
     ) -> Result<T, FfiError> {
@@ -890,6 +1084,20 @@ impl FfiWorkspace {
     pub(super) fn bundle(&self, asset_id: &str) -> Result<UploadBundle, FfiError> {
         let asset_id = parse_uuid("asset_id", asset_id)?;
         self.with(|ws| Ok(ws.upload_bundle(&asset_id)?))
+    }
+
+    /// Forget `asset_id`'s upload source guard, under the lock: every blob of its bundle is
+    /// `Completed`, or nothing will re-derive its original again. Forgetting it is
+    /// housekeeping, so a refusal costs a log line, never the push it follows.
+    pub(super) fn release_upload_guard(&self, asset_id: &Uuid) {
+        match self.with(|ws| Ok(ws.release_upload_guard(asset_id)?)) {
+            Ok(released) => {
+                tracing::debug!(%asset_id, released, "ffi: the original's upload guard released");
+            }
+            Err(error) => {
+                tracing::warn!(%asset_id, %error, "ffi: the original's upload guard could not be released");
+            }
+        }
     }
 
     /// Re-seal a create the server `refused` at the album's current epoch, under the lock
@@ -928,7 +1136,7 @@ impl FfiWorkspace {
 }
 
 /// Parse a UUID from foreign code into a typed error rather than panicking at the boundary.
-fn parse_uuid(field: &str, value: &str) -> Result<Uuid, FfiError> {
+pub(super) fn parse_uuid(field: &str, value: &str) -> Result<Uuid, FfiError> {
     Uuid::parse_str(value).map_err(|e| FfiError::InvalidArgument {
         detail: format!("{field}: {value:?} is not a UUID ({e})"),
     })
@@ -981,11 +1189,19 @@ fn commit_staged(
     staged: &Path,
     target: &Path,
 ) -> std::io::Result<()> {
-    let file = sink
-        .into_inner()
-        .map_err(std::io::IntoInnerError::into_error)?;
-    file.sync_all()?;
-    drop(file);
+    finish_staged(sink)?;
+    place_staged(staged, target)
+}
+
+/// Flush and sync a fully written staging file, so it can be read back before it is placed.
+fn finish_staged(sink: std::io::BufWriter<std::fs::File>) -> std::io::Result<()> {
+    sink.into_inner()
+        .map_err(std::io::IntoInnerError::into_error)?
+        .sync_all()
+}
+
+/// Rename a finished staging file into place as `target`.
+fn place_staged(staged: &Path, target: &Path) -> std::io::Result<()> {
     std::fs::rename(staged, target)?;
     // Persist the rename itself. Best effort: not every platform opens a directory for sync.
     if let Some(parent) = target.parent()
@@ -1101,10 +1317,12 @@ impl FfiWorkspace {
     /// composition shipping secure elements actually provide, none of which do Ed25519. The
     /// post-quantum ML-DSA-65 half is the software-sealed `ml_seed` (32 bytes).
     ///
-    /// The published device key carries the P-256 tag and `verify_asset` dispatches on it, so
-    /// this is constructor parity with `capsule-core`'s own
-    /// `create_with_p256_hardware_signer` — the same core call, reached through this
-    /// namespace's [`FfiHardwareSigner`] seam.
+    /// The published device key carries the P-256 tag and `verify_asset` dispatches on it. The
+    /// library records the binding (the alias, `ml_seed` sealed under the account master key,
+    /// and the published key), so every later launch reopens it with
+    /// [`open_with_p256_hardware_signer`](Self::open_with_p256_hardware_signer) on the same
+    /// key; plain [`open`](Self::open) refuses such a library. An element that refuses
+    /// enrollment fails this call before anything is written under `root`.
     #[uniffi::constructor]
     pub fn create_with_p256_hardware_signer(
         root: String,
@@ -1116,24 +1334,59 @@ impl FfiWorkspace {
         client: FfiClientBuild,
     ) -> Result<Arc<Self>, FfiError> {
         let seed = parse_ml_seed(&ml_seed)?;
-        let signer = P256HybridSigningKey::enroll(
-            Arc::new(ForeignHardwareSigner(hardware)),
-            key_alias,
-            &seed,
-        )
-        .map_err(|e| FfiError::Workspace {
-            detail: format!("hardware P-256 key enrollment failed: {e}"),
-        })?;
-        let workspace = Workspace::create_with_hardware_signer(
+        let workspace = Workspace::create_with_p256_hardware_signer(
             &PathBuf::from(root),
             &passphrase,
             DeviceTier::from(tier).params(),
-            Box::new(signer) as Box<dyn Signer>,
+            HardwareSignerBinding {
+                element: Arc::new(ForeignHardwareSigner(hardware)),
+                key_alias,
+            },
+            &seed,
         )?
         .with_client_id(&client.client_id, &client.semver);
         tracing::info!(
             user_id = %workspace.user_id(),
             "workspace created with a hardware-bound P-256 device key"
+        );
+        Ok(Self::wrap(workspace))
+    }
+
+    /// **Open** the existing library at `root` as [`open`](Self::open) does, re-attaching
+    /// `hardware`, the element that holds this device's P-256 signing key. Required for a
+    /// library made by
+    /// [`create_with_p256_hardware_signer`](Self::create_with_p256_hardware_signer): the element
+    /// is asked for the key under the alias the library recorded, never to make a new one, and
+    /// the rebuilt key must be the one this device published. An element that lost the key or
+    /// is unavailable fails the open with [`FfiError::Workspace`] rather than letting the
+    /// library sign with another key.
+    ///
+    /// The library's record decides, not the caller: a library created with the software key
+    /// opens on it and `hardware` is not used. `key_alias` is used only when `root` holds a
+    /// laid-out library with no account yet, whose fresh account is then enrolled under it.
+    #[uniffi::constructor]
+    pub fn open_with_p256_hardware_signer(
+        root: String,
+        passphrase: Vec<u8>,
+        tier: FfiDeviceTier,
+        hardware: Arc<dyn FfiHardwareSigner>,
+        key_alias: String,
+        client: FfiClientBuild,
+    ) -> Result<Arc<Self>, FfiError> {
+        let workspace = Workspace::open_with_hardware_signer(
+            &PathBuf::from(root),
+            &passphrase,
+            DeviceTier::from(tier).params(),
+            HardwareSignerBinding {
+                element: Arc::new(ForeignHardwareSigner(hardware)),
+                key_alias,
+            },
+        )?
+        .with_client_id(&client.client_id, &client.semver);
+        tracing::info!(
+            user_id = %workspace.user_id(),
+            albums = workspace.albums().len(),
+            "workspace opened with a hardware signing element attached"
         );
         Ok(Self::wrap(workspace))
     }
@@ -1193,7 +1446,9 @@ impl FfiWorkspace {
         self.with(|ws| Ok(ws.ensure_album(album_id, &name)?.to_string()))
     }
 
-    /// Every album this workspace holds key material for.
+    /// Every album this workspace holds key material for, in the one album order every app
+    /// shows as is: the album with the most recent visible, untrashed asset first, an empty
+    /// album by its creation time, ties by ascending id (`Workspace::albums`).
     pub fn albums(&self) -> Result<Vec<FfiAlbum>, FfiError> {
         self.with(|ws| {
             Ok(ws
@@ -1240,11 +1495,16 @@ impl FfiWorkspace {
     ///
     /// Every blob comes back whole, the original included. To push without holding the
     /// original in memory, use [`FfiSession::push_asset`](crate::ffi::FfiSession::push_asset).
+    ///
+    /// Building the bundle records the original's upload source guard; once every blob is
+    /// materialised nothing re-derives the original from this bundle again, so the guard is
+    /// released before the blobs are returned. A later call re-verifies the plaintext against
+    /// the signed content address and records it afresh.
     pub fn upload_blobs(&self, asset_id: String) -> Result<Vec<FfiUploadBlob>, FfiError> {
         let asset_id = parse_uuid("asset_id", &asset_id)?;
         self.with(|ws| {
             let bundle = ws.upload_bundle(&asset_id)?;
-            crate::push::bundle_blobs(&bundle)
+            let blobs = crate::push::bundle_blobs(&bundle)
                 .into_iter()
                 .map(|(blob, hash)| {
                     // The FFI hands each blob across as one buffer, so the original is
@@ -1259,7 +1519,21 @@ impl FfiWorkspace {
                         hash,
                     })
                 })
-                .collect()
+                .collect::<Result<Vec<_>, FfiError>>()?;
+            // Released under the same lock, so no bundle built in between loses its guard.
+            match ws.release_upload_guard(&asset_id) {
+                Ok(released) => tracing::debug!(
+                    %asset_id,
+                    released,
+                    "ffi: every blob materialised; the original's upload guard released"
+                ),
+                Err(error) => tracing::warn!(
+                    %asset_id,
+                    %error,
+                    "ffi: the original's upload guard could not be released"
+                ),
+            }
+            Ok(blobs)
         })
     }
 
@@ -1298,13 +1572,22 @@ impl FfiWorkspace {
     /// Use [`signed_manifest`](Self::signed_manifest) when the *manifest* is what is wanted.
     pub fn provenance_head(&self, asset_id: String) -> Result<Vec<u8>, FfiError> {
         let asset_id = parse_uuid("asset_id", &asset_id)?;
+        // Read off the chain head directly: the upload bundle carries the create record, which
+        // is the head only until the first delete, restore or edit.
         self.with(|ws| {
-            Ok(ws
-                .upload_bundle(&asset_id)
-                .map_err(|e| FfiError::Workspace {
-                    detail: format!("reading the provenance head of {asset_id}: {e}"),
-                })?
-                .provenance_blob)
+            let asset = ws.asset(&asset_id).ok_or_else(|| FfiError::Workspace {
+                detail: format!("asset {asset_id} is not managed by this workspace"),
+            })?;
+            let head = asset
+                .chain
+                .records()
+                .last()
+                .ok_or_else(|| FfiError::Workspace {
+                    detail: format!("asset {asset_id} has an empty provenance chain"),
+                })?;
+            capsule_core::cbor::to_canonical_vec(head).map_err(|e| FfiError::Workspace {
+                detail: format!("reading the provenance head of {asset_id}: {e}"),
+            })
         })
     }
 
@@ -1344,18 +1627,26 @@ impl FfiWorkspace {
     /// Never silently drops and never silently accepts: a refused entry is a
     /// [`FfiSyncApplyOutcome::Quarantined`] the app must surface, not an error that aborts the
     /// page. Errors are reserved for a failure of this workspace itself.
+    ///
+    /// An applied record that chains onto an asset this workspace holds is **adopted**: appended
+    /// to the asset's chain with the metadata it binds, written and indexed, and the facts say
+    /// so ([`FfiAssetFacts::adopted`]). A `create` is adopted only by
+    /// [`open_synced_original`](Self::open_synced_original), which has its original.
     pub fn apply_sync_entry(&self, entry: FfiSyncEntry) -> Result<FfiSyncApplyOutcome, FfiError> {
         let album_id = uuid_from_bytes("album_id", &entry.album_id)?;
         let local_chain_head = chain_head(entry.local_chain_head.as_deref())?;
         self.with(|ws| {
-            let outcome = ws.apply_remote_entry(RemoteEntry {
-                album_id,
-                manifest_cbor: &entry.manifest_cbor,
-                metadata_blob: &entry.metadata_blob,
-                original_ciphertext: &entry.original_ciphertext,
-                local_chain_head,
-            })?;
-            Ok(outcome.into())
+            let (outcome, adoption) = ws.adopt_remote_head(
+                RemoteEntry {
+                    album_id,
+                    manifest_cbor: &entry.manifest_cbor,
+                    metadata_blob: &entry.metadata_blob,
+                    original_ciphertext: &entry.original_ciphertext,
+                    local_chain_head,
+                }
+                .head(),
+            )?;
+            Ok(FfiSyncApplyOutcome::from(outcome).adopted(adoption))
         })
     }
 
@@ -1367,7 +1658,12 @@ impl FfiWorkspace {
     /// The same chokepoint and verdicts: the file is hashed, and that digest is what the
     /// content-integrity step checks against the manifest's content address, so a file that is
     /// not the committed ciphertext is quarantined as `Rejected.CiphertextHashMismatch`, as
-    /// `apply_sync_entry` quarantines those bytes. Nothing is written anywhere.
+    /// `apply_sync_entry` quarantines those bytes. The ciphertext file is only read.
+    ///
+    /// An applied record is adopted as [`apply_sync_entry`](Self::apply_sync_entry) adopts one:
+    /// a `delete`, `trash-restore` or edit of an asset this workspace holds is appended to its
+    /// chain, written under `media/` and indexed, and the facts say so
+    /// ([`FfiAssetFacts::adopted`]).
     ///
     /// A malformed `album_id` or `local_chain_head` is refused before the file is opened, so a
     /// bad argument never costs a read of the original. The file is hashed before the workspace
@@ -1390,7 +1686,59 @@ impl FfiWorkspace {
             original_ciphertext_hash: digest,
             local_chain_head,
         };
-        self.with(|ws| Ok(ws.apply_remote_head(head)?.into()))
+        self.with(|ws| {
+            let (outcome, adoption) = ws.adopt_remote_head(head)?;
+            Ok(FfiSyncApplyOutcome::from(outcome).adopted(adoption))
+        })
+    }
+
+    /// [`apply_sync_entry_from_file`](Self::apply_sync_entry_from_file) for an entry of an asset
+    /// this workspace **holds**, with no original fetched: the original is the one the held
+    /// chain's head commits to, which this workspace verified when it adopted or imported it.
+    ///
+    /// This is how a `delete` on an album page — which names no metadata blob and no blob — is
+    /// applied to an asset held here: the delete binds no metadata blob and commits to the
+    /// original the asset already has, so the same chokepoint and adoption as the apply verb
+    /// verify it against the entry's `local_chain_head`, and the asset moves to this device's
+    /// trash. A record committing to another original than the held one is quarantined as
+    /// `Rejected.CiphertextHashMismatch`, and one that binds a metadata blob the entry does not
+    /// carry is refused by the binding check: neither is adopted.
+    ///
+    /// # Errors
+    ///
+    /// [`FfiError::InvalidArgument`] for a malformed `album_id` or `local_chain_head`;
+    /// [`FfiError::Workspace`] when the record names an asset this workspace does not hold, or
+    /// the workspace itself fails. A record that does not decode is a quarantined verdict, as the
+    /// apply verb answers one.
+    pub fn apply_held_sync_entry(
+        &self,
+        entry: FfiSyncHead,
+    ) -> Result<FfiSyncApplyOutcome, FfiError> {
+        entry.parsed()?;
+        self.with(|ws| {
+            // A record that does not decode names no asset; the chokepoint quarantines it before
+            // the digest is looked at.
+            let committed = match ProvenanceRecord::decode(&entry.manifest_cbor) {
+                Ok(record) => {
+                    let asset_id = record.manifest.core.file_id;
+                    let held = ws
+                        .asset(&asset_id)
+                        .and_then(|asset| asset.chain.records().last())
+                        .map(|head| head.manifest.core.ciphertext_hash);
+                    held.ok_or_else(|| FfiError::Workspace {
+                        detail: format!("asset {asset_id} is not managed by this workspace"),
+                    })?
+                }
+                Err(_) => Hash32::from_bytes([0; 32]),
+            };
+            let head = entry.remote(committed)?;
+            let (outcome, adoption) = ws.adopt_remote_head(head)?;
+            tracing::info!(
+                ?adoption,
+                "ffi: a held asset's entry applied against its held original"
+            );
+            Ok(FfiSyncApplyOutcome::from(outcome).adopted(adoption))
+        })
     }
 
     /// **Open a synced original** from the ciphertext file at `ciphertext_path` to its plaintext
@@ -1405,13 +1753,22 @@ impl FfiWorkspace {
     /// any other verdict and never holds a partial or unverified original. An existing file there
     /// is replaced only by a verified one.
     ///
-    /// The workspace stays locked while the original decrypts.
+    /// An opened entry is then **adopted**: a `create` of an asset this workspace does not hold
+    /// makes it held, with its chain, sidecar and sealed metadata written under `media/`, the
+    /// opened original copied there as its own library copy, and its row and user
+    /// tags indexed; a later record of a held asset is appended as
+    /// [`apply_sync_entry_from_file`](Self::apply_sync_entry_from_file) appends one. The facts
+    /// say whether it was ([`FfiAssetFacts::adopted`]). `destination_path` still holds the
+    /// plaintext either way, for the caller to keep or remove.
+    ///
+    /// The workspace stays locked while the original decrypts and is adopted.
     ///
     /// # Errors
     ///
     /// [`FfiError::Workspace`] when a file cannot be read or written, or the workspace itself
-    /// fails; [`FfiError::InvalidArgument`] for a malformed entry or a destination with no file
-    /// name. A refused entry is a verdict, never an error.
+    /// fails (an adoption whose write failed included, after the original was placed at
+    /// `destination_path`); [`FfiError::InvalidArgument`] for a malformed entry or a destination
+    /// with no file name. A refused entry is a verdict, never an error.
     pub fn open_synced_original(
         &self,
         entry: FfiSyncHead,
@@ -1435,34 +1792,179 @@ impl FfiWorkspace {
         let sink = std::fs::File::create_new(&staged)
             .map(std::io::BufWriter::new)
             .map_err(|e| local_io("creating the staging file", &staged, &e))?;
-        let opened = self.with(|ws| Ok(ws.open_remote_original_from(head, ciphertext, sink)?));
-        let (facts, sink) = match opened {
-            Ok(RemoteOriginal::Opened { facts, plaintext }) => (facts, plaintext),
-            Ok(refused) => {
+        self.with(|ws| {
+            let (facts, sink) = match ws.open_remote_original_from(head, ciphertext, sink) {
+                Ok(RemoteOriginal::Opened { facts, plaintext }) => (facts, plaintext),
+                Ok(refused) => {
+                    discard_staged(&staged);
+                    tracing::warn!(source = %source.display(), "ffi: synced original not opened; nothing placed");
+                    return Ok(refused.into());
+                }
+                Err(error) => {
+                    discard_staged(&staged);
+                    return Err(error.into());
+                }
+            };
+            if let Err(e) = commit_staged(sink, &staged, &destination) {
                 discard_staged(&staged);
-                tracing::warn!(source = %source.display(), "ffi: synced original not opened; nothing placed");
-                return Ok(refused.into());
+                return Err(local_io(
+                    "moving the original into place at",
+                    &destination,
+                    &e,
+                ));
             }
-            Err(error) => {
-                discard_staged(&staged);
-                return Err(error);
-            }
-        };
-        if let Err(e) = commit_staged(sink, &staged, &destination) {
-            discard_staged(&staged);
-            return Err(local_io(
-                "moving the original into place at",
-                &destination,
-                &e,
-            ));
+            tracing::info!(
+                asset_id = %facts.asset_id,
+                destination = %destination.display(),
+                "ffi: synced original verified and opened to disk"
+            );
+            // Still under the lock the open took, so the workspace is the one that verified it.
+            let (_, adoption) = ws.adopt_remote_original(head, &destination)?;
+            let mut facts = FfiAssetFacts::from(*facts);
+            facts.adopted = adoption.is_some_and(Adoption::holds);
+            Ok(FfiOpenedOriginal::Opened { facts })
+        })
+    }
+
+    /// [`open_synced_original`](Self::open_synced_original) for an asset this workspace does not
+    /// hold and first sees **past its create**, with `history` the records before the entry's,
+    /// oldest first from the create — what
+    /// [`FfiSession::fetch_provenance_history`](crate::ffi::FfiSession::fetch_provenance_history)
+    /// returns for the entry's `manifest_cbor`.
+    ///
+    /// The entry is applied against the last record of `history`, whatever its
+    /// `local_chain_head` says, and its original opened from `ciphertext_path` as
+    /// `open_synced_original` opens one. Then every record of `history` is verified through
+    /// the chokepoint in order from the create, the sidecar is opened from the entry's
+    /// `metadata_blob` (the asset's live one, which the server's metadata role names: a
+    /// superseded metadata blob is collected), and the asset is **adopted**, held from its
+    /// create with the opened original as its library copy. The facts say whether it was
+    /// ([`FfiAssetFacts::adopted`]); a held asset's `delete`, `trash-restore` or edit then works
+    /// on this device as on one it imported.
+    ///
+    /// An entry that names no metadata blob or original — a `delete` on an album page, the
+    /// surface a writer member's device reads — is opened the same way once they are fetched:
+    /// [`synced_history_sources`](crate::ffi::synced_history_sources) names both from the entry
+    /// and `history`, the fetched metadata blob goes in the entry's `metadata_blob`, and the
+    /// fetched original is `ciphertext_path`. Left empty, the `metadata_blob` binds to nothing
+    /// and the entry is refused.
+    ///
+    /// A history that does not verify, or a live metadata blob that does not bind, is
+    /// [`FfiOpenedOriginal::Refused`] with the verdict that refused it, and
+    /// `destination_path` is untouched: the original is placed there only once the asset it
+    /// belongs to verifies from its create. An empty `history` is `open_synced_original`, and so
+    /// is an entry of an asset this workspace already holds: its history is not read, so none of
+    /// its records can refuse the entry, and the entry is applied against its own
+    /// `local_chain_head`.
+    ///
+    /// # Errors
+    ///
+    /// As [`open_synced_original`](Self::open_synced_original); an adoption whose write failed
+    /// leaves nothing at `destination_path`.
+    pub fn open_synced_history(
+        &self,
+        entry: FfiSyncHead,
+        history: Vec<Vec<u8>>,
+        ciphertext_path: String,
+        destination_path: String,
+    ) -> Result<FfiOpenedOriginal, FfiError> {
+        // An asset held here already extends its own chain, so its history is not read:
+        // `adopt_remote_history` adopts it as `adopt_remote_original` does, and the entry is
+        // opened against its own `local_chain_head`, as `open_synced_original` opens it.
+        let held = ProvenanceRecord::decode(&entry.manifest_cbor).is_ok_and(|record| {
+            self.with(|ws| Ok(ws.asset(&record.manifest.core.file_id).is_some()))
+                .unwrap_or(false)
+        });
+        if history.is_empty() || held {
+            return self.open_synced_original(entry, ciphertext_path, destination_path);
         }
-        tracing::info!(
-            asset_id = %facts.asset_id,
-            destination = %destination.display(),
-            "ffi: synced original verified and opened to disk"
-        );
-        Ok(FfiOpenedOriginal::Opened {
-            facts: (*facts).into(),
+        // The head chains onto the last record handed over; the adoption verifies that record,
+        // and every one before it, from the create.
+        let chains_onto = match history.last().map(|bytes| ProvenanceRecord::decode(bytes)) {
+            Some(Ok(record)) => Some(record.record_hash()),
+            Some(Err(error)) => {
+                tracing::warn!(%error, "ffi: the last record of a synced history does not decode");
+                return Ok(FfiOpenedOriginal::Refused {
+                    outcome: SyncApplyOutcome::Quarantined(QuarantineReason::MalformedManifest(
+                        error.to_string(),
+                    ))
+                    .into(),
+                });
+            }
+            None => None,
+        };
+        let source = PathBuf::from(ciphertext_path);
+        let destination = PathBuf::from(destination_path);
+        // The claim the chokepoint checks first, as `open_synced_original` makes it.
+        let committed = ProvenanceRecord::decode(&entry.manifest_cbor)
+            .map_or(Hash32::from_bytes([0; 32]), |record| {
+                record.manifest.core.ciphertext_hash
+            });
+        let head = RemoteHead {
+            local_chain_head: chains_onto,
+            ..entry.remote(committed)?
+        };
+        let ciphertext = std::fs::File::open(&source)
+            .map_err(|e| local_io("opening the ciphertext file", &source, &e))?;
+        let staged = staging_path(&destination)?;
+        let sink = std::fs::File::create_new(&staged)
+            .map(std::io::BufWriter::new)
+            .map_err(|e| local_io("creating the staging file", &staged, &e))?;
+        self.with(|ws| {
+            let (facts, sink) = match ws.open_remote_original_from(head, ciphertext, sink) {
+                Ok(RemoteOriginal::Opened { facts, plaintext }) => (facts, plaintext),
+                Ok(refused) => {
+                    discard_staged(&staged);
+                    tracing::warn!(source = %source.display(), "ffi: synced original not opened; nothing placed");
+                    return Ok(refused.into());
+                }
+                Err(error) => {
+                    discard_staged(&staged);
+                    return Err(error.into());
+                }
+            };
+            if let Err(e) = finish_staged(sink) {
+                discard_staged(&staged);
+                return Err(local_io("writing the staging file", &staged, &e));
+            }
+            // Adopted from the staged plaintext, which the library copies, so the destination
+            // is written only once the asset verifies from its create.
+            let (outcome, adoption) = match ws.adopt_remote_history(head, &history, &staged) {
+                Ok(adopted) => adopted,
+                Err(error) => {
+                    discard_staged(&staged);
+                    return Err(error.into());
+                }
+            };
+            if !matches!(outcome, SyncApplyOutcome::Applied(_)) {
+                discard_staged(&staged);
+                tracing::warn!(
+                    asset_id = %facts.asset_id,
+                    records = history.len(),
+                    "ffi: a synced history did not verify; nothing adopted or placed"
+                );
+                return Ok(FfiOpenedOriginal::Refused {
+                    outcome: outcome.into(),
+                });
+            }
+            if let Err(e) = place_staged(&staged, &destination) {
+                discard_staged(&staged);
+                return Err(local_io(
+                    "moving the original into place at",
+                    &destination,
+                    &e,
+                ));
+            }
+            tracing::info!(
+                asset_id = %facts.asset_id,
+                records = history.len(),
+                ?adoption,
+                destination = %destination.display(),
+                "ffi: synced original opened and its asset adopted from its history"
+            );
+            let mut facts = FfiAssetFacts::from(*facts);
+            facts.adopted = adoption.is_some_and(Adoption::holds);
+            Ok(FfiOpenedOriginal::Opened { facts })
         })
     }
 
@@ -1638,6 +2140,139 @@ impl FfiWorkspace {
                 .map_err(label_error)?;
             tracing::info!(%asset_id, %region_id, "ffi: region deleted");
             Ok(())
+        })
+    }
+
+    // ── Trash ────────────────────────────────────────────────────────────────
+    //
+    // The whole deletion state machine is the workspace's: every transition is a signed
+    // provenance record, so it syncs and survives an index rebuild, and every judgement of the
+    // retention window reads the `retention_until` signed into the `delete` record. An app
+    // calls these and keeps no retention logic of its own. A refusal is [`FfiError::Trash`].
+
+    /// Move an asset to the trash: sign a `delete` whose retention window is `retain_days` days
+    /// from now, and return its trash entry. An asset already in the trash keeps the window it
+    /// was deleted with and signs nothing, so a retried delete never extends it.
+    pub fn delete_asset(
+        &self,
+        asset_id: String,
+        retain_days: u32,
+    ) -> Result<FfiTrashEntry, FfiError> {
+        let asset_id = parse_uuid("asset_id", &asset_id)?;
+        self.with(|ws| {
+            if let Some(entry) = ws.trash_entry(&asset_id) {
+                tracing::debug!(%asset_id, "ffi: delete of an asset already in the trash; nothing signed");
+                return Ok(FfiTrashEntry::new(&entry, Timestamp::now()));
+            }
+            ws.soft_delete(&asset_id, i64::from(retain_days))
+                .map_err(trash_error)?;
+            tracing::info!(%asset_id, retain_days, "ffi: asset moved to the trash");
+            let entry = ws.trash_entry(&asset_id).ok_or_else(|| FfiError::Workspace {
+                detail: format!("asset {asset_id} was deleted and is not in the trash"),
+            })?;
+            Ok(FfiTrashEntry::new(&entry, Timestamp::now()))
+        })
+    }
+
+    /// Restore an asset from the trash: sign a `trash-restore`. Refused with
+    /// [`FfiTrashRefusal::RetentionElapsed`] (and the `error.upload.retention_elapsed` code) at
+    /// or after the signed `retention_until`, and with [`FfiTrashRefusal::NotInTrash`] for an
+    /// asset that is not in the trash.
+    pub fn restore_asset(&self, asset_id: String) -> Result<(), FfiError> {
+        let asset_id = parse_uuid("asset_id", &asset_id)?;
+        self.with(|ws| {
+            ws.restore(&asset_id).map_err(trash_error)?;
+            tracing::info!(%asset_id, "ffi: asset restored from the trash");
+            Ok(())
+        })
+    }
+
+    /// Permanently delete a trashed asset: its original, every derivative and local cache
+    /// entry, its sidecar and its index row. The provenance chain is kept as the record of the
+    /// deletion. Before `retention_until` a signed shorter-retention `delete` is appended first
+    /// and handed back in [`FfiPurgeOutcome::reissue_record`] to send to the server.
+    pub fn purge_asset(&self, asset_id: String) -> Result<FfiPurgeOutcome, FfiError> {
+        let asset_id = parse_uuid("asset_id", &asset_id)?;
+        self.with(|ws| {
+            let outcome = ws.purge(&asset_id).map_err(trash_error)?;
+            let reissue_record = outcome
+                .reissue
+                .as_ref()
+                .map(capsule_core::cbor::to_canonical_vec)
+                .transpose()
+                .map_err(|e| FfiError::Workspace {
+                    detail: format!("encoding the re-issued delete of {asset_id}: {e}"),
+                })?;
+            tracing::info!(%asset_id, removed_files = outcome.removed_files, reissued = reissue_record.is_some(), "ffi: asset purged");
+            Ok(FfiPurgeOutcome {
+                asset_id: asset_id.to_string(),
+                reissue_record,
+            })
+        })
+    }
+
+    /// Every asset in the trash with its signed retention window, most recently deleted first.
+    ///
+    /// This is the retention data, not the Recently Deleted *view*: a surface that shows the
+    /// trash still opens it behind the SR1 fresh-local-auth gate, as `Catalog::query_trash`
+    /// does.
+    pub fn trash(&self) -> Result<Vec<FfiTrashEntry>, FfiError> {
+        let now = Timestamp::now();
+        self.with(|ws| {
+            Ok(ws
+                .trash()
+                .iter()
+                .map(|entry| FfiTrashEntry::new(entry, now))
+                .collect())
+        })
+    }
+
+    /// The trash entries whose signed retention window has closed: the retention sweep's
+    /// input, each one ready for [`purge_asset`](Self::purge_asset).
+    ///
+    /// A deadline is judged only after a sync drained the feed to its head, so a restore on a
+    /// later page lands first: pass that drain as `drain`, its `server_heads` covering the whole
+    /// feed as [`FfiFeedDrain::server_heads`] requires. The deadline is judged by the
+    /// drain's latest server `changed_at` alone, never by this device's clock, and an asset
+    /// whose `delete` the server has not indexed (a held delete) never expires. With no drain
+    /// (`None`: the sync failed, or this device has no server), or a drain that saw no entry,
+    /// nothing has expired, and the trash keeps every asset until the user empties it.
+    ///
+    /// # Errors
+    ///
+    /// [`FfiError::InvalidArgument`] for a `latest_changed_at` that is not RFC 3339.
+    pub fn expired_trash(
+        &self,
+        drain: Option<FfiFeedDrain>,
+    ) -> Result<Vec<FfiTrashEntry>, FfiError> {
+        let drain = drain.as_ref().map(FfiFeedDrain::parse).transpose()?;
+        // Every entry the sweep returns was judged at this reading; with none it returns none.
+        let judged_at = drain.as_ref().and_then(FeedDrain::judged_at);
+        self.with(|ws| {
+            Ok(ws
+                .expired_trash_after_drain(drain.as_ref())
+                .iter()
+                .filter_map(|entry| judged_at.map(|at| FfiTrashEntry::new(entry, at)))
+                .collect())
+        })
+    }
+
+    /// The signed `delete` that ended a purged asset, the head of its kept provenance chain, as
+    /// the opaque canonical CBOR record [`FfiPurgeOutcome::reissue_record`] carries. After an
+    /// early purge it is that same re-issue, so a delivery to the album's ops surface that
+    /// failed can be resent from here, also after a reopen
+    /// ([`FfiSession::apply_lifecycle_op`](super::FfiSession::apply_lifecycle_op), or
+    /// [`FfiSession::deliver_purge`](super::FfiSession::deliver_purge) for the whole stretch).
+    /// `None` for an asset this workspace has not purged.
+    pub fn purged_record(&self, asset_id: String) -> Result<Option<Vec<u8>>, FfiError> {
+        let asset_id = parse_uuid("asset_id", &asset_id)?;
+        self.with(|ws| {
+            ws.purge_record(&asset_id)
+                .map(capsule_core::cbor::to_canonical_vec)
+                .transpose()
+                .map_err(|e| FfiError::Workspace {
+                    detail: format!("encoding the purge record of {asset_id}: {e}"),
+                })
         })
     }
 }

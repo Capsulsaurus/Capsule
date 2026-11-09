@@ -84,7 +84,8 @@ pub(crate) enum Commands {
         #[arg(long, conflicts_with = "push")]
         json: bool,
     },
-    /// Import straight from a camera over PTP/IP, and manage the identity cameras pair with
+    /// Find cameras on the network, import straight from one over PTP/IP, and manage the
+    /// identity cameras pair with
     Camera {
         #[command(subcommand)]
         command: CameraCommands,
@@ -119,6 +120,8 @@ pub(crate) enum Commands {
         /// run)
         #[arg(long)]
         json: bool,
+        #[command(flatten)]
+        path: PathArgs,
     },
     /// Download originals from the server and verify them byte for byte
     Restore {
@@ -257,6 +260,12 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         command: ShareCommands,
     },
+    /// Follow albums whose home is another server: subscribe with the capability a share
+    /// invite carried, list what this account follows, and unsubscribe
+    Federation {
+        #[command(subcommand)]
+        command: FederationCommands,
+    },
     /// Hand uploads to another device of this account, or upload ones handed to this device
     Peer {
         #[command(subcommand)]
@@ -298,6 +307,14 @@ pub(crate) enum Commands {
     },
     /// Show current status
     Status,
+    /// Show how the server signs people in: its identity provider, and whether it accepts
+    /// passwords, from its public server-info record
+    ServerInfo {
+        /// Print the record as one JSON document on stdout: the server's id, whether it has an
+        /// identity provider (`oidc`) and whether it refuses passwords (`password_disabled`)
+        #[arg(long)]
+        json: bool,
+    },
     /// List the assets the sync feed has delivered
     List {
         /// Include assets the server has tombstoned (deleted) as well as live ones.
@@ -401,9 +418,10 @@ pub(crate) enum CameraCommands {
     /// the camera is changed, and an interrupted run resumes where it stopped
     Import {
         /// The camera's address on the network, as HOST or HOST:PORT (port 15740 when omitted);
-        /// the camera shows it on its Wi-Fi or "Remote/PC connection" screen
+        /// the camera shows it on its Wi-Fi or "Remote/PC connection" screen. Without it, the
+        /// one camera `capsule camera discover` finds is used, and none or several refuse the run
         #[arg(long, value_name = "HOST[:PORT]")]
-        address: String,
+        address: Option<String>,
         /// Path to the Capsule library
         #[arg(long, value_name = "PATH")]
         library: PathBuf,
@@ -413,6 +431,22 @@ pub(crate) enum CameraCommands {
         passphrase_stdin: bool,
         /// Print the run as one JSON document on stdout: the camera, the identity presented to
         /// it, every object received or left on the camera and why, and the import's report
+        #[arg(long)]
+        json: bool,
+    },
+    /// List the cameras on the local network that offer PTP/IP, by browsing DNS-SD `_ptp._tcp`
+    /// for a bounded window
+    Discover {
+        /// How long to listen for cameras, in seconds
+        #[arg(
+            long,
+            value_name = "SECONDS",
+            default_value_t = crate::camera_discovery::DEFAULT_WINDOW_SECS,
+            value_parser = clap::value_parser!(u64).range(1..=crate::camera_discovery::MAX_WINDOW_SECS),
+        )]
+        timeout: u64,
+        /// Print what answered as one JSON document on stdout: the service type browsed, the
+        /// window, and each camera's name, host, address and port
         #[arg(long)]
         json: bool,
     },
@@ -541,6 +575,110 @@ pub(crate) enum RepairCommands {
         #[arg(long, value_name = "COUNT", value_parser = clap::value_parser!(u64).range(1..))]
         limit: Option<u64>,
     },
+}
+
+/// What the path costs, as `--path-cost` spells it.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PathCostArg {
+    /// Bulk transfer is acceptable.
+    Unmetered,
+    /// A byte-counted link: the preview and original tiers wait.
+    Metered,
+    /// The OS data saver is on: the preview and original tiers wait.
+    Constrained,
+}
+
+/// The interface the path runs over, as `--path-interface` spells it.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PathInterfaceArg {
+    /// Ethernet or another wired link.
+    Wired,
+    /// Wi-Fi.
+    Wifi,
+    /// A cellular radio.
+    Cellular,
+    /// Anything else, or unknown.
+    Other,
+}
+
+/// The power source, as `--power` spells it.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PowerArg {
+    /// On external power.
+    External,
+    /// On battery.
+    Battery,
+    /// On battery in low-power mode: the bulk tiers wait, on one session.
+    LowPower,
+}
+
+/// The thermal state, as `--thermal` spells it.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ThermalArg {
+    /// No thermal pressure.
+    Nominal,
+    /// Slightly elevated.
+    Fair,
+    /// High: the bulk tiers wait, on one session.
+    Serious,
+    /// Critical: nothing is sent.
+    Critical,
+}
+
+/// The path snapshot a push plans from. Each flag overrides what the desktop connection source
+/// reports; an omitted flag keeps it.
+#[derive(Args, Debug, Clone, Copy, Default)]
+pub(crate) struct PathArgs {
+    /// What the path costs; on `metered` or `constrained` the push is staged and the preview
+    /// and original tiers wait
+    #[arg(long, value_enum, value_name = "COST")]
+    pub(crate) path_cost: Option<PathCostArg>,
+    /// The interface the path runs over
+    #[arg(long, value_enum, value_name = "INTERFACE")]
+    pub(crate) path_interface: Option<PathInterfaceArg>,
+    /// The power source; `low-power` holds the preview and original tiers back
+    #[arg(long, value_enum, value_name = "POWER")]
+    pub(crate) power: Option<PowerArg>,
+    /// The thermal state; `serious` holds the preview and original tiers back, `critical` sends
+    /// nothing
+    #[arg(long, value_enum, value_name = "STATE")]
+    pub(crate) thermal: Option<ThermalArg>,
+    /// Run as a background task the OS ends this many seconds from now; under a minute holds
+    /// the preview and original tiers back
+    #[arg(long, value_name = "SECONDS")]
+    pub(crate) background_deadline: Option<u64>,
+}
+
+impl PathArgs {
+    /// The flags as the transfer plan reads them.
+    pub(crate) fn flags(&self) -> crate::cache::PathFlags {
+        use capsule_sdk::net::path::{PathCost, PathInterface, PowerState, ThermalState};
+        crate::cache::PathFlags {
+            cost: self.path_cost.map(|cost| match cost {
+                PathCostArg::Unmetered => PathCost::Unmetered,
+                PathCostArg::Metered => PathCost::Metered,
+                PathCostArg::Constrained => PathCost::Constrained,
+            }),
+            interface: self.path_interface.map(|interface| match interface {
+                PathInterfaceArg::Wired => PathInterface::Wired,
+                PathInterfaceArg::Wifi => PathInterface::Wifi,
+                PathInterfaceArg::Cellular => PathInterface::Cellular,
+                PathInterfaceArg::Other => PathInterface::Other,
+            }),
+            power: self.power.map(|power| match power {
+                PowerArg::External => PowerState::External,
+                PowerArg::Battery => PowerState::Battery,
+                PowerArg::LowPower => PowerState::LowPower,
+            }),
+            thermal: self.thermal.map(|thermal| match thermal {
+                ThermalArg::Nominal => ThermalState::Nominal,
+                ThermalArg::Fair => ThermalState::Fair,
+                ThermalArg::Serious => ThermalState::Serious,
+                ThermalArg::Critical => ThermalState::Critical,
+            }),
+            background_deadline: self.background_deadline.map(std::time::Duration::from_secs),
+        }
+    }
 }
 
 /// The library an edit opens, and how its outcome is printed: shared by every `label`,
@@ -692,6 +830,74 @@ pub(crate) enum EditCommands {
         clear: bool,
         #[command(flatten)]
         library: EditLibraryArgs,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum FederationCommands {
+    /// Subscribe to an album on another server, so this account's server pulls it. The
+    /// capability token from the share invite is read from stdin as one line, never from the
+    /// command line. Posting one for an album already subscribed renews it
+    Subscribe {
+        /// The album's home server, which minted the capability (e.g. home.example)
+        #[arg(long, value_name = "HOST")]
+        issuer: String,
+        /// Print the subscription as one JSON document on stdout: whether it was created, and
+        /// its peer, album, scope, jti, issue, expiry and subscription instants and liveness
+        #[arg(long)]
+        json: bool,
+    },
+    /// List this account's subscriptions to albums on other servers, live or lapsed
+    List {
+        /// Print the subscriptions as one JSON document on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Stop pulling one album from another server for this account. Succeeds whether or not
+    /// the album was subscribed
+    Unsubscribe {
+        /// The album's home server
+        #[arg(value_name = "PEER")]
+        peer: String,
+        /// The album, as its home server names it
+        #[arg(value_name = "ALBUM_ID")]
+        album_id: String,
+        /// Print the outcome as one JSON document on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// List every asset this account's server pulled for one subscription: each live asset's
+    /// id, chain head, timestamp, author and size
+    Assets {
+        /// The album's home server
+        #[arg(value_name = "PEER")]
+        peer: String,
+        /// The album, as its home server names it
+        #[arg(value_name = "ALBUM_ID")]
+        album_id: String,
+        /// Print the album as one JSON document on stdout: its peer, album id and assets
+        #[arg(long)]
+        json: bool,
+    },
+    /// Fetch one pulled asset's encrypted metadata blob, byte for byte as this account's
+    /// server pulled it, into a file
+    Metadata {
+        /// The album's home server
+        #[arg(value_name = "PEER")]
+        peer: String,
+        /// The album, as its home server names it
+        #[arg(value_name = "ALBUM_ID")]
+        album_id: String,
+        /// The asset, as its home server names it
+        #[arg(value_name = "ASSET_ID")]
+        asset_id: String,
+        /// File the blob is written to, replacing any file already there
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Print the outcome as one JSON document on stdout: the peer, album and asset, the
+        /// blob's size and content hash, and the file it was written to
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -880,6 +1086,26 @@ pub(crate) enum PeerCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Stop retrying a delete made after a hand-off that `capsule peer status` keeps reporting
+    /// as not applied because the library holds neither the asset nor its tombstone. Local
+    /// only: the server keeps the asset as it holds it. Refused while the library still holds
+    /// the asset's chain, since `capsule peer status` can then send the delete
+    ForgetDelete {
+        /// Path to the Capsule library holding the assets
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// The asset, as `capsule peer status` lists it
+        #[arg(value_name = "ASSET_ID")]
+        asset: Uuid,
+        /// Read the library passphrase from stdin instead of prompting, so the command
+        /// works in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Print the run as one JSON document on stdout: the asset and how many outbox
+        /// entries were dropped
+        #[arg(long)]
+        json: bool,
+    },
     /// Send this library's assets to another device of this account over the LAN peering
     /// channel: dial its `capsule peer pull --listen`, verify it over mutual TLS as a device of
     /// this account, and serve it one backup artifact sealed for that session. The other device
@@ -1019,6 +1245,16 @@ pub(crate) enum AuthCommands {
     Status {
         /// Print the status as one JSON document on stdout: whether a session is stored, whether
         /// its access token is still fresh, and when that token expires
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show the signed-in account's recent security activity, newest first: sign-ins,
+    /// sign-outs, revoked sessions, credential changes, enrolled devices and links
+    Activity {
+        /// The most events to show; the server keeps 90 days and at most 1000
+        #[arg(long, value_name = "N")]
+        limit: Option<u32>,
+        /// Print the events as one JSON document on stdout
         #[arg(long)]
         json: bool,
     },

@@ -37,6 +37,10 @@ pub(crate) struct MockResponse {
     pub(crate) reason: String,
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) body: Vec<u8>,
+    /// How long the server waits, having read the request, before it answers.
+    pub(crate) delay: std::time::Duration,
+    /// The server reads the request and then never answers, holding the connection open.
+    pub(crate) hold: bool,
 }
 
 impl MockResponse {
@@ -46,7 +50,21 @@ impl MockResponse {
             reason: reason.to_string(),
             headers: Vec::new(),
             body: Vec::new(),
+            delay: std::time::Duration::ZERO,
+            hold: false,
         }
+    }
+    /// Answer only after `delay` — a server slow to write and `fsync`, not a link that stalled.
+    pub(crate) fn after(mut self, delay: std::time::Duration) -> Self {
+        self.delay = delay;
+        self
+    }
+    /// Read the request, then say nothing and keep the connection open: a black-holed request
+    /// only the client's own bounds can end.
+    pub(crate) fn hold_open() -> Self {
+        let mut response = MockResponse::new(0, "");
+        response.hold = true;
+        response
     }
     pub(crate) fn header(mut self, k: &str, v: impl Into<String>) -> Self {
         self.headers.push((k.to_string(), v.into()));
@@ -196,6 +214,14 @@ where
         body,
     };
     let resp = handler(&req);
+    if resp.hold {
+        // Ended only by the client closing it, or the server's drop aborting this task.
+        let _ = stream.read(&mut tmp).await;
+        return;
+    }
+    if !resp.delay.is_zero() {
+        tokio::time::sleep(resp.delay).await;
+    }
     if resp.status == 0 {
         // [`MockResponse::drop_connection`]: close without a byte of response.
         return;

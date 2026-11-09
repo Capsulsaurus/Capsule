@@ -7,7 +7,9 @@ use super::*;
 /// mapping that quietly falls through to `UNMAPPED` for a status the surface renders is not.
 #[test]
 fn every_status_the_surface_renders_has_its_own_code() {
-    for status in [400_u16, 401, 403, 404, 405, 406, 413, 415, 416, 422, 501] {
+    for status in [
+        400_u16, 401, 403, 404, 405, 406, 413, 415, 416, 422, 425, 501,
+    ] {
         assert_ne!(
             code_for(status),
             UNMAPPED,
@@ -100,5 +102,48 @@ fn only_a_problem_body_is_read() {
             http::HeaderValue::from_str(value).expect("a header value"),
         );
         assert_eq!(is_problem(&headers), expected, "for {value}");
+    }
+}
+
+/// A request with `method` and the given `Early-Data` header values.
+fn early(method: &str, values: &[&str]) -> Request {
+    let mut request = Request::new(kynos::http::body::Body::empty());
+    *request.method_mut() = http::Method::from_bytes(method.as_bytes()).expect("a method");
+    for value in values {
+        request.headers_mut().append(
+            EARLY_DATA_HEADER,
+            http::HeaderValue::from_str(value).expect("a header value"),
+        );
+    }
+    request
+}
+
+/// **A write in early data is refused; a read in it, or a write outside it, is not**
+/// (design/networking.md, HTTP Transport; RFC 8470 §5.1).
+#[test]
+fn only_a_non_safe_method_in_early_data_is_an_early_write() {
+    for method in ["POST", "PUT", "PATCH", "DELETE"] {
+        assert!(
+            is_early_write(&early(method, &["1"])),
+            "{method} in early data"
+        );
+        assert!(
+            !is_early_write(&early(method, &[])),
+            "{method} without the header"
+        );
+    }
+    for method in ["GET", "HEAD", "OPTIONS", "TRACE"] {
+        assert!(!is_early_write(&early(method, &["1"])), "{method} is safe");
+    }
+}
+
+/// `1` is the header's only defined value: any instance carrying it counts, padding aside, and
+/// anything else is not RFC 8470's header.
+#[test]
+fn only_the_value_one_marks_early_data() {
+    assert!(is_early_write(&early("POST", &[" 1 "])));
+    assert!(is_early_write(&early("POST", &["0", "1"])));
+    for value in ["0", "true", "11", ""] {
+        assert!(!is_early_write(&early("POST", &[value])), "{value:?}");
     }
 }

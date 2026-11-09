@@ -224,7 +224,10 @@ impl Harness {
                 manifest_hash: hash_bytes(&bytes),
                 prior_provenance_hash: row.chain_head,
                 amk_version: 0,
-                provenance: address.clone(),
+                provenance: crate::index::OpBlob {
+                    address: address.clone(),
+                    size: bytes.len() as u64,
+                },
                 metadata: None,
                 original: None,
                 retention_until: None,
@@ -387,6 +390,50 @@ async fn a_blob_a_live_share_link_serves_is_not_an_orphan() {
     assert_eq!(report.findings, vec![Finding::Orphan { address: expiring }]);
 }
 
+/// A pulled album's held metadata blob is not an orphan, on the collector's terms (#1141).
+#[tokio::test]
+async fn a_blob_a_pulled_album_holds_is_not_an_orphan() {
+    use crate::federation::pull::PulledAlbums as _;
+    use crate::federation::pull::pulled::{Committed, PulledAlbum, ValidatedPage};
+
+    let h = Harness::new();
+    let bytes = b"a pulled album's metadata blob";
+    let held = h.store(bytes).await;
+    let pulled = Arc::new(crate::federation::pull::InMemoryPulledAlbums::new());
+    let job = crate::federation::pull::JobKey::new(
+        crate::federation::PeerId::new("home.scrub.test"),
+        crate::store::AlbumId::new("pulled"),
+    );
+    let page = ValidatedPage {
+        entries: Vec::new(),
+        metadata_blobs: std::collections::BTreeMap::from([(
+            capsule_core::crypto::hash::hash_bytes(bytes),
+            bytes.to_vec(),
+        )]),
+        state: PulledAlbum {
+            cursor: Some("c1".to_owned()),
+            high_water: Some(1),
+            ..PulledAlbum::default()
+        },
+    };
+    assert_eq!(
+        pulled.commit(&job, None, page).await.expect("a commit"),
+        Committed::Written
+    );
+
+    let report = scrub(&h.context, Depth::Structural).await.expect("a pass");
+    assert_eq!(
+        report.findings,
+        vec![Finding::Orphan {
+            address: held.clone()
+        }],
+        "a scrub not given the claims reports it"
+    );
+    let context = h.context.clone().with_held_blobs(pulled);
+    let report = scrub(&context, Depth::Structural).await.expect("a pass");
+    assert!(report.is_clean(), "{:?}", report.findings);
+}
+
 #[tokio::test]
 async fn bit_rot_is_found_only_by_a_deep_pass() {
     let h = Harness::new();
@@ -516,8 +563,13 @@ async fn a_mirrored_fact_that_disagrees_with_the_signed_manifest_is_reported() {
                 .await
                 .expect("read")
                 .expect("the row exists")
-                .address_for(BlobRole::Provenance)
-                .cloned()
+                .blobs
+                .into_iter()
+                .find(|blob| blob.role == BlobRole::Provenance)
+                .map(|blob| crate::index::OpBlob {
+                    address: blob.address,
+                    size: blob.size,
+                })
                 .expect("a provenance blob"),
             metadata: None,
             original: None,
@@ -553,7 +605,8 @@ async fn a_provenance_blob_that_is_not_a_manifest_is_reported_rather_than_assume
 
     // Re-point the provenance role at bytes that are not a manifest, the only way a lifecycle
     // write legitimately moves that role — which is what makes this reachable at all.
-    let junk = h.store(b"not CBOR, not a manifest, not anything").await;
+    let junk_bytes = b"not CBOR, not a manifest, not anything";
+    let junk = h.store(junk_bytes).await;
     h.index
         .apply_op(crate::index::LifecycleOp {
             asset_id: id.clone(),
@@ -569,7 +622,10 @@ async fn a_provenance_blob_that_is_not_a_manifest_is_reported_rather_than_assume
                 .expect("the row exists")
                 .chain_head,
             amk_version: 0,
-            provenance: junk.clone(),
+            provenance: crate::index::OpBlob {
+                address: junk.clone(),
+                size: junk_bytes.len() as u64,
+            },
             metadata: None,
             original: None,
             retention_until: None,
@@ -695,7 +751,11 @@ async fn purging_a_tombstone_takes_the_chain_with_it() {
         .expect("read")
         .expect("the row exists")
         .chain_head;
-    let delete_manifest = h.store(b"purged-delete-manifest").await;
+    let delete_bytes = b"purged-delete-manifest";
+    let delete_manifest = crate::index::OpBlob {
+        address: h.store(delete_bytes).await,
+        size: delete_bytes.len() as u64,
+    };
     h.index
         .apply_op(crate::index::LifecycleOp {
             asset_id: id.clone(),
@@ -732,3 +792,4 @@ async fn purging_a_tombstone_takes_the_chain_with_it() {
 }
 
 mod ledger_check;
+mod quota_check;

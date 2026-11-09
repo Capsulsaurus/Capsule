@@ -57,9 +57,9 @@ fn test_stale_lock_recovery() {
     f.write_all(serde_json::to_string(&stale).unwrap().as_bytes())
         .unwrap();
 
-    // On Linux, PID 0 is not alive, so acquisition should succeed after cleanup.
-    // On non-Linux the conservative assumption keeps the lock — skip that case.
-    #[cfg(target_os = "linux")]
+    // On Linux and Android, PID 0 is not alive, so acquisition should succeed after cleanup.
+    // Elsewhere the conservative assumption keeps the lock — skip that case.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         try_acquire(root).expect("should recover from stale lock");
         release(root).unwrap();

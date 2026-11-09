@@ -250,3 +250,44 @@ fn a_members_continuation_verifies_under_the_members_own_directory() {
         "and the album's asset is still the owner's creation"
     );
 }
+
+/// **The first metadata-bearing edit keeps the blob the create binds** (issue #1091), byte for
+/// byte, before it replaces it. A `delete` / `trash-restore` mints no blob and keeps nothing, and
+/// a later edit leaves the kept copy alone: the current blob is no longer the create's.
+#[test]
+fn the_first_edit_keeps_the_create_blob_and_later_writes_leave_it() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let img = src.path().join("photo.jpg");
+    fs::write(&img, b"\xFF\xD8\xFF kept-create-blob bytes").unwrap();
+    let mut ws = fast_workspace(lib.path());
+    let album = ws.create_album("Trip").unwrap();
+    let asset = ws.import_asset(album, &img).unwrap();
+    let created = ws.asset(&asset).unwrap().metadata_blob.clone();
+    let kept = ws.create_metadata_blob_path(&asset).unwrap();
+
+    ws.soft_delete(&asset, 30).unwrap();
+    ws.restore(&asset).unwrap();
+    assert!(!kept.exists(), "a delete and a restore mint no blob");
+
+    ws.tag_add(&asset, "beach").unwrap();
+    assert_eq!(
+        fs::read(&kept).unwrap(),
+        created,
+        "the create's exact bytes"
+    );
+    let edited = ws.asset(&asset).unwrap().metadata_blob.clone();
+    assert_ne!(edited, created);
+
+    ws.set_caption(&asset, "later").unwrap();
+    assert_eq!(
+        fs::read(&kept).unwrap(),
+        created,
+        "a later edit keeps nothing new"
+    );
+    assert_eq!(
+        ws.verify(&asset).unwrap(),
+        VerifyOutcome::Accept,
+        "the kept copy is not taken for the original"
+    );
+}

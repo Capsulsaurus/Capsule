@@ -53,6 +53,7 @@ use std::sync::Arc;
 use jiff::Timestamp;
 use sea_orm::DatabaseConnection;
 
+use crate::activity::{ActivityContext, ActivityStore, InMemoryActivity, PostgresActivity};
 use crate::album::authority::ProvisionedAuthority;
 use crate::album::postgres::PostgresAlbums;
 use crate::album::{AlbumContext, AlbumStore, InMemoryAlbums};
@@ -83,13 +84,27 @@ use crate::enrollment::EnrollmentContext;
 use crate::escrow::postgres::PostgresEscrow;
 use crate::escrow::{EscrowContext, EscrowStore, InMemoryEscrow};
 use crate::federation::postgres::{PostgresCapabilities, PostgresPeers};
+use crate::federation::pull::pulled::postgres::{PeerBudgetCharge, PostgresPulledAlbums};
+use crate::federation::pull::pulled::{PeerCachingBudget, PulledAlbumReads};
+use crate::federation::pull::remote::{egress_client, rest};
+use crate::federation::pull::valkey::ValkeyPullJobs;
+use crate::federation::pull::{
+    Ed25519RequestSigner, InMemoryPullJobs, InMemoryPulledAlbums, PullJobs, PullWorker,
+    PullWorkerParts, PulledAlbums, RemotePuller, RemotePullerParts, SystemJitter,
+};
+use crate::federation::rejected_hashes::postgres::PostgresRejectedHashes;
+use crate::federation::rejected_hashes::{
+    InMemoryRejectedHashes, RejectedHashBounds, RejectedHashes,
+};
+use crate::federation::subscriptions::postgres::PostgresSubscriptions;
 use crate::federation::{
     CapabilityCodec, CapabilityStore, FederationCollaborators, FederationContext,
-    InMemoryCapabilities, InMemoryPeers, PeerAdministration, PeerStore,
+    InMemoryCapabilities, InMemoryPeers, InMemorySubscriptions, PeerAdministration, PeerId,
+    PeerStore, SubscriptionJobs, SubscriptionStore,
 };
 use crate::gc::memory::InMemoryCollection;
 use crate::gc::postgres::PostgresCollection;
-use crate::gc::{CollectionContext, CollectionStore};
+use crate::gc::{CollectionContext, CollectionStore, HeldBlobs};
 use crate::index::AssetIndex;
 use crate::index::memory::InMemoryAssetIndex;
 use crate::index::postgres::PostgresAssetIndex;
@@ -116,6 +131,7 @@ use crate::store::{
     OidcAuthorizationStore, OidcDeviceStore, PostgresCohorts, SystemClock, UploadSessionStore,
 };
 use crate::sync::{CursorCodec, SyncContext};
+use crate::upload::reservation::{ReservationSweep, UploadHousekeeping};
 use crate::upload::{UploadContext, UploadPolicy};
 use crate::verify::VerifyContext;
 
@@ -178,6 +194,13 @@ pub enum BootError {
     #[error("the OIDC relying party's HTTP client could not be built: {detail}")]
     OidcClient {
         /// What went wrong; names the bundle's path, never its contents.
+        detail: String,
+    },
+    /// The egress pull worker's HTTP client could not be built. Only a federating deployment
+    /// builds one.
+    #[error("the federation pull's HTTP client could not be built: {detail}")]
+    EgressClient {
+        /// What reqwest reported.
         detail: String,
     },
     /// The Valkey at `VALKEY_URL` could not be reached, or did not answer `PING`.
@@ -245,6 +268,10 @@ pub struct Maintenance {
 pub struct Assembled {
     /// The application context every operation resolves its dependencies from.
     pub app: App,
+    /// The egress pull worker, over the same subscriptions, peers and counters as the
+    /// application. `Some` exactly when the deployment federates (`FEDERATION_ENABLED` and
+    /// `FEDERATION_URL`); nothing runs it until [`Assembled::spawn_pull_worker`] does.
+    pub pull_worker: Option<Arc<PullWorker>>,
     /// The operator workers, over the same stores.
     pub maintenance: Maintenance,
 }
@@ -260,6 +287,102 @@ impl Assembled {
             detail: error.to_string(),
         })
     }
+
+    /// Start the egress pull worker's loop, when the deployment federates.
+    ///
+    /// One round every [`PULL_TICK`], the first straight away. A round visits every job and
+    /// runs only the due ones, so the tick bounds how late a due job starts, not how often a
+    /// peer is pulled: that is [`PULL_INTERVAL`](crate::federation::pull::PULL_INTERVAL) and the
+    /// back-off. Rounds never overlap, because the next waits for the last; a round that
+    /// overruns the tick delays the next rather than bunching them. The task is detached, like
+    /// the stranded-claim recovery: a pull cut off by the process stopping commits nothing it
+    /// had not committed, because every page is one transaction, and its lease lapses to the
+    /// next process.
+    ///
+    /// `None` when the deployment does not federate: nothing is pulled.
+    pub fn spawn_pull_worker(&self) -> Option<tokio::task::JoinHandle<()>> {
+        let Some(worker) = self.pull_worker.clone() else {
+            tracing::info!("this deployment does not federate; the pull worker does not run");
+            return None;
+        };
+        tracing::info!(
+            holder = worker.holder(),
+            tick_secs = PULL_TICK.as_secs(),
+            "starting the egress pull worker"
+        );
+        Some(tokio::spawn(async move {
+            let mut ticks = tokio::time::interval(PULL_TICK);
+            ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                ticks.tick().await;
+                let report = worker.tick().await;
+                tracing::debug!(jobs = report.outcomes.len(), "a pull round returned");
+            }
+        }))
+    }
+}
+
+/// How often the pull worker's loop runs a round.
+///
+/// Thirty seconds: half the [`HINT_FLOOR`](crate::federation::pull::HINT_FLOOR), so a job a
+/// hint brought forward starts within half a minute of becoming due, and a round over jobs that
+/// are not due costs one schedule read each.
+pub const PULL_TICK: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// What the pull worker is assembled over, beside the configuration and the signing key.
+struct PullCollaborators {
+    jobs: Arc<dyn PullJobs>,
+    subscriptions: Arc<dyn SubscriptionStore>,
+    peers: Arc<dyn PeerStore>,
+    pulled: Arc<dyn PulledAlbums>,
+    rejected: Arc<dyn RejectedHashes>,
+    counters: CounterContext,
+    clock: Arc<dyn Clock>,
+    policy: UploadPolicy,
+}
+
+/// The production pull worker: [`SubscriptionJobs`] as its source and a [`RemotePuller`] over
+/// the egress client, signing every presentation with `der`.
+///
+/// `der` is `JWT_ED25519_DER`, the key `server-info` publishes and peers pin: a request
+/// signature verifies under the pinned key of the server a capability's `sub` names, so it is
+/// the same key the capability codec signs under.
+fn pull_worker(
+    config: &Config,
+    der: &[u8],
+    parts: PullCollaborators,
+) -> Result<PullWorker, BootError> {
+    let signer = Ed25519RequestSigner::from_pkcs8(der).map_err(|error| BootError::SigningKey {
+        detail: error.to_string(),
+    })?;
+    let http = egress_client().map_err(|error| BootError::EgressClient {
+        detail: error.to_string(),
+    })?;
+    let puller = RemotePuller::new(RemotePullerParts {
+        subscriptions: parts.subscriptions.clone(),
+        peers: parts.peers.clone(),
+        pulled: parts.pulled,
+        rejected: parts.rejected,
+        signer: Arc::new(signer),
+        backend: Arc::new(rest::ReqwestBackend::new(http)),
+        clock: parts.clock.clone(),
+        policy: parts.policy,
+        server_id: PeerId::new(&config.server_domain),
+    });
+    let worker = PullWorker::new(PullWorkerParts {
+        jobs: parts.jobs,
+        source: Arc::new(SubscriptionJobs::new(
+            parts.subscriptions,
+            parts.clock.clone(),
+        )),
+        puller: Arc::new(puller),
+        peers: parts.peers,
+        counters: parts.counters,
+        clock: parts.clock,
+        jitter: Arc::new(SystemJitter::new()),
+    });
+    tracing::info!(holder = worker.holder(), "assembled the egress pull worker");
+    Ok(worker)
 }
 
 /// Assemble a server from `config`.
@@ -405,11 +528,16 @@ async fn valkey(config: &Config) -> Result<ValkeyStores, BootError> {
         .valkey_url
         .as_deref()
         .ok_or(BootError::Missing { key: "VALKEY_URL" })?;
-    let stores = ValkeyStores::connect(url, Arc::new(SystemClock))
-        .await
-        .map_err(|error| BootError::Valkey {
-            detail: error.to_string(),
-        })?;
+    let stores = ValkeyStores::connect(
+        url,
+        Arc::new(SystemClock),
+        config.session_ttl,
+        config.session_hard_cap,
+    )
+    .await
+    .map_err(|error| BootError::Valkey {
+        detail: error.to_string(),
+    })?;
     tracing::info!("VALKEY_URL answers; the volatile state ports are on Valkey");
     Ok(stores)
 }
@@ -463,8 +591,28 @@ struct Stores {
     capabilities: Arc<dyn CapabilityStore>,
     /// The peers: read by federation at every boundary and written by `capsule-server peer …`.
     peers: Arc<dyn PeerStore>,
+    /// The local album subscriptions: written by subscription intake, and the egress pull
+    /// worker's job source (#1035).
+    subscriptions: Arc<dyn SubscriptionStore>,
+    /// What the egress pull worker wrote: each pulled album's position, heads and metadata
+    /// blobs (#1124). Here rather than in [`Ports`] because the durable adapter keeps its blobs
+    /// in [`Stores::blobs`].
+    pulled: Arc<dyn PulledAlbums>,
+    /// The same store as [`Self::pulled`], as the claims the collector and the scrub count as
+    /// references (#1141): a pulled metadata blob has no asset row, so a collector not handed
+    /// these would sweep it from [`Stores::blobs`] once the grace window passed.
+    held: Arc<dyn HeldBlobs>,
+    /// The same store as [`Self::pulled`], as what a subscriber's client reads of an album
+    /// pulled for it (#1160): the subscription routes read it, never the worker.
+    reads: Arc<dyn PulledAlbumReads>,
+    /// The bounded soft-fail table the pull worker remembers each refused stale revival in
+    /// (#1157): durable, so Postgres on the durable arm.
+    rejected: Arc<dyn RejectedHashes>,
     /// The moderation store: written by report intake, read by `capsule-server moderation …`.
     moderation: Arc<dyn ModerationStore>,
+    /// The account activity log: durable, so Postgres on the durable arm (design/activity-log.md).
+    /// Written by the application and swept by `gc` (#1112). Here so both are one store.
+    activity: Arc<dyn ActivityStore>,
 }
 
 impl Stores {
@@ -488,8 +636,24 @@ impl Stores {
             grace_window,
         )
         // The upload-progress view has no lifetime of its own, so `gc --apply` is what keeps
-        // it from growing with every abandoned upload (#519).
-        .with_progress_sweep(Arc::new(self.uploads.clone()));
+        // it from growing with every abandoned upload (#519). The same pass releases the quota
+        // reservations of sessions that expired without their bytes (#1059): expiry has no
+        // other observer. Re-charged under the limits the application charges under.
+        .with_progress_sweep(Arc::new(UploadHousekeeping::new(
+            self.uploads.clone(),
+            ReservationSweep::new(
+                self.quotas.clone(),
+                self.blobs.clone(),
+                self.uploads.clone(),
+                QuotaLimits::unlimited(),
+            ),
+        )))
+        // An account that stopped recording keeps its expired activity rows until a sweep
+        // deletes them, so `gc --apply` does (#1112).
+        .with_activity_sweep(self.activity.clone())
+        // The pull worker writes pulled metadata blobs into the same blob store, and no asset
+        // row names them, so the collector must count the pulled albums' claims (#1141).
+        .with_held_blobs(self.held.clone());
         if let Some(attestation) = purge_signer {
             collection = collection.with_attestation(attestation);
         }
@@ -506,7 +670,10 @@ impl Stores {
                 self.shares.clone(),
                 self.clock.clone(),
             )
-            .with_ledger(self.ledger.clone(), keys.clone()),
+            .with_ledger(self.ledger.clone(), keys.clone())
+            .with_held_blobs(self.held.clone())
+            // Check 8 audits the same quota ledger the rebuild's reconcile repairs (#1183).
+            .with_quotas(self.quotas.clone()),
             rebuild: RebuildContext::new(
                 self.index.clone(),
                 self.blobs.clone(),
@@ -591,6 +758,10 @@ struct Base {
     clock: Arc<dyn Clock>,
     blobs: Arc<FilesystemBlobStore>,
     ledger: Arc<FilesystemLedger>,
+    /// What one source peer's pulled albums may hold for one local account.
+    pulled_budget: PeerCachingBudget,
+    /// How much the rejected-hash table holds, and for how long.
+    rejected_bounds: RejectedHashBounds,
 }
 
 impl Base {
@@ -599,15 +770,27 @@ impl Base {
     /// The index appends finalization's custody receipts to `receipts` under its own lock
     /// (#693), so the attestation context must be built over the same log.
     fn in_memory(self, receipts: Arc<InMemoryReceipts>) -> Stores {
+        let subscriptions = Arc::new(InMemorySubscriptions::new());
+        let pulled = Arc::new(
+            InMemoryPulledAlbums::new().with_budget(subscriptions.clone(), self.pulled_budget),
+        );
         Stores {
             index: Arc::new(InMemoryAssetIndex::with_receipts(receipts)),
             uploads: Arc::new(InMemoryUploadSessions::with_default_ttl(self.clock.clone())),
             marks: Arc::new(InMemoryCollection::new()),
-            quotas: Arc::new(InMemoryQuota::new()),
+            // Over the same pulled albums the pull worker writes, so `quota_used` counts what a
+            // pull holds for an account as the durable ledger's usage statement does.
+            quotas: Arc::new(InMemoryQuota::new().with_pulled(pulled.clone())),
             shares: Arc::new(InMemoryShares::new()),
             capabilities: Arc::new(InMemoryCapabilities::new(self.clock.clone())),
             peers: Arc::new(InMemoryPeers::new()),
+            pulled: pulled.clone(),
+            held: pulled.clone(),
+            reads: pulled,
+            subscriptions,
+            rejected: Arc::new(InMemoryRejectedHashes::new(self.rejected_bounds)),
             moderation: Arc::new(InMemoryModeration::new()),
+            activity: Arc::new(InMemoryActivity::new()),
             root: self.root,
             clock: self.clock,
             blobs: self.blobs,
@@ -617,6 +800,10 @@ impl Base {
 
     /// The shared stores on Postgres, and the upload sessions on Valkey.
     fn durable(self, connection: &DatabaseConnection, valkey: &ValkeyStores) -> Stores {
+        let pulled = Arc::new(
+            PostgresPulledAlbums::new(connection.clone(), self.blobs.clone())
+                .with_charge(Arc::new(PeerBudgetCharge::new(self.pulled_budget))),
+        );
         Stores {
             index: Arc::new(PostgresAssetIndex::new(connection.clone())),
             uploads: valkey.uploads(),
@@ -628,7 +815,16 @@ impl Base {
                 self.clock.clone(),
             )),
             peers: Arc::new(PostgresPeers::new(connection.clone())),
+            subscriptions: Arc::new(PostgresSubscriptions::new(connection.clone())),
+            pulled: pulled.clone(),
+            held: pulled.clone(),
+            reads: pulled,
+            rejected: Arc::new(PostgresRejectedHashes::new(
+                connection.clone(),
+                self.rejected_bounds,
+            )),
             moderation: Arc::new(PostgresModeration::new(connection.clone())),
+            activity: Arc::new(PostgresActivity::new(connection.clone())),
             root: self.root,
             clock: self.clock,
             blobs: self.blobs,
@@ -669,11 +865,31 @@ async fn base(config: &Config, clock: Arc<dyn Clock>) -> Result<Base, BootError>
                     detail: error.to_string(),
                 })?,
         );
+    // Every deployment runs `QuotaLimits::unlimited()` until limits are configurable, as the
+    // quota contexts below do, so the budget is the configured share of that same hard limit:
+    // a figure nothing reaches today, on the same predicate a limited deployment runs.
+    let pulled_budget = PeerCachingBudget::of_hard_limit(
+        QuotaLimits::unlimited().hard_limit,
+        config.peer_budget_percent,
+    );
+    tracing::debug!(
+        percent = config.peer_budget_percent,
+        bytes = pulled_budget.limit(),
+        "the per-peer caching budget on pulled albums"
+    );
+    let rejected_bounds = config.rejected_hash_bounds;
+    tracing::debug!(
+        capacity = rejected_bounds.capacity(),
+        ttl_hours = rejected_bounds.ttl().as_hours(),
+        "the bounds of the federation rejected-hash table"
+    );
     Ok(Base {
         root,
         clock,
         blobs,
         ledger,
+        pulled_budget,
+        rejected_bounds,
     })
 }
 
@@ -733,6 +949,10 @@ struct Ports {
     channels: Arc<dyn ChannelStore>,
     drops: Arc<dyn DropStore>,
     counters: Arc<dyn CounterStore>,
+    /// The egress pull worker's schedule, leases and circuits: volatile state, so Valkey on the
+    /// durable arm (#964). Built on both arms whether or not the deployment federates, and read
+    /// only when it does.
+    pull_jobs: Arc<dyn PullJobs>,
     /// The pending OIDC ceremonies. Built on both arms whether or not `OIDC_ISSUER` is set, and
     /// read only when it is.
     oidc_authorizations: Arc<dyn OidcAuthorizationStore>,
@@ -766,7 +986,10 @@ fn memory_ports(
             config.lockout_attempts,
             config.lockout_window,
         ))),
-        sessions: Arc::new(InMemoryAuthState::with_default_ttl(clock.clone())),
+        sessions: Arc::new(
+            InMemoryAuthState::new(clock.clone(), config.session_ttl)
+                .with_hard_cap(config.session_hard_cap),
+        ),
         challenges: Arc::new(InMemoryChallenges::with_default_ttl(clock.clone())),
         cohorts: Arc::new(InMemoryCohorts::new()),
         totp: Arc::new(InMemoryTotp::new()),
@@ -779,6 +1002,7 @@ fn memory_ports(
         channels: Arc::new(InMemoryChannels::with_default_ttl(clock.clone())),
         drops: Arc::new(InMemoryDrops::new()),
         counters: Arc::new(InMemoryCounters::new()),
+        pull_jobs: Arc::new(InMemoryPullJobs::new()),
         oidc_authorizations: Arc::new(InMemoryOidcAuthorizations::with_default_ttl(clock.clone())),
         oidc_devices: Arc::new(InMemoryOidcDevices::with_default_ttl(clock.clone())),
     })
@@ -819,6 +1043,7 @@ fn durable_ports(
         channels: valkey.channels(),
         drops: Arc::new(PostgresDrops::new(db())),
         counters: Arc::new(ValkeyCounters::new(valkey.valkey().clone())),
+        pull_jobs: Arc::new(ValkeyPullJobs::new(valkey.valkey().clone())),
         oidc_authorizations: valkey.oidc_authorizations(),
         oidc_devices: valkey.oidc_devices(),
     })
@@ -858,10 +1083,17 @@ fn compose(
     let uploads = stores.uploads.clone();
     let marks = stores.marks.clone();
     let quotas = stores.quotas.clone();
+    // Unlimited, which is what a self-hosted deployment runs. A configurable ceiling is a
+    // quota policy this change does not own; `QuotaLimits` already takes one. One context, so
+    // the upload module restores a reservation under the same limits the quota module charges.
+    let quota = QuotaContext::new(quotas.clone(), clock.clone(), QuotaLimits::unlimited());
     let shares = stores.shares.clone();
     let issued = stores.capabilities.clone();
     let peers = stores.peers.clone();
+    let subscriptions = stores.subscriptions.clone();
+    let pulled_reads = stores.reads.clone();
     let moderation = stores.moderation.clone();
+    let activity = stores.activity.clone();
 
     // The signer is built from the private key alone and derives its own public half, which is
     // what lets `ServerInfo` below publish the key tokens actually verify under rather than one
@@ -889,9 +1121,40 @@ fn compose(
         channels,
         drops,
         counters,
+        pull_jobs,
         oidc_authorizations,
         oidc_devices,
     } = ports;
+    // One context for the request budgets and the pull worker's per-peer budgets: one store.
+    let counters = CounterContext::new(counters, clock.clone());
+    // The window the operator configured, not the crate default: this policy is what the
+    // handshake enforces and what every response advertises (`negotiation`), and the discovery
+    // record below publishes the same two values. One window, three readers — and the pull
+    // worker, which re-applies this server's own write rules to what it pulls.
+    let policy = UploadPolicy::default()
+        .with_protocol_window(config.protocol_min.clone(), config.protocol_max.clone())
+        .with_min_client_build(config.min_client_build.clone())
+        // The chunk-body read pace (#717, #1041), fixed for the life of the process.
+        .with_chunk_pace(Arc::new(config.chunk_pace));
+    let pull_worker = if config.federation_endpoint().is_some() {
+        Some(Arc::new(pull_worker(
+            config,
+            der.expose(),
+            PullCollaborators {
+                jobs: pull_jobs,
+                subscriptions: subscriptions.clone(),
+                peers: peers.clone(),
+                pulled: stores.pulled.clone(),
+                rejected: stores.rejected.clone(),
+                counters: counters.clone(),
+                clock: clock.clone(),
+                policy: policy.clone(),
+            },
+        )?))
+    } else {
+        tracing::debug!("this deployment does not federate; no pull worker is assembled");
+        None
+    };
     // The production write authority, not a permissive double: it reads the
     // album's own pin and the account's published device directory, so invariants 6 and 7 mean
     // what they say even in the development profile.
@@ -937,6 +1200,12 @@ fn compose(
     if config.oidc.is_some() {
         // Endpoints only; the issuer and client id stay the server's.
         server_info = server_info.with_oidc();
+    }
+    // Configuration refuses the switch without an issuer, so a record that says "no passwords"
+    // always also publishes where the identity provider is.
+    if config.password_auth_disabled {
+        tracing::info!("password sign-in is disabled; accounts sign in through the OIDC provider");
+        server_info = server_info.without_passwords();
     }
     // Published only when the deployment federates (#509): a `FEDERATION_URL` without
     // `FEDERATION_ENABLED` is an endpoint nothing behind it would answer.
@@ -1013,7 +1282,9 @@ fn compose(
             cohorts,
             tokens: tokens.clone(),
             clock: clock.clone(),
-        }),
+        })
+        // The same switch the discovery record above publishes, read from the same field.
+        .with_password_setting(Arc::new(config.password_auth_disabled)),
         totp: TotpContext::new(
             totp,
             // The issuer is what an authenticator app shows beside the code, so it is this
@@ -1026,15 +1297,9 @@ fn compose(
             blobs.clone(),
             index.clone(),
             authority.clone(),
+            quota.clone(),
             clock.clone(),
-            // The window the operator configured, not the crate default: this policy is what
-            // the handshake enforces and what every response advertises (`negotiation`), and the
-            // discovery record above publishes the same two values. One window, three readers.
-            UploadPolicy::default()
-                .with_protocol_window(config.protocol_min.clone(), config.protocol_max.clone())
-                .with_min_client_build(config.min_client_build.clone())
-                // The chunk-body read deadline (#717), fixed for the life of the process.
-                .with_chunk_read_deadline(Arc::new(config.chunk_read_timeout)),
+            policy,
         ),
         sync: SyncContext::new(
             index.clone(),
@@ -1049,29 +1314,39 @@ fn compose(
             marks.clone(),
             uploads.clone(),
             crate::serve::membership_reads(members.clone()),
+            clock.clone(),
         ),
         verify: VerifyContext::new(index.clone(), blobs.clone(), marks.clone(), clock.clone()),
         directories: DeviceDirectoryContext::new(directories.clone(), clock.clone()),
         albums: AlbumContext::new(albums.clone(), clock.clone()),
         membership: MembershipContext::new(members, clock.clone()),
-        // Unlimited, which is what a self-hosted deployment runs. A configurable ceiling is a
-        // quota policy this change does not own; `QuotaLimits` already takes one.
-        quota: QuotaContext::new(quotas.clone(), clock.clone(), QuotaLimits::unlimited()),
+        quota,
         attestation: attestation.clone(),
         discovery: DiscoveryContext::new(server_info, revocations),
         escrow: EscrowContext::new(escrow, clock.clone()),
-        federation: FederationContext::new(FederationCollaborators {
-            codec: capabilities,
-            capabilities: issued,
-            peers,
-            clock: clock.clone(),
-            enabled: Arc::new(config.federation_endpoint().is_some()),
-        }),
+        federation: {
+            let federation = FederationContext::new(FederationCollaborators {
+                codec: capabilities,
+                capabilities: issued,
+                peers,
+                subscriptions,
+                pulled: pulled_reads,
+                clock: clock.clone(),
+                enabled: Arc::new(config.federation_endpoint().is_some()),
+            });
+            // A verified pull hint reaches the worker that runs the job it names, the same one
+            // `spawn_pull_worker` starts. No worker, no receiver: the route answers the same.
+            match &pull_worker {
+                Some(worker) => federation.with_hints(worker.clone()),
+                None => federation,
+            }
+        },
         enrollment: EnrollmentContext::new(enrollments, channels, clock.clone()),
         moderation: ModerationContext::new(moderation),
         share: ShareContext::new(shares, blobs.clone(), clock.clone()),
         drops: DropContext::new(drops, uploads.clone(), blobs.clone(), clock.clone()),
-        counters: CounterContext::new(counters, clock.clone()),
+        counters,
+        activity: ActivityContext::new(activity, clock.clone()),
     });
 
     tracing::info!(
@@ -1086,6 +1361,7 @@ fn compose(
 
     Ok(Assembled {
         app,
+        pull_worker,
         // The same stores, so "upload it, then let the collector see it" is a property of the
         // server rather than of two disconnected assemblies.
         maintenance: stores.maintenance(

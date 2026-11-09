@@ -14,7 +14,7 @@ Capsule · Restore · Signed in
 │  Asset id (optional)                                                         │
 │                                                                              │
 │Restored 2 of 3 assets to /tmp/out (0 already present, 1 failed, 0 deleted    │
-│skipped).                                                                     │
+│skipped, 0 purged skipped).                                                   │
 │asset asset-100 failed: the original does not match its manifest              │
 │                                                                              │
 │Scriptable: `capsule restore --library PATH --out DIR --json`.                │

@@ -29,7 +29,7 @@ capsule-cli-migration = { path = "./migration" }
 # not. Building it needs cmake, a C++17 compiler, libclang and — on x86_64 — nasm.
 capsule-core = { path = "../capsule-core", features = ["media-linked-codecs"] }
 # The local library: the SQLite index, the on-disk library, the `Workspace` and import execution
-# (Module Map — Stateless Core). Its codec pass-throughs are named too, not only core's, so the
+# (`capsule-core` stays stateless; see its crate docs). Its codec pass-throughs are named too, not only core's, so the
 # library's own feature-gated derivative tests run in a workspace build exactly as they did when
 # the pipeline lived in `capsule-core`.
 capsule-library = { path = "../capsule-library", features = ["media-linked-codecs"] }
@@ -53,8 +53,8 @@ jiff = { workspace = true }
 clap = { version = "4.6.1", features = ["derive"] }
 color-eyre = "0.6.5"
 colored = "3.1.1"
-# Bare `capsule` on a terminal opens the full-screen TUI (`src/tui/`); see the Terminal UI row
-# of design/dependencies.md.
+# Bare `capsule` on a terminal opens the full-screen TUI (`src/tui/`); see the ratatui and
+# crossterm pins in the root manifest.
 crossterm = { workspace = true }
 dialoguer = "0.11.0"
 directories = "6.0"
@@ -64,11 +64,11 @@ humansize = "2.1"
 indexmap = { workspace = true }
 nanoid = "0.4.0"
 ratatui = { workspace = true }
-# The library browser's inline preview (Terminal image preview row of design/dependencies.md):
-# Kitty, Sixel or iTerm2 graphics where the terminal answers the query, a text fallback
+# The library browser's inline preview: Kitty, Sixel or iTerm2 graphics where the terminal answers the query, a text fallback
 # elsewhere. No default features: `chafa-dyn` would load the LGPL libchafa, and the crossterm
 # feature is only its examples'. Decoding stays with Rawshift; `image` is named only for the
-# `DynamicImage` buffer the widget takes, with no codec features of its own.
+# `DynamicImage` buffer the widget takes, with no codec features of its own — the one product
+# crate that names `image`, which is otherwise xtask tooling only.
 ratatui-image = { version = "11.1.0", default-features = false }
 image = { version = "0.25", default-features = false }
 sea-orm = { workspace = true, features = [
@@ -94,6 +94,13 @@ uuid = { workspace = true }
 # percent-decoding.
 url = "2.5.8"
 walkdir = "2.5.0"
+# `capsule camera discover`, and `capsule camera import` without `--address`: browses DNS-SD
+# `_ptp._tcp` for a bounded window, behind a seam its tests script. Pure Rust, no async runtime,
+# builds for every client target; MIT OR Apache-2.0. Not `zeroconf` (binds Avahi/Bonjour) or
+# `libmdns` (responder only). No default features: `logging` pulls the `log` facade and `async`
+# the flume async channel, neither of which the blocking browse needs. Peering's live LAN
+# discovery (`capsule-sdk::peering::Discovery`, a mocked seam today) will use this crate too.
+mdns-sd = { version = "0.21.6", default-features = false }
 
 # `media-avif-decode`: AVIF stills decode, so an AVIF original gets its dimensions, placeholder and
 # thumbnail instead of a no-codec deferral (issue #588). It links a **system** libdav1d (BSD-2)
@@ -116,7 +123,7 @@ reqwest = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 # `tests/json_contract.rs` snapshots each `--json` run's exit status, stdout and stderr, so a
 # change to the machine contract shows up as a reviewed snapshot diff. The binary is spawned
-# through `CARGO_BIN_EXE_capsule`, per the test-runner row of the dependencies doc. The TUI's
+# through `CARGO_BIN_EXE_capsule`, never `assert_cmd`. The TUI's
 # render tests snapshot `TestBackend` frames as plain text the same way (`src/tui/view/`).
 insta = { workspace = true }
 # `tests/escrow_publishes_directory.rs` drives `register`, `login`, `library init`, `auth escrow`,
@@ -126,7 +133,8 @@ insta = { workspace = true }
 capsule-e2e = { path = "../capsule-e2e" }
 
 # `auth escrow` confirms its secret on an interactive prompt that refuses anything but a
-# terminal, so the escrow test hands the spawned binary a pseudo-terminal from `openpty`. Already
+# terminal, so the escrow test hands the spawned binary a pseudo-terminal from `openpty`, not an
+# `expect`-style crate. Already
 # in the graph through tokio and others; unix only, as the PTY calls are.
 [target.'cfg(unix)'.dev-dependencies]
 libc = "0.2.186"

@@ -1,7 +1,7 @@
 //! Workspace construction and opening: account create/unlock, device-directory publication,
 //! and the injected client / still-encoder seams.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -13,7 +13,7 @@ use capsule_core::crypto::keys::directory::{DekPublic, DeviceEntry, DirectoryCor
 use capsule_core::crypto::keys::{
     Account, AccountFile, DeviceDirectory, HardwareKeyAgreement, HybridVerifyingKey, Signer,
 };
-use capsule_core::crypto::provenance::{ProvenanceChain, ProvenanceRecord};
+use capsule_core::crypto::provenance::{Action, ProvenanceChain, ProvenanceRecord};
 use capsule_core::metadata::crdt::Counter;
 use capsule_core::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
 use jiff::civil::Date;
@@ -25,6 +25,7 @@ use super::unanchored::find_unanchored;
 use super::{
     AssetState, LifecycleError, Result, StackPlacement, Workspace, media_dir, now_rfc3339,
 };
+use crate::account::{DeviceSignerRecord, HardwareSignerBinding};
 use crate::album_store::AlbumStoreFile;
 
 /// A device is treated as added far in the past so any import timestamp postdates it.
@@ -170,6 +171,40 @@ pub(super) fn month_dir_timestamp(dir: &Path) -> i64 {
     parse().unwrap_or(0)
 }
 
+/// Read a `{uuid}.provenance.cbor` file, replayed through `append` so the chain's own link
+/// invariants are re-checked rather than assumed.
+fn read_chain(provenance_path: &Path) -> Result<ProvenanceChain> {
+    let bytes = fs::read(provenance_path).map_err(|e| LifecycleError::Io(e.to_string()))?;
+    let records: Vec<ProvenanceRecord> =
+        cbor::from_slice(&bytes).map_err(|e| LifecycleError::Cbor(e.to_string()))?;
+    let mut chain = ProvenanceChain::new();
+    for rec in records {
+        chain
+            .append(rec)
+            .map_err(|e| LifecycleError::Cbor(format!("provenance chain: {e}")))?;
+    }
+    Ok(chain)
+}
+
+/// The asset id and kept chain of a purged asset: a provenance chain that reads whole, is
+/// headed by a `delete`, and has neither a sidecar nor an original beside it. `None` for
+/// anything else, which is damage (a lost sidecar of a live, restored or trashed asset, a
+/// corrupt chain) rather than a purge.
+fn purged_chain(provenance_path: &Path, stem: &str) -> Option<(Uuid, ProvenanceChain)> {
+    let dir = provenance_path.parent()?;
+    let asset_id = Uuid::parse_str(stem).ok()?;
+    if provenance_path
+        .with_file_name(format!("{stem}.cbor"))
+        .exists()
+        || original_extension(dir, &asset_id).is_some()
+    {
+        return None;
+    }
+    let chain = read_chain(provenance_path).ok()?;
+    let headed_by_delete = chain.records().last()?.manifest.core.action == Action::Delete;
+    headed_by_delete.then_some((asset_id, chain))
+}
+
 impl Workspace {
     /// Create a fresh workspace: initialise the library directory and a new account, and
     /// publish a device directory. `passphrase` guards the on-disk account; `tier` sets the
@@ -202,6 +237,43 @@ impl Workspace {
         device_signer: Box<dyn Signer>,
     ) -> Result<Self> {
         Self::create_inner(root, passphrase, params, Some(device_signer), None)
+    }
+
+    /// As [`create_with_params`](Self::create_with_params) but with the device **signing** key's
+    /// classical half enrolled in `binding`'s secure element over ECDSA-P256, composed with the
+    /// ML-DSA-65 half derived from `ml_seed`. Unlike
+    /// [`create_with_hardware_signer`](Self::create_with_hardware_signer), which signs only for
+    /// the session that created the library, this records the binding (alias, sealed `ml_seed`,
+    /// published key) beside the account, so
+    /// [`open_with_hardware_signer`](Self::open_with_hardware_signer) rebuilds the same key on
+    /// every later launch.
+    ///
+    /// The element is enrolled before anything is written under `root`, so a refusal leaves no
+    /// library behind. Nothing falls back to the software key: a caller that accepts software
+    /// keys calls [`create_with_params`](Self::create_with_params) itself.
+    #[tracing::instrument(skip_all, fields(root = %root.display(), key_alias = %binding.key_alias))]
+    pub fn create_with_p256_hardware_signer(
+        root: &Path,
+        passphrase: &[u8],
+        params: capsule_core::crypto::primitives::Argon2Params,
+        binding: HardwareSignerBinding,
+        ml_seed: &[u8; 32],
+    ) -> Result<Self> {
+        let account = Account::create(crate::ambient::system_ids());
+        let (signer, record) = DeviceSignerRecord::enroll(binding, ml_seed, &account.master)?;
+        let library = crate::library::init::init_library(root, "Capsule")
+            .map_err(|e| LifecycleError::Io(format!("init library: {e}")))?;
+        // Before the account file: a library whose account exists always has its record, and a
+        // record with no account beside it is the leftover the first open removes.
+        record.persist(root)?;
+        Self::finish_create(
+            root,
+            library,
+            passphrase,
+            params,
+            account,
+            Some(Box::new(signer)),
+        )
     }
 
     /// As [`create_with_params`](Self::create_with_params) but with the device **encryption** key's
@@ -527,6 +599,7 @@ impl Workspace {
             upload_links: HashMap::new(),
             inbox: HashMap::new(),
             unanchored: Vec::new(),
+            purged: BTreeMap::new(),
         })
     }
 
@@ -569,12 +642,15 @@ impl Workspace {
     /// Still session-scoped by design, and dropped on close: the federation group assertions
     /// (re-delivered by the feed), the pending guest-drop inbox (server-authoritative), and the
     /// issued share/upload link records — see the [`Workspace`] fields for why each is deferred.
+    ///
+    /// A library whose device signing key is hardware-bound is refused here; it opens through
+    /// [`open_with_hardware_signer`](Self::open_with_hardware_signer).
     pub fn open(
         root: &Path,
         passphrase: &[u8],
         params: capsule_core::crypto::primitives::Argon2Params,
     ) -> Result<Self> {
-        Self::open_inner(root, passphrase, params, None)
+        Self::open_inner(root, passphrase, params, None, None)
     }
 
     /// As [`open`](Self::open), re-attaching the secure element that holds this device's
@@ -592,7 +668,34 @@ impl Workspace {
         params: capsule_core::crypto::primitives::Argon2Params,
         binding: HardwareDekBinding,
     ) -> Result<Self> {
-        Self::open_inner(root, passphrase, params, Some(binding))
+        Self::open_inner(root, passphrase, params, Some(binding), None)
+    }
+
+    /// As [`open`](Self::open), re-attaching the secure element that holds this device's
+    /// hardware-bound **signing** key. Required for a library created by
+    /// [`create_with_p256_hardware_signer`](Self::create_with_p256_hardware_signer): the element
+    /// is asked for the key under the alias the library recorded, the ML-DSA-65 half is rebuilt
+    /// from its sealed seed, and the result must be the key this device published. Plain
+    /// [`open`](Self::open) refuses such a library rather than signing with the software key,
+    /// which would change the key the device directory publishes.
+    ///
+    /// The recorded binding decides, never the caller: a library with no record (every library
+    /// created with the software key, including those from before this binding existed) opens
+    /// on its software key and ignores the element. On a **first** open of an empty library (no
+    /// account yet) the fresh account's signing key is enrolled in the element under
+    /// `binding.key_alias` with a freshly drawn ML-DSA-65 seed.
+    ///
+    /// Refused with [`CryptoError::Key`] when the element does not hold the recorded key (it was
+    /// removed, or the element is unavailable) or holds another key under that alias; the element
+    /// is never asked to mint a replacement.
+    #[tracing::instrument(skip_all, fields(root = %root.display()))]
+    pub fn open_with_hardware_signer(
+        root: &Path,
+        passphrase: &[u8],
+        params: capsule_core::crypto::primitives::Argon2Params,
+        binding: HardwareSignerBinding,
+    ) -> Result<Self> {
+        Self::open_inner(root, passphrase, params, None, Some(binding))
     }
 
     fn open_inner(
@@ -600,14 +703,17 @@ impl Workspace {
         passphrase: &[u8],
         params: capsule_core::crypto::primitives::Argon2Params,
         dek_binding: Option<HardwareDekBinding>,
+        signer_binding: Option<HardwareSignerBinding>,
     ) -> Result<Self> {
         let library = crate::library::open_library(root)?;
         let account_path = root.join(".library").join("account.cbor");
-        let account = if account_path.exists() {
+        let (account, device_signer) = if account_path.exists() {
             let bytes = fs::read(&account_path).map_err(|e| LifecycleError::Io(e.to_string()))?;
             let file: AccountFile =
                 cbor::from_slice(&bytes).map_err(|e| LifecycleError::Cbor(e.to_string()))?;
-            file.unlock_with_element(passphrase, dek_binding.map(|b| b.element))?
+            let account = file.unlock_with_element(passphrase, dek_binding.map(|b| b.element))?;
+            let device_signer = Self::reopen_device_signer(root, &account, signer_binding)?;
+            (account, device_signer)
         } else {
             let account = match dek_binding {
                 Some(binding) => Account::create_with_hardware_dek(
@@ -621,6 +727,19 @@ impl Workspace {
                 })?,
                 None => Account::create(crate::ambient::system_ids()),
             };
+            // Any record here was left by a creation that stopped before its account file was
+            // written; it is sealed under a master key nothing holds, so it is replaced or
+            // removed, and always before the account file is written.
+            let device_signer: Box<dyn Signer> = if let Some(binding) = signer_binding {
+                let ml_seed = capsule_core::crypto::rng::random_array::<32>();
+                let (signer, record) =
+                    DeviceSignerRecord::enroll(binding, &ml_seed, &account.master)?;
+                record.persist(root)?;
+                Box::new(signer)
+            } else {
+                DeviceSignerRecord::remove_stale(root)?;
+                Box::new(account.device.dsk.clone())
+            };
             let file = account.to_file_with(passphrase, params)?;
             let acct_bytes =
                 cbor::to_canonical_vec(&file).map_err(|e| LifecycleError::Cbor(e.to_string()))?;
@@ -629,10 +748,9 @@ impl Workspace {
             // the next open sees "no albums yet" rather than the keys-never-persisted migration
             // case.
             AlbumStore::new().save(root, &account.master)?;
-            account
+            (account, device_signer)
         };
 
-        let device_signer: Box<dyn Signer> = Box::new(account.device.dsk.clone());
         let dsk_public = device_signer.verifying_key();
         let built = Self::build_directory(&account, dsk_public.clone());
         // #562: the directory this device last signed — cross-signed devices, a rebound id, an
@@ -667,6 +785,7 @@ impl Workspace {
             upload_links: HashMap::new(),
             inbox: HashMap::new(),
             unanchored: Vec::new(),
+            purged: BTreeMap::new(),
         };
         // Album keys, authorities, and every managed asset come back from disk here.
         // Without this the reopened workspace would hold an unlocked account and nothing else.
@@ -678,6 +797,45 @@ impl Workspace {
             "workspace opened"
         );
         Ok(ws)
+    }
+
+    /// The signer an existing account reopens with: the hardware key its record describes,
+    /// re-attached through `binding`'s element, or the account's software DSK when the library
+    /// has no record. A recorded library opened without an element is refused, never moved onto
+    /// the software key.
+    fn reopen_device_signer(
+        root: &Path,
+        account: &Account,
+        binding: Option<HardwareSignerBinding>,
+    ) -> Result<Box<dyn Signer>> {
+        let Some(record) = DeviceSignerRecord::load(root)? else {
+            if binding.is_some() {
+                tracing::info!(
+                    "workspace open: this library signs with its software key; the offered \
+                     secure element is not used"
+                );
+            }
+            return Ok(Box::new(account.device.dsk.clone()));
+        };
+        let Some(binding) = binding else {
+            tracing::error!(
+                "workspace open: this library's device signing key is hardware-bound and no \
+                 secure element was supplied; refusing rather than signing with another key"
+            );
+            return Err(CryptoError::Key(
+                "this library's device signing key is hardware-bound: a HardwareSigner element \
+                 is required to open it",
+            )
+            .into());
+        };
+        if binding.key_alias != record.key_alias() {
+            tracing::warn!(
+                offered = %binding.key_alias,
+                recorded = %record.key_alias(),
+                "workspace open: the offered alias differs from the recorded one; the recorded alias is used"
+            );
+        }
+        Ok(Box::new(record.reattach(&account.master, binding.element)?))
     }
 
     /// Restore the durable half of the workspace after unlocking the account:
@@ -727,6 +885,7 @@ impl Workspace {
         }
         let mut restored = 0usize;
         let mut skipped = 0usize;
+        let mut purged = 0usize;
         for entry in WalkDir::new(&media)
             .into_iter()
             .filter_map(std::result::Result::ok)
@@ -745,19 +904,30 @@ impl Workspace {
                     tracing::trace!(asset_id = %asset.asset_id, album_id = %asset.album_id, "asset restored");
                     self.assets.insert(asset.asset_id, asset);
                 }
+                // A purge keeps the chain, ends it with a `delete`, and removes the sidecar and
+                // the original (`Workspace::purge`): a chain headed by a `delete` with no
+                // sidecar beside it is that record, not damage. Anything else falls through to
+                // the warning below.
                 Err(e) => {
-                    skipped += 1;
-                    tracing::warn!(
-                        provenance = %path.display(),
-                        error = %e,
-                        "workspace open: could not restore this asset; skipping it"
-                    );
+                    if let Some((asset_id, chain)) = purged_chain(path, stem) {
+                        purged += 1;
+                        tracing::trace!(provenance = %path.display(), %asset_id, records = chain.records().len(), restore_error = %e, "workspace open: purged asset; only its provenance chain is kept");
+                        self.purged.insert(asset_id, chain);
+                    } else {
+                        skipped += 1;
+                        tracing::warn!(
+                            provenance = %path.display(),
+                            error = %e,
+                            "workspace open: could not restore this asset; skipping it"
+                        );
+                    }
                 }
             }
         }
         tracing::info!(
             restored,
             skipped,
+            purged,
             "workspace open: assets restored from disk"
         );
 
@@ -789,17 +959,8 @@ impl Workspace {
             .parent()
             .ok_or_else(|| LifecycleError::Io("provenance file has no parent".into()))?;
 
-        // (1) The provenance chain — the anchor. Replayed through `append` so the chain's own
-        // link invariants are re-checked rather than assumed.
-        let bytes = fs::read(provenance_path).map_err(|e| LifecycleError::Io(e.to_string()))?;
-        let records: Vec<ProvenanceRecord> =
-            cbor::from_slice(&bytes).map_err(|e| LifecycleError::Cbor(e.to_string()))?;
-        let mut chain = ProvenanceChain::new();
-        for rec in records {
-            chain
-                .append(rec)
-                .map_err(|e| LifecycleError::Cbor(format!("provenance chain: {e}")))?;
-        }
+        // (1) The provenance chain — the anchor.
+        let chain = read_chain(provenance_path)?;
         let head = &chain
             .records()
             .last()

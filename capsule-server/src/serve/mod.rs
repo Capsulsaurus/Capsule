@@ -15,8 +15,9 @@
 //! | [`ServeResolution::Gone`] | `410` | referenced but not retrievable per policy — **permanent**, so the client degrades to a lower representation |
 //! | [`ServeResolution::ScopeInsufficient`] | `403` | a peer's capability does not cover this blob's role |
 //!
-//! Three distinct facts collapse into that one `410` — a deleted asset, a blob awaiting
-//! collection, and a moderation hold — and they collapse deliberately. The client's action is
+//! Three distinct facts collapse into that one `410` — a deleted asset whose retention window
+//! has closed, a blob awaiting collection, and a moderation hold — and they collapse
+//! deliberately. The client's action is
 //! identical in all three (stop asking, degrade), and a status that told an anonymous fetcher
 //! *which* it was would turn this path into a moderation oracle: whether a given asset was
 //! taken down is exactly what a takedown does not owe a peer. The distinction is in the log
@@ -99,6 +100,19 @@
 //! exactly the addresses a share link enumerates, and the drop surface serves its own. Neither
 //! routes through here.
 //!
+//! # Trash is readable until its window closes (#1192)
+//!
+//! A `delete` moves an asset to trash, recoverable by a `trash-restore` until the
+//! `retention_until` its signed record fixed. Until then the asset's blobs — its records, the
+//! superseded ones included, its live metadata blob, its original and its derivatives — serve to
+//! exactly the readers the live asset served, because a device that first sees the asset at its
+//! `delete` must fetch them to adopt the asset and restore it. The window is
+//! [`BlobReference::readable_at`], the one definition the restore is refused by, so no instant
+//! serves a blob of an asset whose restore it would refuse. Past the window the asset's blobs are
+//! the tombstone `410` until a purge drops their references, after which the address is unknown.
+//! The authority is still asked first: a stranger is told `404` and a former member `403`,
+//! whether the asset is live, in trash or past its window.
+//!
 //! # What is missing, and owned elsewhere
 //!
 //! - **Moderation takedown** is served: an asset under a
@@ -127,7 +141,7 @@ pub use self::authority::{
 };
 use crate::blob::{BlobError, BlobStore, ContentAddress};
 use crate::index::{AssetIndex, AssetState, BlobReference};
-use crate::store::UserId;
+use crate::store::{Clock, UserId};
 
 /// The media serving module's collaborators, as one injectable value.
 ///
@@ -141,16 +155,22 @@ pub struct ServeContext {
     marks: Arc<dyn crate::gc::CollectionStore>,
     uploads: Arc<dyn crate::store::UploadSessionStore>,
     authority: Arc<dyn ReadAuthority>,
+    clock: Arc<dyn Clock>,
 }
 
 impl ServeContext {
     /// Assembles the module from its collaborators.
+    ///
+    /// `clock` is the server's, and it is what decides whether a trashed asset's retention
+    /// window is still open — the same clock the lifecycle route stamps a `trash-restore` with,
+    /// so a fetch and a restore at one instant agree about the window.
     pub fn new(
         index: Arc<dyn AssetIndex>,
         blobs: Arc<dyn BlobStore>,
         marks: Arc<dyn crate::gc::CollectionStore>,
         uploads: Arc<dyn crate::store::UploadSessionStore>,
         authority: Arc<dyn ReadAuthority>,
+        clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
             index,
@@ -158,7 +178,13 @@ impl ServeContext {
             marks,
             uploads,
             authority,
+            clock,
         }
+    }
+
+    /// The server's clock, which a trashed asset's retention window is judged against.
+    pub fn clock(&self) -> &dyn Clock {
+        self.clock.as_ref()
     }
 
     /// The asset index the reference lookup reads.
@@ -205,6 +231,9 @@ pub enum ServeResolution {
         address: ContentAddress,
         /// Its complete length, which every `Range` offset is relative to.
         size: u64,
+        /// The account the holder it is served through is filed under — whose blob it is, for
+        /// the activity event a peer's fetch records. Never put on the wire.
+        owner: crate::store::OwnerId,
     },
     /// Nothing references the address **yet**, and the caller has an upload of exactly these
     /// bytes in flight.
@@ -231,7 +260,8 @@ pub enum ServeResolution {
     /// [`Self::Forbidden`] and for the same reason: it is an authorization answer, and it is
     /// given only to a reader that already knows the asset is there.
     ScopeInsufficient,
-    /// Referenced but not retrievable per policy: a deleted asset, or a dangling reference.
+    /// Referenced but not retrievable per policy: a deleted asset past its retention window, a
+    /// held one, a blob awaiting collection, or a dangling reference.
     Gone,
 }
 
@@ -302,7 +332,11 @@ pub async fn resolve(
     // no relationship to it must not be able to read any of them off the status line. Deciding
     // ownership last would have turned this path into an oracle that reports on other accounts'
     // deletions.
-    let reference = match decide_over_holders(context, principal, references).await? {
+    //
+    // `now` is read once, so the fold and the tombstone check below judge every holder's
+    // retention window at the same instant.
+    let now = context.clock().now();
+    let reference = match decide_over_holders(context, principal, references, now).await? {
         Ok(reference) => reference,
         Err(refusal) => return Ok(refusal),
     };
@@ -322,11 +356,28 @@ pub async fn resolve(
         return Ok(ServeResolution::Gone);
     }
 
-    // A deleted asset's blobs are gone, not unknown: the client that already has the asset must
-    // learn to stop asking, and `410` is what tells it to.
+    // A deleted asset whose retention window has closed is gone, not unknown: the client that
+    // already has the asset must learn to stop asking, and `410` is what tells it to. Inside the
+    // window the asset is in trash, a signed delete its reader can still undo (#1192), so its
+    // blobs serve on to the readers entitled to it: a device that first sees the asset at its
+    // `delete` fetches the records, the live metadata blob and the original it needs to adopt
+    // the asset and sign the `trash-restore`. A purged asset holds no reference, so it was
+    // answered as unknown above.
     if reference.state == AssetState::Tombstoned {
-        tracing::info!(asset = %reference.asset_id, "a deleted asset's blob was refused");
-        return Ok(ServeResolution::Gone);
+        if !reference.readable_at(now) {
+            tracing::info!(
+                asset = %reference.asset_id,
+                retention_until = ?reference.retention_until,
+                "a deleted asset's blob was refused: its retention window has closed"
+            );
+            return Ok(ServeResolution::Gone);
+        }
+        tracing::debug!(
+            asset = %reference.asset_id,
+            role = reference.role.as_str(),
+            retention_until = ?reference.retention_until,
+            "a trashed asset's blob is served inside its retention window"
+        );
     }
 
     // Mid-collection. Decided before the store is touched, so a marked blob's bytes
@@ -360,6 +411,7 @@ pub async fn resolve(
         return Ok(ServeResolution::Serve {
             address,
             size: stat.size,
+            owner: reference.owner_id,
         });
     }
 
@@ -386,15 +438,16 @@ pub async fn resolve(
 /// the *other* album `403`. So every holder is asked, in the index's order (live before
 /// tombstoned), and the strongest answer wins:
 ///
-/// 1. a [`BlobReadAccess::Granted`] holder that is **servable** — live and under no serving
-///    hold — serves at once. A granted holder that is held or tombstoned is remembered and the
-///    fold reads on, because a takedown or a delete is a fact about *that* asset: a caller also
-///    entitled through another, unheld live holder is served from it, exactly as every other
-///    reader of that asset is;
+/// 1. a [`BlobReadAccess::Granted`] holder that is **servable** — under no serving hold, and
+///    live or in trash inside its retention window ([`BlobReference::readable_at`] at `now`) —
+///    serves at once. A granted holder that is held, or tombstoned past its window, is
+///    remembered and the fold reads on, because a takedown or a closed window is a fact about
+///    *that* asset: a caller also entitled through another servable holder is served from it,
+///    exactly as every other reader of that asset is;
 /// 2. else, if any holder's authority failed, an outage — see below;
 /// 3. else the first granted holder, whose own `hold` and `state` then decide the `410`s, so an
-///    owner fetching their deleted asset still learns it is gone while a stranger's live copy
-///    exists;
+///    owner fetching their deleted asset past its window still learns it is gone while a
+///    stranger's live copy exists;
 /// 4. else any [`BlobReadAccess::ScopeInsufficient`] — the reader is entitled to that album, so
 ///    a scope answer is truer than a revocation from some other album;
 /// 5. else any [`BlobReadAccess::Revoked`] is [`ServeResolution::Forbidden`];
@@ -412,6 +465,7 @@ async fn decide_over_holders(
     context: &ServeContext,
     principal: ReadPrincipal<'_>,
     references: Vec<BlobReference>,
+    now: jiff::Timestamp,
 ) -> Result<Result<BlobReference, ServeResolution>, ServeUnavailable> {
     let holders = references.len();
     let mut scope_insufficient = false;
@@ -436,9 +490,7 @@ async fn decide_over_holders(
             }
         };
         match access {
-            BlobReadAccess::Granted
-                if reference.hold.is_none() && reference.state == AssetState::Visible =>
-            {
+            BlobReadAccess::Granted if reference.hold.is_none() && reference.readable_at(now) => {
                 tracing::trace!(
                     holders,
                     asset = %reference.asset_id,
@@ -450,7 +502,7 @@ async fn decide_over_holders(
                 tracing::trace!(
                     holders,
                     asset = %reference.asset_id,
-                    "the caller is entitled through a held or deleted holder; reading on"
+                    "the caller is entitled through a held or expired holder; reading on"
                 );
                 unservable_grant.get_or_insert(reference);
             }

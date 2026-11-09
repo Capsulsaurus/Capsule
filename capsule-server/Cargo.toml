@@ -12,8 +12,8 @@ publish.workspace = true
 # with no server, no CLI network commands and no end-to-end test for the duration. The rename is
 # a `git mv` in the same change that moves the old tree into `legacy-review/`.
 #
-# One application, cohesive internal modules — not separate transports or services
-# (design/module-map.md, "Planned Server Modules").
+# One application, cohesive internal modules — not separate transports or services (see the
+# crate docs in `src/lib.rs`).
 
 # Kynos's route attribute generates a `relative_uri` doc comment whose prose is indented four
 # spaces, which rustdoc reads as an indented Rust code block and then fails to parse. Every one
@@ -28,9 +28,16 @@ publish.workspace = true
 [lib]
 doctest = false
 
+[features]
+# The federation pull's loopback seam (`federation::pull::remote::test_egress`): a test routes a
+# peer host to the TLS front it bound and trusts that front's private CA, so a pull dials
+# `https://{peer}/` over a real handshake. Off by default and never on in a served build:
+# `capsule-e2e` enables it from its dev-dependencies, so resolver 3 compiles it only into test
+# targets. With nothing registered the client it builds is the production one.
+test-egress = []
+
 [dependencies]
-# The framework. Pinned to a rev in the root manifest; see design/dependencies.md for why a rev
-# and not a version, and for the repin-on-publish exit.
+# The framework. Pinned once in the root manifest, where its rationale sits.
 kynos = { workspace = true }
 # The shared, key-free validation invariants. The envelope gate does not
 # reimplement invariants 1-8 and 15: `capsule_core::validation` owns them, the client's own
@@ -38,7 +45,7 @@ kynos = { workspace = true }
 # question the threat model allows one answer to. `capsule_core::crypto::hash` comes with it,
 # which is how finalization recomputes the ciphertext hash without this crate picking its own
 # digest crate. A workspace member, already in the lock file through `capsule-api`, so this
-# adds no external dependency and needs no design/dependencies.md row. The `native` default is
+# adds no external dependency. The `native` default is
 # not optional: `validation` is gated behind it.
 # `default-features = false`: the server needs only `capsule_core::validation` — the pure, key-less
 # refuse-by-default invariants — and the crypto types they read. The default `native` feature pulls
@@ -50,25 +57,25 @@ serde = { workspace = true }
 # the ports are on the critical path of every authenticated request and every upload chunk;
 # `uuid` so a session's asserted `device_id` is parsed once at the port boundary instead of
 # being re-normalized as a string at each call site. All four are already workspace
-# dependencies with a row in design/dependencies.md.
+# dependencies.
 thiserror = { workspace = true }
 jiff = { workspace = true }
 tracing = { workspace = true }
-# `v7` for the session ids this crate mints: a session id is a new identifier, and the
-# Identifiers row in design/dependencies.md makes UUIDv7 the default for one. `v4` rides along
+# `v7` for the session ids this crate mints: a session id is a new identifier, and UUIDv7 is
+# the default for one (design/metadata.md#identifiers). `v4` rides along
 # from the workspace default.
 uuid = { workspace = true, features = ["v7"] }
 # The message catalog's stable `error.*` codes (the i18n design doc). Every
 # rejection this server renders names one from `capsule_i18n::error_codes` rather than a string
 # literal, so a typo is a compile error and the code cannot drift from `locales/`.
 capsule-i18n = { path = "../capsule-i18n" }
-# EdDSA access and refresh tokens. Already the workspace's JWT crate, pinned with `aws_lc_rs`;
-# see the Tokens row in design/dependencies.md. Nothing else in this crate parses a JWT.
+# EdDSA access and refresh tokens. Already the workspace's JWT crate, pinned with `aws_lc_rs`
+# in the root manifest. Nothing else in this crate parses a JWT.
 jsonwebtoken = { workspace = true }
 # The blob store's filesystem adapter. `tokio::fs` because every blob write is
 # an await on a server runtime and `std::fs` on that runtime blocks it; `fs`/`io-util`/`rt` are
 # the three features a ranged read and a durable append need, and nothing more. Already the
-# workspace's async runtime (design/dependencies.md, "Async runtime") and already in this
+# workspace's async runtime and already in this
 # crate's tree through kynos — this promotes it from a dev-dependency, it does not add a crate.
 # `rt-multi-thread` and `macros` on top of those three for the binary: `serve` runs an accept
 # loop that has to make progress while a request is awaiting the disk, and `#[tokio::main]` is
@@ -85,8 +92,7 @@ tokio = { workspace = true, features = [
 # The `.reason.json` a quarantined blob keeps beside it (design/filesystem/server.md). The
 # encoding belongs to the filesystem *adapter*, not to the port's record — which derives no
 # serde traits, exactly as the state ports' records do not — so this is used in one file.
-# Already a workspace dependency with a row in design/dependencies.md, and already here as a
-# dev-dependency.
+# Already a workspace dependency, and already here as a dev-dependency.
 serde_json = { workspace = true }
 # The sync cursor's HMAC-SHA256 (validation invariant 22). `ring` is already the
 # workspace's key-generation crate and was already here as a dev-dependency; this promotes it.
@@ -94,24 +100,24 @@ serde_json = { workspace = true }
 # implementation in one binary for one 41-byte token.
 ring = { workspace = true }
 # base64url for that cursor, which is a query parameter and therefore has to survive a URL.
-# Already a workspace dependency with a row in design/dependencies.md.
+# Already a workspace dependency.
 base64 = { workspace = true }
 # The buffer type Kynos's `ByteSource` signature is written in, so ranged blob serving can hand
 # back a span without a copy. Already in the lock file through `capsule-sdk` and `capsule-api`;
-# no new external dependency and no new domain, so no design/dependencies.md row.
+# no new external dependency and no new domain.
 bytes = { workspace = true }
 # The coded-problem interceptor reads a rendered problem body back before putting it
 # down again, and `Body` is an `http_body::Body` with no inherent collector. Already in the lock
-# file through Kynos and hyper; see design/dependencies.md.
+# file through Kynos and hyper.
 http-body-util = { workspace = true }
 
 # RFC 6238 second-factor codes. `otpauth` for the provisioning URI an
-# authenticator app scans, `gen_secret` for the shared secret this server generates. See the
-# Second factor row in design/dependencies.md; already in the lock file through the retired
+# authenticator app scans, `gen_secret` for the shared secret this server generates. SHA-1,
+# six digits, 30 s step, one step of drift; replay refusal is the store's compare-and-set.
+# Already in the lock file through the retired
 # `capsule-api/auth`, which is where the four TOTP operations are being ported *from*.
 totp-rs = { workspace = true }
-# The constant-time comparison that check uses. See the Constant-time comparison row in
-# design/dependencies.md.
+# The constant-time comparison that check uses; already transitive.
 subtle = { workspace = true }
 
 # Argon2id for the development profile's account adapter (`auth::credential`,
@@ -128,15 +134,24 @@ argon2 = { workspace = true }
 # URL terminates TLS in rustls and never in native-tls, and `script`, because every multi-key
 # mutation is one Lua script rather than a `WATCH`/`MULTI` round trip a multiplexed connection
 # could not hold. No `bb8`: one `ConnectionManager` is a self-reconnecting multiplexed
-# connection, which is the whole of what a server talking to one Valkey needs. See the Volatile
-# state row in design/dependencies.md.
+# connection, which is the whole of what a server talking to one Valkey needs. Lua scripts for
+# multi-key writes mean no Redis Cluster. No `object_store` or generic TTL/CAS crate.
 redis = { workspace = true, features = ["tokio-rustls-comp", "script"] }
 # The OIDC relying party's egress: the discovery document, the JWK Set and the
 # form-encoded token exchange, against the configured identity provider and nothing else. The
 # one outbound HTTP client in this crate. Already in the lock file through `capsule-sdk`, so this
-# promotes an edge rather than adding a crate; the HTTP-client row in design/dependencies.md
-# carries the scope. rustls-tls only, like everywhere else Capsule holds a TLS stack.
+# promotes an edge rather than adding a crate. Redirects are off on every server egress client
+# (this one and the federation pull worker's). rustls-tls only, like everywhere else Capsule
+# holds a TLS stack.
 reqwest = { workspace = true }
+# The egress pull worker's client (`federation::pull::remote`, #1116) is generated by `build.rs`
+# from the committed contract, and its embedded runtime names these two: `secrecy` for the
+# credential it attaches, `http` because a `reqwest::Response` is constructible only from an
+# `http::Response`, which is how the pull transport hands the generated code a body it has
+# already bounded. Both are workspace pins already in the lock file through `capsule-sdk` (and
+# `http` through reqwest and hyper), so nothing new enters the tree.
+secrecy = { workspace = true }
+http = { workspace = true }
 # The `capsule-server` binary: subcommand parsing, and the error report a startup failure prints.
 # `clap` and `color-eyre` were already here for the `gen_openapi` binary this replaces; the
 # binary is now one `capsule-server` with `serve | gc | purge | scrub | gen-openapi`
@@ -146,15 +161,15 @@ clap = { version = "4.6.1", features = ["derive"] }
 color-eyre = "0.6.5"
 # The Postgres adapters for the durable ports (#402). `default-features = false` is
 # load-bearing rather than tidy: sea-orm's defaults include `with-chrono`, and
-# design/dependencies.md makes `cargo tree -i chrono -e no-dev` a review-blocking gate that must
-# keep resolving to `capsule-cli/entity` and sea-orm's own internals. Without a datetime feature
+# `cargo xtask architecture-check` makes `cargo tree -i chrono -e no-dev` a review-blocking
+# gate that must keep resolving to `capsule-cli/entity` and sea-orm's own internals. Without a datetime feature
 # there is no Rust binding for `TIMESTAMPTZ` at all, which is why every instant in the server's
 # schema is a `BIGINT` of epoch microseconds converted in `postgres::time`.
 #
 # Three features and no more: `macros` for the `FromQueryResult` derive the adapters' private row
 # structs use, `sqlx-postgres` for the driver, `runtime-tokio-rustls` because the workspace's TLS
-# rule is rustls only. Already a workspace dependency with a row in design/dependencies.md (ORM),
-# consumed until now only by `capsule-cli/entity`.
+# rule is rustls only. Already a workspace dependency (ORM for rebuildable indexes only), consumed
+# until now only by `capsule-cli/entity`.
 #
 # Spelled out rather than `workspace = true`, and only because cargo forbids the one thing this
 # needs: a member may add features to an inherited dependency but may not turn the workspace's
@@ -169,16 +184,25 @@ sea-orm = { version = "2.0.4", default-features = false, features = [
 ] }
 # The log stream the binary installs (`cli::install_tracing`). `env-filter` for `RUST_LOG` and
 # `json` for the one-object-per-event rendering a log shipper wants; both are on in the workspace
-# pin, and the crate already has a row in design/dependencies.md. Written to **stderr**, so
+# pin. Written to **stderr**, so
 # `gen-openapi` and the operator commands keep a parseable stdout.
 tracing-subscriber = { workspace = true }
+
+[build-dependencies]
+# The server's own copy of the generated calls a federated pull makes (#1116): `build.rs` lowers
+# the committed `openapi.json`, narrowed to the three operations a pull presents a capability
+# to. The SDK's pin, with its defaults off for the SDK's reason, and a build-dependency only: the
+# runtime is emitted into the generated module, so spargen never enters the served binary.
+# `serde_json` reads the document's path list so the narrowing is computed, not hand-listed.
+spargen = { version = "0.5.0", default-features = false }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 # The server's schema, applied by the Postgres conformance harness. A **dev-dependency only**,
 # and that is the decision rather than an oversight: `sea-orm-migration` pulls sea-orm with its
 # default `with-chrono` feature, so a normal dependency here would break the
-# `cargo tree -i chrono -e no-dev` gate at design/dependencies.md. The cost is that `serve`
-# cannot migrate — it reads `seaql_migrations` and refuses to boot on a mismatch
+# `cargo tree -i chrono -e no-dev` gate in `cargo xtask architecture-check`. The cost is that
+# `serve` cannot migrate — it reads `seaql_migrations` and refuses to boot on a mismatch
 # (`postgres::assert_schema_current`), which is also the safer rollout: a server that migrates on
 # start migrates once per replica during a rolling deploy.
 capsule-server-migration = { path = "migration" }
@@ -234,14 +258,16 @@ secrecy = { workspace = true }
 # `macros` and `rt-multi-thread` on top of what the blob store's adapter already needs: the
 # `#[tokio::test]` attribute and a runtime to drive it. `net` for the in-process mock identity
 # provider `tests/support/idp.rs` binds on loopback, so the OIDC relying party is exercised
-# over a real socket. Test-only, so the served binary carries none of the three.
-tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread"] }
+# over a real socket. `test-util` for a paused clock, so the chunk read pace is proven over
+# minutes of simulated trickle without waiting for them (`upload/body/tests.rs`). Test-only, so
+# the served binary carries none of the four.
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "test-util"] }
 # The TLS half of the mock identity provider, for the `OIDC_CA_BUNDLE` case: a private CA and
 # a leaf it signs (`rcgen`), served by `tokio-rustls`, so "the relying party trusts the operator's
 # CA and nothing else" is proven over a real handshake. The same three crates, versions and
 # features `capsule-sdk` pins for the peering stack - `ring` provider throughout, matching the
 # rustls `reqwest` links - so nothing new enters the lock file. Dev-only: the served binary
-# terminates no TLS (design/cryptography/failure-modes.md).
+# terminates no TLS (design/networking.md#transport-security).
 rcgen = { version = "0.13", default-features = false, features = ["ring", "crypto"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }

@@ -17,6 +17,7 @@
 //! | --- | --- |
 //! | register `201` | **`200` here.** Kynos's `Created` requires a `Location`, and this server exposes no URL for an account — see [`register_user`] |
 //! | register `400` / `409` / `500` | kept, and now coded (`error.auth.registration_invalid`, `error.auth.user_already_exists`, `error.auth.unavailable`) |
+//! | register `429` | **added** — the source address's registration budget is spent (`error.auth.rate_limited`), or its limiter partition is full (`error.auth.registration_at_capacity`); both with `Retry-After` |
 //! | login `200` | kept — [`TokenResponse`] |
 //! | login `202` | **added**. The account has a confirmed second factor, so the credentials were accepted and the sign-in is not finished. Salvo had the TOTP operations and never issued a challenge |
 //! | login `400` "Bad request" | **deleted as unreachable.** `LoginResponses::BadRequest` was never constructed; the 400 a malformed body actually produces comes from the `Json` extractor, and Kynos declares it |
@@ -29,6 +30,7 @@
 //! | logout `401` | kept, and now the framework's, with the `WWW-Authenticate` challenge the document declares |
 //! | logout `500` | kept |
 //! | — | **`403` added** to logout: a live refresh token presented as a bearer credential is valid but insufficient. Salvo answered 401 |
+//! | — | **`403` added** to register, login and reauthenticate: the deployment refuses passwords (`PASSWORD_AUTH_DISABLED`), `error.auth.password_disabled` |
 //!
 //! Every status above is produced by a test. That is not a stylistic claim: the document is
 //! generated from these types, and `assert_declared_responses_covered` fails on any response the
@@ -58,10 +60,13 @@ use kynos::security::auth::Auth;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::activity::{ActivityContext, ActivityKind};
 use crate::auth::{
     AccessToken, AuthContext, Authentication, DirectoryError, IssuedTokens, MIN_PASSWORD_LENGTH,
     Registration, TokenKind, VerifiedToken,
 };
+use crate::client_addr::ClientAddr;
+use crate::counter::{CounterContext, CounterKey, Verdict, budgets, unix_seconds};
 use crate::store::{
     ChallengeToken, RevokeAllChallenge, SessionId, SessionRecord, StoreError, UserId,
 };
@@ -133,14 +138,42 @@ pub enum RegisterRejection {
     /// **This is an account oracle and it is the decided contract** — the message catalog fixes
     /// `error.auth.user_already_exists` for exactly this. The alternative, answering success and
     /// creating nothing, leaves a client that then cannot sign in and no way to tell it why.
-    /// What bounds the oracle is a rate limiter, and there is none; see
-    /// [`crate::auth::registry`] for the fact it is waiting on.
+    /// What bounds the oracle is the per-source limiter [`Self::RateLimited`] answers for; see
+    /// [`crate::auth::registry`].
     #[error("an account already exists for that address")]
     #[problem(status = 409, title = "Account already exists")]
     AlreadyExists {
         /// The stable catalog code.
         #[problem(extension)]
         code: &'static str,
+    },
+
+    /// This deployment accepts sign-in only through its identity provider
+    /// (`PASSWORD_AUTH_DISABLED`, #1004), so no password account can be created.
+    #[error("password sign-in is disabled on this server")]
+    #[problem(status = 403, title = "Password sign-in disabled")]
+    PasswordDisabled {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// Too many registrations from this source address, **or** the limiter is holding as many
+    /// distinct sources as it will hold (#1001).
+    ///
+    /// Both causes carry one retry instant, because the caller's remedy is the same — wait out
+    /// `Retry-After` — but each has its own code: a spent budget is `error.auth.rate_limited`, a
+    /// full partition is `error.auth.registration_at_capacity`. The detail names no budget, so it
+    /// is true of either cause.
+    #[error("too many registration attempts; try again later")]
+    #[problem(status = 429, title = "Too many requests")]
+    RateLimited {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+        /// When the caller may retry, as Unix seconds. Lifted onto `Retry-After`.
+        #[problem(extension)]
+        retry_after: u64,
     },
 
     /// A collaborator could not answer.
@@ -166,6 +199,59 @@ impl RegisterRejection {
     fn unavailable() -> Self {
         Self::Unavailable {
             code: error_codes::AUTH_UNAVAILABLE,
+        }
+    }
+
+    /// Password registration is switched off on this deployment.
+    fn password_disabled() -> Self {
+        Self::PasswordDisabled {
+            code: error_codes::AUTH_PASSWORD_DISABLED,
+        }
+    }
+
+    /// The source's budget is spent until `retry_after`.
+    fn rate_limited(retry_after: jiff::Timestamp) -> Self {
+        Self::RateLimited {
+            code: error_codes::AUTH_RATE_LIMITED,
+            retry_after: unix_seconds(retry_after),
+        }
+    }
+
+    /// The limiter's source-address partition is full until, at the latest, `retry_after`.
+    fn at_capacity(retry_after: jiff::Timestamp) -> Self {
+        Self::RateLimited {
+            code: error_codes::AUTH_REGISTRATION_AT_CAPACITY,
+            retry_after: unix_seconds(retry_after),
+        }
+    }
+}
+
+/// Charge [`budgets::REGISTRATION_SOURCE`] for one registration attempt from `client`, failing
+/// closed.
+///
+/// A counter store that cannot answer refuses the registration with `500`: a limiter an attacker
+/// turns off by loading the counter store is not a limiter. A full partition is the limiter
+/// working as designed, so it is a `429` with a retry instant rather than an outage.
+async fn charge_registration_source(
+    counters: &CounterContext,
+    client: ClientAddr,
+) -> Result<(), RegisterRejection> {
+    let key = CounterKey::RegistrationSource(client.source_key());
+    let budget = budgets::REGISTRATION_SOURCE;
+    let verdict = counters.hit(&key, budget).await.map_err(|error| {
+        if let Some(retry_after) = counters.capacity_refusal(&error, budget) {
+            tracing::warn!(%error, limiter = key.as_str(), "the registration limiter is at capacity");
+            RegisterRejection::at_capacity(retry_after)
+        } else {
+            tracing::error!(%error, limiter = key.as_str(), "the registration limiter could not be reached");
+            RegisterRejection::unavailable()
+        }
+    })?;
+    match verdict {
+        Verdict::Admitted { .. } => Ok(()),
+        Verdict::Limited { retry_after } => {
+            tracing::info!(limiter = key.as_str(), "a registration was rate-limited");
+            Err(RegisterRejection::rate_limited(retry_after))
         }
     }
 }
@@ -334,6 +420,17 @@ pub enum LoginRejection {
         code: &'static str,
     },
 
+    /// This deployment accepts sign-in only through its identity provider
+    /// (`PASSWORD_AUTH_DISABLED`, #1004), so no password is checked — for any account, including
+    /// one that already exists.
+    #[error("password sign-in is disabled on this server")]
+    #[problem(status = 403, title = "Password sign-in disabled")]
+    PasswordDisabled {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
     /// The account is refusing attempts after too many failures.
     #[error("the account is locked after too many failed sign-in attempts")]
     #[problem(status = 423, title = "Account locked")]
@@ -357,6 +454,12 @@ impl LoginRejection {
     fn invalid_credentials() -> Self {
         Self::InvalidCredentials {
             code: error_codes::AUTH_INVALID_CREDENTIALS,
+        }
+    }
+
+    fn password_disabled() -> Self {
+        Self::PasswordDisabled {
+            code: error_codes::AUTH_PASSWORD_DISABLED,
         }
     }
 
@@ -456,9 +559,16 @@ impl LogoutRejection {
 /// directory" has an honest answer for a brand-new account, and the honest answer is *no*. A
 /// client's first action after registering is `POST /v1/auth/devices/directory`.
 ///
-/// **It is not rate-limited**, and that is a real gap rather than an oversight — see
-/// [`crate::auth::registry`] for the fact the limiter is waiting on. This is the one
-/// unauthenticated write on the surface.
+/// # Rate-limited per source
+///
+/// This is the one unauthenticated write on the surface, and its `409` is an account oracle, so
+/// every attempt whose body parses is charged against [`budgets::REGISTRATION_SOURCE`] for the
+/// trusted client address **before** the address and password are validated or the registry is
+/// asked anything: probing costs the prober whatever the answer. A body the `Json` extractor
+/// refuses (`400`/`415`/`422`) never reaches the handler and is not charged; it learns nothing
+/// about any account. A spent budget is `429 error.auth.rate_limited` and a full limiter
+/// partition `429 error.auth.registration_at_capacity`, both with `Retry-After`; a counter store
+/// that cannot answer is `500`, never an admission.
 ///
 /// # `200`, where Salvo answered `201`
 ///
@@ -471,8 +581,23 @@ impl LogoutRejection {
 #[kynos::post("/v1/auth/register", operation_id = "register_user", tag = AuthTag)]
 pub async fn register_user(
     Inject(auth): Inject<AuthContext>,
+    Inject(counters): Inject<CounterContext>,
+    Inject(activity): Inject<ActivityContext>,
+    client: ClientAddr,
     Json(request): Json<RegisterRequest>,
 ) -> Result<Json<TokenResponse>, RegisterRejection> {
+    // Before the limiter, and before anything else: a deployment that refuses passwords has no
+    // registration surface to protect, so there is nothing to charge and nothing to probe.
+    if auth.passwords_disabled() {
+        tracing::info!("a registration was refused: password sign-in is disabled");
+        return Err(RegisterRejection::password_disabled());
+    }
+
+    // Charged first, so a malformed attempt and a probe of a taken address both spend the
+    // source's budget. The source is the address the router resolved through the trusted
+    // proxies (#704), never a forwarding header taken on its word.
+    charge_registration_source(&counters, client).await?;
+
     // Structural, before anything is written. An address the server cannot use and a password
     // under the floor are both the caller's to fix, and neither should reach a store.
     let email = request.email.trim();
@@ -510,18 +635,21 @@ pub async fn register_user(
     // `authenticated_at`, because registering *is* a credential presentation and a freshness
     // gate measuring from anything else would be measuring from nothing.
     let session_id = new_session_id();
+    let record = SessionRecord {
+        session_id: session_id.clone(),
+        user_id: user.clone(),
+        created_at: now,
+        authenticated_at: now,
+        signed_in_at: now,
+        last_active_at: now,
+        user_agent: None,
+        ip_address: None,
+        cohort_hash: None,
+        device_id: None,
+    };
+    let refresh_ttl = refresh_lifetime(&auth, &record, now);
     auth.sessions()
-        .open_session(SessionRecord {
-            session_id: session_id.clone(),
-            user_id: user.clone(),
-            created_at: now,
-            authenticated_at: now,
-            last_active_at: now,
-            user_agent: None,
-            ip_address: None,
-            cohort_hash: None,
-            device_id: None,
-        })
+        .open_session(record)
         .await
         .map_err(|error| {
             // The account exists and its session does not. Answered as an outage rather than as
@@ -532,13 +660,21 @@ pub async fn register_user(
 
     let issued = auth
         .tokens()
-        .issue(&user, &session_id, auth.sessions().ttl())
+        .issue(&user, &session_id, refresh_ttl)
         .map_err(|error| {
             tracing::error!(%error, "a token pair could not be signed");
             RegisterRejection::unavailable()
         })?;
 
     tracing::info!(user_id = %user, session_id = %session_id, "registered an account");
+    activity
+        .record(
+            &user,
+            ActivityKind::AccountRegistered,
+            None,
+            Some(session_id.as_str()),
+        )
+        .await;
     Ok(Json(TokenResponse::from(issued)))
 }
 
@@ -563,8 +699,16 @@ pub async fn register_user(
 pub async fn login_user(
     Inject(auth): Inject<AuthContext>,
     Inject(totp): Inject<crate::auth::TotpContext>,
+    Inject(activity): Inject<ActivityContext>,
     Json(request): Json<LoginRequest>,
 ) -> Result<LoginReply, LoginRejection> {
+    // Before the directory is asked anything, so no password is hashed and no account's
+    // existence or lockout state is disclosed (#1004).
+    if auth.passwords_disabled() {
+        tracing::info!("a sign-in was refused: password sign-in is disabled");
+        return Err(LoginRejection::password_disabled());
+    }
+
     // The password crosses this line once and never comes back: `authenticate` borrows it, and
     // what returns is a decision.
     let outcome = auth
@@ -578,14 +722,19 @@ pub async fn login_user(
 
     let user = match outcome {
         Authentication::Granted(user) => user,
-        Authentication::Locked => {
-            // No account identifier: the directory did not name one, and the route must not
-            // guess. The adapter that made this decision logs which account it was.
+        // The account a refusal names goes to that account's activity log and nowhere else: not
+        // into the answer, which is the same for every address, and not onto the response path,
+        // where a write made only for an address that exists would show in the response time.
+        Authentication::Locked(user) => {
             tracing::warn!("a sign-in was refused: the account is locked");
+            activity.record_detached(&user, ActivityKind::SignInLocked);
             return Err(LoginRejection::account_locked());
         }
-        Authentication::Refused => {
+        Authentication::Refused(account) => {
             tracing::info!("a sign-in was refused: the credentials did not match");
+            if let Some(user) = account {
+                activity.record_detached(&user, ActivityKind::SignInPasswordRefused);
+            }
             return Err(LoginRejection::invalid_credentials());
         }
     };
@@ -626,6 +775,10 @@ pub async fn login_user(
     let now = auth.clock().now();
     let issued = open_session_for(
         &auth,
+        SignIn {
+            activity: &activity,
+            kind: ActivityKind::SignInPassword,
+        },
         &user,
         request.cohort_hash.as_deref(),
         request.device_id.as_deref(),
@@ -662,6 +815,7 @@ pub async fn login_user(
 /// fault" and every caller answers them identically.
 pub(super) async fn open_session_for(
     auth: &AuthContext,
+    sign_in: SignIn<'_>,
     user: &UserId,
     cohort_hash: Option<&str>,
     device_id: Option<&str>,
@@ -671,22 +825,24 @@ pub(super) async fn open_session_for(
     let device_id = normalize_device_id(device_id);
     let session_id = new_session_id();
 
-    auth.sessions()
-        .open_session(SessionRecord {
-            session_id: session_id.clone(),
-            user_id: user.clone(),
-            created_at: now,
-            // A sign-in *is* a credential presentation, so this is the moment a freshness gate
-            // measures from. A refresh will carry it forward untouched.
-            authenticated_at: now,
-            last_active_at: now,
-            // Both always `None` here, as in Salvo. See the module docs.
-            user_agent: None,
-            ip_address: None,
-            cohort_hash: cohort_hash.clone(),
-            device_id,
-        })
-        .await?;
+    let record = SessionRecord {
+        session_id: session_id.clone(),
+        user_id: user.clone(),
+        created_at: now,
+        // A sign-in *is* a credential presentation, so this is the moment a freshness gate
+        // measures from. A refresh will carry it forward untouched.
+        authenticated_at: now,
+        // And the moment the lineage's hard cap measures from, which nothing ever moves.
+        signed_in_at: now,
+        last_active_at: now,
+        // Both always `None` here, as in Salvo. See the module docs.
+        user_agent: None,
+        ip_address: None,
+        cohort_hash: cohort_hash.clone(),
+        device_id,
+    };
+    let refresh_ttl = refresh_lifetime(auth, &record, now);
+    auth.sessions().open_session(record).await?;
 
     // The durable cohort map, written **after** the session and **never** allowed to
     // fail the sign-in. A cohort is legibility metadata: it groups a physical device's
@@ -705,18 +861,51 @@ pub(super) async fn open_session_for(
     }
 
     // Issued after the record exists, so a token can never name a session the store has not
-    // heard of. The refresh lifetime is the store's own TTL rather than a second constant —
-    // a refresh token that outlives its session record verifies and then fails.
+    // heard of. The refresh lifetime is the record's own remaining life rather than a second
+    // constant — a refresh token that outlives its session record verifies and then fails.
     let issued = auth
         .tokens()
-        .issue(user, &session_id, auth.sessions().ttl())
+        .issue(user, &session_id, refresh_ttl)
         .map_err(|error| StoreError::Unavailable {
             store: "session tokens",
             detail: error.to_string(),
         })?;
 
     tracing::info!(user_id = %user, session_id = %session_id, "opened a session");
+    sign_in
+        .activity
+        .record(user, sign_in.kind, None, Some(session_id.as_str()))
+        .await;
     Ok(issued)
+}
+
+/// How a session opened by [`open_session_for`] is recorded in the account's activity log.
+///
+/// The door the sign-in came through — password, second factor, identity provider — is the
+/// caller's to name, and the session it opened is the event's subject. Recorded inside the one
+/// function every door shares, so no door can open a session the log does not show.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct SignIn<'a> {
+    /// Where the event is recorded.
+    pub(super) activity: &'a ActivityContext,
+    /// Which sign-in it was.
+    pub(super) kind: ActivityKind,
+}
+
+/// How long a refresh token minted for `record`, opened at `now`, may live.
+///
+/// Exactly as long as the store keeps the record: the sliding window, clipped to the lineage's
+/// hard cap. A token that outlived its record would verify and then fail, and one that died
+/// before it would sign out a device the design says is still signed in.
+fn refresh_lifetime(
+    auth: &AuthContext,
+    record: &SessionRecord,
+    now: jiff::Timestamp,
+) -> jiff::SignedDuration {
+    auth.sessions()
+        .expires_at(record, now)
+        .duration_since(now)
+        .max(jiff::SignedDuration::ZERO)
 }
 
 /// Exchange a refresh token for a new pair, rotating the session.
@@ -782,7 +971,23 @@ pub async fn refresh_token(
         return Err(RefreshRejection::session_expired());
     }
 
+    // The lifetimes this process was configured with, measured from the issuance that last
+    // opened the record. The store already drops a record at the deadline it was opened under,
+    // but a restart may have lowered `SESSION_TTL_DAYS` or `SESSION_HARD_CAP_DAYS` since: a
+    // record idle past the new window, or a lineage past the new cap, is still held under the
+    // old deadline and must end here rather than rotate into an already-expired successor.
+    // Past this check the successor below has life left under both, so its refresh token is
+    // minted for what remains of the window clipped to the cap.
     let now = auth.clock().now();
+    let deadline = auth.sessions().expires_at(&record, record.created_at);
+    if deadline <= now {
+        tracing::info!(
+            session_id = %session,
+            %deadline,
+            "a refresh was refused: the session is past its configured lifetime"
+        );
+        return Err(RefreshRejection::session_expired());
+    }
     let rotated = new_session_id();
     let successor = SessionRecord {
         session_id: rotated.clone(),
@@ -792,12 +997,17 @@ pub async fn refresh_token(
         // is not a credential presentation — resetting this would make every re-authentication
         // gate satisfiable by waiting fifteen minutes, which is the same as not having one.
         authenticated_at: record.authenticated_at,
+        // Carried forward for the same reason, and with higher stakes: resetting this would
+        // turn the hard cap into one more sliding window, so a stolen token refreshed daily
+        // would never die.
+        signed_in_at: record.signed_in_at,
         last_active_at: now,
         user_agent: record.user_agent,
         ip_address: record.ip_address,
         cohort_hash: record.cohort_hash,
         device_id: record.device_id,
     };
+    let refresh_ttl = refresh_lifetime(&auth, &successor, now);
 
     auth.sessions()
         .open_session(successor)
@@ -809,7 +1019,7 @@ pub async fn refresh_token(
 
     let issued = auth
         .tokens()
-        .issue(&record.user_id, &rotated, auth.sessions().ttl())
+        .issue(&record.user_id, &rotated, refresh_ttl)
         .map_err(|error| {
             tracing::error!(%error, "a rotated token pair could not be signed");
             RefreshRejection::unavailable()
@@ -832,6 +1042,7 @@ pub async fn refresh_token(
 pub async fn logout(
     Auth(credential): Auth<AccessToken>,
     Inject(auth): Inject<AuthContext>,
+    Inject(activity): Inject<ActivityContext>,
 ) -> Result<NoContent, LogoutRejection> {
     let closed = auth
         .sessions()
@@ -848,6 +1059,14 @@ pub async fn logout(
             session_id = %credential.session,
             "closed a session on request"
         );
+        activity
+            .record(
+                &record.user_id,
+                ActivityKind::SignOut,
+                Some(&credential.session),
+                Some(credential.session.as_str()),
+            )
+            .await;
     } else {
         tracing::debug!(
             session_id = %credential.session,
@@ -900,7 +1119,8 @@ pub struct ReauthenticateResponse {
 /// The same refusals as a sign-in, for the same reasons: a wrong password is
 /// `401 error.auth.invalid_credentials`, a locked account is `403`, and the account directory
 /// failing is `500`. A caller that guessed a password here learns exactly what it would learn
-/// at `/v1/auth/login`, and no more.
+/// at `/v1/auth/login`, and no more. A deployment that refuses passwords answers
+/// `403 error.auth.password_disabled` before the password is checked, as login does.
 #[kynos::post(
     "/v1/auth/reauthenticate",
     operation_id = "reauthenticate",
@@ -912,6 +1132,12 @@ pub async fn reauthenticate(
     Json(request): Json<ReauthenticateRequest>,
 ) -> Result<Json<ReauthenticateResponse>, LoginRejection> {
     let user = UserId::new(credential.user.as_str());
+
+    // A password presentation like any other, refused for the same reason login is (#1004).
+    if auth.passwords_disabled() {
+        tracing::info!(%user, "a re-authentication was refused: password sign-in is disabled");
+        return Err(LoginRejection::password_disabled());
+    }
 
     // The account is the credential's, never a request field: this operation must not be usable
     // to test another account's password.
@@ -926,11 +1152,11 @@ pub async fn reauthenticate(
 
     match outcome {
         Authentication::Granted(_) => {}
-        Authentication::Locked => {
+        Authentication::Locked(_) => {
             tracing::warn!(%user, "a re-authentication was refused: the account is locked");
             return Err(LoginRejection::account_locked());
         }
-        Authentication::Refused => {
+        Authentication::Refused(_) => {
             tracing::info!(%user, "a re-authentication was refused: the password did not match");
             return Err(LoginRejection::invalid_credentials());
         }
@@ -1094,6 +1320,7 @@ pub async fn revoke_all_challenge(
 pub async fn revoke_all(
     Inject(auth): Inject<AuthContext>,
     Inject(directories): Inject<crate::directory::DeviceDirectoryContext>,
+    Inject(activity): Inject<ActivityContext>,
     Json(request): Json<RevokeAllRequest>,
 ) -> Result<Json<RevokeAllResponse>, RevokeAllRejection> {
     let proof_bytes = BASE64.decode(request.proof.trim()).map_err(|error| {
@@ -1188,6 +1415,14 @@ pub async fn revoke_all(
         revoked = closed.len(),
         "a global sign-out closed every session for an account"
     );
+    activity
+        .record(
+            &claimed.user_id,
+            ActivityKind::SessionsRevokedAll,
+            None,
+            None,
+        )
+        .await;
     Ok(Json(RevokeAllResponse {
         revoked: closed.len() as u64,
     }))

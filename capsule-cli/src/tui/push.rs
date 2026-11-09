@@ -153,6 +153,9 @@ pub enum Custody {
     Failed(String),
     /// Skipped: another device of the account holds its open hand-off and uploads it.
     Delegated,
+    /// Skipped: the server already holds its create, which an edit here has superseded, so
+    /// only the records after it are sent.
+    OnServer,
 }
 
 /// One asset's row.
@@ -295,7 +298,12 @@ impl PushScreen {
     pub fn retryable(&self) -> Vec<&AssetRow> {
         self.rows
             .iter()
-            .filter(|row| !matches!(row.custody, Custody::Verified | Custody::Delegated))
+            .filter(|row| {
+                !matches!(
+                    row.custody,
+                    Custody::Verified | Custody::Delegated | Custody::OnServer
+                )
+            })
             .collect()
     }
 
@@ -584,6 +592,7 @@ impl PushScreen {
             // The screen does not offer a dry run; a planned outcome moves nothing.
             AssetPushStatus::Planned => row.custody = Custody::Waiting,
             AssetPushStatus::Delegated => row.custody = Custody::Delegated,
+            AssetPushStatus::Indexed => row.custody = Custody::OnServer,
         }
     }
 
@@ -611,7 +620,7 @@ fn shown_rows(screen: &PushScreen) -> Vec<&AssetRow> {
         Custody::Failed(_) => 1,
         Custody::Waiting => 2,
         Custody::Delegated => 3,
-        Custody::Verified => 4,
+        Custody::OnServer | Custody::Verified => 4,
     };
     let mut rows: Vec<&AssetRow> = screen.rows.iter().collect();
     rows.sort_by_key(|row| rank(row));
@@ -636,6 +645,7 @@ fn row_line(row: &AssetRow, running: bool) -> Line<'static> {
         Custody::Verified => ("verified", Color::Green),
         Custody::Failed(_) => ("failed", Color::Red),
         Custody::Delegated => ("handed off", Color::Magenta),
+        Custody::OnServer => ("on server", Color::Green),
     };
     Line::from(vec![
         Span::raw(format!(

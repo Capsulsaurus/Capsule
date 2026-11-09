@@ -7211,6 +7211,10 @@
     "message": "تعذّر على Capsule الوصول إلى موفّر الهوية حاليًا. يُرجى المحاولة مرة أخرى.",
     "origin": "machine"
   },
+  "error.auth.password_disabled": {
+    "message": "لا يقبل هذا الخادم تسجيل الدخول إلا عبر تسجيل الدخول الموحّد.",
+    "origin": "machine"
+  },
   "error.auth.password_invalid": {
     "message": "لا يمكن استخدام كلمة المرور هذه.",
     "origin": "machine"
@@ -7225,6 +7229,10 @@
   },
   "error.auth.rate_limited": {
     "message": "محاولات كثيرة جدًا. يُرجى الانتظار ثم المحاولة مرة أخرى.",
+    "origin": "machine"
+  },
+  "error.auth.registration_at_capacity": {
+    "message": "يتعامل هذا الخادم مع عدد كبير جدًا من عمليات التسجيل حاليًا. يُرجى المحاولة مرة أخرى بعد قليل.",
     "origin": "machine"
   },
   "error.auth.registration_invalid": {
@@ -7463,8 +7471,28 @@
     "message": "تم إيقاف هذا المصدر مؤقتًا بعد أخطاء متكررة.",
     "origin": "machine"
   },
+  "error.federation.hint_at_capacity": {
+    "message": "يتعامل هذا الخادم مع عدد كبير جدًا من إشعارات التحديث حاليًا. يُرجى الانتظار ثم المحاولة مرة أخرى.",
+    "origin": "machine"
+  },
+  "error.federation.hint_malformed": {
+    "message": "إشعار التحديث هذا غير صالح.",
+    "origin": "machine"
+  },
+  "error.federation.hint_rate_limited": {
+    "message": "إشعارات تحديث كثيرة جدًا من هذا الخادم. يُرجى الانتظار ثم المحاولة مرة أخرى.",
+    "origin": "machine"
+  },
+  "error.federation.hint_unsigned": {
+    "message": "تعذّر التحقق من إشعار التحديث.",
+    "origin": "machine"
+  },
   "error.federation.member_not_on_roster": {
     "message": "هذا الشخص ليس ضمن قائمة أعضاء هذا الألبوم.",
+    "origin": "machine"
+  },
+  "error.federation.mint_at_capacity": {
+    "message": "يتعامل هذا الخادم مع عدد كبير جدًا من منح الوصول حاليًا. يُرجى المحاولة مرة أخرى بعد قليل.",
     "origin": "machine"
   },
   "error.federation.not_configured": {
@@ -7487,12 +7515,20 @@
     "message": "لا يشمل منح الوصول هذا المحتوى المطلوب.",
     "origin": "machine"
   },
+  "error.federation.subscription_limit": {
+    "message": "لقد بلغت الحد الأقصى للألبومات المشتركة التي يمكنك متابعتها من خوادم أخرى. أزل ألبومًا لإضافة آخر.",
+    "origin": "machine"
+  },
   "error.federation.unavailable": {
     "message": "تعذّر على Capsule الوصول إلى سجلات الاتحاد. يُرجى المحاولة مرة أخرى.",
     "origin": "machine"
   },
   "error.moderation.account_suspended": {
     "message": "حسابك موقوف. لا يمكنك الرفع أو المشاركة حتى تتم إعادته.",
+    "origin": "machine"
+  },
+  "error.moderation.report_at_capacity": {
+    "message": "يتعامل هذا الخادم مع عدد كبير جدًا من البلاغات حاليًا. يُرجى الانتظار ثم المحاولة مرة أخرى.",
     "origin": "machine"
   },
   "error.moderation.report_malformed": {
@@ -7569,6 +7605,10 @@
   },
   "error.request.range_not_satisfiable": {
     "message": "تعذّر على Capsule إرسال ذلك الجزء من الملف.",
+    "origin": "machine"
+  },
+  "error.request.too_early": {
+    "message": "أُرسل هذا الطلب مبكرًا جدًا. يُرجى المحاولة مرة أخرى.",
     "origin": "machine"
   },
   "error.request.too_large": {
@@ -7763,6 +7803,10 @@
     "message": "لا يمكنك الرفع نيابةً عن هذا المستخدم.",
     "origin": "machine"
   },
+  "error.upload.range_conflict": {
+    "message": "جزء من هذا الرفع قيد الإرسال بالفعل. جارٍ الاستئناف…",
+    "origin": "machine"
+  },
   "error.upload.rate_limited": {
     "message": "تم إيقاف الرفع مؤقتًا للحظة. سيُستأنف تلقائيًا.",
     "origin": "machine"
@@ -7791,6 +7835,10 @@
     "message": "أرسل الرفع بيانات أكثر مما أعلن عنه.",
     "origin": "machine"
   },
+  "error.upload.source_changed": {
+    "message": "تغيّر هذا الملف أثناء رفعه، لذلك أُوقف رفعه.",
+    "origin": "machine"
+  },
   "error.upload.stale_revival": {
     "message": "يستند هذا التغيير إلى نسخة قديمة من العنصر.",
     "origin": "machine"
@@ -7805,6 +7853,14 @@
   },
   "error.upload.timestamp_out_of_range": {
     "message": "يبدو أن ساعة جهازك غير صحيحة. تحقّق من التاريخ والوقت.",
+    "origin": "machine"
+  },
+  "error.upload.too_fragmented": {
+    "message": "يحتوي هذا الرفع على فجوات كثيرة جدًا. جارٍ ملؤها…",
+    "origin": "machine"
+  },
+  "error.upload.too_many_in_flight": {
+    "message": "يُرسَل عدد كبير جدًا من أجزاء هذا الرفع في الوقت نفسه. جارٍ الإبطاء…",
     "origin": "machine"
   },
   "error.upload.unavailable": {

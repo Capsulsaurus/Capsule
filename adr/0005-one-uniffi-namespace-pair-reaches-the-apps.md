@@ -4,7 +4,7 @@
 - **Date:** 2026-09-01
 - **Supersedes:** —
 - **Superseded by:** —
-- **Contract:** [Module Map — Client Boundaries](../capsule-docs/src/content/docs/design/module-map.md#client-boundaries)
+- **Contract:** [`capsule-core-ffi` crate docs](../capsule-core-ffi/src/lib.rs)
 - **Slices:** S-F1, S-F3, S-D9, S-P1
 
 The decision below stands. The third namespace its Context and Consequences describe no

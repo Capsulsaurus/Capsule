@@ -338,6 +338,29 @@ fn scans_the_kotlin_surface() {
     );
 }
 
+/// uniffi's Kotlin template closes a non-throwing top-level function's doc on the declaration's
+/// own line; the function is scanned, with that doc, all the same.
+#[test]
+fn scans_a_kotlin_function_declared_on_its_docs_closing_line() {
+    let source = r"
+        /**
+         * One step.
+         *
+         * Pure.
+         */ fun `renderStep`(`request`: FfiRenderRequest): FfiRenderStep {
+            return lift()
+    }
+    /* A comment that is not a doc. */
+";
+    let declarations = scan_kotlin(source).unwrap();
+    assert_eq!(names(&declarations), [("fun", "renderStep")]);
+    assert_eq!(declarations[0].doc, "One step.\n\nPure.");
+    assert_eq!(
+        declarations[0].signature,
+        "fun renderStep(request: FfiRenderRequest): FfiRenderStep"
+    );
+}
+
 #[test]
 fn the_fixtures_agree_across_languages_apart_from_the_required_table() {
     let swift = scan_swift(SWIFT).unwrap();

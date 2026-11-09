@@ -7211,6 +7211,10 @@
     "message": "Capsule n'a pas pu joindre votre fournisseur d'identité pour le moment. Veuillez réessayer.",
     "origin": "machine"
   },
+  "error.auth.password_disabled": {
+    "message": "Ce serveur n'accepte la connexion que par authentification unique.",
+    "origin": "machine"
+  },
   "error.auth.password_invalid": {
     "message": "Ce mot de passe ne peut pas être utilisé.",
     "origin": "machine"
@@ -7225,6 +7229,10 @@
   },
   "error.auth.rate_limited": {
     "message": "Trop de tentatives. Veuillez patienter et réessayer.",
+    "origin": "machine"
+  },
+  "error.auth.registration_at_capacity": {
+    "message": "Ce serveur gère trop d'inscriptions en ce moment. Veuillez réessayer sous peu.",
     "origin": "machine"
   },
   "error.auth.registration_invalid": {
@@ -7463,8 +7471,28 @@
     "message": "Cette source est temporairement mise en attente après des erreurs répétées.",
     "origin": "machine"
   },
+  "error.federation.hint_at_capacity": {
+    "message": "Ce serveur traite trop d'avis de mise à jour en ce moment. Veuillez patienter et réessayer.",
+    "origin": "machine"
+  },
+  "error.federation.hint_malformed": {
+    "message": "Cet avis de mise à jour n'est pas valide.",
+    "origin": "machine"
+  },
+  "error.federation.hint_rate_limited": {
+    "message": "Trop d'avis de mise à jour provenant de ce serveur. Veuillez patienter et réessayer.",
+    "origin": "machine"
+  },
+  "error.federation.hint_unsigned": {
+    "message": "L'avis de mise à jour n'a pas pu être vérifié.",
+    "origin": "machine"
+  },
   "error.federation.member_not_on_roster": {
     "message": "Cette personne ne figure pas dans la liste des membres de cet album.",
+    "origin": "machine"
+  },
+  "error.federation.mint_at_capacity": {
+    "message": "Ce serveur gère trop d'autorisations d'accès en ce moment. Veuillez réessayer sous peu.",
     "origin": "machine"
   },
   "error.federation.not_configured": {
@@ -7487,12 +7515,20 @@
     "message": "Cette autorisation d'accès ne couvre pas le contenu demandé.",
     "origin": "machine"
   },
+  "error.federation.subscription_limit": {
+    "message": "Vous avez atteint la limite d'albums partagés d'autres serveurs que vous pouvez suivre. Retirez-en un pour en ajouter un autre.",
+    "origin": "machine"
+  },
   "error.federation.unavailable": {
     "message": "Capsule n'a pas pu accéder aux données de fédération. Veuillez réessayer.",
     "origin": "machine"
   },
   "error.moderation.account_suspended": {
     "message": "Votre compte est suspendu. Vous ne pouvez ni téléverser ni partager tant qu'il n'est pas rétabli.",
+    "origin": "machine"
+  },
+  "error.moderation.report_at_capacity": {
+    "message": "Ce serveur gère trop de signalements en ce moment. Veuillez patienter et réessayer.",
     "origin": "machine"
   },
   "error.moderation.report_malformed": {
@@ -7569,6 +7605,10 @@
   },
   "error.request.range_not_satisfiable": {
     "message": "Capsule n'a pas pu envoyer cette partie du fichier.",
+    "origin": "machine"
+  },
+  "error.request.too_early": {
+    "message": "Cette requête a été envoyée trop tôt. Veuillez réessayer.",
     "origin": "machine"
   },
   "error.request.too_large": {
@@ -7763,6 +7803,10 @@
     "message": "Vous ne pouvez pas téléverser au nom de cet utilisateur.",
     "origin": "machine"
   },
+  "error.upload.range_conflict": {
+    "message": "Une partie de ce téléversement est déjà en cours d'envoi. Reprise…",
+    "origin": "machine"
+  },
   "error.upload.rate_limited": {
     "message": "Le téléversement est suspendu un instant. Il reprendra de lui-même.",
     "origin": "machine"
@@ -7791,6 +7835,10 @@
     "message": "Le téléversement a envoyé plus de données qu'il n'en avait déclaré.",
     "origin": "machine"
   },
+  "error.upload.source_changed": {
+    "message": "Ce fichier a changé pendant son téléversement, qui a donc été arrêté.",
+    "origin": "machine"
+  },
   "error.upload.stale_revival": {
     "message": "Cette modification repose sur une version obsolète de l'élément.",
     "origin": "machine"
@@ -7805,6 +7853,14 @@
   },
   "error.upload.timestamp_out_of_range": {
     "message": "L'horloge de votre appareil semble incorrecte. Vérifiez sa date et son heure.",
+    "origin": "machine"
+  },
+  "error.upload.too_fragmented": {
+    "message": "Ce téléversement comporte trop de lacunes. Comblement en cours…",
+    "origin": "machine"
+  },
+  "error.upload.too_many_in_flight": {
+    "message": "Trop de parties de ce téléversement sont envoyées en même temps. Ralentissement…",
     "origin": "machine"
   },
   "error.upload.unavailable": {

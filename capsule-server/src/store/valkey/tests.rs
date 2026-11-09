@@ -24,6 +24,20 @@ fn scripts_derive_keys_with_the_prefixes_rust_writes() {
         (&SET_STATUS, strip(album_key(&AlbumId::new("x")))),
         (&PENDING_FOR_ADDRESS, strip(upload_key(&up))),
         (&PENDING_FOR_ADDRESS, strip(chunks_key(&up))),
+        (
+            &OPEN_UPLOAD,
+            address_key("x").trim_end_matches('x').to_owned(),
+        ),
+        (
+            &SET_STATUS,
+            address_key("x").trim_end_matches('x').to_owned(),
+        ),
+        (
+            &DISCARD_UPLOAD,
+            address_key("x").trim_end_matches('x').to_owned(),
+        ),
+        (&LIVE_FOR_ADDRESS, strip(upload_key(&up))),
+        (&LIVE_FOR_ADDRESS, strip(chunks_key(&up))),
         (&IN_FLIGHT_FOR_ALBUM, strip(upload_key(&up))),
         (&LEAST_RECENTLY_PROGRESSED, strip(upload_key(&up))),
         (&CLAIMED_UPLOADS, strip(upload_key(&up))),
@@ -69,6 +83,7 @@ fn a_session_round_trips_through_its_hash_encoding() {
         user_id: UserId::new("uid"),
         created_at: Timestamp::UNIX_EPOCH,
         authenticated_at: deadline(Timestamp::UNIX_EPOCH, SignedDuration::from_nanos(1)),
+        signed_in_at: deadline(Timestamp::UNIX_EPOCH, SignedDuration::from_nanos(-5)),
         last_active_at: Timestamp::UNIX_EPOCH,
         user_agent: None,
         ip_address: Some("203.0.113.7".to_owned()),
@@ -77,11 +92,37 @@ fn a_session_round_trips_through_its_hash_encoding() {
     };
     let flat = encode_session(&record, Timestamp::UNIX_EPOCH);
     assert!(flat.contains(&"expires_at".to_owned()));
+    assert!(flat.contains(&"signed_in_at".to_owned()));
     assert!(
         !flat.contains(&"user_agent".to_owned()),
         "absent stays absent"
     );
     assert_eq!(decode_session(flat).expect("decodes"), record);
+}
+
+#[test]
+fn a_session_written_before_signed_in_at_existed_still_decodes() {
+    // A live record from the previous release has no `signed_in_at` field. It must decode — a
+    // deploy may not sign anyone out — with the lineage start taken from the record's own
+    // `created_at`, never the older `authenticated_at`, so no lineage is already past its cap
+    // the moment it is read.
+    let created_at = deadline(Timestamp::UNIX_EPOCH, SignedDuration::from_hours(48));
+    let authenticated_at = deadline(Timestamp::UNIX_EPOCH, SignedDuration::from_hours(1));
+    let legacy: Vec<String> = [
+        ("session_id", "sid".to_owned()),
+        ("user_id", "uid".to_owned()),
+        ("created_at", created_at.to_string()),
+        ("authenticated_at", authenticated_at.to_string()),
+        ("last_active_at", created_at.to_string()),
+        ("expires_at", "0".to_owned()),
+    ]
+    .into_iter()
+    .flat_map(|(name, value)| [name.to_owned(), value])
+    .collect();
+
+    let record = decode_session(legacy).expect("a legacy record decodes");
+    assert_eq!(record.signed_in_at, created_at);
+    assert_eq!(record.authenticated_at, authenticated_at);
 }
 
 #[test]
@@ -205,9 +246,11 @@ fn an_upload_session_round_trips_through_its_hash_encoding() {
         blob_role: BlobRole::Provenance,
         intent_id: Some("intent".to_owned()),
         manifest_envelope: "{\"tag\":\"x\"}".to_owned(),
-        received_bytes: 12,
+        committed: CommittedSet::prefix_of(12).with_range(16, 20),
+        in_flight_cap: 4,
         total_size: 34,
-        status: UploadSessionStatus::WaitingForProcessing,
+        status: UploadSessionStatus::FailedProcessing,
+        failure_code: Some("error.upload.content_hash_mismatch".to_owned()),
         created_at: Timestamp::UNIX_EPOCH,
         last_progress_at: deadline(Timestamp::UNIX_EPOCH, SignedDuration::from_secs(5)),
     };
@@ -216,17 +259,80 @@ fn an_upload_session_round_trips_through_its_hash_encoding() {
 }
 
 #[test]
-fn a_chunk_round_trips_through_its_packed_encoding() {
-    let chunk = AcceptedChunk {
-        offset: 4096,
-        chunk_hash: "b".repeat(64),
-        next_offset: 8192,
-        accepted_at: deadline(Timestamp::UNIX_EPOCH, SignedDuration::from_nanos(123)),
+fn an_upload_session_stored_before_the_committed_set_reads_as_its_prefix() {
+    // A record an append-only server wrote: a counter, no set, no cap. It is served on as the
+    // contiguous prefix it was, one range at a time.
+    let record = UploadSessionRecord {
+        upload_id: UploadId::new("legacy"),
+        asset_id: AssetId::new("asset"),
+        owner_id: OwnerId::new("owner"),
+        upload_user_id: UserId::new("uploader"),
+        album_id: None,
+        content_type: None,
+        expected_hash: "a".repeat(64),
+        crypto_suite_id: 3,
+        protocol_version: "2026-08-29".to_owned(),
+        blob_role: BlobRole::Original,
+        intent_id: None,
+        manifest_envelope: String::new(),
+        committed: CommittedSet::prefix_of(8192),
+        in_flight_cap: 1,
+        total_size: 16384,
+        status: UploadSessionStatus::Uploading,
+        failure_code: None,
+        created_at: Timestamp::UNIX_EPOCH,
+        last_progress_at: Timestamp::UNIX_EPOCH,
     };
-    assert_eq!(
-        decode_chunk(4096, &encode_chunk(&chunk)).expect("decodes"),
-        chunk
-    );
+    let mut flat = encode_upload(&record, Timestamp::UNIX_EPOCH);
+    for name in ["committed", "in_flight_cap"] {
+        let at = flat
+            .iter()
+            .position(|field| field == name)
+            .expect("the field is encoded");
+        flat.drain(at..at + 2);
+    }
+    assert_eq!(decode_upload(flat).expect("decodes"), record);
+}
+
+#[test]
+fn a_committed_set_that_is_not_normal_is_corrupt() {
+    let record_flat = |committed: &str| {
+        let mut flat = encode_upload(
+            &UploadSessionRecord {
+                upload_id: UploadId::new("up"),
+                asset_id: AssetId::new("asset"),
+                owner_id: OwnerId::new("owner"),
+                upload_user_id: UserId::new("uploader"),
+                album_id: None,
+                content_type: None,
+                expected_hash: "a".repeat(64),
+                crypto_suite_id: 3,
+                protocol_version: "2026-08-29".to_owned(),
+                blob_role: BlobRole::Original,
+                intent_id: None,
+                manifest_envelope: String::new(),
+                committed: CommittedSet::default(),
+                in_flight_cap: 1,
+                total_size: 16384,
+                status: UploadSessionStatus::Uploading,
+                failure_code: None,
+                created_at: Timestamp::UNIX_EPOCH,
+                last_progress_at: Timestamp::UNIX_EPOCH,
+            },
+            Timestamp::UNIX_EPOCH,
+        );
+        let at = flat
+            .iter()
+            .position(|field| field == "committed")
+            .expect("the set is encoded");
+        flat[at + 1] = committed.to_owned();
+        flat
+    };
+    assert!(decode_upload(record_flat("0-4096,8192-12288")).is_ok());
+    assert!(matches!(
+        decode_upload(record_flat("0-4096,4096-8192")),
+        Err(StoreError::Corrupt { .. })
+    ));
 }
 
 #[test]
@@ -244,9 +350,6 @@ fn a_field_that_will_not_parse_is_corrupt_not_absent() {
         matches!(error, StoreError::Corrupt { store: "auth", .. }),
         "{error:?}"
     );
-
-    let error = decode_chunk(0, "hash-only").expect_err("refuses");
-    assert!(matches!(error, StoreError::Corrupt { .. }), "{error:?}");
 }
 
 #[test]

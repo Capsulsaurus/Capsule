@@ -1,0 +1,108 @@
+---
+// Starlight ThemeSelect override: one icon button that cycles the theme
+// preference Auto → Light → Dark. The cycle, labels and storage format are
+// src/lib/theme-cycle.mjs. It writes the same `localStorage` key and
+// `data-theme` attribute as Starlight's picker, so Starlight's ThemeProvider
+// still applies the saved theme before first paint.
+import { Icon } from '@astrojs/starlight/components';
+import { toggleLabel } from '../lib/theme-cycle.mjs';
+---
+
+<capsule-theme-toggle data-pref="auto">
+  <button type="button" class="toggle" aria-label={toggleLabel('auto')} title={toggleLabel('auto')}>
+    <Icon name="laptop" class="auto" />
+    <Icon name="sun" class="light" />
+    <Icon name="moon" class="dark" />
+  </button>
+</capsule-theme-toggle>
+
+{/* Inlined so the right icon shows before the module script runs. It cannot
+    import theme-cycle.mjs; it only distinguishes light, dark and everything
+    else, which parseTheme maps to auto. */}
+<script is:inline>
+  (() => {
+    const stored = localStorage.getItem('starlight-theme');
+    const pref = stored === 'light' || stored === 'dark' ? stored : 'auto';
+    for (const el of document.querySelectorAll('capsule-theme-toggle')) {
+      el.dataset.pref = pref;
+    }
+  })();
+</script>
+
+<script>
+  import {
+    nextTheme,
+    parseTheme,
+    resolveTheme,
+    STORAGE_KEY,
+    storedValue,
+    toggleLabel,
+  } from '../lib/theme-cycle.mjs';
+
+  const systemLight = matchMedia('(prefers-color-scheme: light)');
+
+  const load = () => parseTheme(localStorage.getItem(STORAGE_KEY));
+
+  function apply(pref) {
+    document.documentElement.dataset.theme = resolveTheme(
+      pref,
+      systemLight.matches,
+    );
+    for (const el of document.querySelectorAll('capsule-theme-toggle')) {
+      el.dataset.pref = pref;
+      const button = el.querySelector('button');
+      button?.setAttribute('aria-label', toggleLabel(pref));
+      button?.setAttribute('title', toggleLabel(pref));
+    }
+  }
+
+  systemLight.addEventListener('change', () => {
+    if (load() === 'auto') apply('auto');
+  });
+
+  class CapsuleThemeToggle extends HTMLElement {
+    connectedCallback() {
+      apply(load());
+      this.querySelector('button')?.addEventListener('click', () => {
+        const pref = nextTheme(load());
+        localStorage.setItem(STORAGE_KEY, storedValue(pref));
+        apply(pref);
+      });
+    }
+  }
+
+  customElements.define('capsule-theme-toggle', CapsuleThemeToggle);
+</script>
+
+<style>
+  .toggle {
+    display: inline-grid;
+    place-items: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    padding: 0;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--sl-color-gray-2);
+    font-size: 1.125rem;
+    cursor: pointer;
+  }
+
+  .toggle:hover,
+  .toggle:focus-visible {
+    color: var(--sl-color-white);
+    border-color: var(--sl-color-gray-3);
+    background: var(--sl-color-gray-6);
+  }
+
+  .toggle :global(svg) {
+    display: none;
+  }
+
+  capsule-theme-toggle[data-pref='auto'] .toggle :global(svg.auto),
+  capsule-theme-toggle[data-pref='light'] .toggle :global(svg.light),
+  capsule-theme-toggle[data-pref='dark'] .toggle :global(svg.dark) {
+    display: block;
+  }
+</style>

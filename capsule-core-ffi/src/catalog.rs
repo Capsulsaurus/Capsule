@@ -166,34 +166,14 @@ impl Catalog {
         }
     }
 
-    pub fn soft_delete(&self, uuid: String, deleted_at: i64) -> Result<(), CatalogError> {
-        tracing::debug!(%uuid, "catalog: soft_delete");
-        self.driver().soft_delete(&uuid, deleted_at)?;
-        Ok(())
-    }
-
-    pub fn restore_asset(&self, uuid: String) -> Result<(), CatalogError> {
-        tracing::debug!(%uuid, "catalog: restore_asset");
-        self.driver().restore_asset(&uuid)?;
-        Ok(())
-    }
-
-    /// The **retention sweep** input: assets soft-deleted longer than `older_than_secs`
-    /// ago, for the background purge job ([Filesystem — Maintenance]).
-    ///
-    /// Deliberately **ungated**: the sweep runs unattended, with no user present to
-    /// authenticate, so putting it behind SR1 would only break maintenance. It is not the
-    /// Recently Deleted *view* — do not build one on it; use
-    /// [`query_trash`](Self::query_trash), which is gated.
-    ///
-    /// [Filesystem — Maintenance]: https://docs/design/filesystem/maintenance/
-    pub fn query_expired_trash(
-        &self,
-        older_than_secs: i64,
-    ) -> Result<Vec<AssetRecord>, CatalogError> {
-        let rows = self.driver().query_expired_trash(older_than_secs)?;
-        Ok(rows.into_iter().map(AssetRecord::from).collect())
-    }
+    // ── Trash ────────────────────────────────────────────────────────────────
+    //
+    // The catalog only reads the trash. Every transition (delete, restore, purge) and the
+    // retention sweep are `FfiWorkspace` verbs, which sign the record the index row projects,
+    // so the transition syncs and survives an index rebuild ([Organization — Deletion State
+    // Machine]). A write here would flag the row and sign nothing.
+    //
+    // [Organization — Deletion State Machine]: https://docs/design/organization/#deletion-state-machine
 
     /// All currently soft-deleted assets — the Recently Deleted listing, **gated** by SR1.
     ///
@@ -246,13 +226,6 @@ impl Catalog {
     pub fn lock_views(&self) {
         tracing::debug!("catalog: lock_views");
         self.gates().lock();
-    }
-
-    /// Permanently remove an asset row (the file is deleted by the caller).
-    pub fn purge_asset(&self, uuid: String) -> Result<(), CatalogError> {
-        tracing::debug!(%uuid, "catalog: purge_asset");
-        self.driver().purge_asset(&uuid)?;
-        Ok(())
     }
 
     // ── Stacks ───────────────────────────────────────────────────────────────

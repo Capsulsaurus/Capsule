@@ -54,6 +54,7 @@ use kynos::response::status::NoContent;
 use kynos::security::auth::Auth;
 use serde::{Deserialize, Serialize};
 
+use crate::activity::{ActivityContext, ActivityKind};
 use crate::auth::{
     AccessToken, ActivateOutcome, AuthContext, BeginOutcome, ConsumeOutcome, DirectoryError,
     EnrollmentState, TotpCodes, TotpContext, TotpEnrollment,
@@ -367,6 +368,7 @@ pub async fn totp_verify_enrollment(
     Auth(credential): Auth<AccessToken>,
     Inject(auth): Inject<AuthContext>,
     Inject(totp): Inject<TotpContext>,
+    Inject(activity): Inject<ActivityContext>,
     Json(request): Json<CodeRequest>,
 ) -> Result<NoContent, ConfirmRejection> {
     let user = UserId::new(credential.user.as_str());
@@ -430,6 +432,14 @@ pub async fn totp_verify_enrollment(
     }
 
     tracing::info!(%user, "a second factor is now active");
+    activity
+        .record(
+            &user,
+            ActivityKind::TotpEnabled,
+            Some(&credential.session),
+            None,
+        )
+        .await;
     Ok(NoContent)
 }
 
@@ -443,6 +453,7 @@ pub async fn totp_disable(
     Auth(credential): Auth<AccessToken>,
     Inject(auth): Inject<AuthContext>,
     Inject(totp): Inject<TotpContext>,
+    Inject(activity): Inject<ActivityContext>,
     Json(request): Json<CodeRequest>,
 ) -> Result<NoContent, DisableRejection> {
     let user = UserId::new(credential.user.as_str());
@@ -516,6 +527,14 @@ pub async fn totp_disable(
 
     if removed {
         tracing::info!(%user, "a second factor was removed");
+        activity
+            .record(
+                &user,
+                ActivityKind::TotpDisabled,
+                Some(&credential.session),
+                None,
+            )
+            .await;
     } else {
         // Removed by another device between the read and here. The caller's goal is met.
         tracing::info!(%user, "a second factor was already gone by the time it was removed");
@@ -537,6 +556,7 @@ pub async fn totp_verify_login(
     Inject(auth): Inject<AuthContext>,
     Inject(totp): Inject<TotpContext>,
     Inject(counters): Inject<CounterContext>,
+    Inject(activity): Inject<ActivityContext>,
     Json(request): Json<VerifyLoginRequest>,
 ) -> Result<Json<TokenResponse>, VerifyLoginRejection> {
     let verified = auth
@@ -596,7 +616,7 @@ pub async fn totp_verify_login(
         })?;
 
     let now = auth.clock().now();
-    let step = totp
+    let Some(step) = totp
         .codes()
         .verify(&held.secret, request.totp_code.trim(), now)
         .map_err(|error| {
@@ -605,12 +625,17 @@ pub async fn totp_verify_login(
                 code: error_codes::AUTH_UNAVAILABLE,
             }
         })?
-        .ok_or_else(|| {
-            tracing::info!(%user, "a second factor was refused: the code did not verify");
-            VerifyLoginRejection::InvalidCode {
-                code: error_codes::AUTH_TOTP_INVALID_CODE,
-            }
-        })?;
+    else {
+        tracing::info!(%user, "a second factor was refused: the code did not verify");
+        // The first factor verified, so the account is known and its owner should see that
+        // somebody holding it was stopped here.
+        activity
+            .record(&user, ActivityKind::SignInSecondFactorRefused, None, None)
+            .await;
+        return Err(VerifyLoginRejection::InvalidCode {
+            code: error_codes::AUTH_TOTP_INVALID_CODE,
+        });
+    };
 
     // The replay ledger, and the reason a shoulder-surfed code is good for one sign-in rather
     // than for the ninety seconds it stays valid.
@@ -627,6 +652,9 @@ pub async fn totp_verify_login(
         ConsumeOutcome::Fresh => {}
         ConsumeOutcome::Replayed | ConsumeOutcome::NotEnrolled => {
             tracing::warn!(%user, "a second factor was refused: the code had already been used");
+            activity
+                .record(&user, ActivityKind::SignInSecondFactorRefused, None, None)
+                .await;
             return Err(VerifyLoginRejection::InvalidCode {
                 code: error_codes::AUTH_TOTP_INVALID_CODE,
             });
@@ -636,6 +664,10 @@ pub async fn totp_verify_login(
     // The session at last, opened exactly as a password-only sign-in opens one.
     let issued = super::auth::open_session_for(
         &auth,
+        super::auth::SignIn {
+            activity: &activity,
+            kind: ActivityKind::SignInSecondFactor,
+        },
         &user,
         request.cohort_hash.as_deref(),
         request.device_id.as_deref(),
