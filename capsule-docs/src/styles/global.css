@@ -123,8 +123,14 @@
     }
 }
 
-.header {
+/* The name goes on Starlight's <header> alone: the Header override's root
+   div is also `.header`, and a name two elements share cancels the whole
+   transition. */
+header.header {
     view-transition-name: site-header;
+}
+
+.header {
     background-color: color-mix(
         in srgb,
         var(--sl-color-black) 78%,
