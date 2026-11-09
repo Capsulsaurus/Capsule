@@ -4,7 +4,7 @@ description: Capsule's cryptographic stack — the entry point to the sub-docs
 status: draft
 ---
 
-Every primitive and key-handling routine lives in `capsule-core::crypto`; all clients and the server's no-key validation path run the same code.
+Every primitive and key-handling routine lives in `capsule-core::crypto`. All clients and the server's no-key validation path run the same code.
 
 | Sub-doc | Owns |
 | --- | --- |
@@ -16,8 +16,8 @@ Every primitive and key-handling routine lives in `capsule-core::crypto`; all cl
 
 ## Invariants
 
-- **Audited libraries only** (RustCrypto, dalek, OpenMLS over libcrux); Capsule is never the first serious user of an implementation.
-- **Memory hygiene:** plaintext and key material are zeroed on drop; secure allocation where available.
-- **Server stores, never authorizes:** it holds ciphertext and key-free index facts; every authorization is verified against MLS-distributed material.
+- **Audited libraries only** ([RustCrypto](https://github.com/RustCrypto), [dalek](https://github.com/dalek-cryptography), OpenMLS over libcrux). Capsule is never the first serious user of an implementation.
+- **Memory hygiene:** plaintext and key material are zeroed on drop, with secure allocation where available.
+- **Server stores, never authorizes:** it holds ciphertext and key-free index facts. Every authorization is verified against MLS-distributed material.
 
-Keys, Encryption and Provenance each list the failure modes they were designed against; the independent recovery paths are in [Backup and Recovery](/design/backup-recovery/#recovery-paths), transport security in [Network Resilience](/design/networking/#transport-security).
+Keys, Encryption and Provenance each list the failure modes they were designed against. Independent recovery paths are in [](/design/backup-recovery/#recovery-paths) and transport security in [](/design/networking/#transport-security).
