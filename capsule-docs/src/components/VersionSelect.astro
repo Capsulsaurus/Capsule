@@ -38,8 +38,12 @@ const current = __DOCS_VERSION__;
         // naming this build's version and offers nothing to switch to.
         return;
       }
-      if (versions.length === 0) return;
       const current = this.dataset.current ?? '';
+      // This build always names itself, even before its release is listed.
+      if (current !== '' && !versions.includes(current)) {
+        versions = [current, ...versions];
+      }
+      if (versions.length === 0) return;
       select.replaceChildren(
         new Option('Latest', '/', false, current === ''),
         ...versions.map(
@@ -84,7 +88,7 @@ const current = __DOCS_VERSION__;
     cursor: default;
   }
 
-  select:hover,
+  select:not(:has(option:only-child)):hover,
   select:focus-visible {
     color: var(--sl-color-white);
     border-color: var(--capsule-control-border-hover);
