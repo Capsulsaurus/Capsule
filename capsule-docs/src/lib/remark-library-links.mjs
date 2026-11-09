@@ -1,12 +1,21 @@
-// Remark plugin: links the first mention of each library or tool on a page to
-// its source repository (src/lib/library-links.mjs), so a name never appears
-// unlinked and no page carries a hand-copied URL. A mention is a whole-word
-// prose spelling or an exact inline-code spelling; headings, existing links
-// and code blocks are never touched, and later mentions stay plain text.
+// Remark plugin: follows the first mention of each library or tool on a page
+// with a small repo badge linking its source repository
+// (src/lib/library-links.mjs), so no page carries a hand-copied URL. The name
+// itself stays plain text: the substitution is automatic, so it must not look
+// like a link an author chose for the reader to follow. A mention is a
+// whole-word prose spelling or an exact inline-code spelling; headings,
+// existing links and code blocks are never touched, and later mentions get no
+// badge. The badge's look is global.css (Library badges).
 import { EXPLICIT_ONLY, LIBRARIES } from './library-links.mjs';
 
 /** Node types whose text is never linked. */
 const BLOCKED = new Set(['heading', 'link', 'linkReference', 'definition']);
+
+/** The class that marks a repo badge, styled in global.css. */
+export const BADGE_CLASS = 'lib-badge';
+
+/** The badge's visible text. */
+export const BADGE_TEXT = 'repo';
 
 /** @param {string} text */
 function escapeRegExp(text) {
@@ -53,12 +62,23 @@ export function linkLibraries(tree, libraries = LIBRARIES) {
     /** @type {Set<import('./library-links.mjs').Library>} */
     const linked = new Set();
 
-    const link = (library, child) => ({
-        type: 'link',
-        url: library.url,
-        title: null,
-        children: [child],
-    });
+    /** The mention as written, then its badge. */
+    const badged = (library, mention, name) => [
+        mention,
+        {
+            type: 'link',
+            url: library.url,
+            // Shown on hover: where the badge goes, without the scheme.
+            title: library.url.replace(/^https:\/\//, ''),
+            data: {
+                hProperties: {
+                    className: [BADGE_CLASS],
+                    ariaLabel: `${name} source repository`,
+                },
+            },
+            children: [{ type: 'text', value: BADGE_TEXT }],
+        },
+    ];
 
     /** Split a text node around the first mention of each unlinked library. */
     const splitText = (value) => {
@@ -75,7 +95,9 @@ export function linkLibraries(tree, libraries = LIBRARIES) {
                     value: value.slice(rest, match.index),
                 });
             }
-            out.push(link(library, { type: 'text', value: match[0] }));
+            out.push(
+                ...badged(library, { type: 'text', value: match[0] }, match[0]),
+            );
             rest = match.index + match[0].length;
         }
         if (rest < value.length) {
@@ -99,7 +121,7 @@ export function linkLibraries(tree, libraries = LIBRARIES) {
             ) {
                 const library = byCode.get(child.value);
                 linked.add(library);
-                children.push(link(library, child));
+                children.push(...badged(library, child, child.value));
             } else {
                 walk(child, inside);
                 children.push(child);

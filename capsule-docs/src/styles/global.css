@@ -416,3 +416,42 @@
     color: var(--sl-color-gray-3);
     font-size: var(--sl-text-sm);
 }
+
+/* Library badges: the small "repo" pill src/lib/remark-library-links.mjs
+   puts after a library's first mention. The name beside it is plain text;
+   the pill is quiet and unmistakably a badge, so it never reads as a link an
+   author chose, and only the pill itself is clickable. */
+.sl-markdown-content a.lib-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2em;
+    margin-inline-start: 0.3em;
+    padding: 0 0.4em;
+    border: 1px solid var(--sl-color-hairline);
+    border-radius: var(--capsule-radius-pill);
+    color: var(--sl-color-gray-3);
+    font-family: var(--sl-font-mono);
+    font-size: 0.6875rem;
+    font-weight: 500;
+    line-height: 1.5;
+    text-decoration: none;
+    vertical-align: 0.1em;
+    white-space: nowrap;
+}
+
+/* A code-brackets glyph, drawn in the text colour through a mask. */
+.sl-markdown-content a.lib-badge::before {
+    content: "";
+    width: 0.9em;
+    height: 0.9em;
+    background-color: currentColor;
+    mask:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M5.5 4 2 8l3.5 4m5-8L14 8l-3.5 4' fill='none' stroke='%23000' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+        center / contain no-repeat;
+}
+
+.sl-markdown-content a.lib-badge:hover,
+.sl-markdown-content a.lib-badge:focus-visible {
+    border-color: var(--sl-color-accent);
+    color: var(--sl-color-text-accent);
+}

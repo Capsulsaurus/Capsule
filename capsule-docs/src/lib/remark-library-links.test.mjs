@@ -3,7 +3,12 @@ import { toString as textOf } from 'mdast-util-to-string';
 import { visit } from 'unist-util-visit';
 import { describe, expect, it } from 'vitest';
 import { EXPLICIT_ONLY, LIBRARIES } from './library-links.mjs';
-import { forbiddenNames, linkLibraries } from './remark-library-links.mjs';
+import {
+    BADGE_CLASS,
+    BADGE_TEXT,
+    forbiddenNames,
+    linkLibraries,
+} from './remark-library-links.mjs';
 
 const KYNOS = { url: 'https://github.com/getkono/kynos', names: ['Kynos'] };
 const TANSTACK = [
@@ -16,61 +21,113 @@ const RUSTLS = {
     code: ['rustls'],
 };
 
-/** Every link in a document: [text, url]. */
-function links(markdown, libraries) {
+/** True for a repo badge the plugin inserted. */
+const isBadge = (node) =>
+    node.type === 'link' &&
+    (node.data?.hProperties?.className ?? []).includes(BADGE_CLASS);
+
+/**
+ * A document's text as a reader sees it, with each repo badge written inline
+ * as `{url}` and any other link as `[text](url)`; blocks on their own lines.
+ */
+function render(markdown, libraries) {
+    const tree = linkLibraries(fromMarkdown(markdown), libraries);
+    const inline = (node) => {
+        if (isBadge(node)) return `{${node.url}}`;
+        if (node.type === 'link') return `[${textOf(node)}](${node.url})`;
+        if ('value' in node) return node.value;
+        return (node.children ?? []).map(inline).join('');
+    };
+    return tree.children.map(inline).join('\n');
+}
+
+/** Every repo badge in a document. */
+function badges(markdown, libraries) {
     const tree = linkLibraries(fromMarkdown(markdown), libraries);
     const out = [];
     visit(tree, 'link', (node) => {
-        out.push([textOf(node), node.url]);
+        if (isBadge(node)) out.push(node);
     });
     return out;
 }
 
 describe('linkLibraries', () => {
-    it('links only the first mention on a page', () => {
+    it('badges only the first mention on a page', () => {
         expect(
-            links('Kynos routes. Kynos emits.\n\nKynos again.', [KYNOS]),
-        ).toEqual([['Kynos', KYNOS.url]]);
+            render('Kynos routes. Kynos emits.\n\nKynos again.', [KYNOS]),
+        ).toBe(`Kynos{${KYNOS.url}} routes. Kynos emits.\nKynos again.`);
     });
 
-    it('keeps the text around a mention', () => {
+    it('leaves the name itself plain text, not a link', () => {
         const tree = linkLibraries(fromMarkdown('Built on Kynos today.'), [
             KYNOS,
         ]);
-        expect(textOf(tree)).toBe('Built on Kynos today.');
+        const [paragraph] = tree.children;
+        expect(paragraph.children.map((node) => node.type)).toEqual([
+            'text',
+            'text',
+            'link',
+            'text',
+        ]);
+        expect(paragraph.children[1]).toEqual({ type: 'text', value: 'Kynos' });
+    });
+
+    it('makes the badge a labelled link to the source repository', () => {
+        const [badge] = badges('Built on Kynos.', [KYNOS]);
+        expect(badge.url).toBe(KYNOS.url);
+        expect(badge.title).toBe('github.com/getkono/kynos');
+        expect(badge.data.hProperties).toEqual({
+            className: [BADGE_CLASS],
+            ariaLabel: 'Kynos source repository',
+        });
+        expect(textOf(badge)).toBe(BADGE_TEXT);
+    });
+
+    it('badges a mention inside a table cell', () => {
+        expect(
+            render('| a | b |\n| - | - |\n| x | the Kynos router |', [KYNOS]),
+        ).toContain(`the Kynos{${KYNOS.url}} router`);
     });
 
     it('skips headings, existing links and code blocks', () => {
         expect(
-            links(
+            render(
                 '## Kynos\n\n[the Kynos docs](https://x.invalid)\n\n```\nKynos\n```\n\nThen Kynos.',
                 [KYNOS],
             ),
-        ).toEqual([
-            ['the Kynos docs', 'https://x.invalid'],
-            ['Kynos', KYNOS.url],
-        ]);
+        ).toBe(
+            `Kynos\n[the Kynos docs](https://x.invalid)\nKynos\nThen Kynos{${KYNOS.url}}.`,
+        );
     });
 
     it('matches whole words only', () => {
         expect(
-            links('Kynoses, kynos, Kynos-like, a/Kynos, Kynos.toml.', [KYNOS]),
+            badges('Kynoses, kynos, Kynos-like, a/Kynos, Kynos.toml.', [KYNOS]),
         ).toEqual([]);
-        expect(links('Ends with Kynos.', [KYNOS])).toEqual([
-            ['Kynos', KYNOS.url],
-        ]);
+        expect(render('Ends with Kynos.', [KYNOS])).toBe(
+            `Ends with Kynos{${KYNOS.url}}.`,
+        );
     });
 
     it('prefers the longest name', () => {
-        expect(links('Uses TanStack Router.', TANSTACK)).toEqual([
-            ['TanStack Router', TANSTACK[0].url],
-        ]);
+        expect(render('Uses TanStack Router.', TANSTACK)).toBe(
+            `Uses TanStack Router{${TANSTACK[0].url}}.`,
+        );
     });
 
-    it('links an exact inline-code spelling, and it counts as the mention', () => {
+    it('badges an exact inline-code spelling, and it counts as the mention', () => {
         expect(
-            links('`rustls` first, then rustls, and `rustls-tls`.', [RUSTLS]),
-        ).toEqual([['rustls', RUSTLS.url]]);
+            render('`rustls` first, then rustls, and `rustls-tls`.', [RUSTLS]),
+        ).toBe(`rustls{${RUSTLS.url}} first, then rustls, and rustls-tls.`);
+    });
+
+    it('keeps an inline-code mention as code', () => {
+        const tree = linkLibraries(fromMarkdown('Uses `rustls`.'), [RUSTLS]);
+        const [paragraph] = tree.children;
+        expect(paragraph.children[1]).toEqual(
+            expect.objectContaining({ type: 'inlineCode', value: 'rustls' }),
+        );
+        expect(isBadge(paragraph.children[2])).toBe(true);
     });
 });
 
