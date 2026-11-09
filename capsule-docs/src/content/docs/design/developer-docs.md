@@ -21,7 +21,10 @@ maintained by hand.
    output. A wrong page is fixed at its source (a doc comment, a `clap` `about`, a schema
    description) and regenerated.
 3. **Freshness is a gate.** Every artifact has a `--check` mode that fails on drift, run in the
-   owning toolchain's gate, never the docs gate.
+   owning toolchain's required CI gate, never the docs gate. `cargo test` repeats it for the REST
+   and CLI artifacts. A local docs run warns, and banners the affected pages, when a source
+   changed on the branch after its artifact was last written (`scripts/lib/staleness.mjs`); it
+   never fails, and is skipped in CI.
 4. **One chrome.** A generator that emits Starlight pages beats a renderer that mounts its own app:
    an embedded OpenAPI viewer escapes search, the link validator and the theme. The `Reference`
    sidebar is curated in `scripts/reference-groups.mjs`; generated pages never decide navigation
@@ -76,5 +79,6 @@ where sealing happens: SDK doctests and CLI transcripts.
 
 - `mise run check-docs` formats, lints, tests and builds the site; the link validator fails on a
   dead cross-reference.
-- Each artifact's `--check` runs in its owning toolchain's gate.
+- Each artifact's `--check` runs in its owning toolchain's gate. The bindings and browser checks
+  need a cdylib and a wasm-bindgen build, so they run only there.
 - Adding a reference surface means reviewing the CI `docs` path filter.

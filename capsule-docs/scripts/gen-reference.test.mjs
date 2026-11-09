@@ -642,6 +642,19 @@ describe('generate', () => {
         expect(first.length).toBeGreaterThan(0);
     });
 
+    it('marks only the pages of a stale artifact', () => {
+        writeCli(MINIMAL_CLI);
+        writeOpenApi(MINIMAL_OPENAPI);
+        writeSdk();
+        const written = generate(root, { stale: [CLI_SURFACE] });
+        for (const path of written) {
+            const body = readFileSync(join(root, path), 'utf8');
+            expect(/^ {2}stale: true$/m.test(body)).toBe(
+                path.includes('/cli/'),
+            );
+        }
+    });
+
     it('fails, writing nothing, when an artifact is missing', () => {
         expect(() => generate(root)).toThrow(/cli-surface\.json/);
         expect(

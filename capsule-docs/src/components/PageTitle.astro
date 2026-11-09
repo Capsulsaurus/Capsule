@@ -44,6 +44,14 @@ const badge = titleBadge(status);
     </p>
   )
 }
+{
+  generated?.stale && (
+    <p class="stale-banner not-content" role="note">
+      The code this page documents changed on this branch after it was generated, so it may be
+      stale. Regenerate the artifact to refresh it.
+    </p>
+  )
+}
 
 <style>
   .title-with-status {
@@ -60,6 +68,16 @@ const badge = titleBadge(status);
      wrapper above instead. */
   .title-with-status :global(h1) {
     margin-top: 0;
+  }
+
+  .stale-banner {
+    margin-top: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--sl-color-orange);
+    border-radius: 0.5rem;
+    background: var(--sl-color-orange-low);
+    color: var(--sl-color-orange-high);
+    font-size: var(--sl-text-sm);
   }
 
   .generated-banner {

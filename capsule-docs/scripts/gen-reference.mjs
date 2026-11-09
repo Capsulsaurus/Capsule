@@ -68,6 +68,13 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { slugify } from './lib/markdown.mjs';
 import {
+    ARTIFACT_SOURCES,
+    mtimes,
+    readChanges,
+    skipReason,
+    staleArtifacts,
+} from './lib/staleness.mjs';
+import {
     API_CONVENTIONS,
     API_GROUPS,
     CLI_PAGES,
@@ -2184,7 +2191,7 @@ function renderMembers(declaration, style, level, anchors, source) {
                       ]
                     : [`- ${codeSpan(member.signature)}`];
             if (member.doc) {
-                lines.push(docProse(member.doc, level + 2, anchors));
+                lines.push(docProse(member.doc, level + 1, anchors));
             }
             return [lines[0], ...lines.slice(1).map(indentItem)].join('\n\n');
         });
@@ -2425,37 +2432,50 @@ export function renderBindingsPage(page, dump) {
  * unparseable one leaves no half-written section behind.
  *
  * @param {string} root Repository root.
+ * @param {{ stale?: string[] }} [options] Artifacts that may be stale on this branch; their
+ *   pages carry `generated.stale`, which the banner shows as a caution.
  * @returns {string[]} Repo-relative paths written, in a stable order.
  */
-export function generate(root) {
+export function generate(root, { stale = [] } = {}) {
     const surface = readCliSurface(root);
     const document = readOpenApiDocument(root);
     const buckets = bucketOperations(document);
     const bindings = readBindingsSurface(root);
     const wasm = readWasmSurface(root);
 
-    /** @type {Array<{ path: string, body: string }>} */
-    const pages = [
+    /** @type {Array<{ path: string, artifact: string, body: string }>} */
+    const rendered = [
         {
             path: `${CLI_OUT}/${CLI_PAGES[0].slug}.md`,
+            artifact: CLI_SURFACE,
             body: renderCliPage(surface),
         },
         {
             path: `${API_OUT}/${API_CONVENTIONS.slug}.md`,
+            artifact: OPENAPI_DOCUMENT,
             body: renderConventionsPage(document),
         },
         ...API_GROUPS.map((group) => ({
             path: `${API_OUT}/${group.slug}.md`,
+            artifact: OPENAPI_DOCUMENT,
             body: renderApiPage(group, buckets.get(group.slug) ?? [], document),
         })),
         ...SDK_PAGES.filter((page) => page.artifact !== null).map((page) => ({
             path: `${SDK_OUT}/${page.slug}.md`,
+            artifact:
+                page.artifact === 'wasm' ? WASM_SURFACE : BINDINGS_SURFACE,
             body:
                 page.artifact === 'wasm'
                     ? renderWasmPage(page, wasm)
                     : renderBindingsPage(page, bindings),
         })),
     ];
+    const pages = rendered.map(({ path, artifact, body }) => ({
+        path,
+        body: stale.includes(artifact)
+            ? body.replace(/^generated:$/m, 'generated:\n  stale: true')
+            : body,
+    }));
 
     // Cleared, not merged into. A page this run no longer emits — a group renamed, a surface
     // dropped — would otherwise stay on disk, and because the directory is gitignored
@@ -2497,10 +2517,42 @@ export function generate(root) {
     return pages.map(({ path }) => path);
 }
 
+/**
+ * The artifacts that may be stale on this branch, each warned about on stderr with the
+ * command that regenerates it. Empty, with the reason, where the check does not run.
+ *
+ * @param {string} root
+ * @returns {string[]}
+ */
+function checkFreshness(root) {
+    const skipped = skipReason(process.env);
+    if (skipped) {
+        process.stderr.write(
+            `gen-reference: freshness check skipped in ${skipped}\n`,
+        );
+        return [];
+    }
+    const changes = readChanges(root);
+    if (changes === null) {
+        process.stderr.write(
+            'gen-reference: freshness check skipped: git or origin/master is unavailable\n',
+        );
+        return [];
+    }
+    const stale = staleArtifacts(changes, ARTIFACT_SOURCES, mtimes(root));
+    for (const artifact of stale) {
+        process.stderr.write(
+            `gen-reference: ${artifact} may be stale: its source changed on this branch after ` +
+                `it was last regenerated. Run \`${ARTIFACT_SOURCES[artifact].regenerate}\`; the warning clears once it is rewritten.\n`,
+        );
+    }
+    return stale;
+}
+
 function main() {
     // scripts/ -> capsule-docs/ -> repo root
     const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-    const written = generate(root);
+    const written = generate(root, { stale: checkFreshness(root) });
     process.stdout.write(
         `gen-reference: wrote ${written.length} page(s)\n${written.map((path) => `  ${path}`).join('\n')}\n`,
     );

@@ -29,6 +29,9 @@ export const collections = {
                             surface: z.string(),
                             source: z.string(),
                             download: z.string().optional(),
+                            // The artifact's source changed on this branch after it
+                            // did (scripts/lib/staleness.mjs): a dev-only caution.
+                            stale: z.boolean().optional(),
                         })
                         .optional(),
                 }),
