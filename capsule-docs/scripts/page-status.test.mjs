@@ -9,7 +9,11 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { isDraftPost } from '../src/lib/blog-posts.mjs';
+import {
+    BLOG_AUTHORS,
+    isDraftPost,
+    postContractViolations,
+} from '../src/lib/blog-posts.mjs';
 import { frontmatterStatus } from './lib/markdown.mjs';
 
 const DOCS = join(
@@ -63,5 +67,20 @@ describe('docs pages', () => {
             );
         });
         expect(unreviewed).toEqual([]);
+    });
+
+    it('gives every published blog post the full post contract', () => {
+        // Title, a 50-160 character description, date, configured authors,
+        // tags and an excerpt marker: what the index, RSS and search need.
+        const incomplete = pages
+            .filter((rel) => rel.startsWith('blog/'))
+            .map((rel) => {
+                const source = readFileSync(join(DOCS, rel), 'utf8');
+                if (isDraftPost(source)) return null;
+                const violations = postContractViolations(source, BLOG_AUTHORS);
+                return violations.length ? { rel, violations } : null;
+            })
+            .filter(Boolean);
+        expect(incomplete).toEqual([]);
     });
 });

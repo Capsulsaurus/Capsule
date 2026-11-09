@@ -1,6 +1,6 @@
 import { defineCollection, z } from 'astro:content';
-import { docsLoader } from '@astrojs/starlight/loaders';
-import { docsSchema } from '@astrojs/starlight/schema';
+import { docsLoader, i18nLoader } from '@astrojs/starlight/loaders';
+import { docsSchema, i18nSchema } from '@astrojs/starlight/schema';
 import { blogSchema } from 'starlight-blog/schema';
 import { docsVersionsLoader } from 'starlight-versions/loader';
 
@@ -21,5 +21,9 @@ export const collections = {
                 }),
         }),
     }),
+    // Overrides of UI strings, keyed as in Starlight and its plugins. The blog
+    // plugin's metadata strings carry their own " - " separators; the post
+    // header supplies its own (src/styles/global.css), so these drop them.
+    i18n: defineCollection({ loader: i18nLoader(), schema: i18nSchema() }),
     versions: defineCollection({ loader: docsVersionsLoader() }),
 };

@@ -1,91 +1,91 @@
 ---
 // Site-wide footer, mounted on every page by Footer.astro. Its contents are a
-// contract of the Visual Language doc (development/visual-language.md).
-// Set in astro.config.mjs from src/lib/blog-posts.mjs: the Blog link appears
-// once a post is published, exactly when the blog itself goes live.
+// contract of the Visual Language doc (development/visual-language.md); the
+// links are src/lib/site-nav.mjs.
+import { footerLinks, REPO } from '../lib/site-nav.mjs';
+
+// Set in astro.config.mjs: whether the blog is live (src/lib/blog-posts.mjs),
+// and the commit the site was built from (src/lib/build-commit.mjs).
 declare const __BLOG_IS_LIVE__: boolean;
+declare const __BUILD_COMMIT__: { sha: string; short: string } | null;
 
-const REPO = 'https://github.com/Capsulsaurus/Capsule';
-
-const links = [
-    { label: 'Documentation', href: '/guides/getting-started/' },
-    ...(__BLOG_IS_LIVE__ ? [{ label: 'Blog', href: '/blog/' }] : []),
-    {
-        label: 'Roadmap',
-        href: `${REPO}/blob/master/ROADMAP.md`,
-        external: true,
-    },
-    { label: 'Discussions', href: `${REPO}/discussions`, external: true },
-    { label: 'GitHub', href: REPO, external: true },
-];
-
+const links = footerLinks({ blogIsLive: __BLOG_IS_LIVE__ });
+const commit = __BUILD_COMMIT__;
 const year = new Date().getFullYear();
 ---
 
 <footer class="site-footer not-content">
-  <div class="footer-content">
-    <a href="/" class="footer-logo">Capsule</a>
-    <nav class="footer-nav" aria-label="Site">
-      {
-        links.map(({ label, href, external }) => (
-          <a
-            href={href}
-            class="footer-link"
-            {...(external
-              ? { target: '_blank', rel: 'noopener noreferrer' }
-              : {})}
-          >
-            {label}
-          </a>
-        ))
-      }
-    </nav>
-  </div>
+  <nav class="footer-nav" aria-label="Site">
+    {
+      links.map(({ label, href, external }) => (
+        <a
+          href={href}
+          {...(external
+            ? { target: '_blank', rel: 'noopener noreferrer' }
+            : {})}
+        >
+          {label}
+        </a>
+      ))
+    }
+  </nav>
 
   <p class="footer-bottom">
     <span>© {year} Justin Chung</span>
     <span aria-hidden="true">·</span>
     <span>Open source and openly developed, licensed AGPL-3.0</span>
+    {
+      commit && (
+        <>
+          <span aria-hidden="true">·</span>
+          <span>
+            Built from{' '}
+            <a
+              class="commit"
+              href={`${REPO}/commit/${commit.sha}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={commit.sha}
+            >
+              {commit.short}
+            </a>
+          </span>
+        </>
+      )
+    }
   </p>
 </footer>
 
 <style>
+  /* One spacing step (2rem) above, between and below the two rows, so the
+     footer sits evenly inside its rule. */
   .site-footer {
-    margin-top: 4rem;
-    padding-block: 2rem 1rem;
-    border-top: 1px solid var(--sl-color-hairline);
-  }
-
-  .footer-content {
     display: flex;
+    flex-direction: column;
     align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 1.25rem 2rem;
-  }
-
-  .footer-logo {
-    font-size: 1.125rem;
-    font-weight: 650;
-    letter-spacing: -0.01em;
-    color: var(--sl-color-white);
-    text-decoration: none;
+    gap: 1.25rem;
+    margin-top: 3rem;
+    padding-block: 2rem;
+    border-top: 1px solid var(--sl-color-hairline);
+    text-align: center;
   }
 
   .footer-nav {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.5rem 1.5rem;
+    justify-content: center;
+    gap: 0.5rem 1.75rem;
   }
 
-  .footer-link {
-    color: var(--sl-color-gray-3);
+  .footer-nav a {
+    color: var(--sl-color-gray-2);
     font-size: var(--sl-text-sm);
+    font-weight: 500;
     text-decoration: none;
   }
 
-  .footer-link:hover,
-  .footer-link:focus-visible {
+  .footer-nav a:hover,
+  .footer-nav a:focus-visible {
     color: var(--sl-color-text-accent);
   }
 
@@ -96,19 +96,20 @@ const year = new Date().getFullYear();
     flex-wrap: wrap;
     justify-content: center;
     gap: 0.25rem 0.5rem;
-    margin-top: 1.5rem;
+    margin: 0;
     color: var(--sl-color-gray-3);
     font-size: var(--sl-text-xs);
   }
 
-  @media (max-width: 50rem) {
-    .footer-content {
-      flex-direction: column;
-      text-align: center;
-    }
+  .commit {
+    color: inherit;
+    font-family: var(--sl-font-mono);
+    text-decoration: underline dotted;
+    text-underline-offset: 0.2em;
+  }
 
-    .footer-nav {
-      justify-content: center;
-    }
+  .commit:hover,
+  .commit:focus-visible {
+    color: var(--sl-color-text-accent);
   }
 </style>

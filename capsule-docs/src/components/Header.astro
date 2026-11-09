@@ -1,0 +1,108 @@
+---
+// Starlight Header override. Wide screens: the wordmark, the section links
+// centred in the free space, then search, GitHub and the theme toggle. Narrow
+// screens keep Starlight's layout (title and search), and the section links
+// move into the mobile menu (MobileMenuFooter.astro). The layout is a contract
+// of the Visual Language doc (development/visual-language.md).
+import LanguageSelect from 'virtual:starlight/components/LanguageSelect';
+import Search from 'virtual:starlight/components/Search';
+import SiteTitle from 'virtual:starlight/components/SiteTitle';
+import SocialIcons from 'virtual:starlight/components/SocialIcons';
+import ThemeSelect from 'virtual:starlight/components/ThemeSelect';
+import config from 'virtual:starlight/user-config';
+import HeaderNav from './HeaderNav.astro';
+
+// Mirrors Starlight's own Header: search renders when Pagefind is on or the
+// Search component is overridden.
+const shouldRenderSearch =
+    config.pagefind ||
+    config.components.Search !== '@astrojs/starlight/components/Search.astro';
+---
+
+<div class="header">
+  <div class="title-wrapper">
+    <SiteTitle />
+  </div>
+  <div class="nav-wrapper print:hidden">
+    <HeaderNav variant="bar" />
+  </div>
+  <div class="right-group print:hidden">
+    {shouldRenderSearch && <div class="search"><Search /></div>}
+    <div class="actions">
+      <SocialIcons />
+      <ThemeSelect />
+      <LanguageSelect />
+    </div>
+  </div>
+</div>
+
+<style>
+  .header {
+    display: flex;
+    gap: var(--sl-nav-gap);
+    justify-content: space-between;
+    align-items: center;
+    height: 100%;
+  }
+
+  .title-wrapper {
+    display: flex;
+    /* Keep a long title from covering the search and menu buttons. */
+    overflow: clip;
+    /* Leave room for the title link's focus ring. */
+    padding: 0.25rem;
+    margin: -0.25rem;
+    min-width: 0;
+  }
+
+  .nav-wrapper,
+  .actions {
+    display: none;
+  }
+
+  .right-group {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .actions {
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  @media (min-width: 50rem) {
+    .header {
+      display: grid;
+      /* The title column runs to the sidebar's edge, as in Starlight's own
+         header, so the wordmark lines up with the navigation below it. */
+      grid-template-columns:
+        minmax(
+          calc(
+            max(
+              0rem,
+              var(--sl-content-inline-start, 0rem) - var(--sl-nav-pad-x)
+            )
+          ),
+          auto
+        )
+        1fr
+        auto;
+    }
+
+    .nav-wrapper {
+      display: flex;
+      justify-content: center;
+      min-width: 0;
+    }
+
+    .actions {
+      display: flex;
+    }
+
+    /* Search shrinks to a compact field so the section links own the middle. */
+    .search {
+      width: clamp(9rem, 16vw, 15rem);
+    }
+  }
+</style>

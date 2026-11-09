@@ -3,7 +3,7 @@
  * the Visual Language doc (src/content/docs/development/visual-language.md):
  * change a value there first, then here.
  *
- * Fonts are self-hosted. No Capsule-served page requests a third-party asset.
+ * Fonts are self-hosted, so text never waits on a third-party origin.
  */
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/geist-mono";
@@ -93,9 +93,24 @@
     );
 }
 
-.site-title {
-    font-weight: 650;
-    letter-spacing: -0.01em;
+/* Sidebar: the same surface as the page, divided by a hairline, so it reads
+   as part of the page rather than a slab beside it. */
+:root,
+:root[data-theme="light"] {
+    --sl-color-bg-sidebar: var(--sl-color-bg);
+}
+
+.sidebar-pane {
+    border-inline-end-color: var(--sl-color-hairline);
+}
+
+/* The current page: an accent-tinted pill, not a solid accent block. */
+.sidebar-content a[aria-current="page"],
+.sidebar-content a[aria-current="page"]:hover,
+.sidebar-content a[aria-current="page"]:focus {
+    color: var(--sl-color-text-accent);
+    background-color: var(--sl-color-accent-low);
+    border-radius: var(--capsule-radius-sm);
 }
 
 /* Front-page hero: the theme-matched app screenshot. */
@@ -180,4 +195,101 @@
     list-style-type: disc;
     list-style-position: outside;
     margin-left: 1.5rem;
+}
+
+/*
+ * Blog posts. A post's content is the Markdown body that opens with the
+ * plugin's metadata block, so `:has(> .sl-blog-metadata)` scopes these rules
+ * to posts without touching docs pages. Prose gets a reading measure and a
+ * looser rhythm than reference docs.
+ */
+.sl-markdown-content:has(> .sl-blog-metadata) {
+    --capsule-measure: 68ch;
+    font-size: 1.0625rem;
+    line-height: 1.75;
+}
+
+.sl-markdown-content:has(> .sl-blog-metadata)
+    > :is(p, ul, ol, blockquote, h2, h3, h4) {
+    max-inline-size: var(--capsule-measure);
+}
+
+.sl-markdown-content:has(> .sl-blog-metadata) > :is(h2, h3) {
+    margin-block-start: 2.5rem;
+}
+
+.sl-markdown-content:has(> .sl-blog-metadata) figure figcaption {
+    margin-block-start: 0.5rem;
+    color: var(--sl-color-gray-3);
+    font-size: var(--sl-text-sm);
+    text-align: center;
+}
+
+/* Metadata: the date, last update and reading time on one line, then the
+   authors with their avatars, divided from the body by a hairline. Author
+   rules are scoped under `.sl-blog-metadata-authors` so they outrank the
+   plugin's own component styles, which load after this file. */
+.sl-blog-metadata {
+    padding-block-end: 1.5rem;
+    margin-block-end: 2rem;
+    border-block-end: 1px solid var(--sl-color-hairline);
+}
+
+.sl-blog-metadata-items {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.25rem 0.5rem;
+    color: var(--sl-color-gray-3);
+}
+
+.sl-blog-metadata-items > * + *::before {
+    content: "·";
+    margin-inline-end: 0.5rem;
+    color: var(--sl-color-gray-4);
+}
+
+.sl-blog-metadata-authors .sl-blog-author-picture {
+    width: 2.25rem;
+    height: 2.25rem;
+    border: 1px solid var(--sl-color-hairline);
+}
+
+.sl-blog-metadata-authors .sl-blog-author-name {
+    font-size: var(--sl-text-sm);
+}
+
+.sl-blog-metadata-authors .sl-blog-author[href] .sl-blog-author-name {
+    color: var(--sl-color-white);
+}
+
+.sl-blog-metadata-authors .sl-blog-author[href]:hover .sl-blog-author-name {
+    color: var(--sl-color-text-accent);
+}
+
+.sl-blog-metadata-authors .sl-blog-author-title {
+    color: var(--sl-color-gray-3);
+}
+
+/* Tags: accent pills, like the header's current section. */
+.sl-blog-tags .sl-blog-tag {
+    padding: 0.125rem 0.625rem;
+    border: 0;
+    border-radius: 999px;
+    background: var(--sl-color-accent-low);
+    color: var(--sl-color-text-accent);
+    font-size: var(--sl-text-xs);
+    font-weight: 500;
+    text-decoration: none;
+}
+
+/* The index: each post a quiet card with its excerpt. */
+.sl-blog-preview {
+    padding: 1.5rem;
+    border: 1px solid var(--sl-color-hairline);
+    border-radius: var(--capsule-radius-md);
+}
+
+.sl-blog-preview-title {
+    letter-spacing: -0.015em;
 }

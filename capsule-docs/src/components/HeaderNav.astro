@@ -1,0 +1,68 @@
+---
+// The section links (Guides, Design, Reference and, once live, Blog). Rendered
+// in the header on wide screens and in the mobile menu on narrow ones. The
+// list itself is src/lib/site-nav.mjs.
+import { ariaCurrent, headerLinks } from '../lib/site-nav.mjs';
+
+// Set in astro.config.mjs from src/lib/blog-posts.mjs.
+declare const __BLOG_IS_LIVE__: boolean;
+
+interface Props {
+    /** `bar` lays the links out in a row; `menu` stacks them. */
+    variant: 'bar' | 'menu';
+}
+
+const { variant } = Astro.props;
+const links = headerLinks({ blogIsLive: __BLOG_IS_LIVE__ });
+const { pathname } = Astro.url;
+---
+
+<nav class:list={['site-nav', variant]} aria-label="Sections">
+  {
+    links.map((link) => (
+      <a
+        href={link.href}
+        aria-current={ariaCurrent(link, pathname)}
+      >
+        {link.label}
+      </a>
+    ))
+  }
+</nav>
+
+<style>
+  .site-nav {
+    display: flex;
+    gap: 0.25rem;
+  }
+
+  .site-nav a {
+    padding: 0.375rem 0.75rem;
+    border-radius: 999px;
+    color: var(--sl-color-gray-2);
+    font-size: var(--sl-text-sm);
+    font-weight: 500;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+
+  .site-nav a:hover {
+    color: var(--sl-color-white);
+    background: var(--sl-color-gray-6);
+  }
+
+  .site-nav a[aria-current] {
+    color: var(--sl-color-text-accent);
+    background: var(--sl-color-accent-low);
+  }
+
+  .menu {
+    flex-direction: column;
+    padding-block: 0.5rem;
+  }
+
+  .menu a {
+    padding: 0.5rem 0.75rem;
+    font-size: var(--sl-text-base);
+  }
+</style>
