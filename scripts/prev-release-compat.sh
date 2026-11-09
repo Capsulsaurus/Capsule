@@ -25,11 +25,11 @@
 # There is no vacuous pass: run without `--resolve-only`, no release older than HEAD is a failure,
 # loudly, as is a release that lacks the archive or either binary.
 #
-# The flow, per direction: register, login, `library init`, `auth escrow`, `auth recover` (the one
-# CLI path that lists a device in the account's directory, which push requires), import one
-# fixture, `push`, `status`, `restore`. Which outcome is required is decided before the flow runs, from the server's
-# advertised window (`GET /v1/version`, the `X-Capsule-Protocol-Min`/`-Max` headers) and the
-# client's protocol version:
+# The flow, per direction: register, login, `library init`, `auth escrow` (which binds the library
+# and lists its device in the account's directory, which push requires), import one fixture,
+# `push`, `status`, `restore`. Which outcome is required is decided before the flow runs, from the
+# server's advertised window (`GET /v1/version`, the `X-Capsule-Protocol-Min`/`-Max` headers) and
+# the client's protocol version:
 #
 # - inside the window, the push must reach verified custody for the one asset and the restore
 #   must return the fixture byte for byte;
@@ -391,20 +391,12 @@ run_flow() {
 			step_failed "$dir" register "register failed"
 		cli_run "$dir" login "$PASSWORD"$'\n' auth login --email "$email" --password-stdin ||
 			step_failed "$dir" login "login failed"
-		# A library created by `library init` is bound to the account by `auth escrow`, but only
-		# `auth recover` publishes a device into the account's directory, and push refuses an
-		# upload from a device the directory does not list. So the flow escrows a first library
-		# and recovers the account into the one it imports into: both are CLI commands a release
-		# ships, and both cross the wire under test.
-		local escrowed="$dir/escrowed-library"
-		cli_run "$dir" init '' library init "$escrowed" --name compat ||
+		# `auth escrow` binds the library `library init` created to the account and publishes its
+		# device into the account's directory; push refuses an upload from a device the directory
+		# does not list, so escrow is the step that lets the push below reach custody.
+		cli_run "$dir" init '' library init "$library" --name compat ||
 			step_failed "$dir" init "library init failed"
-		cli_escrow "$dir" "$escrowed" || step_failed "$dir" escrow "auth escrow failed"
-		local secret
-		secret=$(grep -oE '[0-9a-f]{64}' "$dir/escrow.stdout" | head -n 1)
-		[ -n "$secret" ] || step_failed "$dir" escrow "printed no recovery secret"
-		cli_run "$dir" recover "$secret"$'\n'"$PASSPHRASE"$'\n' auth recover --library "$library" \
-			--recovery-secret-stdin --passphrase-stdin || step_failed "$dir" recover "auth recover failed"
+		cli_escrow "$dir" "$library" || step_failed "$dir" escrow "auth escrow failed"
 		cli_run "$dir" import "$PASSPHRASE"$'\n' import "$fixture_dir" --library "$library" \
 			--passphrase-stdin --json || step_failed "$dir" import "import failed"
 		cli_run "$dir" push "$PASSPHRASE"$'\n' push --library "$library" --passphrase-stdin --json ||
