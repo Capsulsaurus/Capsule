@@ -54,8 +54,9 @@ bottom; body text is the opposite end.
 
 ### Type
 
-- **Web and docs:** Geist for text and Geist Mono for code, self-hosted. The docs site uses the
-  variable cuts; at a named weight their outlines match the static cuts.
+- **Web and docs:** Geist for text and Geist Mono for code, self-hosted. The docs site vendors
+  upstream Geist 1.9's variable cuts, upright and italic (`src/assets/fonts/`); at a named weight
+  their outlines match the static cuts.
 - **Apple and Android:** the platform's system text styles (Dynamic Type, Material type scale). No
   brand font ships in a native app.
 

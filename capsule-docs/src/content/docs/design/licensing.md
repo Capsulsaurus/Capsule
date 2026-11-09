@@ -46,7 +46,7 @@ A bounded, dischargeable obligation beyond attribution needs a per-crate `deny.t
 | `tzf-rel` | `ODbL-1.0` | Share-alike on the database only; embedded unmodified, no derivative database. |
 | `jpeg-encoder` | `(MIT OR Apache-2.0) AND IJG` | IJG requires only a fixed notice. |
 | `libfuzzer-sys` | `(MIT OR Apache-2.0) AND NCSA` | Attribution-only; reached only via rav1e's `cfg(fuzzing)`, so no artefact compiles it. |
-| Geist, Geist Mono (`@fontsource-variable/*`) | `OFL-1.1` | Fonts the docs site serves as Fontsource packages them; the licence binds the font files only, never the pages that use them. Not a crate, so outside `deny.toml`. |
+| Geist, Geist Mono | `OFL-1.1` | Upstream font files the docs site vendors unmodified; the licence binds the font files only, never the pages that use them. Not a crate, so outside `deny.toml`. |
 
 ### Forbidden
 

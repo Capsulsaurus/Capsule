@@ -5,9 +5,34 @@
  *
  * Fonts are self-hosted, so text never waits on a third-party origin.
  */
-@import "@fontsource-variable/geist";
-@import "@fontsource-variable/geist-mono";
 @import "tailwindcss";
+
+/* Upstream Geist 1.9 variable cuts, vendored in src/assets/fonts (see its
+   README). Vite fingerprints them into /_astro/, which public/_headers marks
+   immutable so Cloudflare caches them at the edge. */
+@font-face {
+    font-family: "Geist";
+    font-style: normal;
+    font-weight: 100 900;
+    font-display: swap;
+    src: url("../assets/fonts/Geist-Variable.woff2") format("woff2");
+}
+
+@font-face {
+    font-family: "Geist";
+    font-style: italic;
+    font-weight: 100 900;
+    font-display: swap;
+    src: url("../assets/fonts/Geist-Italic-Variable.woff2") format("woff2");
+}
+
+@font-face {
+    font-family: "Geist Mono";
+    font-style: normal;
+    font-weight: 100 900;
+    font-display: swap;
+    src: url("../assets/fonts/GeistMono-Variable.woff2") format("woff2");
+}
 
 :root {
     /* Brand accent: Slate Blue, OKLCH hue 255, chroma 0.09. */
@@ -38,12 +63,11 @@
     --capsule-radius-lg: 22px;
 
     --sl-font:
-        "Geist Variable", ui-sans-serif, system-ui, sans-serif,
-        "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol",
-        "Noto Color Emoji";
+        "Geist", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji",
+        "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
     --sl-font-mono:
-        "Geist Mono Variable", ui-monospace, SFMono-Regular, Menlo, Monaco,
-        Consolas, "Liberation Mono", "Courier New", monospace;
+        "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+        "Liberation Mono", "Courier New", monospace;
 }
 
 /* Dark mode (Starlight's default). */

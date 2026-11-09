@@ -1,0 +1,5 @@
+# Cloudflare Pages response headers. Everything under /_astro/ is fingerprinted by
+# Vite (fonts, CSS, JS, images), so a URL's bytes never change and the edge and
+# browsers may keep it for a year.
+/_astro/*
+  Cache-Control: public, max-age=31536000, immutable
