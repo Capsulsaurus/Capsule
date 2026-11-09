@@ -5,7 +5,7 @@ status: draft
 ---
 
 This doc owns Capsule's **brand tokens**: the accent, neutral ramp, type, radius and spacing scales
-every surface takes from one place. It also owns the **voice** of public copy and the **docs-site
+defined in one place. It also owns the **voice** of public copy and the **docs-site
 rules** (status badges, front page, footer, blog). It defers everything else about a client's look to
 [Clients — Design Language](/design/clients/#design-language): native material on each platform,
 no third house style. The brand reaches a native client only through its accent and its app icon.
@@ -16,8 +16,9 @@ no third house style. The brand reaches a native client only through its accent 
   accent marks what to act on and small identity cues (an icon well, a selected tab), never a large
   surface.
 - **Native material, shared identity.** Apple clients follow HIG and Android clients follow Material.
-  The accent is the only brand token a native client adopts; type, controls and spacing are the
-  platform's own.
+  The accent is the only brand token a native client adopts as such; type and controls are the
+  platform's own, and the radius and spacing scales below are mirrored from the Apple client's
+  theme rather than imposed on it.
 - **Nothing leaks.** A Capsule-served page (the docs site, the web client) MUST NOT request a
   third-party asset: fonts, images, scripts and analytics come from the same origin or are not used.
 - **Accessible by default.** Text and interactive accents meet WCAG AA (4.5:1) in both themes, motion
@@ -95,10 +96,11 @@ one is designed.
   table-stakes tier, why Capsule is built this way, and where to start.
 - **Footer.** On every page: links to the documentation, the blog, the roadmap, discussions and the
   source, then the copyright holder and the licence line.
-- **Blog links follow posts.** The blog's footer link, header link and RSS feed appear only once at
-  least one post is published, so no reader lands on an empty index.
+- **The blog goes live with its first post.** Until a post is published the blog has no route,
+  header link, RSS feed, sitemap entry or footer link, so no reader lands on an empty index.
 - **Blog.** Announcements, release notes and design write-ups. A post links to the design doc it
-  discusses rather than restating its contract.
+  discusses rather than restating its contract. `draft: true` keeps a post unpublished; its review
+  `status` is set to `stable` when it is published, so a published post never shows a Draft badge.
 
 ## Validation
 
