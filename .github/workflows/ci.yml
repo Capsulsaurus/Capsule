@@ -241,45 +241,11 @@ jobs:
           install: false
       - name: Check (fmt + clippy + build)
         run: mise run check-rust
-      # The workspace is `publish = false`, so docs.rs never builds it, and it is far too large
-      # to commit or to serve beside the docs site: it is published to GitHub Pages instead,
-      # by `rustdoc-pages` below. The gate's render above includes private items, so the
-      # published one is rendered on its own. master only.
-      - name: Render the published rustdoc
-        if: github.event_name == 'push'
-        run: rm -rf target/doc && mise run doc-publish-rust
-      - name: Upload the published rustdoc
-        if: github.event_name == 'push'
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: target/doc
       # The cargo-fuzz targets live in their own workspace, which no step above builds. Type-
       # checking them on every pull request keeps a decoder change from silently breaking a
       # target the scheduled workflow only runs nightly.
       - name: Check fuzz targets
         run: mise run fuzz-check
-
-  # Publishes the rustdoc the `rust` job rendered to GitHub Pages, so every crate's reference
-  # tracks master. Runs only after a push to master whose Rust gate passed; it is not a check,
-  # so `required` does not wait on it. The repository's Pages source must be "GitHub Actions".
-  rustdoc-pages:
-    name: Publish rustdoc (GitHub Pages)
-    needs: rust
-    if: ${{ github.event_name == 'push' && needs.rust.result == 'success' }}
-    runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
-    concurrency:
-      group: rustdoc-pages
-      cancel-in-progress: false
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deploy
-        uses: actions/deploy-pages@v4
 
   # RustSec advisories, crate bans and crate sources against Cargo.lock (#507). Not gated on
   # the `changes` filter: an advisory is published against a lockfile nobody touched, so the

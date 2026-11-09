@@ -1,0 +1,66 @@
+name: Rustdoc
+
+# Publishes the workspace rustdoc to GitHub Pages on every push to master, so each crate's
+# reference tracks master. The workspace is `publish = false`, so docs.rs never builds it, and
+# it is far too large to commit or to deploy beside the docs site; the docs site serves it
+# under /rustdoc/ through a Pages Function. The repository's Pages source must be "GitHub
+# Actions".
+#
+# A workflow of its own rather than a job in CI: a job that names the `github-pages`
+# environment, whose deployment policy admits only master, stops a pull request's CI run
+# from starting even when the job's `if:` would skip it. The CI `rust` gate already checks
+# the rustdoc builds (`doc-check-rust`), and master only takes commits that passed it.
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rustdoc-pages
+  cancel-in-progress: false
+
+env:
+  MISE_AUTO_INSTALL: "false"
+
+jobs:
+  build:
+    name: Render rustdoc
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      # Build scripts run under `cargo doc` too: rav1e's assembly needs nasm and dav1d-sys
+      # links the system libdav1d (see the CI `rust` job).
+      - name: Install nasm and libdav1d
+        run: sudo apt-get update && sudo apt-get install -y nasm libdav1d-dev
+      - name: Set up mise (task runner)
+        uses: jdx/mise-action@v2
+        with:
+          install: false
+      - name: Render the published rustdoc
+        run: mise run doc-publish-rust
+      - name: Upload the published rustdoc
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/doc
+
+  deploy:
+    name: Publish rustdoc (GitHub Pages)
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

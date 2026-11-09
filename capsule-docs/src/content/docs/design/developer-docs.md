@@ -46,7 +46,7 @@ maintained by hand.
 - **Browser digest.** The caller-facing half of the declaration file wasm-bindgen emits, kept
   verbatim. Its check runs in the web gate, the only job that installs wasm-bindgen.
 - **Rustdoc is the one exception to one chrome.** The workspace is `publish = false`, so docs.rs
-  never builds it, and rustdoc emits a whole site of its own. The `rustdoc-pages` CI job publishes
+  never builds it, and rustdoc emits a whole site of its own. The `Rustdoc` workflow publishes
   the public items of every crate except the generated migration and entity crates to GitHub Pages
   on each push to master (`mise run doc-publish-rust`). The Rust SDK page stays a Starlight page
   that links into it.

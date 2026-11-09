@@ -159,7 +159,7 @@ description = "Rustdoc gate for the whole workspace (intra-doc links, over all i
 env = { RUSTDOCFLAGS = "-D warnings" }
 run = "cargo doc --workspace --no-deps --document-private-items"
 
-# The rustdoc published to GitHub Pages from master (the `rustdoc-pages` CI job). Public items
+# The rustdoc published to GitHub Pages from master (`.github/workflows/rustdoc-pages.yml`). Public items
 # only, which is what a reader building on the crates can call, and without the sea-orm
 # migration and entity crates, whose generated docs are a third of the gate's 730 MB render and
 # nothing a reader browses. The gate above still lints every item of every crate. The site root
