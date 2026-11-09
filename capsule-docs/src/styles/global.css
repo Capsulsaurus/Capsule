@@ -264,7 +264,7 @@
 .sl-badge {
     font-family: var(--sl-font);
     font-weight: 500;
-    border-radius: 999px;
+    border-radius: var(--capsule-radius-pill);
 }
 
 .sidebar-content .sl-badge {
@@ -293,7 +293,7 @@
     display: list-item;
     list-style-type: disc;
     list-style-position: outside;
-    margin-left: 1.5rem;
+    margin-inline-start: 1.5rem;
 }
 
 /*
@@ -374,7 +374,7 @@
 .sl-blog-tags .sl-blog-tag {
     padding: 0.125rem 0.625rem;
     border: 0;
-    border-radius: 999px;
+    border-radius: var(--capsule-radius-pill);
     background: var(--sl-color-accent-low);
     color: var(--sl-color-text-accent);
     font-size: var(--sl-text-xs);
@@ -412,7 +412,7 @@
 }
 
 .sl-markdown-content figure.diagram figcaption {
-    margin-top: 0.5rem;
+    margin-block-start: 0.5rem;
     color: var(--sl-color-gray-3);
     font-size: var(--sl-text-sm);
 }

@@ -32,10 +32,10 @@ const others = links.filter((link) => link !== github);
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
-    height: 2.25rem;
+    height: var(--capsule-control-size);
     padding-inline: 0.75rem;
-    border: 1px solid var(--sl-color-gray-5);
-    border-radius: 999px;
+    border: 1px solid var(--capsule-control-border);
+    border-radius: var(--capsule-radius-pill);
     color: var(--sl-color-white);
     font-size: var(--sl-text-sm);
     font-weight: 600;
@@ -45,7 +45,7 @@ const others = links.filter((link) => link !== github);
 
   .github:hover,
   .github:focus-visible {
-    border-color: var(--sl-color-gray-3);
+    border-color: var(--capsule-control-border-hover);
     background: var(--sl-color-gray-6);
   }
 
