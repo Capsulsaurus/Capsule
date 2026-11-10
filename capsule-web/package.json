@@ -36,7 +36,6 @@
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
         "filesize": "^10.1.6",
-        "geist": "^1.7.2",
         "lucide-react": "^1.21.0",
         "react": "^19.2.7",
         "react-dom": "^19.2.7",
@@ -44,8 +43,7 @@
         "react-qr-code": "^2.2.0",
         "sonner": "^2.0.7",
         "tailwind-merge": "^3.6.0",
-        "tailwindcss": "^4.3.1",
-        "zod": "^4.4.3"
+        "tailwindcss": "^4.3.1"
     },
     "devDependencies": {
         "@biomejs/biome": "^2.5.1",
