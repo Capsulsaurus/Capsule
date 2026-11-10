@@ -4,7 +4,7 @@ description: Storage verification, deep re-hash, custody receipts, proof of loss
 status: draft
 ---
 
-Finalization's `Completed` is a one-time transfer acknowledgement, and [`verify_asset`](/design/cryptography/keys/#write-authorization) proves cryptographic validity, never that the server still holds the bytes. This page defines the re-checkable durability verdict, the signed custody receipt, and the rule every client follows before destroying local data: the [transfer protocol's](/design/transfer/) invariants 6 and 7. Server: `capsule-server::verify`, `capsule-server::attestation`; client gate: `capsule-library::library::ReleaseGate`, driven by `capsule-sdk::verify`.
+Finalization's `Completed` is a one-time transfer acknowledgement, and `verify_asset` ([](/design/cryptography/keys/#write-authorization)) proves cryptographic validity, never that the server still holds the bytes. This page defines the re-checkable durability verdict, the signed custody receipt, and the rule every client follows before destroying local data: invariants 6 and 7 of the [](/design/transfer/). Server: `capsule-server::verify`, `capsule-server::attestation`; client gate: `capsule-library::library::ReleaseGate`, driven by `capsule-sdk::verify`.
 
 ## What "Safely Stored" Means
 
@@ -12,9 +12,9 @@ Finalization's `Completed` is a one-time transfer acknowledgement, and [`verify_
 
 - **indexed** — a live asset row of the caller's references the address.
 - **stored** — the bytes are present at the content address in the blob store.
-- **retrievable** — indexed ∧ stored ∧ nothing withholds it: not marked by [GC](/design/filesystem/server/#deletion-and-garbage-collection), not quarantined, not under a moderation hold.
+- **retrievable** — indexed ∧ stored ∧ nothing withholds it: not marked by GC ([](/design/filesystem/server/#deletion-and-garbage-collection)), not quarantined, not under a moderation hold.
 
-`durable` attests **this home server's** storage only, not replicas, peers or [backups](/design/backup-recovery/).
+`durable` attests **this home server's** storage only, not replicas, peers or backups ([](/design/backup-recovery/)).
 
 ## Endpoint
 
@@ -30,8 +30,8 @@ Finalization's `Completed` is a one-time transfer acknowledgement, and [`verify_
 A verdict says the bytes are serveable *now*. A **custody receipt** proves the server *accepted* them, so "the server lost my photo" and "the client never uploaded it" stop being symmetric claims. The type is `capsule-core::crypto::receipts::CustodyReceipt`, shared by client and server.
 
 - **Contents.** Server identity and signing-key id, a per-server `receipt_seq` and `prior_receipt_hash`, the upload and asset ids, the blob role, the **server-recomputed** `ciphertext_hash` and size, the uploader, and `received_at` from the server clock. `envelope_hash` (SHA-256 over the signed manifest bytes) is present only on the `provenance` blob's receipt; the manifest already commits to the other blobs.
-- **Signed** under the server attestation key, a long-lived hybrid Ed25519 + ML-DSA-65 key distinct from the [operational key](/design/federation/#server-identity-and-key-rotation), with an append-only key history so old receipts verify forever.
-- **Issued with custody**, in the same transaction as the index record ([Upload — Finalization](/design/transfer/upload/#finalization-and-integrity)). There is no receipt without custody and no indexed blob without a receipt.
+- **Signed** under the server attestation key, a long-lived hybrid Ed25519 + ML-DSA-65 key distinct from the operational key ([](/design/federation/#server-identity-and-key-rotation)), with an append-only key history so old receipts verify forever.
+- **Issued with custody**, in the same transaction as the index record ([](/design/transfer/upload/#finalization-and-integrity)). There is no receipt without custody and no indexed blob without a receipt.
 - **Hash-chained and append-only.** `receipt_seq` and `prior_receipt_hash` form the server's receipt log; no API path overwrites or deletes an entry. Position allocation and signing happen in one operation, so the chain cannot fork.
 - **Fetched** via `GET /v1/upload/{id}/receipt` within the session window and `GET /v1/assets/{asset_id}/receipts` durably. The durable fetch is **owner-only**: a non-owner gets the unknown-asset `404`.
 - **Verified and kept by the client.** The client checks the signature under the pinned key, that `ciphertext_hash`, `size` and `envelope_hash` match what it sent, and a gross clock-drift bound on `received_at`. It stores receipts beside the provenance chain and in the backup artifact. The client copy is evidence, not cache.
@@ -55,13 +55,13 @@ A client proves loss with:
 2. later non-holding: a signed attestation reporting `H` not stored, or a failed content-addressed fetch, which is self-verifying;
 3. the absence of an authorized purge.
 
-The server's rebuttal is a device-signed `delete` with an elapsed [retention window](/design/organization/#retention-window). Conversely, a custody claim with no valid receipt is unbacked, and a receipt from another server fails on its server binding. Accepted v1 limitation: a server can show different log views to different auditors; gossiped signed log heads are the planned extension.
+The server's rebuttal is a device-signed `delete` with an elapsed retention window ([](/design/organization/#retention-window)). Conversely, a custody claim with no valid receipt is unbacked, and a receipt from another server fails on its server binding. Accepted v1 limitation: a server can show different log views to different auditors; gossiped signed log heads are the planned extension.
 
 ## Verify Before Destroy
 
 Before any post-write local cleanup that drops irreplaceable bytes, a client MUST hold all three:
 
-1. a verified [custody receipt](#custody-receipts) for the write;
+1. a verified custody receipt for the write ([](#custody-receipts));
 2. `durable = true` from `/storage/verify` for every declared blob;
 3. `verify_asset` acceptance.
 
@@ -73,8 +73,8 @@ The gate applies to:
 - **Move-mode** source deletion after import: the local commit never deletes a source, which is deleted only once both it and the library copy read back as the signed original and the gate passes. With no server to ask, every source is kept;
 - **streaming import** release ([](/design/import/pipeline/#import-upload-streaming-mode));
 - discarding local working state tied to a write (staged temporaries, the pre-edit copy across a `replace`);
-- releasing an original handed to a [delegate](/design/peering/#delegation): the origin fetches the receipt from the server and checks it against the hash it computed, never relayed by the delegate.
+- releasing an original handed to a delegate ([](/design/peering/#delegation)): the origin fetches the receipt from the server and checks it against the hash it computed, never relayed by the delegate.
 
-It does not apply to intentional deletes (governed by the retention window), rebuildable derivative cache, or re-fetchable server-origin blobs. The SQLite catalog is **not** rebuildable cache: it [migrates in place](/design/versioning/#client-catalog-migration), and evicting it is a repair action.
+It does not apply to intentional deletes (governed by the retention window), rebuildable derivative cache, or re-fetchable server-origin blobs. The SQLite catalog is **not** rebuildable cache: it migrates in place ([](/design/versioning/#client-catalog-migration)), and evicting it is a repair action.
 
 The verdict is point-in-time: the client re-verifies if a bounded interval passes before release, and on the server a blob that just answered `durable` cannot be deleted faster than the GC grace window. Together these make the gate sound without a lease.

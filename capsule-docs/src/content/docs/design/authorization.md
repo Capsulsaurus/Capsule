@@ -4,7 +4,7 @@ description: The closed lifecycle-action set and how every destructive operation
 status: draft
 ---
 
-**Rule:** every lifecycle transition is an [asset manifest](/design/cryptography/provenance/#asset-manifest) signed under the album's per-epoch write-tier key, the same proof as a write. There is no weaker path to destroy data than to add it. Clients reject anything [`verify_asset`](/design/cryptography/keys/#write-authorization) does not accept.
+**Rule:** every lifecycle transition is an asset manifest ([](/design/cryptography/provenance/#asset-manifest)) signed under the album's per-epoch write-tier key, the same proof as a write. There is no weaker path to destroy data than to add it. Clients reject anything `verify_asset` ([](/design/cryptography/keys/#write-authorization)) does not accept.
 
 ## The Closed Action Set
 
@@ -14,9 +14,9 @@ status: draft
 | --- | --- |
 | `create` | First write; `prior_provenance_hash` is `null` |
 | `replace` | New original bytes (e.g. re-encryption), same `file_id`/`album_id` |
-| `delete` | Soft-delete into trash for a [retention window](/design/organization/#retention-window) |
+| `delete` | Soft-delete into trash for a retention window ([](/design/organization/#retention-window)) |
 | `metadata-update` | Edit the encrypted metadata blob or sidecar fields |
-| `derivative-add` | Add a [derivative](/design/cryptography/provenance/#derivative-provenance) |
+| `derivative-add` | Add a derivative ([](/design/cryptography/provenance/#derivative-provenance)) |
 | `derivative-replace` | Replace a derivative; the only path, since silent overwrite is rejected |
 | `trash-restore` | Recover from trash within the window |
 
@@ -31,16 +31,16 @@ A client accepts an operation only if:
 
 ## The Lifecycle Write Surface
 
-Every non-upload lifecycle write goes through **one** endpoint, `POST /v1/albums/{album_id}/ops`, carrying the signed manifest (plus metadata blob if any); see [](/reference/api/albums/). Writes that move blob bytes (`create`, `replace`, derivatives with new bytes) use the [upload protocol](/design/transfer/upload/).
+Every non-upload lifecycle write goes through **one** endpoint, `POST /v1/albums/{album_id}/ops`, carrying the signed manifest (plus metadata blob if any); see [](/reference/api/albums/). Writes that move blob bytes (`create`, `replace`, derivatives with new bytes) use the upload protocol ([](/design/transfer/upload/)).
 
-- The structural envelope ([server invariants](/design/threat-model/validation/#server-side-validation-invariants) 16–18, 25) runs before any row is written. New actions never add endpoints.
+- The structural envelope (invariants 16–18 and 25 of [](/design/threat-model/validation/#server-side-validation-invariants)) runs before any row is written. New actions never add endpoints.
 - **Idempotent by content hash:** a replayed accepted manifest returns the identical response and writes nothing.
-- Provenance append and per-album `sync_seq` mint are **one transaction**, so an operation is visible on the [sync feed](/design/transfer/download/) exactly when durable.
-- Rejections carry an [`error.*` code](/design/i18n/#server-error-codes), write nothing, and are logged.
+- Provenance append and per-album `sync_seq` mint are **one transaction**, so an operation is visible on the sync feed ([](/design/transfer/download/)) exactly when durable.
+- Rejections carry an `error.*` code ([](/design/i18n/#server-error-codes)), write nothing, and are logged.
 
 ## Album Membership on the Server
 
-The server cannot read the MLS roster. It holds the owner's **signed roster** (`PUT /v1/albums/{album_id}/roster`, [invariant 33](/design/threat-model/validation/#server-side-validation-invariants)): members with role `reader`/`writer`, a strictly increasing `roster_version` and the AMK epoch, signed by a non-revoked owner device. The version may rise at most +16 over the held one, so one publish cannot latch the counter. Only the owner publishes. Removal is a later roster omitting the member, recorded with the version and epoch, not deleted.
+The server cannot read the MLS roster. It holds the owner's **signed roster** (`PUT /v1/albums/{album_id}/roster`, invariant 33 of [](/design/threat-model/validation/#server-side-validation-invariants)): members with role `reader`/`writer`, a strictly increasing `roster_version` and the AMK epoch, signed by a non-revoked owner device. The version may rise at most +16 over the held one, so one publish cannot latch the counter. Only the owner publishes. Removal is a later roster omitting the member, recorded with the version and epoch, not deleted.
 
 | Caller | Server behaviour |
 | --- | --- |
@@ -53,21 +53,21 @@ The roster is a transport control, not confidentiality. Removing a writer reclai
 
 ## The Server Executes But Never Authorizes
 
-The server carries out deletes and replaces but never permits them. Without keys, it still enforces the [structural envelope](/design/threat-model/validation/#server-side-validation-invariants) before persisting.
+The server carries out deletes and replaces but never permits them. Without keys, it still enforces the structural envelope ([](/design/threat-model/validation/#server-side-validation-invariants)) before persisting.
 
 ## Deletes Are Soft First
 
 - `delete` moves the asset to trash; the blob is hard-purged only after the retention window.
-- The window is **signed into the delete manifest**, so a server cannot shorten or extend it ([Recycling](/design/organization/#recycling)).
+- The window is **signed into the delete manifest**, so a server cannot shorten or extend it ([](/design/organization/#recycling)).
 - `trash-restore` before expiry is itself an audited manifest.
 
 ## Every Transition Is Auditable
 
-Each operation appends a [provenance record](/design/cryptography/provenance/#provenance-of-library-modifications); the chain is [append-only](/design/threat-model/scenarios/#provenance-immutability-rules).
+Each operation appends a provenance record ([](/design/cryptography/provenance/#provenance-of-library-modifications)); the chain is append-only ([](/design/threat-model/scenarios/#provenance-immutability-rules)).
 
 ## Federated Peers
 
-[Federated](/design/federation/) operations pass the same `verify_asset` and envelope checks; peer ordering and timestamps are never trusted. [Stale revival](/design/sync/#stale-revival-detection) is caught by the chain check and quarantined.
+Federated operations ([](/design/federation/)) pass the same `verify_asset` and envelope checks; peer ordering and timestamps are never trusted. Stale revival ([](/design/sync/#stale-revival-detection)) is caught by the chain check and quarantined.
 
 ## Validation
 
