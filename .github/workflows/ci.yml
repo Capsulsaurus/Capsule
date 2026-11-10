@@ -79,6 +79,10 @@ jobs:
               - 'capsule-web/src/i18n/messages/**'
               - 'capsule-swift/Generated/**'
               - 'capsule-android/src/main/res/values*/strings.xml'
+              # `translate-readme-check` (also in `check-rust`) gates README.md's
+              # generated language regions and the translations derived from it,
+              # so a README-only edit must still pay the Rust gate.
+              - 'README*.md'
               # `i18n-guard` scans these client sources for hard-coded literals and
               # physical-direction layout, and the `rust` job is the only CI route to
               # it, so a client-only change must pay the Rust gate. Same surfaces as

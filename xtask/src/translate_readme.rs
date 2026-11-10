@@ -26,6 +26,13 @@
 //! the check — the same key-less pattern as `i18n --check`. It is **structural, not
 //! semantic**: it reads only committed files and needs no translation API in CI.
 //!
+//! # Generated regions
+//!
+//! Before anything else, [`languages::sync`] rewrites README.md's language switcher and
+//! translations table from `locales/config.json`; `--check` fails when they differ.
+//! Their progress badges read `locales/stats.json` live, so catalog edits never change
+//! the README.
+//!
 //! # The backend seam
 //!
 //! [`TranslationBackend`] is the seam a future LLM provider drops into. In CI (and by
@@ -39,6 +46,8 @@ use std::path::{Path, PathBuf};
 use eyre::{Context, Result, bail, eyre};
 use regex::Regex;
 use serde_json::Value;
+
+mod languages;
 
 /// What `run` should do.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -62,21 +71,43 @@ pub(crate) fn run(root: &Path, mode: Mode) -> Result<()> {
     let source =
         fs::read_to_string(root.join(SOURCE)).with_context(|| format!("reading {SOURCE}"))?;
     let locales = non_source_locales(root)?;
+    let languages = languages::Languages::from_config(&read_config(root)?)?;
+    let synced = languages::sync(&source, &languages)?;
     match mode {
         Mode::Extract => {
-            print!("{}", extract_json(&source)?);
+            print!("{}", extract_json(&synced)?);
             Ok(())
         }
         Mode::Generate { api } => {
+            if synced != source {
+                fs::write(root.join(SOURCE), &synced)
+                    .with_context(|| format!("writing {SOURCE}"))?;
+                println!("generated {SOURCE} language regions");
+            }
             let backend: Box<dyn TranslationBackend> = if api {
                 Box::new(ApiBackend)
             } else {
                 Box::new(FileBackend::new(root))
             };
-            generate(root, &source, &locales, backend.as_ref())
+            generate(root, &synced, &locales, backend.as_ref())
         }
-        Mode::Check => check(root, &source, &locales),
+        Mode::Check => {
+            if synced != source {
+                bail!(
+                    "{SOURCE}: the language switcher or translations table is out of date \
+                     with locales/config.json; run `mise run translate-readme`"
+                );
+            }
+            check(root, &source, &locales)
+        }
     }
+}
+
+/// Parse `locales/config.json`.
+fn read_config(root: &Path) -> Result<Value> {
+    let path = root.join("locales/config.json");
+    let text = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
 }
 
 // ─── Locale set (mirrored from locales/config.json) ──────────────────────────────
@@ -84,12 +115,7 @@ pub(crate) fn run(root: &Path, mode: Mode) -> Result<()> {
 /// The non-source locales, in `locales/config.json` order — the language list is never
 /// declared outside that file (the i18n contract).
 fn non_source_locales(root: &Path) -> Result<Vec<String>> {
-    let config: Value = {
-        let path = root.join("locales/config.json");
-        let text =
-            fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-        serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?
-    };
+    let config = read_config(root)?;
     let source = config
         .get("sourceLocale")
         .and_then(Value::as_str)
@@ -462,7 +488,7 @@ impl Glossary {
     pub(crate) fn verify(source: &str, target: &str) -> Result<()> {
         let mut missing = Vec::new();
         for term in Self::verbatim_terms() {
-            if source.contains(term) && !target.contains(term) {
+            if contains_term(source, term) && !contains_term(target, term) {
                 missing.push(*term);
             }
         }
@@ -475,6 +501,18 @@ impl Glossary {
             );
         }
     }
+}
+
+/// Whether `term` occurs in `text` as a whole word: not flanked by an ASCII letter or
+/// digit, so `mise` is not found inside "promise". Only ASCII counts as a word
+/// character, so a term followed directly by CJK text (`Capsuleは`) still matches.
+fn contains_term(text: &str, term: &str) -> bool {
+    text.match_indices(term).any(|(start, _)| {
+        let before = text[..start].chars().next_back();
+        let after = text[start + term.len()..].chars().next();
+        !before.is_some_and(|c| c.is_ascii_alphanumeric())
+            && !after.is_some_and(|c| c.is_ascii_alphanumeric())
+    })
 }
 
 // ─── Translation backends (the seam) ─────────────────────────────────────────────
