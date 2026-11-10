@@ -180,6 +180,10 @@ pub const EXPECTED_MIGRATIONS: &[ExpectedMigration] = &[
         name: "m20260902_000031_volatile_state",
         checksum: "b7a2b7611b2c610672d2339e43e726f90961c5b69b09a9de5b1b597015196819",
     },
+    ExpectedMigration {
+        name: "m20260902_000032_quota_pulled_total_in_writers",
+        checksum: "88b78427093b9a00b6c9bf87e04d0a3943709251f23635124599940a8f9f092d",
+    },
 ];
 
 /// The command an operator runs to apply them.

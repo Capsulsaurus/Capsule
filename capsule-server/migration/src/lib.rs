@@ -41,6 +41,8 @@
 //! - `000031` (ADR-0015): the state Valkey held — `auth_sessions`, `upload_sessions`, the
 //!   ceremony tables, `rate_counters` and the federation pull schedule — each row carrying its
 //!   own `expires_at`.
+//! - `000032`: `000030`'s maintenance triggers and functions are dropped; the writers keep the
+//!   pulled total themselves (`capsule_server::quota::pulled_total`). The re-key guards stay.
 //!
 //! # Every instant is a `BIGINT` of microseconds since the Unix epoch
 //!
@@ -135,6 +137,7 @@ migrations![
     m20260902_000029_federation_rejected_hashes,
     m20260902_000030_quota_pulled_holdings,
     m20260902_000031_volatile_state,
+    m20260902_000032_quota_pulled_total_in_writers,
 ];
 
 /// The content checksum of one migration's source: lowercase hex SHA-256.

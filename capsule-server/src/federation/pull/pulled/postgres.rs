@@ -41,13 +41,13 @@
 //! it enforces a [`PeerCachingBudget`] as the [port's docs](super) count it. [`Uncharged`], the
 //! default of [`PostgresPulledAlbums::new`], charges nothing.
 //!
-//! The receivers' `quota_used` is not written by this adapter either: inserting the
-//! `federation_pulled_metadata_blobs` rows fires the schema's trigger that adds each newly held
-//! address to every subscriber's stored pulled total (migration `000030`,
-//! [`crate::quota::PostgresQuota`]), inside this commit's transaction. So a written page is
-//! counted from the instant it commits and a rolled-back one never is, whichever hook is
-//! assembled. That trigger takes a per-job lock and then the subscribers' `quota_usage` rows, in
-//! account order, after the per-address locks above, so a commit holds them to its end.
+//! The receivers' `quota_used` moves with the page: after inserting the
+//! `federation_pulled_metadata_blobs` rows, the commit adds each newly held address to every
+//! subscriber's stored pulled total ([`crate::quota::pulled_total`]) inside the same
+//! transaction. So a written page is counted from the instant it commits and a rolled-back one
+//! never is, whichever hook is assembled. That takes a per-job lock and then the subscribers'
+//! `quota_usage` rows, in account order, after the per-address locks above, so a commit holds
+//! them to its end.
 //!
 //! # The budget is read under the job's lock
 //!
@@ -471,6 +471,25 @@ impl PostgresPulledAlbums {
         )
         .await?;
         let failed = PORT.failing("recording a job's metadata blobs");
+        // The newly claimed blobs are held for every subscriber of the job, in this page's
+        // transaction (design/quota.md, the pulled total).
+        let mut claimed = Vec::with_capacity(inserted.len());
+        for row in &inserted {
+            let address: String = row.try_get("", "address").map_err(&failed)?;
+            let size: i64 = row.try_get("", "size").map_err(&failed)?;
+            claimed.push((
+                job.peer.as_str().to_owned(),
+                job.album.as_str().to_owned(),
+                address,
+                size,
+            ));
+        }
+        crate::quota::pulled_total::blobs_changed(
+            transaction,
+            &claimed,
+            crate::quota::pulled_total::Change::Added,
+        )
+        .await?;
         inserted
             .iter()
             .map(|row| {
