@@ -8,19 +8,19 @@ The **server** stores only opaque, content-addressed ciphertext and never holds 
 
 | Sub-doc | Concern |
 | --- | --- |
-| [Server Filesystem](/design/filesystem/server/) | Blob store layout, Postgres index, required services, deletion |
-| [Client Filesystem](/design/filesystem/client/) | Library layout, local SQLite index, space recovery |
-| [Maintenance](/design/filesystem/maintenance/) | Validation, scrubbing, repair, intra-library dedup, atomic writes |
+| [](/design/filesystem/server/) | Blob store layout, Postgres index, required services, deletion |
+| [](/design/filesystem/client/) | Library layout, local SQLite index, space recovery |
+| [](/design/filesystem/maintenance/) | Validation, scrubbing, repair, intra-library dedup, atomic writes |
 
-Byte transfer is the [transfer protocol](/design/transfer/); metadata sync is [Sync](/design/sync/).
+Byte transfer is covered by [](/design/transfer/); metadata sync by [](/design/sync/).
 
 ## Shared Principles
 
-- **Recovery-first.** No database is needed to interpret canonical data. Client sidecars are the source of truth; the server's PostgreSQL index holds only [key-free facts](/design/filesystem/server/#postgresql-what-the-server-knows) and is rebuildable from stored manifests.
-- **Atomic writes.** Temp file + atomic rename on the same filesystem; never overwrite in place ([rules](/design/filesystem/maintenance/#atomic-writes-and-crash-recovery)).
+- **Recovery-first.** No database is needed to interpret canonical data. Client sidecars are the source of truth; the server's PostgreSQL index holds only key-free facts ([](/design/filesystem/server/#postgresql-what-the-server-knows)) and is rebuildable from stored manifests.
+- **Atomic writes.** Temp file + atomic rename on the same filesystem; never overwrite in place ([](/design/filesystem/maintenance/#atomic-writes-and-crash-recovery)).
 - **Ephemeral derived data.** Only originals and their canonical metadata are irreplaceable.
-- **4 KiB alignment.** Upload chunks are 4 KiB-aligned so the [staging path](/design/transfer/upload/#staging) stays block-aligned.
-- **Content-addressing.** Server blobs are named by their [ciphertext hash](/design/cryptography/primitives/).
+- **4 KiB alignment.** Upload chunks are 4 KiB-aligned so the staging path ([](/design/transfer/upload/#staging)) stays block-aligned.
+- **Content-addressing.** Server blobs are named by their ciphertext hash ([](/design/cryptography/primitives/)).
 
 | Concern | Server | Client |
 | --- | --- | --- |

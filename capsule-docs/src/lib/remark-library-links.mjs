@@ -1,12 +1,22 @@
-// Remark plugin: links the first mention of each library or tool on a page to
-// its source repository (src/lib/library-links.mjs), so a name never appears
-// unlinked and no page carries a hand-copied URL. A mention is a whole-word
-// prose spelling or an exact inline-code spelling; headings, existing links
-// and code blocks are never touched, and later mentions stay plain text.
+// Remark plugin: turns the first mention of each library or tool on a page
+// into a badge linking its source repository (src/lib/library-links.mjs), so
+// no page carries a hand-copied URL. The badge is the mention itself, its
+// words unchanged, drawn as a quiet pill rather than an underlined link: the
+// substitution is automatic, so it must not look like a link an author chose
+// for the reader to follow. A mention is a whole-word prose spelling or an
+// exact inline-code spelling; headings, existing links and code blocks are
+// never touched, and later mentions stay plain. The badge's look is
+// global.css (Library badges).
 import { EXPLICIT_ONLY, LIBRARIES } from './library-links.mjs';
 
 /** Node types whose text is never linked. */
 const BLOCKED = new Set(['heading', 'link', 'linkReference', 'definition']);
+
+/** The class that marks a repo badge, styled in global.css. */
+export const BADGE_CLASS = 'lib-badge';
+
+/** Text that, right after an inline-code mention, makes it part of a word. */
+const COMPOUND = /^(?:[\w/@'’-]|\.\w)/;
 
 /** @param {string} text */
 function escapeRegExp(text) {
@@ -31,12 +41,13 @@ export function compile(libraries) {
     }
     const names = [...byName.keys()].sort((a, b) => b.length - a.length);
     // A name is a word on its own: not part of a path, an identifier, a
-    // hyphenated compound or a file name.
+    // hyphenated compound, a possessive or a file name. (A pill around part
+    // of a word would break it in two: "(rustls)-only".)
     const prose =
         names.length === 0
             ? null
             : new RegExp(
-                  `(?<![\\w./@-])(?:${names.map(escapeRegExp).join('|')})(?![\\w/@-]|\\.\\w)`,
+                  `(?<![\\w./@-])(?:${names.map(escapeRegExp).join('|')})(?![\\w/@'’-]|\\.\\w)`,
                   'g',
               );
     return { byName, byCode, prose };
@@ -53,11 +64,22 @@ export function linkLibraries(tree, libraries = LIBRARIES) {
     /** @type {Set<import('./library-links.mjs').Library>} */
     const linked = new Set();
 
-    const link = (library, child) => ({
+    /** The mention as written, as a badge. Search indexes it: it is the
+     *  page's own words. */
+    const badged = (library, mention, name) => ({
         type: 'link',
         url: library.url,
-        title: null,
-        children: [child],
+        // Shown on hover: where the badge goes, without the scheme.
+        title: `Source repository: ${library.url.replace(/^https:\/\//, '')}`,
+        data: {
+            hProperties: {
+                className: [BADGE_CLASS],
+                // Starts with the visible name, so speech control can name
+                // it (WCAG 2.5.3), and says where it goes.
+                ariaLabel: `${name} source repository`,
+            },
+        },
+        children: [mention],
     });
 
     /** Split a text node around the first mention of each unlinked library. */
@@ -75,7 +97,9 @@ export function linkLibraries(tree, libraries = LIBRARIES) {
                     value: value.slice(rest, match.index),
                 });
             }
-            out.push(link(library, { type: 'text', value: match[0] }));
+            out.push(
+                badged(library, { type: 'text', value: match[0] }, match[0]),
+            );
             rest = match.index + match[0].length;
         }
         if (rest < value.length) {
@@ -88,18 +112,19 @@ export function linkLibraries(tree, libraries = LIBRARIES) {
         if (!Array.isArray(node.children)) return;
         const inside = blocked || BLOCKED.has(node.type);
         const children = [];
-        for (const child of node.children) {
+        for (const [index, child] of node.children.entries()) {
             if (!inside && child.type === 'text') {
                 children.push(...splitText(child.value));
             } else if (
                 !inside &&
                 child.type === 'inlineCode' &&
                 byCode.has(child.value) &&
-                !linked.has(byCode.get(child.value))
+                !linked.has(byCode.get(child.value)) &&
+                !COMPOUND.test(node.children[index + 1]?.value ?? '')
             ) {
                 const library = byCode.get(child.value);
                 linked.add(library);
-                children.push(link(library, child));
+                children.push(badged(library, child, child.value));
             } else {
                 walk(child, inside);
                 children.push(child);

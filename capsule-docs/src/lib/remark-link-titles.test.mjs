@@ -7,7 +7,9 @@ import { visit } from 'unist-util-visit';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import remarkLinkTitles, {
     frontmatterTitle,
+    isGeneratedPage,
     labelFor,
+    labelParts,
     outlineOf,
     SEPARATOR,
 } from './remark-link-titles.mjs';
@@ -64,6 +66,20 @@ describe('labelFor', () => {
         );
     });
 
+    it('splits a label into the page and the heading it names', () => {
+        expect(labelParts('/design/metadata/', outlineFor, here)).toEqual({
+            page: 'Metadata',
+            heading: null,
+        });
+        expect(
+            labelParts('/design/metadata/#identifiers', outlineFor, here),
+        ).toEqual({ page: 'Metadata', heading: 'Identifiers' });
+        expect(labelParts('#local-heading', outlineFor, here)).toEqual({
+            page: null,
+            heading: 'Local Heading',
+        });
+    });
+
     it('fails on a missing page or anchor', () => {
         expect(() => labelFor('/nope/', outlineFor, here)).toThrow(
             /no page serves \/nope\//,
@@ -97,15 +113,36 @@ describe('remarkLinkTitles', () => {
 
     afterEach(() => rmSync(contentDir, { recursive: true, force: true }));
 
-    function labels(markdown) {
+    /** Run the plugin over a page; its tree. */
+    function run(markdown, frontmatter = { title: 'Page' }) {
         const tree = fromMarkdown(markdown);
         remarkLinkTitles({ contentDir })(tree, {
             path: 'page.md',
             value: markdown,
+            data: { astro: { frontmatter } },
         });
+        return tree;
+    }
+
+    function labels(markdown, frontmatter) {
         const out = [];
-        visit(tree, 'link', (node) => {
+        visit(run(markdown, frontmatter), 'link', (node) => {
             out.push([node.url, textOf(node)]);
+        });
+        return out;
+    }
+
+    /** Each link's class and its children as [class, text] pairs. */
+    function parts(markdown) {
+        const out = [];
+        visit(run(markdown), 'link', (node) => {
+            out.push({
+                className: node.data?.hProperties?.className,
+                children: node.children.map((child) => [
+                    child.data?.hProperties?.className?.[0],
+                    child.value,
+                ]),
+            });
         });
         return out;
     }
@@ -117,7 +154,8 @@ describe('remarkLinkTitles', () => {
                     '## Local',
                     '',
                     '[](/design/cryptography/) [](/design/metadata/#identifiers) [](#local)',
-                    '[kept](/design/metadata/) [](https://example.com/)',
+                    '[](https://example.com/) [the spec](https://example.com/spec)',
+                    '[rustdoc](/rustdoc/capsule_sdk/)',
                 ].join('\n'),
             ),
         ).toEqual([
@@ -127,8 +165,34 @@ describe('remarkLinkTitles', () => {
                 `Metadata${SEPARATOR}Identifiers`,
             ],
             ['#local', 'Local'],
-            ['/design/metadata/', 'kept'],
             ['https://example.com/', ''],
+            ['https://example.com/spec', 'the spec'],
+            ['/rustdoc/capsule_sdk/', 'rustdoc'],
+        ]);
+    });
+
+    it('marks each label part so the page and the heading can be styled apart', () => {
+        expect(
+            parts(
+                '## Local\n\n[](/design/metadata/) [](/design/metadata/#identifiers) [](#local)',
+            ),
+        ).toEqual([
+            {
+                className: ['xref'],
+                children: [['xref-page', 'Metadata']],
+            },
+            {
+                className: ['xref'],
+                children: [
+                    ['xref-page', 'Metadata'],
+                    ['xref-sep', SEPARATOR],
+                    ['xref-heading', 'Identifiers'],
+                ],
+            },
+            {
+                className: ['xref'],
+                children: [['xref-heading', 'Local']],
+            },
         ]);
     });
 
@@ -136,5 +200,66 @@ describe('remarkLinkTitles', () => {
         expect(() => labels('[](/design/metadata/#nope)')).toThrow(
             /page\.md: empty link \[\]\(\/design\/metadata\/#nope\)/,
         );
+        expect(() => labels('[](/design/metadata/#100%)')).toThrow(
+            /page\.md: empty link .* #100% is not a valid percent-encoded fragment/,
+        );
+    });
+
+    it('keeps a link title and any class an earlier plugin set', () => {
+        const tree = fromMarkdown('[](/design/metadata/ "Hover")');
+        visit(tree, 'link', (node) => {
+            node.data = { hProperties: { className: 'earlier' } };
+        });
+        remarkLinkTitles({ contentDir })(tree, {
+            path: 'page.md',
+            data: { astro: { frontmatter: { title: 'Page' } } },
+        });
+        const links = [];
+        visit(tree, 'link', (node) => {
+            links.push(node);
+        });
+        expect(links[0].title).toBe('Hover');
+        expect(links[0].data.hProperties.className).toEqual([
+            'earlier',
+            'xref',
+        ]);
+    });
+
+    it('rejects a hand-written label on a link to a docs page or heading', () => {
+        expect(() => labels('[the metadata doc](/design/metadata/)')).toThrow(
+            /page\.md: \[the metadata doc\]\(\/design\/metadata\/\) has its own text; write it \[\]\(\/design\/metadata\/\)/,
+        );
+        expect(() => labels('## Local\n\n[up there](#local)')).toThrow(
+            /\[up there\]\(#local\) has its own text/,
+        );
+    });
+
+    it('allows a hand-written label on a generated page', () => {
+        expect(
+            labels('[`Asset`](/design/metadata/)', {
+                title: 'Swift',
+                generated: { surface: 'Swift SDK', source: 'x.json' },
+            }),
+        ).toEqual([['/design/metadata/', 'Asset']]);
+    });
+});
+
+describe('isGeneratedPage', () => {
+    it('reads the generated marker from Astro frontmatter or the source', () => {
+        expect(
+            isGeneratedPage({
+                data: {
+                    astro: { frontmatter: { generated: { surface: 'x' } } },
+                },
+            }),
+        ).toBe(true);
+        expect(
+            isGeneratedPage({
+                value: '---\ntitle: X\ngenerated:\n  surface: "X"\n---\n',
+            }),
+        ).toBe(true);
+        expect(
+            isGeneratedPage({ value: '---\ntitle: X\n---\n\ngenerated: no\n' }),
+        ).toBe(false);
     });
 });

@@ -10,7 +10,7 @@ The server can prove a request comes from a session it issued, not who the user 
 
 - **Registered accounts** have a unique identity and their own master key, and sign in with password (+ optional TOTP) or OIDC ([](#choosing-an-auth-path)).
 - **Delegated/sponsored accounts** have keys derived from a registered account's master key and no identity of their own. The sponsor authenticates and manages them and has full access ([](/design/cryptography/keys/#delegatedsponsored-accounts)).
-- **Non-registered accounts** have no identity or master key: [share links](/design/share-links/) encapsulate keys to the link secret, and [web-upload links](/design/web-upload/) let a guest seal to a link-scoped key with no read access.
+- **Non-registered accounts** have no identity or master key: share links ([](/design/share-links/)) encapsulate keys to the link secret, and web-upload links ([](/design/web-upload/)) let a guest seal to a link-scoped key with no read access.
 
 ## Creating an Account
 
@@ -20,7 +20,7 @@ Registration takes **an address and a password, nothing else**, and signs the ca
 - Passwords have a 12-character floor and no composition rule, because they guard a session, not the master key.
 - A taken address is `409 error.auth.user_already_exists`, an account oracle by decision, bounded per source. Every attempt whose body parses, refused ones included, is charged 10/hour against the resolved client address (IPv6 per /64, through `TRUSTED_PROXIES`/`TRUSTED_PROXY_HOPS`). A spent budget is `429 error.auth.rate_limited` and a full limiter partition is `429 error.auth.registration_at_capacity`, both with `Retry-After`. The limiter fails closed: an unreachable counter store is `500`, never an admission. Behind an unconfigured proxy every registrant shares the proxy's budget, as with the share and drop source limiters.
 - A new account has **no device directory and therefore cannot write**. Invariant 7's floor is the writing device's `added_at` in the published directory, with no account-creation fallback, so the client's first act is publishing a directory.
-- There is no token introspection, since the session ledger is read on every request and validation *is* the request. There is no password reset, since the server cannot re-wrap a master key it never saw; recovery is the [escrow blob](/design/backup-recovery/).
+- There is no token introspection, since the session ledger is read on every request and validation *is* the request. There is no password reset, since the server cannot re-wrap a master key it never saw; recovery is the escrow blob ([](/design/backup-recovery/)).
 
 ### Passkeys Are Not in v1
 
@@ -40,21 +40,21 @@ TOTP is the local path's second factor.
 
 ### The Profile Surface
 
-- **The profile is the caller's own** id, address, optional display name and creation time: the whole of what the server stores about a person. The route has no `{user_id}` segment, so reading another's profile is unrepresentable; other accounts' public facts are the [device directory](/design/cryptography/keys/#device-directory).
+- **The profile is the caller's own** id, address, optional display name and creation time: the whole of what the server stores about a person. The route has no `{user_id}` segment, so reading another's profile is unrepresentable; other accounts' public facts are the device directory ([](/design/cryptography/keys/#device-directory)).
 - **Only the display name is editable.** An absent key leaves it unchanged and an explicit `null` clears it. It is trimmed and ≤128 chars, and control characters are **refused**, not rewritten.
 - **A password change authenticates with the current password** through the sign-in path, so lockout applies. It closes **every** session of the account, then re-opens the caller's. A wrong current password is `403`, never `401`.
 - **The login address is immutable.** Changing it without proof of control of the new address is an account takeover, so the port has no method for it until such proof exists.
 
 ## Choosing an Auth Path
 
-Both paths mint the same [sessions](#session-and-access-tokens) and differ only in who verifies the credential. A deployment may enable either or both.
+Both paths mint the same sessions ([](#session-and-access-tokens)) and differ only in who verifies the credential. A deployment may enable either or both.
 
 - **Local auth** (password + optional TOTP) is the default, with no external dependency, for personal and household servers.
 - **OIDC** (authorization code + PKCE, Capsule as relying party only) suits deployments with an IdP or wanting SSO. Account lifecycle policy lives at the IdP.
 
 ### Signing In Through an Identity Provider
 
-Authorization code + PKCE, plus the [device grant](#signing-in-without-a-browser). No implicit or hybrid flow.
+Authorization code + PKCE, plus the device grant ([](#signing-in-without-a-browser)). No implicit or hybrid flow.
 
 **Ceremony.** Authorize takes the client's `redirect_uri` and `binding_challenge` and answers the provider URL, `state` and a 10-minute deadline; the client receives the redirect itself. The callback takes `state`, `code` and `binding_verifier` and answers exactly as password login does (token pair or `202` TOTP challenge), through the same session code.
 
@@ -122,8 +122,8 @@ Headless clients use the device authorization grant (RFC 8628): `capsule auth lo
 Handles are `user@server.tld` (Matrix-style). **`.well-known/` never enumerates users.**
 
 - `.well-known/capsule/server-info` is public and server-scoped only: API base, auth and federation endpoints, server signing key, `protocol_version` range and `min_protocol_version` cutoffs.
-- **User lookup is authenticated**: local clients by session token, federated peers by a [federation capability token](/design/federation/#federation-capabilities) rate-limited per peer.
-- **Anonymous WebFinger** returns only what the user opted into (default nothing), limited to handle and display name, never keys, devices or album hints, per the [deny-by-default rule](/design/threat-model/schema-rules/#schema-evolution-and-field-grammar).
+- **User lookup is authenticated**: local clients by session token, federated peers by a federation capability token ([](/design/federation/#federation-capabilities)) rate-limited per peer.
+- **Anonymous WebFinger** returns only what the user opted into (default nothing), limited to handle and display name, never keys, devices or album hints, per the deny-by-default rule ([](/design/threat-model/schema-rules/#schema-evolution-and-field-grammar)).
 
 ### The `.well-known/capsule/*` Registry
 
@@ -139,11 +139,11 @@ All are public and take no credential. A new path MUST add a row.
 
 ## Account Portability
 
-**Post-v1.** The [User IK](/design/cryptography/keys/#user-identity-keys-user-iks) is already a server-independent root; only the handle is host-bound. No DID system.
+**Post-v1.** The User IK ([](/design/cryptography/keys/#user-identity-keys-user-iks)) is already a server-independent root; only the handle is host-bound. No DID system.
 
 - The new server registers the account under the **same IK**, leaving the key hierarchy unchanged.
 - The old server publishes `.well-known/capsule/moved/{user}`, `{ old_handle, new_handle, moved_at, ik_sig }`, cacheable 24 h. It is the only well-known record naming a user, admissible because the user signs and initiates it.
-- Resolvers verify `ik_sig` against the IK from the signed [device directory](/design/cryptography/keys/#device-directory) and re-resolve. An unverifiable certificate is ignored (the old handle keeps resolving) and surfaced.
+- Resolvers verify `ik_sig` against the IK from the signed device directory ([](/design/cryptography/keys/#device-directory)) and re-resolve. An unverifiable certificate is ignored (the old handle keeps resolving) and surfaced.
 
 No server can forge a migration, because the IK signs the move.
 
@@ -155,11 +155,11 @@ A server-generated UUIDv7 identifying the session record.
 
 ### Session Token
 
-An opaque **128-bit** bearer secret (not a JWT) stored on the client, used only to obtain [access tokens](#access-token).
+An opaque **128-bit** bearer secret (not a JWT) stored on the client, used only to obtain access tokens ([](#access-token)).
 
 ### Access Token
 
-A short-lived **EdDSA JWT** signed with the server's Ed25519 key and issued against the session token. Classical only, per the [operational-signature carve-out](/design/cryptography/primitives/#signature-scheme).
+A short-lived **EdDSA JWT** signed with the server's Ed25519 key and issued against the session token. Classical only, per the operational-signature carve-out ([](/design/cryptography/primitives/#signature-scheme)).
 
 ## Session Expiry and Revocation
 
@@ -171,7 +171,7 @@ A session token stops being honoured on sliding expiry, hard expiry or explicit 
 
 ### Hard Expiry
 
-365 days (`SESSION_HARD_CAP_DAYS`) from sign-in, **never reset**. It caps the window for a silently exfiltrated token on an active device ([malicious keyholder](/design/threat-model/#client-class-taxonomy)).
+365 days (`SESSION_HARD_CAP_DAYS`) from sign-in, **never reset**. It caps the window for a silently exfiltrated token on an active device (the malicious keyholder of [](/design/threat-model/#client-class-taxonomy)).
 
 Both are whole days, set per deployment and never per session. Zero, a negative count, or a cap shorter than the sliding window refuses the boot as a configuration fault. A stored session keeps the deadline it was opened under, so a changed value applies from its next refresh. A lowered value then refuses a session idle longer than the new window, or a lineage older than the new cap, as expired, and rotates one inside both with only what the new values leave it. A raised value lengthens nothing until that refresh.
 
@@ -189,7 +189,7 @@ The session ledger supports:
 2. **Revoke one** session, authenticated by any active session token.
 3. **Revoke all**, authenticated by **proof of master-key possession**, not a session token, so a stolen token cannot lock the user out of every device.
 
-Revoke-all is two requests. An authenticated `POST /v1/auth/logout/all/challenge` issues a single-use challenge; it is authenticated so it is not an account-existence oracle. An **unauthenticated** `POST /v1/auth/logout/all` redeems an IK signature over a domain-separated message containing it, verified against the account's [identity anchor](/design/cryptography/keys/#device-directory), never a request-supplied key. The challenge is burned on every attempt.
+Revoke-all is two requests. An authenticated `POST /v1/auth/logout/all/challenge` issues a single-use challenge; it is authenticated so it is not an account-existence oracle. An **unauthenticated** `POST /v1/auth/logout/all` redeems an IK signature over a domain-separated message containing it, verified against the account's identity anchor ([](/design/cryptography/keys/#device-directory)), never a request-supplied key. The challenge is burned on every attempt.
 
 Invariants:
 
@@ -220,11 +220,11 @@ The promise is **reinstall-stable everywhere, reset-stable only on macOS**. A fa
 cohort_hash = SHA-256( canonical-CBOR([ "capsule-device-cohort/v1", user_id, platform_tag, primary_id ]) )
 ```
 
-The input is [canonical CBOR](/design/metadata/#canonical-cbor-encoding) with a closed `platform_tag` enum. `user_id` is folded in so one device under two accounts yields unlinkable hashes. It is implemented once in `capsule-core` (`cohort`).
+The input is canonical CBOR ([](/design/metadata/#canonical-cbor-encoding)) with a closed `platform_tag` enum. `user_id` is folded in so one device under two accounts yields unlinkable hashes. It is implemented once in `capsule-core` (`cohort`).
 
 ### Privacy and Scope
 
-- Sent **only** in the session-opening request body, and registered in the [header census](/design/threat-model/validation/#universal-headers) as a body field. **Never** in signed artifacts, to federated peers or in `.well-known`.
+- Sent **only** in the session-opening request body, and registered in the header census ([](/design/threat-model/validation/#universal-headers)) as a body field. **Never** in signed artifacts, to federated peers or in `.well-known`.
 - **Advisory only.** It is client-asserted and unverifiable, so **no authorization or capability decision may read it**, and it never substitutes for `device_id` or the DSK. Absent or garbage values behave identically to valid ones.
 
 ### Server Storage and Surfacing
@@ -250,5 +250,5 @@ The auth → library-query E2E case is in the [E2E case index](https://github.co
 ## Related
 
 - [](/design/authorization/): the closed lifecycle-action set every write proves against.
-- [](/design/device-enrollment/): how a device joins the account and the [device directory](/design/cryptography/keys/#device-directory).
+- [](/design/device-enrollment/): how a device joins the account and the device directory ([](/design/cryptography/keys/#device-directory)).
 - [](/design/backup-recovery/): recovering the master key after device loss.

@@ -53,6 +53,10 @@ Until then this path works and is tested; it is not dead code.
 - **LQIP decode:** none in JavaScript. Decoding goes through `capsule-wasm`; no `thumbhash`
   package (`rg thumbhash capsule-web` stays empty).
 - **i18n runtime:** FormatJS over the generated catalogs.
+- **Layout direction:** `@radix-ui/react-direction`, already in the tree under every Radix
+  menu and tabs primitive, pinned directly so `LocaleSettingsProvider` can hand Radix the
+  language's direction. Radix reads it from context, not from `<html dir>`; without it
+  submenus open to the right and arrow keys run backwards under Arabic.
 - **Guest share crypto:** `capsule-wasm` (`mise run build-wasm`), generated and never committed.
 - **Lint / format:** Biome. **Runtime, package manager and test runner:** bun.
 

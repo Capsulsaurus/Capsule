@@ -12,7 +12,7 @@ This doc owns alert delivery and the vocabulary. The server holds only ciphertex
 | --- | --- | --- | --- |
 | **Alert** | device → its own user | Localized text composed **on-device** | This doc |
 | **Wake** | server → client | Nothing: "something changed for you" | This doc |
-| **Hint** | server ↔ server, peer ↔ peer | "A new event exists in album A"; advisory, no authority | [Federation](/design/federation/#pull-only-federation), [Peering](/design/peering/#sync) |
+| **Hint** | server ↔ server, peer ↔ peer | "A new event exists in album A"; advisory, no authority | [](/design/federation/#pull-only-federation), [](/design/peering/#sync) |
 
 Alert classes and trigger predicates live in `capsule-core::notify`, one decision function for every platform; delivery is native per client. Open:
 
@@ -32,11 +32,11 @@ A closed enum. Thresholds belong to the trigger owner, and parameters are plain 
 
 | Class | Trigger owner | Parameters | Pre-armable |
 | --- | --- | --- | --- |
-| `sync_stale` | [Sync](/design/sync/#notifications) | `count`, `days_behind` | **Yes** |
-| `recovery_check_due` | [Backup — Schedule](/design/backup-recovery/#schedule-and-triggers) | `snooze_budget` (`available`/`spent`), `recovery` (`check`/`rewrap`) | **Yes** |
-| `quota_soft` / `quota_grace_expiring` | [Quota](/design/quota/#thresholds-and-states) | `grace` (`counting`/`expired`), second only | No |
-| `quarantine_pending` | [Quarantine Surfaces](/design/threat-model/scenarios/#quarantine-surfaces) | `count` | No |
-| `drop_pending` | [Web Upload](/design/web-upload/#drop-and-adoption-lifecycle) | `count` | No |
+| `sync_stale` | [](/design/sync/#notifications) | `count`, `days_behind` | **Yes** |
+| `recovery_check_due` | [](/design/backup-recovery/#schedule-and-triggers) | `snooze_budget` (`available`/`spent`), `recovery` (`check`/`rewrap`) | **Yes** |
+| `quota_soft` / `quota_grace_expiring` | [](/design/quota/#thresholds-and-states) | `grace` (`counting`/`expired`), second only | No |
+| `quarantine_pending` | [](/design/threat-model/scenarios/#quarantine-surfaces) | `count` | No |
+| `drop_pending` | [](/design/web-upload/#drop-and-adoption-lifecycle) | `count` | No |
 
 ### The Pre-Arm Rule
 
@@ -44,7 +44,7 @@ A closed enum. Thresholds belong to the trigger owner, and parameters are plain 
 
 `sync_stale` reports that the OS gave the app no background time, so it cannot rely on background time. It is armed for two weeks after each successful sync and fires from the OS timer.
 
-Server-side conditions (`quota_*`, `quarantine_pending`, `drop_pending`) cannot be pre-armed and surface at next launch; [Tier 1](#tier-1--wake) is what would close that gap.
+Server-side conditions (`quota_*`, `quarantine_pending`, `drop_pending`) cannot be pre-armed and surface at next launch; [](#tier-1--wake) is what would close that gap.
 
 The client loop is one idempotent refresh, run after every state change: read the facts, take the badge set from `evaluate_alerts` and the per-class instants from `pre_arm_deadlines`, then reconcile the OS timers against them.
 
@@ -71,7 +71,7 @@ Permission is requested the first time a class has something to say, never at fi
 - **Disabling suppresses the warning, never the behavior** it reports on.
 - **No alert ever blocks** any flow.
 - **Permission denial is not an error.** Every class degrades to its in-app badge, with no retry and no nag.
-- **Copy is a catalog key** under `notification.*` in `locales/` ([i18n](/design/i18n/)): `notification.<class>.title` / `.body`. An enumerated parameter selects the key (`notification.recovery_check_due.rewrap.*`, `notification.quota_grace_expiring.expired.*`), because the catalog compiles only a whole-message plural, and a count is that plural's quantity.
+- **Copy is a catalog key** under `notification.*` in `locales/` ([](/design/i18n/)): `notification.<class>.title` / `.body`. An enumerated parameter selects the key (`notification.recovery_check_due.rewrap.*`, `notification.quota_grace_expiring.expired.*`), because the catalog compiles only a whole-message plural, and a count is that plural's quantity.
 
 ## Tier 1 — Wake
 
@@ -116,5 +116,5 @@ Tiers per [](/design/principles/#validation-tiers).
 - **Trigger predicates (unit):** each class fires exactly at its threshold.
 - **Pre-arm lifecycle (unit):** arm, re-arm, cancel; never two timers per class.
 - **Snooze, disable, denial (unit):** each degrades to a badge and changes no behavior.
-- **Pre-armed delivery (smoke, per platform):** fires with the app terminated.
+- **Pre-armed delivery (smoke, per platform):** fires with the app terminated, and its tap opens the class's destination: a `recovery = rewrap` alert opens the guided re-wrap, never the routine check. On Android the alarm also survives a reboot. Run by hand on a device or simulator, because no harness can terminate the app and wait out an OS timer.
 - **Wake contentlessness (unit, post-v1):** no library-derived field; response identical to the scheduled poll.

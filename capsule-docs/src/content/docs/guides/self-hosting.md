@@ -138,7 +138,7 @@ Schedule these one-shot commands (cron or a timer). They need `DATABASE_URL`, `V
   upload-progress state. Run it regularly even when storage is not tight.
 - `capsule-server purge --apply`: hard-purges soft-deleted assets whose retention has elapsed. It
   also needs the server's `ATTESTATION_KEY_SEED`, because each purge is signed into the
-  [owner ledger](/design/filesystem/server/#the-owner-ledger) first, and refuses without it. It
+  owner ledger ([](/design/filesystem/server/#the-owner-ledger)) first, and refuses without it. It
   exits non-zero when the ledger could not record a purge; that asset is kept for the next run.
 - `capsule-server scrub [--deep]`: read-only integrity check of the index against the blob store.
   It **exits non-zero on any finding**, so alert on that

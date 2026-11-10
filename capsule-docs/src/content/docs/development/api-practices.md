@@ -23,7 +23,7 @@ deterministic mocks. Database models never become wire DTOs.
 
 - REST/OpenAPI is the only public server transport. Kynos owns runtime, routing, middleware, OpenAPI
   emission, limits, shutdown and runtime observability.
-- The checked-in [OpenAPI 3.2 document](/design/api-surfaces/#key-design-decisions) is generated
+- The checked-in OpenAPI 3.2 document ([](/design/api-surfaces/#key-design-decisions)) is generated
   deterministically without live infrastructure, and Spargen generates the client from it.
 - Every error carries a stable `error.*` code. The English detail is diagnostic; clients localize the
   code.
@@ -51,7 +51,7 @@ authoritative.
   reservation, provenance, bundle visibility or finalization.
 - `AuthStateStore` and `UploadSessionStore` are distinct typed ports with Valkey and in-memory
   adapters passing the same conformance suites. Valkey is
-  [required](/design/filesystem/server/#required-services); the in-memory adapter is a test double,
+  required ([](/design/filesystem/server/#required-services)); the in-memory adapter is a test double,
   not a deployment choice.
 
 ## Logging

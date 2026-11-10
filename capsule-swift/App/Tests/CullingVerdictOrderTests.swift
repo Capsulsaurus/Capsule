@@ -1,4 +1,5 @@
 import CapsuleDomain
+import CapsuleFoundation
 import Foundation
 import Testing
 

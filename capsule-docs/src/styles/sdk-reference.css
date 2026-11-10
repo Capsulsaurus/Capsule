@@ -16,12 +16,12 @@
 /* ── man(1) (CLI): small-caps section names, hanging-indent options ────── */
 
 .sl-markdown-content .man-cmd {
-    margin-top: 2.5rem;
+    margin-block-start: 2.5rem;
 }
 
 .sl-markdown-content .man-label {
-    margin-top: 1.25rem;
-    margin-bottom: 0.25rem;
+    margin-block-start: 1.25rem;
+    margin-block-end: 0.25rem;
     font-size: var(--sl-text-sm);
     font-weight: 700;
     font-variant: small-caps;
@@ -86,7 +86,7 @@
 }
 
 .sl-markdown-content .sdk-index li > p + p {
-    margin-bottom: 0.5rem;
+    margin-block-end: 0.5rem;
     color: var(--sl-color-gray-2);
     font-size: var(--sl-text-sm);
 }
@@ -104,25 +104,25 @@
 /* ── Shared ─────────────────────────────────────────────────────────────── */
 
 .sl-markdown-content .sdk-symbol {
-    margin-top: 2.5rem;
+    margin-block-start: 2.5rem;
     padding-top: 1.5rem;
     border-top: 1px solid var(--sl-color-hairline);
 }
 
 /* Starlight wraps each heading in .sl-heading-wrapper. */
 .sl-markdown-content .sdk-symbol > .sl-heading-wrapper.level-h3 {
-    margin-top: 0.25rem;
+    margin-block-start: 0.25rem;
 }
 
 .sl-markdown-content .sdk-kind {
-    margin-bottom: 0;
+    margin-block-end: 0;
     font-size: var(--sl-text-sm);
     color: var(--sl-color-gray-2);
 }
 
 .sl-markdown-content .sdk-label {
-    margin-top: 1.5rem;
-    margin-bottom: 0.5rem;
+    margin-block-start: 1.5rem;
+    margin-block-end: 0.5rem;
     font-weight: 600;
     color: var(--sl-color-white);
 }
@@ -150,7 +150,7 @@
 }
 
 .sl-markdown-content .sdk-members > ul > li > :not(:first-child) {
-    margin-top: 0.25rem;
+    margin-block-start: 0.25rem;
     color: var(--sl-color-gray-2);
     font-size: var(--sl-text-sm);
 }
@@ -217,7 +217,7 @@
     --sdk-kind-color: var(--sl-color-gray-2);
     display: inline-block;
     padding: 0 0.5em;
-    border-radius: 999px;
+    border-radius: var(--capsule-radius-pill);
     background: color-mix(in srgb, var(--sdk-kind-color) 16%, transparent);
     color: var(--sdk-kind-color);
     font-size: var(--sl-text-xs);
