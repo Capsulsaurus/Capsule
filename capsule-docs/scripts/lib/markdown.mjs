@@ -42,7 +42,7 @@ function blank(text) {
  *
  * Leading whitespace is unbounded rather than CommonMark's three spaces,
  * because a fence nested in a list item is indented past that and is still a
- * fence — `capsule-cli/migration/README.md` has 36 of them.
+ * fence — the since-retired `capsule-cli/migration/README.md` had 36 of them.
  *
  * @param {string} source Markdown document.
  * @returns {string} The document with fenced content blanked out.

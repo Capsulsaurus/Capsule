@@ -7,10 +7,9 @@ use std::time::Duration;
 
 use capsule_core::crypto::primitives::{Argon2Params, DeviceTier};
 use capsule_sdk::peering::MemoryDirectoryVersions;
-use migration::{Migrator, MigratorTrait};
-use sea_orm::{Database, DatabaseConnection};
 
 use super::*;
+use crate::db::test_support::{exec, open};
 use crate::peering_state::record_purged;
 
 const FAST: Argon2Params = Argon2Params {
@@ -35,11 +34,8 @@ impl Scratch {
 
     /// A fresh, migrated connection to this scratch's CLI database: what a restarted process
     /// opens.
-    async fn db(&self) -> DatabaseConnection {
-        let url = format!("sqlite://{}?mode=rwc", self.0.join("cli.sqlite").display());
-        let db = Database::connect(&url).await.expect("connect sqlite");
-        Migrator::up(&db, None).await.expect("migrate");
-        db
+    async fn db(&self) -> LocalDb {
+        open(&self.0.join("cli.sqlite")).await
     }
 }
 
@@ -447,7 +443,7 @@ fn an_admitted_session_records_no_failure() {
 async fn an_unreadable_tombstone_store_refuses_the_pull() {
     let scratch = Scratch::new();
     let db = scratch.db().await;
-    sea_orm::ConnectionTrait::execute_unprepared(&db, "DROP TABLE peering_tombstones")
+    exec(&db, "DROP TABLE peering_tombstones")
         .await
         .expect("drops the table");
     assert!(matches!(

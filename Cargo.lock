@@ -1185,8 +1185,6 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "capitalize",
- "capsule-cli-entity",
- "capsule-cli-migration",
  "capsule-core",
  "capsule-e2e",
  "capsule-i18n",
@@ -1213,10 +1211,11 @@ dependencies = [
  "ratatui",
  "ratatui-image",
  "reqwest",
- "sea-orm",
+ "rusqlite",
  "secrecy",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sysinfo",
  "thiserror 2.0.20",
  "tokio",
@@ -1225,24 +1224,6 @@ dependencies = [
  "url",
  "uuid",
  "walkdir",
-]
-
-[[package]]
-name = "capsule-cli-entity"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "nanoid",
- "sea-orm",
- "serde",
-]
-
-[[package]]
-name = "capsule-cli-migration"
-version = "0.1.0"
-dependencies = [
- "sea-orm-migration",
- "tokio",
 ]
 
 [[package]]
@@ -1318,7 +1299,6 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "capsule-cli",
- "capsule-cli-migration",
  "capsule-core",
  "capsule-library",
  "capsule-sdk",
@@ -1330,7 +1310,6 @@ dependencies = [
  "kynos",
  "rcgen",
  "reqwest",
- "sea-orm",
  "serde",
  "serde_json",
  "tempfile",
@@ -1605,10 +1584,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
- "js-sys",
  "num-traits",
  "serde",
- "wasm-bindgen",
  "windows-link 0.2.1",
 ]
 

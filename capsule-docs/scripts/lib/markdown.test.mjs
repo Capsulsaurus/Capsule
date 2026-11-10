@@ -82,7 +82,7 @@ describe('stripFences', () => {
     });
 
     it('recognises a fence indented past four spaces inside a list item', () => {
-        // `capsule-cli/migration/README.md` has 36 of these. A three-space
+        // The since-retired `capsule-cli/migration/README.md` had 36. A three-space
         // bound leaves their contents scanned as prose.
         const source = [
             '- step:',

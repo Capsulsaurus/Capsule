@@ -32,7 +32,6 @@ use capsule_sdk::peering::{
     Offer, Offering, PeerClient, PeerRestore, PeeringError, PinnedTrust, TrustSource,
     build_delta_artifact, ingest, pull_over_channel, serve,
 };
-use sea_orm::ConnectionTrait;
 use serde::Serialize;
 use tokio::net::TcpStream;
 use tracing::instrument;
@@ -41,6 +40,7 @@ use uuid::Uuid;
 use super::{
     Admission, Admitted, PeerError, PeerFailure, PeerListener, PublishedTrust, dial, pinned_trust,
 };
+use crate::db::LocalDb;
 use crate::peering_state::{DbDirectoryVersions, load_tombstones};
 use crate::remote::{self, RemoteConfig};
 use crate::session::SessionStore;
@@ -329,7 +329,7 @@ impl PullSummary {
 /// # Errors
 ///
 /// [`PeerError::Tombstones`] when the store cannot be read or a row does not decode.
-pub async fn ingest_tombstones<C: ConnectionTrait>(db: &C) -> Result<BTreeSet<Uuid>, PeerError> {
+pub async fn ingest_tombstones(db: &LocalDb) -> Result<BTreeSet<Uuid>, PeerError> {
     load_tombstones(db).await.map_err(|error| {
         tracing::warn!(%error, "peer pull: the tombstones cannot be read; refusing the ingest");
         PeerError::Tombstones(error.to_string())
@@ -346,11 +346,11 @@ pub async fn ingest_tombstones<C: ConnectionTrait>(db: &C) -> Result<BTreeSet<Uu
 /// or [`PeerError`] for a run that could not start: no session, or a directory that does not
 /// verify or is below this device's floor.
 #[instrument(skip_all)]
-pub async fn pull<C: ConnectionTrait>(
+pub async fn pull(
     remote: &RemoteConfig,
     store: &SessionStore,
     workspace: &mut Workspace,
-    db: &C,
+    db: &LocalDb,
     versions: &DbDirectoryVersions,
     listener: &PeerListener,
 ) -> Result<PullSummary, PeerError> {
@@ -369,7 +369,7 @@ pub async fn pull<C: ConnectionTrait>(
 /// the server's feed, over every album (`0` for a library that never synced). The cursor is
 /// carried for parity with server sync; the offering device cuts its delta from the addresses,
 /// so a store that cannot be read offers `0` rather than refusing the run.
-async fn offer_cursor<C: ConnectionTrait>(db: &C, remote: &RemoteConfig) -> u64 {
+async fn offer_cursor(db: &LocalDb, remote: &RemoteConfig) -> u64 {
     match crate::syncstore::load_sync_state(db, &remote.protocol_version).await {
         Ok(state) => state
             .high_water_marks()

@@ -1,8 +1,6 @@
 [workspace]
 members = [
     "capsule-cli",
-    "capsule-cli/entity",
-    "capsule-cli/migration",
     "capsule-core",
     "capsule-core-ffi",
     "capsule-e2e",
@@ -19,8 +17,6 @@ members = [
 # capsule-server/openapi.json; regenerate it with `mise run openapi-kynos`.
 default-members = [
     "capsule-cli",
-    "capsule-cli/entity",
-    "capsule-cli/migration",
     "capsule-core",
     "capsule-core-ffi",
     "capsule-e2e",
@@ -88,9 +84,6 @@ socket2 = { version = "0.6.5", features = ["all"] }
 # lock file through reqwest and hyper. The server's bounded federation-pull transport uses it
 # the same way.
 http = "1.4.2"
-# Only as the sea-orm column type in `capsule-cli/entity` and in `capsule-server-migration` (a
-# server dev-dependency); everything else uses `jiff`. `cargo xtask architecture-check` gates it.
-chrono = { version = "0.4.45", features = ["serde"] }
 ed25519-dalek = "2"
 # Binaries report errors with `eyre` + `color-eyre`; libraries use `thiserror`. No `anyhow`.
 eyre = "0.6.12"
@@ -112,11 +105,15 @@ reqwest = { version = "0.12.28", default-features = false, features = [
     "rustls-tls",
 ] }
 ring = "0.17.14"
-# The server's Postgres adapters (`sqlx-postgres`) and the CLI's local SQLite (`sqlx-sqlite`).
-# Neither is a disposable cache: on the server only the asset index is a projection (rebuildable
-# from the ledger and blobs) and every other table is restored from backup; the CLI's database
-# holds peering state a resync cannot recover.
-sea-orm = { version = "2.0.4" }
+# The one client-side SQLite stack: `capsule-library`'s catalog, the FFI's catalog access and the
+# CLI's `capsule.sqlite` (sync store and peering state). `bundled` compiles SQLite in, so every
+# client carries the same engine whatever the host ships. Pinned once here because
+# `libsqlite3-sys` is `links = "sqlite3"`: two rusqlite versions in one build cannot link, which
+# is why the CLI left sea-orm's `sqlx-sqlite` (a second SQLite driver) for this crate.
+rusqlite = { version = "0.32", features = ["bundled"] }
+# The server's Postgres schema migrator (`capsule-server-migration`). sea-orm itself has no
+# workspace pin: `capsule-server` is its one direct consumer and declares it with its defaults
+# off (see that manifest); keep the two versions in step. The CLI's SQLite is on `rusqlite` above.
 sea-orm-migration = { version = "2.0.4", features = [
     "sqlx-postgres",
     "runtime-tokio-rustls",

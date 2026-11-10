@@ -42,7 +42,7 @@ ptpip-rs = { path = "../ptpip-rs" }
 p256 = { version = "0.13", default-features = false, features = ["ecdsa", "ecdh", "arithmetic"] }
 # Bundled SQLite (C) — the on-device library index. Local state, so never a `capsule-core`
 # dependency.
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { workspace = true }
 serde = { workspace = true }
 serde_bytes = "0.11"
 serde_json = { workspace = true }

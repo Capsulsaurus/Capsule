@@ -167,7 +167,7 @@ run = "cargo doc --workspace --no-deps --document-private-items"
 [tasks.doc-publish-rust]
 description = "Render the public workspace rustdoc published to GitHub Pages"
 run = [
-  "cargo doc --workspace --no-deps --exclude capsule-server-migration --exclude capsule-cli-migration --exclude capsule-cli-entity",
+  "cargo doc --workspace --no-deps --exclude capsule-server-migration",
   "printf '<!doctype html><meta http-equiv=\"refresh\" content=\"0; url=capsule_sdk/\"><link rel=\"canonical\" href=\"capsule_sdk/\">\\n' > target/doc/index.html",
 ]
 

@@ -492,15 +492,15 @@ fn member_dependency_names(root: &Path) -> Result<BTreeSet<String>> {
 
 /// `capsule-server` must not be on the `chrono` path.
 ///
-/// `cargo tree -i chrono -e no-dev` is a review-blocking gate: chrono exists in this workspace
-/// only as the sea-orm column type inside `capsule-cli/entity`, and the server's own datetime
-/// crate is `jiff`. #402 puts sea-orm into `capsule-server` for the
+/// `cargo tree -i chrono -e no-dev` is a review-blocking gate: chrono reaches this workspace only
+/// through `sea-orm-migration`'s defaults in `capsule-server-migration`, and the workspace's
+/// datetime crate is `jiff`. #402 puts sea-orm into `capsule-server` for the
 /// Postgres adapters, which makes that gate worth *enforcing* rather than reading.
 ///
 /// The check is deliberately **per package** rather than a grep of the workspace-wide tree.
-/// `capsule-cli` inherits sea-orm with its default features, `with-chrono` among them, and
-/// cargo unifies features across the packages a workspace build selects — so the workspace-wide
-/// `cargo tree` output lists `capsule-server` under sea-orm and always will, whatever this crate
+/// `capsule-server-migration` pulls sea-orm with its default features, `with-chrono` among them,
+/// and cargo unifies features across the packages a workspace build selects — so the
+/// workspace-wide `cargo tree` output can list `capsule-server` under sea-orm whatever this crate
 /// declares. What is actually decidable, and what the rule is about, is whether *this package's
 /// own manifest* asks for chrono: `cargo tree -p capsule-server -i chrono -e no-dev` must print
 /// nothing. That is what `default-features = false` on the server's sea-orm entry buys, and this
@@ -565,7 +565,7 @@ fn check_chrono_isolation(root: &Path, violations: &mut Vec<String>) -> Result<(
         if reaches_chrono && !expected {
             violations.push(format!(
                 "`{package}` reaches `chrono` through its own manifest; the workspace \
-                 permits chrono only as the sea-orm column type in `capsule-cli/entity` and in \
+                 permits chrono only through `sea-orm-migration` in \
                  `capsule-server-migration`. Check that sea-orm is declared with \
                  `default-features = false`"
             ));

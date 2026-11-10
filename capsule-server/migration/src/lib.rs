@@ -47,10 +47,9 @@
 //! # Every instant is a `BIGINT` of microseconds since the Unix epoch
 //!
 //! Not `TIMESTAMPTZ`. Binding one needs sea-orm's `with-chrono` or `with-time`, and both are
-//! refused: `chrono` is banned outside `capsule-cli/entity` by a gate
-//! (`cargo xtask architecture-check`), and `time` would be a third datetime crate beside `jiff`
-//! and the CLI entity's `chrono`. `capsule_server::postgres::time` converts at the adapter boundary, exactly as the
-//! CLI converts at its entity boundary. What that costs is SQL date arithmetic; every expiry
+//! refused: `chrono` is banned by a gate (`cargo xtask architecture-check`), and `time` would be
+//! a second datetime crate beside `jiff`. `capsule_server::postgres::time` converts at the adapter
+//! boundary. What that costs is SQL date arithmetic; every expiry
 //! and retention comparison in these tables is an ordering on one column, and integers order
 //! identically.
 

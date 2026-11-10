@@ -151,22 +151,20 @@ clap = { version = "4.6.1", features = ["derive"] }
 color-eyre = "0.6.5"
 # The Postgres adapters for the durable ports (#402). `default-features = false` is
 # load-bearing rather than tidy: sea-orm's defaults include `with-chrono`, and
-# `cargo xtask architecture-check` makes `cargo tree -i chrono -e no-dev` a review-blocking
-# gate that must keep resolving to `capsule-cli/entity` and sea-orm's own internals. Without a datetime feature
+# `cargo xtask architecture-check` makes `cargo tree -p capsule-server -i chrono -e no-dev` a
+# review-blocking gate: chrono may reach the lock file only through `capsule-server-migration`'s
+# `sea-orm-migration`, a dev-dependency. Without a datetime feature
 # there is no Rust binding for `TIMESTAMPTZ` at all, which is why every instant in the server's
 # schema is a `BIGINT` of epoch microseconds converted in `postgres::time`.
 #
 # Three features and no more: `macros` for the `FromQueryResult` derive the adapters' private row
 # structs use, `sqlx-postgres` for the driver, `runtime-tokio-rustls` because the workspace's TLS
-# rule is rustls only. Already a workspace dependency, consumed until #402 only by
-# `capsule-cli/entity`.
+# rule is rustls only.
 #
-# Spelled out rather than `workspace = true`, and only because cargo forbids the one thing this
-# needs: a member may add features to an inherited dependency but may not turn the workspace's
-# defaults **off**. `capsule-cli` and `capsule-cli/entity` inherit sea-orm *with* its defaults —
-# that is exactly why the chrono gate names `capsule-cli/entity` — so flipping the workspace
-# entry would change their build. The version is the workspace pin, restated; keep the two in
-# step when sea-orm is repinned.
+# Not a workspace pin: this crate is sea-orm's one direct consumer (the CLI's SQLite left it for
+# `rusqlite`), and a member may add features to an inherited dependency but may not turn the
+# workspace's defaults **off**. Keep the version in step with the workspace `sea-orm-migration`
+# pin, which pulls the same sea-orm.
 sea-orm = { version = "2.0.4", default-features = false, features = [
   "macros",
   "sqlx-postgres",

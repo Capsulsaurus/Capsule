@@ -386,7 +386,11 @@ fn a_successful_cargo_tree_is_read_from_its_output() {
         Ok(false)
     );
     assert_eq!(
-        classify_chrono_tree(true, "chrono v0.4.45\n└── capsule-cli-entity v0.1.0\n", ""),
+        classify_chrono_tree(
+            true,
+            "chrono v0.4.45\n└── capsule-server-migration v0.1.0\n",
+            ""
+        ),
         Ok(true)
     );
 }

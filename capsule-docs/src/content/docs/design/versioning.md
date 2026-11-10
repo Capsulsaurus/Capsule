@@ -48,6 +48,8 @@ The client catalog is the library as the user experiences it, so it carries the 
 
 A catalog stamped **above** the binary's version is refused with an error naming both versions and left byte-for-byte untouched (invariant 5). An older binary writing to it would fill columns it does not know are authoritative; refusing costs the user an update.
 
+The CLI's own database, `capsule.sqlite` (the sync store and peering's directory floor and tombstones), follows the same rule with its own `user_version` migrator. A copy written by an earlier sea-orm build is adopted in place, in one transaction, and one listing a migration this build does not know is refused untouched rather than recreated, so peering state is never discarded.
+
 ## Album Protocol Version Pinning
 
 Each album declares a `protocol_version` at creation, immutable for its lifetime, and every event in it must conform. A faulty implementation of a newer version can therefore only corrupt albums of that version, which matters most under [](/design/federation/).

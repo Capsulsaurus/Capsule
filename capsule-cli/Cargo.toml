@@ -21,8 +21,6 @@ name = "capsule_cli"
 path = "src/lib.rs"
 
 [dependencies]
-capsule-cli-entity = { path = "./entity" }
-capsule-cli-migration = { path = "./migration" }
 # `media-linked-codecs`: the lossy libjxl master, the AVIF delivery variant and the preview tier
 # (issue #437). The CLI is the stabilize-first client that imports real libraries, and it builds
 # only for desktop hosts, so it takes the native-code encoders the mobile FFI deliberately does
@@ -62,7 +60,7 @@ eyre = { workspace = true }
 futures = "0.3.32"
 humansize = "2.1"
 indexmap = { workspace = true }
-nanoid = "0.4.0"
+nanoid = { workspace = true }
 ratatui = { workspace = true }
 # The library browser's inline preview: Kitty, Sixel or iTerm2 graphics where the terminal answers the query, a text fallback
 # elsewhere. No default features: `chafa-dyn` would load the LGPL libchafa, and the crossterm
@@ -71,11 +69,12 @@ ratatui = { workspace = true }
 # crate that names `image`, which is otherwise xtask tooling only.
 ratatui-image = { version = "11.1.0", default-features = false }
 image = { version = "0.25", default-features = false }
-sea-orm = { workspace = true, features = [
-    "sqlx-sqlite",
-    "runtime-tokio-rustls",
-    "debug-print",
-] }
+# `capsule.sqlite`, the CLI's local database (`src/db.rs`): the sync store and peering's floor and
+# tombstones, behind a forward-only `user_version` migrator. The workspace pin, the same bundled
+# SQLite `capsule-library` keeps its catalog on, so the client builds one SQLite engine. Not
+# sea-orm's `sqlx-sqlite`, which this replaced: a second SQLite stack and an ORM for six small
+# hand-written queries.
+rusqlite = { workspace = true }
 serde = { workspace = true }
 sysinfo = "0.36.1"
 thiserror = { workspace = true }
@@ -126,6 +125,10 @@ tokio = { workspace = true, features = ["test-util"] }
 # through `CARGO_BIN_EXE_capsule`, never `assert_cmd`. The TUI's
 # render tests snapshot `TestBackend` frames as plain text the same way (`src/tui/view/`).
 insta = { workspace = true }
+# The `capsule.sqlite` migrator's immutability lock (`src/db/migrate/tests.rs`): each shipped
+# step's rendering is pinned by its SHA-256, as `capsule-library`'s catalog migrator does. The
+# workspace pin, already in the graph through capsule-core.
+sha2 = { workspace = true }
 # `tests/escrow_publishes_directory.rs` drives `register`, `login`, `library init`, `auth escrow`,
 # `import` and `push` as spawned binaries against a server: `capsule-e2e`'s `Server` boots the
 # composition root `serve --memory` runs on an ephemeral port, in-process. Its own

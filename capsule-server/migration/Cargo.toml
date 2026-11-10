@@ -10,15 +10,15 @@ publish.workspace = true
 # `capsule-server` takes this crate as a **dev-dependency only**, which is a deliberate
 # constraint rather than an accident of layering: `sea-orm-migration` pulls `sea-orm` with its
 # default features, `with-chrono` among them, and `cargo xtask architecture-check` makes
-# `cargo tree -i chrono -e no-dev` a review-blocking gate. Keeping the migrator out of the
-# server's normal dependency graph is what keeps that gate resolving to `capsule-cli/entity`
-# and sea-orm's own internals. The consequence is recorded where it is felt:
+# `cargo tree -p capsule-server -i chrono -e no-dev` a review-blocking gate. Keeping the migrator
+# out of the server's normal dependency graph is what keeps chrono off the server's path; this
+# crate is the one place it is expected. The consequence is recorded where it is felt:
 # `capsule_server::postgres::assert_schema_current` refuses to boot on a pending migration and
 # names the command below, rather than running `Migrator::up` on `serve`.
 
 [lib]
-# Not `migration`: `capsule-cli/migration` already publishes a lib of that name, and two libs
-# called `migration` in one workspace is legal and a trap for anybody writing `use migration::`.
+# Not `migration`: a name that generic invites a collision (the CLI once published a lib of that
+# name), and two libs called `migration` in one workspace is a trap for `use migration::`.
 name = "server_migration"
 path = "src/lib.rs"
 
