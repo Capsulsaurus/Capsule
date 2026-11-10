@@ -78,6 +78,7 @@ pub mod conformance;
 pub mod ids;
 pub mod memory;
 pub mod postgres;
+pub mod sweep;
 pub mod upload;
 pub mod valkey;
 
