@@ -413,10 +413,14 @@ header.header {
 }
 
 /* Natural size, never scaled down: a diagram's text stays the size of the
-   page's small text, and a wide one scrolls inside its card. */
+   page's small text, and a wide one scrolls inside its card. Tailwind's
+   preflight makes an SVG a block, which `text-align` cannot centre, so the
+   auto margins centre it under its caption; a diagram wider than the card
+   has no spare width, starts at the card's edge and scrolls. */
 .sl-markdown-content .diagram svg {
     max-width: none;
     height: auto;
+    margin-inline: auto;
 }
 
 .sl-markdown-content figure.diagram figcaption {
