@@ -506,7 +506,7 @@ jobs:
       matrix:
         include:
           - name: apple
-            os: macos-14
+            os: macos-26
             recipe: build-apple
             targets: aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
             tier2: false
