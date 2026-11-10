@@ -1,0 +1,55 @@
+/*
+ * Corner backdrop: a fine dot grid in the page's top-right corner, on every
+ * page, dissolving toward the centre. It is texture, not decoration: 1px dots
+ * in a neutral at low strength, so it never competes with text, and fixed to
+ * the window, so it stays put while the page scrolls over it.
+ *
+ * It sits behind everything (a fixed layer under the body's content), so it
+ * shows through the transparent content column, the table of contents and
+ * the header's glass, and the opaque sidebar covers it. The contract is the
+ * Visual Language doc's "Background" rule
+ * (src/content/docs/development/visual-language.md).
+ */
+:root {
+    --capsule-backdrop-dot: color-mix(
+        in srgb,
+        var(--sl-color-gray-3) 22%,
+        transparent
+    );
+    --capsule-backdrop-pitch: 20px;
+}
+
+:root[data-theme="light"] {
+    --capsule-backdrop-dot: color-mix(
+        in srgb,
+        var(--sl-color-gray-4) 28%,
+        transparent
+    );
+}
+
+body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background-image: radial-gradient(
+        circle at center,
+        var(--capsule-backdrop-dot) 1px,
+        transparent 1.5px
+    );
+    background-size: var(--capsule-backdrop-pitch) var(--capsule-backdrop-pitch);
+    /* Strongest in the corner, gone by the middle of the window. */
+    mask-image: radial-gradient(
+        ellipse 55vw 75vh at 100% 0%,
+        #000 0%,
+        rgb(0 0 0 / 0.6) 35%,
+        transparent 75%
+    );
+}
+
+@media print {
+    body::before {
+        display: none;
+    }
+}

@@ -114,6 +114,10 @@ one is designed.
   step back through history reverses the direction, the new content settling down from above. It is
   a browser view transition, so a browser without one, or a reader who asks for reduced motion,
   navigates with no animation.
+- **Background.** Every page carries a fine dot grid in its top-right corner, fixed to the window and
+  dissolving toward the middle: 1px neutral dots, faint in both themes, so it reads as texture and
+  never competes with text. It shows behind the content, the table of contents and the header's
+  glass; the sidebar covers it, and it is not printed.
 - **Status badges.** Every authored page carries a review `status`
   ([](/design/principles/#review-status)). The page title always shows
   it. The sidebar shows it only for a page that is not `stable`, so the navigation lists exactly what

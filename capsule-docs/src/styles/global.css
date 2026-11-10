@@ -9,6 +9,7 @@
 @import "./api-reference.css";
 @import "./sdk-reference.css";
 @import "./motion.css";
+@import "./backdrop.css";
 
 /* Upstream Geist 1.9 variable cuts, vendored in src/assets/fonts (see its
    README). Vite fingerprints them into /_astro/, which public/_headers marks
