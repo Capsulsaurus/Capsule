@@ -130,7 +130,14 @@ header.header {
     view-transition-name: site-header;
 }
 
-.header {
+/* The glass is one even layer from the bar's top edge to its bottom edge.
+   Scoped to Starlight's <header>: the override's inner `.header` div sits
+   inside the bar's vertical padding, and glazing it too stacks a second,
+   denser band across the middle, so text scrolling under the bar's top edge
+   would show through and then vanish. The blur stays on the <header> itself:
+   its view-transition-name makes it a backdrop root, so a blurred child layer
+   would see nothing behind it. */
+header.header {
     background-color: color-mix(
         in srgb,
         var(--sl-color-black) 78%,

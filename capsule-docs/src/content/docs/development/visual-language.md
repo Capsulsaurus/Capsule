@@ -100,6 +100,8 @@ one is designed.
   shown, naming the version being read: Latest, or `vX.Y`, with each released version once one
   exists, in a menu drawn like the site's other controls rather than the browser's native
   dropdown, the version being read an accent-tinted pill), a labelled GitHub button and a theme toggle that cycles Auto, Light and Dark. The bar
+  is one even pane of tinted glass from its top edge to its bottom edge, the page blurred beneath
+  it, so text scrolling under it fades uniformly rather than showing through at the edges. The bar
   is laid out by the window's width alone, so it is identical on every page, the front page
   included, and a navigation in a browser with view transitions keeps it in place. The section
   links need a wide window (72rem, where the table of contents also appears); narrower, the sidebar
