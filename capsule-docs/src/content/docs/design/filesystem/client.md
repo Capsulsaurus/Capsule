@@ -35,7 +35,7 @@ Android and iOS use the app's private sandbox with the same logical model. Rebui
 
 ## Local Index Staleness
 
-SQLite may lag the filesystem. The client checks a file exists before acting on its row and rebuilds from sidecars on structural inconsistency ([](/design/filesystem/maintenance/)).
+SQLite may lag the filesystem: a bundle is durable before its index rows commit. Opening the workspace re-indexes any bundle with no row from its sidecar ([](/design/filesystem/maintenance/#atomic-writes-and-crash-recovery)). The client checks a file exists before acting on its row and rebuilds from sidecars on structural inconsistency ([](/design/filesystem/maintenance/)).
 
 ## Space Recovery
 

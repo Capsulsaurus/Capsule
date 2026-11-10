@@ -891,3 +891,49 @@ fn every_fallback_content_type_has_an_extension() {
     }
     assert_eq!(extension_for(&content_type_for("xyz")), "bin");
 }
+
+/// **Per-asset index atomicity.** `index_asset_row` writes the row and replaces the tags as one
+/// scope: when the tag write fails part-way, the row upsert is rolled back with it and the
+/// previous tags survive, rather than a fresh row with a truncated tag set.
+#[test]
+fn a_failed_index_write_leaves_the_previous_row_and_tags() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let img = src.path().join("photo.jpg");
+    fs::write(&img, b"\xFF\xD8\xFF atomic index write").unwrap();
+
+    let mut ws = fast_workspace(lib.path());
+    let album = ws.create_album("Trip").unwrap();
+    let id = ws.import_asset(album, &img).unwrap();
+    ws.tag_add(&id, "beach").unwrap();
+    ws.tag_add(&id, "dusk").unwrap();
+    let uuid = id.to_string();
+
+    // A stale projection the next index write would overwrite, and a tag table that now
+    // refuses every insert.
+    let conn = ws.db().connection();
+    conn.execute(
+        "UPDATE assets SET rating = 3 WHERE uuid = ?1",
+        rusqlite::params![uuid],
+    )
+    .unwrap();
+    conn.execute_batch(
+        "CREATE TRIGGER refuse_tags BEFORE INSERT ON asset_tags
+         BEGIN SELECT RAISE(ABORT, 'injected tag failure'); END;",
+    )
+    .unwrap();
+
+    let asset = ws.asset(&id).unwrap();
+    assert!(ws.index_asset_row(asset).is_err());
+
+    assert_eq!(
+        ws.db().find_by_uuid(&uuid).unwrap().unwrap().rating,
+        3,
+        "the row upsert rolled back with the failed tag write"
+    );
+    assert_eq!(
+        ws.db().tags_for(&uuid).unwrap(),
+        vec!["beach".to_string(), "dusk".to_string()]
+    );
+    assert!(!ws.db().in_transaction());
+}

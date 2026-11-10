@@ -53,7 +53,8 @@ Findings are **classified, never adjudicated**: the report names the check and b
 | --- | --- |
 | Stale `.tmp` | Deleted by the scrub. |
 | Orphaned `cache/` entry | Deleted. |
-| Index inconsistency | Rebuilt from sidecars and chains. Safe but not lossless (index-only state such as importer-formed stack placement is lost), so rebuild is never a schema-upgrade path. |
+| Bundle without an index row | Re-indexed on open from its sidecar and chain, through the same per-asset path as a rebuild ([](#atomic-writes-and-crash-recovery)). |
+| Index inconsistency | Rebuilt from sidecars and chains: row, user tags and stacks. Safe but not lossless (index-only state such as importer-formed stack placement is lost), so rebuild is never a schema-upgrade path. |
 | Sidecar without original | Expected under metadata-only sync scope ([](/design/sync/#synchronization-scope)); otherwise re-fetch the original. |
 | Original without sidecar | Never deleted: quarantined, surfaced, minimal sidecar re-derived. |
 | Sidecar without provenance chain | Not restored on open; listed as unanchored and left untouched. A write renames its chain into place last, so an interrupted one leaves this rather than a torn chain. |
@@ -80,6 +81,7 @@ Every write that must not tear stages a temp file on the destination filesystem,
 - **Client single file.** Stage `{name}.tmp` in the destination directory, then rename. Never overwrite in place.
 - **Client per-asset bundle.** Stage all files, then rename in fixed order: original, sidecar, provenance. A rewrite first stages the displaced version as `.prev` so rollback can restore it. Any failure rolls back completed renames, so a new provenance record implies a committed bundle.
 - **Client stack edit.** All sidecars and per-asset provenance records stage and rename as one batch; there is no partial stack.
+- **Client index write.** An asset's index rows (row, user tags, original's cache entry) are written after its bundle is durable, in one transaction, so a reader never sees a row with a partial tag set. A bulk import commits these rows once per bounded batch, each asset a savepoint within it, and the batch commits before any source is released. A crash between bundle and commit leaves a bundle with no row; opening the workspace compares the indexed ids with the bundles on disk and re-indexes the missing ones from their sidecars, at the cost of one id scan when none is missing.
 - **Server finalization.** Order: claim (CAS), re-hash the staged file, envelope checks, `BlobStore::commit` (atomic rename + directory fsync), owner-ledger append, then index record and custody receipt in one transaction ([](/design/transfer/upload/#finalization-and-integrity)).
   - A crash before commit leaves `incoming/` debris. A crash after commit but before the index transaction leaves an orphan GC reclaims (or a ledger entry rebuild replays), and the retry is idempotent because the content address is one object.
   - An indexed blob without a receipt, or a receipt without custody, MUST NOT occur.

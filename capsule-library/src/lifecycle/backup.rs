@@ -640,8 +640,7 @@ impl Workspace {
             held.map(|h| h.metadata_blob.as_slice()),
         )?;
         self.write_asset_files(&asset, &restored.plaintext)?;
-        self.index_asset_row(&asset)?;
-        self.index_original_representation(&asset, restored.plaintext.len())?;
+        self.index_asset_with_original(&asset, restored.plaintext.len())?;
         self.assets.insert(restored.asset_id, asset);
         Ok(())
     }
