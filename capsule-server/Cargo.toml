@@ -194,11 +194,10 @@ serde_json = { workspace = true }
 # (`postgres::assert_schema_current`), which is also the safer rollout: a server that migrates on
 # start migrates once per replica during a rolling deploy.
 capsule-server-migration = { path = "migration" }
-# The containers the conformance suites run against: a Postgres for `postgres::testing`, behind
-# `CAPSULE_TEST_POSTGRES=1`, and a Valkey for `tests/valkey.rs`, behind `CAPSULE_TEST_VALKEY=1`
-# (or `CAPSULE_TEST_VALKEY_URL` for a server already running). Both suites run the same cases the
-# in-memory doubles pass, so `mise run test-rust` still needs no podman and `.config/nextest.toml`
-# puts both in the one-thread `containers` group.
+# The container the conformance suites run against: a Postgres for `postgres::testing`, behind
+# `CAPSULE_TEST_POSTGRES=1`. The suites run the same cases the in-memory doubles pass, so
+# `mise run test-rust` still needs no podman, and `.config/nextest.toml` puts them in the
+# one-thread `containers` group.
 #
 # Both crates were pinned at the workspace and consumed by nothing — `xtask`'s
 # `PLANNED_WORKSPACE_DEPENDENCIES` sanctioned them as planned because "no test starts a
