@@ -3,12 +3,13 @@
  * page, dissolving toward the centre. It is texture, not decoration: dots of a
  * 1px radius in a neutral at low strength, so it never competes with text,
  * and fixed to the window, so it stays put while the page scrolls over it.
+ * It is unnamed, so a page transition (./motion.css) carries it in the root
+ * snapshot with the content: it settles with the new page.
  *
  * It sits behind everything (a fixed layer under the body's content), so it
  * shows through the transparent content column and the table of contents;
  * the opaque sidebar covers it, and the header's glass blurs it away. The
- * contract is the
- * Visual Language doc's "Background" rule
+ * contract is the Visual Language doc's "Background" rule
  * (src/content/docs/development/visual-language.md).
  */
 :root {

@@ -117,7 +117,8 @@ one is designed.
 - **Background.** Every page carries a fine dot grid in its top-right corner, fixed to the window and
   dissolving toward the middle: small neutral dots, faint in both themes, so it reads as texture and
   never competes with text. It shows behind the content and the table of contents; the sidebar
-  covers it, the header's glass blurs it away, and it is not printed.
+  covers it, the header's glass blurs it away, and it is not printed. It stays put while a page
+  scrolls; a page transition carries it with the content, so it settles with the new page.
 - **Status badges.** Every authored page carries a review `status`
   ([](/design/principles/#review-status)). The page title always shows
   it. The sidebar shows it only for a page that is not `stable`, so the navigation lists exactly what
