@@ -7,7 +7,7 @@
 //!
 //! # A shipped step is immutable
 //!
-//! Once a step appears in [`STEPS`] it is never edited, only followed by another: some user's
+//! Once a step appears in `STEPS` it is never edited, only followed by another: some user's
 //! database has been walked through the old text, so editing it would make one `user_version`
 //! name two schemas. `shipped_steps_are_immutable` in this module's tests locks each step's
 //! rendering behind a SHA-256 fingerprint.

@@ -21,7 +21,7 @@
 //! `quota_pulled_holdings`, one row per `(account, address)` with the number of the account's
 //! albums that hold it. Every writer of `federation_subscriptions`,
 //! `federation_pulled_metadata_blobs` and `quota_attributions` keeps both through
-//! [`super::pulled_total`], in the transaction of the statement that changed them: the pulled
+//! `quota::pulled_total`, in the transaction of the statement that changed them: the pulled
 //! page's commit, the subscribe and unsubscribe, a charge of an address the account holds
 //! pulled, and every release. So reading the total is one row. A release of an attribution returns the address to the pulled total while
 //! the account still holds it, which is why [`QuotaStore::release_attribution`] never credits
@@ -228,7 +228,7 @@ impl PostgresQuota {
     /// pulled blobs and attributions derive, in account order.
     ///
     /// One statement, so one snapshot: every writer moves the stored state in the transaction
-    /// that moves the rows ([`super::pulled_total`]), so a committed snapshot shows no drift unless something bypassed
+    /// that moves the rows (`quota::pulled_total`), so a committed snapshot shows no drift unless something bypassed
     /// them. It reads every holding on the server, so it is an audit, not a request-path read.
     ///
     /// # Errors
@@ -328,7 +328,7 @@ impl PostgresQuota {
     /// what was found.
     ///
     /// An empty answer is the expected one; each account it names is logged at `WARN`, because
-    /// drift means some write reached the tables without [`super::pulled_total`].
+    /// drift means some write reached the tables without `quota::pulled_total`.
     ///
     /// # Errors
     ///

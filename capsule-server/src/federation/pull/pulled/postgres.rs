@@ -43,7 +43,7 @@
 //!
 //! The receivers' `quota_used` moves with the page: after inserting the
 //! `federation_pulled_metadata_blobs` rows, the commit adds each newly held address to every
-//! subscriber's stored pulled total ([`crate::quota::pulled_total`]) inside the same
+//! subscriber's stored pulled total (`quota::pulled_total`) inside the same
 //! transaction. So a written page is counted from the instant it commits and a rolled-back one
 //! never is, whichever hook is assembled. That takes a per-job lock and then the subscribers'
 //! `quota_usage` rows, in account order, after the per-address locks above, so a commit holds
