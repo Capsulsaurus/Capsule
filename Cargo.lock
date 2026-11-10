@@ -1183,7 +1183,7 @@ checksum = "6b5271031022835ee8c7582fe67403bd6cb3d962095787af7921027234bab5bf"
 name = "capsule-cli"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "capitalize",
  "capsule-core",
  "capsule-e2e",
@@ -1297,7 +1297,7 @@ dependencies = [
 name = "capsule-e2e"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "capsule-cli",
  "capsule-core",
  "capsule-library",
@@ -1363,7 +1363,7 @@ dependencies = [
 name = "capsule-sdk"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "capsule-core",
  "capsule-i18n",
@@ -1403,7 +1403,7 @@ name = "capsule-server"
 version = "0.1.0"
 dependencies = [
  "argon2",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "capsule-core",
  "capsule-i18n",
@@ -1454,7 +1454,7 @@ dependencies = [
 name = "capsule-wasm"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "capsule-core",
  "hex",
  "uuid",
@@ -9656,7 +9656,7 @@ dependencies = [
 name = "xtask"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "capsule-core",
  "capsule-i18n",
  "eyre",
