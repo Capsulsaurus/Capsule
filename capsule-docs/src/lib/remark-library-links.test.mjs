@@ -5,7 +5,6 @@ import { describe, expect, it } from 'vitest';
 import { EXPLICIT_ONLY, LIBRARIES } from './library-links.mjs';
 import {
     BADGE_CLASS,
-    BADGE_TEXT,
     forbiddenNames,
     linkLibraries,
 } from './remark-library-links.mjs';
@@ -28,12 +27,13 @@ const isBadge = (node) =>
 
 /**
  * A document's text as a reader sees it, with each repo badge written inline
- * as `{url}` and any other link as `[text](url)`; blocks on their own lines.
+ * as `{name|url}` and any other link as `[text](url)`; blocks on their own
+ * lines.
  */
 function render(markdown, libraries) {
     const tree = linkLibraries(fromMarkdown(markdown), libraries);
     const inline = (node) => {
-        if (isBadge(node)) return `{${node.url}}`;
+        if (isBadge(node)) return `{${textOf(node)}|${node.url}}`;
         if (node.type === 'link') return `[${textOf(node)}](${node.url})`;
         if ('value' in node) return node.value;
         return (node.children ?? []).map(inline).join('');
@@ -55,21 +55,24 @@ describe('linkLibraries', () => {
     it('badges only the first mention on a page', () => {
         expect(
             render('Kynos routes. Kynos emits.\n\nKynos again.', [KYNOS]),
-        ).toBe(`Kynos{${KYNOS.url}} routes. Kynos emits.\nKynos again.`);
+        ).toBe(`{Kynos|${KYNOS.url}} routes. Kynos emits.\nKynos again.`);
     });
 
-    it('leaves the name itself plain text, not a link', () => {
+    it('makes the mention itself the badge, its words unchanged', () => {
         const tree = linkLibraries(fromMarkdown('Built on Kynos today.'), [
             KYNOS,
         ]);
         const [paragraph] = tree.children;
         expect(paragraph.children.map((node) => node.type)).toEqual([
             'text',
-            'text',
             'link',
             'text',
         ]);
-        expect(paragraph.children[1]).toEqual({ type: 'text', value: 'Kynos' });
+        expect(isBadge(paragraph.children[1])).toBe(true);
+        expect(paragraph.children[1].children).toEqual([
+            { type: 'text', value: 'Kynos' },
+        ]);
+        expect(textOf(tree)).toBe('Built on Kynos today.');
     });
 
     it('never badges a mention that is part of a compound word', () => {
@@ -79,7 +82,7 @@ describe('linkLibraries', () => {
                 RUSTLS,
             ]),
         ).toBe(
-            `Kynos's routes. rustls-only. Then Kynos{${KYNOS.url}} and rustls{${RUSTLS.url}}.`,
+            `Kynos's routes. rustls-only. Then {Kynos|${KYNOS.url}} and {rustls|${RUSTLS.url}}.`,
         );
         expect(badges('Kynos’s routes.', [KYNOS])).toEqual([]);
         // An inline-code mention follows the same word rule as prose.
@@ -92,20 +95,18 @@ describe('linkLibraries', () => {
         const [badge] = badges('Built on Kynos.', [KYNOS]);
         expect(badge.url).toBe(KYNOS.url);
         expect(badge.title).toBe('Source repository: github.com/getkono/kynos');
+        // No search exclusion: the badge holds the name, which is content.
         expect(badge.data.hProperties).toEqual({
             className: [BADGE_CLASS],
-            // Contains the visible label, so speech control can name it.
-            ariaLabel: `Kynos source ${BADGE_TEXT}`,
-            // The badge is chrome, not content: search never indexes it.
-            dataPagefindIgnore: '',
+            // Starts with the visible name, so speech control can name it.
+            ariaLabel: 'Kynos source repository',
         });
-        expect(textOf(badge)).toBe(BADGE_TEXT);
     });
 
     it('badges a mention inside a table cell', () => {
         expect(
             render('| a | b |\n| - | - |\n| x | the Kynos router |', [KYNOS]),
-        ).toContain(`the Kynos{${KYNOS.url}} router`);
+        ).toContain(`the {Kynos|${KYNOS.url}} router`);
     });
 
     it('skips headings, existing links and code blocks', () => {
@@ -115,7 +116,7 @@ describe('linkLibraries', () => {
                 [KYNOS],
             ),
         ).toBe(
-            `Kynos\n[the Kynos docs](https://x.invalid)\nKynos\nThen Kynos{${KYNOS.url}}.`,
+            `Kynos\n[the Kynos docs](https://x.invalid)\nKynos\nThen {Kynos|${KYNOS.url}}.`,
         );
     });
 
@@ -124,29 +125,29 @@ describe('linkLibraries', () => {
             badges('Kynoses, kynos, Kynos-like, a/Kynos, Kynos.toml.', [KYNOS]),
         ).toEqual([]);
         expect(render('Ends with Kynos.', [KYNOS])).toBe(
-            `Ends with Kynos{${KYNOS.url}}.`,
+            `Ends with {Kynos|${KYNOS.url}}.`,
         );
     });
 
     it('prefers the longest name', () => {
         expect(render('Uses TanStack Router.', TANSTACK)).toBe(
-            `Uses TanStack Router{${TANSTACK[0].url}}.`,
+            `Uses {TanStack Router|${TANSTACK[0].url}}.`,
         );
     });
 
     it('badges an exact inline-code spelling, and it counts as the mention', () => {
         expect(
             render('`rustls` first, then rustls, and `rustls-tls`.', [RUSTLS]),
-        ).toBe(`rustls{${RUSTLS.url}} first, then rustls, and rustls-tls.`);
+        ).toBe(`{rustls|${RUSTLS.url}} first, then rustls, and rustls-tls.`);
     });
 
-    it('keeps an inline-code mention as code', () => {
+    it('keeps an inline-code mention as code, inside the badge', () => {
         const tree = linkLibraries(fromMarkdown('Uses `rustls`.'), [RUSTLS]);
         const [paragraph] = tree.children;
-        expect(paragraph.children[1]).toEqual(
+        expect(isBadge(paragraph.children[1])).toBe(true);
+        expect(paragraph.children[1].children).toEqual([
             expect.objectContaining({ type: 'inlineCode', value: 'rustls' }),
-        );
-        expect(isBadge(paragraph.children[2])).toBe(true);
+        ]);
     });
 });
 

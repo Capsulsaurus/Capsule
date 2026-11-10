@@ -157,11 +157,12 @@ one is designed.
   sentence around the label, typically as a parenthetical after the term it supports. The build
   rejects such a link written with its own text; generated reference pages, and site paths that
   are not docs pages (`/rustdoc/`, `/openapi.json`), are exempt.
-- **Libraries are badged once per page.** The first mention of a library or tool is followed by a
-  small "repo" badge linking its source repository from `src/lib/library-links.mjs`; the name
-  itself stays plain text, so an automatic substitution never looks like a link an author chose.
-  A mention inside a larger word (`` `rustls`-only ``, a possessive, a path) is never badged, so a
-  badge never splits a word; the next standalone mention is. Search does not index the badge.
+- **Libraries are badged once per page.** The first mention of a library or tool becomes a badge
+  linking its source repository from `src/lib/library-links.mjs`: the name itself, a touch
+  smaller, in a hairline pill with a code-brackets glyph, sitting on the line like any other word.
+  It is never an underlined link, so an automatic substitution never looks like a link an author
+  chose. A mention inside a larger word (`` `rustls`-only ``, a possessive, a path) is never
+  badged, so a pill never splits a word; the next standalone mention is.
   Add a library there, not a URL to a page. A name that is also an ordinary word, or names two
   things (`gamut`), is linked by hand.
 - **Diagrams are Mermaid.** A graph, flow or state machine is a ```` ```mermaid title="…" ````
