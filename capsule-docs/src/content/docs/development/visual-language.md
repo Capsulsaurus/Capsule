@@ -98,7 +98,8 @@ one is designed.
   the section links centred in the free space: Guides, Design, Reference and, once the blog is live,
   Blog. The current section is an accent-tinted pill. Then search, a version switcher (always
   shown, naming the version being read: Latest, or `vX.Y`, with each released version once one
-  exists), a labelled GitHub button and a theme toggle that cycles Auto, Light and Dark. The bar
+  exists, in a menu drawn like the site's other controls rather than the browser's native
+  dropdown, the version being read an accent-tinted pill), a labelled GitHub button and a theme toggle that cycles Auto, Light and Dark. The bar
   is laid out by the window's width alone, so it is identical on every page, the front page
   included, and a navigation in a browser with view transitions keeps it in place. The section
   links need a wide window (72rem, where the table of contents also appears); narrower, the sidebar
@@ -176,6 +177,8 @@ one is designed.
   (`src/lib/blog-posts.test.mjs` proves the contract check itself).
 - `src/lib/site-nav.test.mjs` proves the header and footer links, their order, the Blog link's
   dependence on the blog being live, and that every internal link resolves to a page.
+- `src/lib/version-menu.test.mjs` proves what the version switcher lists, where its keyboard focus
+  moves and which side of the button it opens on.
 - `src/lib/theme-cycle.test.mjs` proves the toggle's cycle and that it stores what Starlight reads;
   `src/lib/build-commit.test.mjs` proves which commit the footer names.
 - `src/lib/sidebar-status.test.mjs` proves which sidebar entries carry a badge.
