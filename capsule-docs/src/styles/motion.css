@@ -1,24 +1,52 @@
 /*
  * Page transitions. A navigation between pages is a cross-document view
  * transition: the chrome holds still and the page's content moves. The header
- * is identical on every page and does not animate at all. The sidebar and the
- * table of contents swap in a short crossfade, so only what differs (the
- * current-page pill, the new page's headings) changes, and softly. The
- * content steps out, lifting a few pixels as it fades, then the new content
- * rises into place. A step back through history reverses the direction: the
- * old content sinks and the new content settles down from above. The `back`
- * transition type is added by the inline <head> script built from
+ * is identical on every page and does not animate at all. The sidebar swaps in
+ * a short crossfade, so only what differs (the current-page pill) changes, and
+ * softly. The table of contents and the content fade out as the new page's
+ * fade in, the content lifting a few pixels as it leaves and rising into
+ * place as it arrives. A step back through history reverses the direction:
+ * the old content sinks and the new content settles down from above. The
+ * `back` transition type is added by the inline <head> script built from
  * src/lib/page-transition.mjs.
+ *
+ * The content is not named: it travels in the root snapshot, which is the
+ * window's size whatever the page's length or scroll position, so the old
+ * content leaves from exactly where the reader saw it. (A named <main> would
+ * be captured at its own box, and a scrolled or differently laid-out page
+ * would put the old snapshot somewhere else.)
  *
  * The contract is the Visual Language doc's "Page transitions" rule
  * (src/content/docs/development/visual-language.md). Motion is decorative:
  * readers who ask for reduced motion, and browsers without cross-document
  * view transitions, navigate with no animation at all.
  *
- * Every name is given to exactly one element. Two elements sharing a name
- * cancel the whole transition, so the header's name goes on Starlight's
- * <header> alone (the Header override's root div is also `.header`).
+ * The names are given regardless of the motion preference, so every reader
+ * gets the same stacking (a named element is a stacking context and a
+ * backdrop root). Each goes on exactly one element: two elements sharing a
+ * name cancel the whole transition, so the header's name goes on Starlight's
+ * <header> alone (the Header override's root div is also `.header`). The
+ * side columns are named only where they are fixed columns: below those
+ * widths the sidebar is the mobile menu, and the table-of-contents container
+ * holds the mobile contents bar, which a stacking context there would bury
+ * under the content.
  */
+header.header {
+    view-transition-name: site-header;
+}
+
+@media (min-width: 50rem) {
+    .sidebar-pane {
+        view-transition-name: site-sidebar;
+    }
+}
+
+@media (min-width: 72rem) {
+    .right-sidebar {
+        view-transition-name: site-toc;
+    }
+}
+
 @media (prefers-reduced-motion: no-preference) {
     @view-transition {
         navigation: auto;
@@ -42,22 +70,6 @@
         --capsule-page-in-y: -10px;
     }
 
-    header.header {
-        view-transition-name: site-header;
-    }
-
-    .sidebar-pane {
-        view-transition-name: site-sidebar;
-    }
-
-    .right-sidebar {
-        view-transition-name: site-toc;
-    }
-
-    main {
-        view-transition-name: page-content;
-    }
-
     /* The bar is the same on both sides of a navigation. */
     ::view-transition-group(site-header),
     ::view-transition-old(site-header),
@@ -79,8 +91,8 @@
     }
 
     /* Table of contents: a different list on each page, which a crossfade
-       would overprint. It steps out and in with the content, without the
-       travel. */
+       would overprint. It fades out and in with the content, without the
+       travel. Its column is fixed and the same on every page that has it. */
     ::view-transition-group(site-toc) {
         animation: none;
     }
@@ -95,29 +107,22 @@
             var(--capsule-page-ease-out) var(--capsule-page-in-delay) both;
     }
 
-    /* Content: no morph between the two pages' boxes (a long page and a
-       short one differ in height, the front page in width), just the old
-       content leaving and the new one arriving in its own place. */
-    ::view-transition-group(page-content) {
-        animation: none;
+    /* Content: everything not named, at the window's size. The two
+       snapshots no longer meet in a crossfade, so the overlay carries the
+       page's background between them rather than letting the canvas show
+       through. */
+    ::view-transition {
+        background-color: var(--sl-color-bg);
     }
 
-    ::view-transition-old(page-content) {
+    ::view-transition-old(root) {
         animation: capsule-page-out var(--capsule-page-out)
             var(--capsule-page-ease-in) both;
     }
 
-    ::view-transition-new(page-content) {
+    ::view-transition-new(root) {
         animation: capsule-page-in var(--capsule-page-in)
             var(--capsule-page-ease-out) var(--capsule-page-in-delay) both;
-    }
-
-    /* Whatever the named groups leave behind (the page background) fades
-       over the content's arrival rather than the browser's default 250ms. */
-    ::view-transition-old(root),
-    ::view-transition-new(root) {
-        animation-duration: var(--capsule-page-in);
-        animation-timing-function: var(--capsule-page-ease-out);
     }
 }
 

@@ -25,9 +25,12 @@ export function transitionTypes(activation) {
     const to = activation.entry?.index;
     const from = activation.from?.index;
     if (typeof to !== 'number' || typeof from !== 'number') return [];
-    // A `from` of -1 means the previous entry belongs to another origin.
+    // No `from` (a cross-origin arrival) or a `from` of -1 (an entry no
+    // longer in the list) has no direction to reverse.
     if (from < 0 || to >= from) return [];
-    return [BACK_TYPE];
+    // A literal, not BACK_TYPE: installScript ships this function's source,
+    // which must not refer to anything outside it.
+    return ['back'];
 }
 
 /**
@@ -40,7 +43,6 @@ export function transitionTypes(activation) {
 export function installScript() {
     return `(() => {
 const transitionTypes = ${transitionTypes.toString()};
-const BACK_TYPE = ${JSON.stringify(BACK_TYPE)};
 window.addEventListener('pagereveal', (event) => {
     const transition = event.viewTransition;
     if (!transition || !transition.types || !window.navigation) return;

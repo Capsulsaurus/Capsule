@@ -109,15 +109,15 @@ one is designed.
   Splash pages such as the front page have no menu, so there the sections are reached through the
   page's own links.
 - **Page transitions.** Moving between pages animates the content, never the chrome: the header
-  holds still, the sidebar crossfades so only its current-page pill moves, and the content and table
-  of contents step out before the new page's arrive, the content rising a few pixels into place. A
-  step back through history reverses the direction, the new content settling down from above. It is
-  a browser view transition, so a browser without one, or a reader who asks for reduced motion,
-  navigates with no animation.
+  holds still, the sidebar crossfades so only its current-page pill changes, and the content and
+  table of contents fade out as the new page's fade in, the content leaving from where the reader
+  saw it and rising a few pixels into place. A step back through history reverses the direction,
+  the new content settling down from above. It is a browser view transition, so a browser without
+  one, or a reader who asks for reduced motion, navigates with no animation.
 - **Background.** Every page carries a fine dot grid in its top-right corner, fixed to the window and
-  dissolving toward the middle: 1px neutral dots, faint in both themes, so it reads as texture and
-  never competes with text. It shows behind the content, the table of contents and the header's
-  glass; the sidebar covers it, and it is not printed.
+  dissolving toward the middle: small neutral dots, faint in both themes, so it reads as texture and
+  never competes with text. It shows behind the content and the table of contents; the sidebar
+  covers it, the header's glass blurs it away, and it is not printed.
 - **Status badges.** Every authored page carries a review `status`
   ([](/design/principles/#review-status)). The page title always shows
   it. The sidebar shows it only for a page that is not `stable`, so the navigation lists exactly what

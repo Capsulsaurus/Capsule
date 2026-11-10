@@ -1,12 +1,13 @@
 /*
  * Corner backdrop: a fine dot grid in the page's top-right corner, on every
- * page, dissolving toward the centre. It is texture, not decoration: 1px dots
- * in a neutral at low strength, so it never competes with text, and fixed to
- * the window, so it stays put while the page scrolls over it.
+ * page, dissolving toward the centre. It is texture, not decoration: dots of a
+ * 1px radius in a neutral at low strength, so it never competes with text,
+ * and fixed to the window, so it stays put while the page scrolls over it.
  *
  * It sits behind everything (a fixed layer under the body's content), so it
- * shows through the transparent content column, the table of contents and
- * the header's glass, and the opaque sidebar covers it. The contract is the
+ * shows through the transparent content column and the table of contents;
+ * the opaque sidebar covers it, and the header's glass blurs it away. The
+ * contract is the
  * Visual Language doc's "Background" rule
  * (src/content/docs/development/visual-language.md).
  */
