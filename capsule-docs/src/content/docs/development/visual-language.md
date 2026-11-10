@@ -110,7 +110,9 @@ one is designed.
   it. The sidebar shows it only for a page that is not `stable`, so the navigation lists exactly what
   still awaits review.
 - **Sidebar.** The same surface as the page, divided from it by a hairline; the current page is an
-  accent-tinted pill.
+  accent-tinted pill. Where the table of contents appears beside it, the two columns are the same
+  width and the content is centred between them, so the text has equal space on each side at every
+  window width.
 - **Front page.** In order: a hero with the differentiators and a theme-matched product screenshot,
   a one-line status, the differentiators with a link named for the doc behind each, the
   table-stakes tier, why Capsule is built this way, and where to start.

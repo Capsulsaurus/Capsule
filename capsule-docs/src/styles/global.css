@@ -164,6 +164,33 @@ header.header {
     border-inline-end-color: var(--sl-color-hairline);
 }
 
+/*
+ * Balanced columns. Starlight gives the table of contents every spare pixel
+ * of a wide window and pushes the content against it (TwoColumnContent.astro),
+ * so the "On this page" column outgrows the sidebar and the gap opens on the
+ * left alone. Instead both side columns are the sidebar's width and the
+ * content is centred in what is left, so the text has equal space on each
+ * side at every width. Below 72rem Starlight shows no table-of-contents
+ * column, and a page without a sidebar or contents keeps Starlight's layout.
+ */
+@media (min-width: 72rem) {
+    [data-has-sidebar][data-has-toc] .right-sidebar-container,
+    [data-has-sidebar][data-has-toc] .right-sidebar {
+        width: var(--sl-sidebar-width);
+    }
+
+    [data-has-sidebar][data-has-toc] .main-pane {
+        --sl-content-margin-inline: auto;
+        width: calc(100% - var(--sl-sidebar-width));
+    }
+
+    /* The contents fill their column as the sidebar's links fill theirs,
+       not the quarter of the window Starlight caps them at. */
+    [data-has-sidebar][data-has-toc] .right-sidebar-panel .sl-container {
+        max-width: none;
+    }
+}
+
 /* The current page: an accent-tinted pill, not a solid accent block. */
 .sidebar-content a[aria-current="page"],
 .sidebar-content a[aria-current="page"]:hover,
