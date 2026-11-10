@@ -281,11 +281,7 @@ mod postgres_conformance {
     }
 
     /// One `capsule-server rebuild` pass over `blob_root` into `database_url`.
-    async fn rebuild_pass(
-        blob_root: &Path,
-        database_url: &str,
-        mode: Mode,
-    ) -> RebuildReport {
+    async fn rebuild_pass(blob_root: &Path, database_url: &str, mode: Mode) -> RebuildReport {
         let mut env = BTreeMap::new();
         env.insert("BLOB_ROOT".to_owned(), blob_root.display().to_string());
         env.insert("DATABASE_URL".to_owned(), database_url.to_owned());
@@ -559,12 +555,7 @@ mod postgres_conformance {
             .await;
         host_b.migrate(REBUILT_DATABASE).await;
         let rebuilt_url = host_b.database_url(REBUILT_DATABASE);
-        let from_ledgers = rebuild_pass(
-            server_b.blob_root.path(),
-            &rebuilt_url,
-            Mode::Apply,
-        )
-        .await;
+        let from_ledgers = rebuild_pass(server_b.blob_root.path(), &rebuilt_url, Mode::Apply).await;
         assert!(!from_ledgers.has_faults(), "{from_ledgers:#?}");
         assert_eq!(restored(&from_ledgers), every, "{from_ledgers:#?}");
         assert_eq!(

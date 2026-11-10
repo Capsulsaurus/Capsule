@@ -96,11 +96,7 @@ mod postgres_conformance {
                 let job = || vec![Value::from(peer.to_owned()), Value::from(album.to_owned())];
                 let mut subscription = vec![Value::from(user.as_str().to_owned())];
                 subscription.extend(job());
-                let subscribed = [(
-                    user.as_str().to_owned(),
-                    peer.to_owned(),
-                    album.to_owned(),
-                )];
+                let subscribed = [(user.as_str().to_owned(), peer.to_owned(), album.to_owned())];
                 self.write(
                     "INSERT INTO federation_subscriptions (subscriber_id, peer_id, album_id, \
                      scope, jti, token, issued_at, expires_at, min_protocol_version, \
@@ -129,10 +125,7 @@ mod postgres_conformance {
                 .await?;
                 let size = i64::try_from(size).expect("a test size fits a BIGINT");
                 let mut blob = job();
-                blob.extend([
-                    Value::from(address.as_str().to_owned()),
-                    Value::from(size),
-                ]);
+                blob.extend([Value::from(address.as_str().to_owned()), Value::from(size)]);
                 let claimed = [(
                     peer.to_owned(),
                     album.to_owned(),
@@ -162,11 +155,7 @@ mod postgres_conformance {
             album: &'a str,
         ) -> StoreFuture<'a, ()> {
             Box::pin(async move {
-                let removed = [(
-                    user.as_str().to_owned(),
-                    peer.to_owned(),
-                    album.to_owned(),
-                )];
+                let removed = [(user.as_str().to_owned(), peer.to_owned(), album.to_owned())];
                 self.write(
                     "DELETE FROM federation_subscriptions \
                      WHERE subscriber_id = $1 AND peer_id = $2 AND album_id = $3 \
@@ -218,8 +207,7 @@ mod postgres_conformance {
                             size,
                         ));
                     }
-                    pulled_total::blobs_changed(&transaction, &released, Change::Removed)
-                        .await?;
+                    pulled_total::blobs_changed(&transaction, &released, Change::Removed).await?;
                     Ok(transaction)
                 },
             )

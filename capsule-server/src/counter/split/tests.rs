@@ -50,14 +50,56 @@ async fn a_hit_is_charged_to_the_store_its_key_routes_to() {
 
     let chunk = CounterKey::UploadChunks(UserId::new("u1"));
     let login = CounterKey::LoginAttempts(UserId::new("u1"));
-    assert!(split.hit(&chunk, budget, at).await.expect("answers").admits());
-    assert!(split.hit(&login, budget, at).await.expect("answers").admits());
+    assert!(
+        split
+            .hit(&chunk, budget, at)
+            .await
+            .expect("answers")
+            .admits()
+    );
+    assert!(
+        split
+            .hit(&login, budget, at)
+            .await
+            .expect("answers")
+            .admits()
+    );
 
-    assert!(!local.peek(&chunk, budget, at).await.expect("answers").admits());
-    assert!(shared.peek(&chunk, budget, at).await.expect("answers").admits());
-    assert!(!shared.peek(&login, budget, at).await.expect("answers").admits());
-    assert!(local.peek(&login, budget, at).await.expect("answers").admits());
+    assert!(
+        !local
+            .peek(&chunk, budget, at)
+            .await
+            .expect("answers")
+            .admits()
+    );
+    assert!(
+        shared
+            .peek(&chunk, budget, at)
+            .await
+            .expect("answers")
+            .admits()
+    );
+    assert!(
+        !shared
+            .peek(&login, budget, at)
+            .await
+            .expect("answers")
+            .admits()
+    );
+    assert!(
+        local
+            .peek(&login, budget, at)
+            .await
+            .expect("answers")
+            .admits()
+    );
 
     split.reset(&login).await.expect("resets");
-    assert!(shared.peek(&login, budget, at).await.expect("answers").admits());
+    assert!(
+        shared
+            .peek(&login, budget, at)
+            .await
+            .expect("answers")
+            .admits()
+    );
 }

@@ -126,10 +126,7 @@ struct Pairs {
     counts: Vec<i64>,
 }
 
-async fn pairs(
-    connection: &impl ConnectionTrait,
-    query: Statement,
-) -> Result<Pairs, StoreError> {
+async fn pairs(connection: &impl ConnectionTrait, query: Statement) -> Result<Pairs, StoreError> {
     let rows = connection
         .query_all_raw(query)
         .await
@@ -345,6 +342,10 @@ pub(crate) async fn attributions_changed(
         ))
         .await
         .map_err(PORT.failing("moving the pulled total for an attribution"))?;
-    tracing::debug!(accounts = accounts.len(), ?change, "an attribution moved the pulled total");
+    tracing::debug!(
+        accounts = accounts.len(),
+        ?change,
+        "an attribution moved the pulled total"
+    );
     Ok(())
 }

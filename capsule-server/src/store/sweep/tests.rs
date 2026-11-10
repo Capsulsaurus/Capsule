@@ -19,7 +19,10 @@ fn every_state_table_is_swept() {
         assert!(swept.contains(table), "`{table}` is never swept");
     }
     for table in &swept {
-        assert!(created.contains(table), "`{table}` is swept but not created by 000031");
+        assert!(
+            created.contains(table),
+            "`{table}` is swept but not created by 000031"
+        );
     }
 }
 

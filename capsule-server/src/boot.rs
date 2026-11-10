@@ -86,10 +86,10 @@ use crate::enrollment::EnrollmentContext;
 use crate::escrow::postgres::PostgresEscrow;
 use crate::escrow::{EscrowContext, EscrowStore, InMemoryEscrow};
 use crate::federation::postgres::{PostgresCapabilities, PostgresPeers};
+use crate::federation::pull::postgres::PostgresPullJobs;
 use crate::federation::pull::pulled::postgres::{PeerBudgetCharge, PostgresPulledAlbums};
 use crate::federation::pull::pulled::{PeerCachingBudget, PulledAlbumReads};
 use crate::federation::pull::remote::{egress_client, rest};
-use crate::federation::pull::postgres::PostgresPullJobs;
 use crate::federation::pull::{
     Ed25519RequestSigner, InMemoryPullJobs, InMemoryPulledAlbums, PullJobs, PullWorker,
     PullWorkerParts, PulledAlbums, RemotePuller, RemotePullerParts, SystemJitter,

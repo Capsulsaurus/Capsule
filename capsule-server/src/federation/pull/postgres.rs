@@ -11,9 +11,8 @@
 use jiff::{SignedDuration, Timestamp};
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, QueryResult, Statement, Value};
 
-use super::JOB_STATE_RETENTION;
 use super::jobs::{JobState, PullJobs};
-use super::JobKey;
+use super::{JOB_STATE_RETENTION, JobKey};
 use crate::federation::PeerId;
 use crate::postgres::error::Port;
 use crate::postgres::time::{from_micros, to_micros};

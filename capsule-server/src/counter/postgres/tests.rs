@@ -5,8 +5,9 @@ mod postgres_conformance {
     use jiff::{SignedDuration, Timestamp};
 
     use super::super::PostgresCounters;
-    use crate::counter::conformance as counters;
-    use crate::counter::{Budget, CounterKey, CounterStore, is_at_capacity};
+    use crate::counter::{
+        Budget, CounterKey, CounterStore, conformance as counters, is_at_capacity,
+    };
     use crate::postgres::testing;
 
     #[tokio::test]
@@ -93,7 +94,10 @@ mod postgres_conformance {
                     admitted += 1;
                 }
             }
-            assert_eq!(admitted, limit, "a budget of {limit} admits exactly {limit}");
+            assert_eq!(
+                admitted, limit,
+                "a budget of {limit} admits exactly {limit}"
+            );
         }
     }
 }
