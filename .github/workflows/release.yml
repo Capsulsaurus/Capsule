@@ -63,7 +63,7 @@ jobs:
             os: ubuntu-latest
             optional: false
           - target: aarch64-apple-darwin
-            os: macos-14
+            os: macos-26
             optional: false
           # An Intel runner rather than a cross build from Apple Silicon: the CLI links the
           # system libdav1d (#588), and Homebrew on an arm64 host only installs an arm64 one.

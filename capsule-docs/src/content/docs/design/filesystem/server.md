@@ -12,7 +12,7 @@ Three required systems, one code path:
 
 - **Blob store**: the encrypted bytes. Adapters: filesystem and in-memory ([`capsule-server::blob`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-server/src/blob/mod.rs)).
 - **PostgreSQL 18**: the authoritative durable index of ownership, album and blob references, lifecycle state, pending-asset rows, the device-cohort map and the quota ledger. Tested against `postgres:18` on glibc, because asset-id order relies on `COLLATE "C"` behaving as deployed.
-- **Valkey**: volatile state only (upload-session records and [auth sessions](/design/authentication/)) with native TTL. [](/design/transfer/upload/#session-lifetime-and-discard) owns session lifetime.
+- **Valkey**: volatile state only (upload-session records and [](/design/authentication/) sessions) with native TTL. [](/design/transfer/upload/#session-lifetime-and-discard) owns session lifetime.
 
 Rules:
 
@@ -39,7 +39,7 @@ Rules:
 
 - The whole tree MUST be on one filesystem so finalization renames are atomic.
 - `incoming/` holds one positionally written file per session, with no per-chunk staging and no assembly ([](/design/transfer/upload/#staging)).
-- `blobs/` is sharded on the hash's own hex prefix so the three enumerations ([integrity scrub](/design/filesystem/maintenance/#server-side-integrity-scrub), [GC](#deletion-and-garbage-collection), [index rebuild](#recovering-the-index-from-blobs-alone)) stay affordable at scale. Lookup is a `stat` at a known address either way.
+- `blobs/` is sharded on the hash's own hex prefix so the three enumerations (integrity scrub, GC and index rebuild; see [](/design/filesystem/maintenance/#server-side-integrity-scrub), [](#deletion-and-garbage-collection), [](#recovering-the-index-from-blobs-alone)) stay affordable at scale. Lookup is a `stat` at a known address either way.
 - `incoming/` and `quarantine/` are not sharded: neither is content-addressed, and an operator reads quarantine.
 
 Commit discipline ([`capsule-server::blob::fs`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-server/src/blob/fs.rs)):
@@ -50,22 +50,22 @@ Commit discipline ([`capsule-server::blob::fs`](https://github.com/Capsulsaurus/
 
 ## Uniform, Opaque Blobs
 
-An asset is a **bundle** of blobs ([](/design/transfer/upload/#what-gets-uploaded)): encrypted original, derivatives, metadata blob, and the signed manifest stored as the provenance blob. The store does not distinguish them. Roles live in PostgreSQL, with the manifest envelopes and the [owner ledger](#the-owner-ledger) as the key-free durable fallback.
+An asset is a **bundle** of blobs ([](/design/transfer/upload/#what-gets-uploaded)): encrypted original, derivatives, metadata blob, and the signed manifest stored as the provenance blob. The store does not distinguish them. Roles live in PostgreSQL, with the manifest envelopes and the owner ledger ([](#the-owner-ledger)) as the key-free durable fallback.
 
 A lifecycle op moves the provenance role to its new record. The record it moved past stays referenced in the asset's **superseded chain** until a purge closes the retention window. The blob read route serves each superseded record as a provenance blob of the asset that holds it ([](/reference/api/sync/)): byte for byte as uploaded, under the read authority of the live record, with the same refusals (a deleted or held asset's records are `410`). A device that first sees an asset past its `create` fetches the record each `prior_provenance_hash` names back to the create, verifies the chain in order, and holds the asset from its start. The sidecar comes from the asset's live metadata blob, since a superseded metadata blob is collected.
 
 ## Recovering the Index from Blobs Alone
 
-PostgreSQL's asset index is a **projection** of the blob store, never the only copy. Losing the database, or finding it corrupt, costs a rebuild, not a library. Accounts, credentials and everything else that is not an asset fact still come from the PostgreSQL backup ([what is not rebuilt](#what-a-rebuild-cannot-recover)).
+PostgreSQL's asset index is a **projection** of the blob store, never the only copy. Losing the database, or finding it corrupt, costs a rebuild, not a library. Accounts, credentials and everything else that is not an asset fact still come from the PostgreSQL backup ([](#what-a-rebuild-cannot-recover)).
 
 ### The Owner Ledger
 
-Every signed [manifest envelope](/design/cryptography/provenance/#asset-manifest) is stored in `blobs/` and names everything an index row needs except who owns it and the order the server accepted it in. The **owner ledger** (`ledger/` in the [layout](#blob-store-layout)) carries those facts.
+Every signed manifest envelope ([](/design/cryptography/provenance/#asset-manifest)) is stored in `blobs/` and names everything an index row needs except who owns it and the order the server accepted it in. The **owner ledger** (`ledger/` in [](#blob-store-layout)) carries those facts.
 
 **Entries.**
 
 - One entry per accepted manifest, per device-directory version and per lifecycle action: `sync_seq`, the manifest's content hash, `upload_user_id`, uploader device, `received_at` and the custody receipt.
-- Each entry carries its owner, its position (`seq`, from 1, contiguous) and its predecessor's hash inside the signed core, and is signed by the attestation key. Edits, removals, a dropped head and a torn tail are detected from the chain alone. A tail cut exactly at an entry boundary is detected only against the [anchor](#anchor).
+- Each entry carries its owner, its position (`seq`, from 1, contiguous) and its predecessor's hash inside the signed core, and is signed by the attestation key. Edits, removals, a dropped head and a torn tail are detected from the chain alone. A tail cut exactly at an entry boundary is detected only against the anchor ([](#anchor)).
 - A segment is a sequence of length-prefixed canonical-CBOR frames. The only bytes ever cut are those after the last whole entry when no complete entry starts anywhere after them (a short frame, or zeroes a crash left); they were never acknowledged. Damage followed by an entry refuses further appends.
 
 **Write order.**
@@ -86,7 +86,7 @@ The **anchor** is each owner's ledger head, `(seq, entry hash)`, recorded in Pos
 
 #### Purges
 
-The ledger is never rewritten. A retention purge appends a `lifecycle` entry with action `purge` before the index drops the asset's references, then, once the index answers that the purge committed, a second one with action `purged` naming the `purge` entry's ledger position. The purged blobs go through [GC](#deletion-and-garbage-collection) as before.
+The ledger is never rewritten. A retention purge appends a `lifecycle` entry with action `purge` before the index drops the asset's references, then, once the index answers that the purge committed, a second one with action `purged` naming the `purge` entry's ledger position. The purged blobs go through garbage collection ([](#deletion-and-garbage-collection)) as before.
 
 - The `purged` entry resolves a purge. Rebuild confirms exactly the `purge` entry it names, so two concurrent purge runs cannot confirm each other's refused purge, and empties a tombstone only for a confirmed purge, at the `purge` entry's position.
 - A purge the index refused (the asset was restored, or re-deleted under a later floor, after the worker listed it) is never confirmed. A rebuild therefore keeps every reference the live row kept, whatever order the purge and the concurrent op reached the ledger in.
@@ -117,17 +117,17 @@ Device-directory versions are in the ledger, so a rebuild verifies signatures ag
    - Each manifest's `device_sig` is verified against the signer's directory version in force at that point: the last one before the manifest's entry when the signer's ledger is the one replayed, otherwise the last one the server's clock recorded no later than it, since two ledgers share no order.
    - Versions come from the copies beside the ledger, replayed through the store's own checks. A version that does not strictly advance, or that is signed under an identity key other than the account's first, was refused and is not in force. When a version with no usable copy comes before any key is known, the account's key is unknown and no later version vouches for anything.
    - A device the version in force does not list, lists as revoked, or added after the manifest's timestamp fails; a device a later version revoked does not.
-   - A manifest that fails, or falls under a version whose copy is missing or does not match its entry, is reported and its asset is not restored. When the index lacks the row, the owner moves to a new [sync epoch](#sync-epoch-and-client-re-announce), so the clients holding the manifest re-announce it and the server verifies it against the live directory.
+   - A manifest that fails, or falls under a version whose copy is missing or does not match its entry, is reported and its asset is not restored. When the index lacks the row, the owner moves to a new sync epoch ([](#sync-epoch-and-client-re-announce)), so the clients holding the manifest re-announce it and the server verifies it against the live directory.
 3. **Recompute quota attribution** for the restored rows. Blob references are a query over rows, so restoring the rows recomputes them.
-4. **Report** blobs no entry names (orphans, left to GC); entries naming a missing blob (dangling, except an [`awaiting-original`](/design/transfer/upload/#upload-tiering-staged-uploads) asset); purged tombstones whose manifests GC has swept (only the database backup holds those rows); and envelopes failing structural validation (moved to `quarantine/` with a `.reason.json`, never dropped; a record from a newer client is reported and left in place).
+4. **Report** blobs no entry names (orphans, left to GC); entries naming a missing blob (dangling, except an `awaiting-original` asset; see [](/design/transfer/upload/#upload-tiering-staged-uploads)); purged tombstones whose manifests GC has swept (only the database backup holds those rows); and envelopes failing structural validation (moved to `quarantine/` with a `.reason.json`, never dropped; a record from a newer client is reported and left in place).
 
-Decoding manifests is confined to **one module**, the server's only signed-CBOR parser, shared by rebuild and the [integrity scrub](/design/filesystem/maintenance/#server-side-integrity-scrub) and fuzzed ([`capsule-server::ledger::manifest`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-server/src/ledger/manifest.rs)). A provenance blob is the chain head's provenance record, and the parser checks that the record and the manifest inside it agree. The write path never decodes manifests.
+Decoding manifests is confined to **one module**, the server's only signed-CBOR parser, shared by rebuild and the integrity scrub ([](/design/filesystem/maintenance/#server-side-integrity-scrub)) and fuzzed ([`capsule-server::ledger::manifest`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-server/src/ledger/manifest.rs)). A provenance blob is the chain head's provenance record, and the parser checks that the record and the manifest inside it agree. The write path never decodes manifests.
 
 ### Sync Epoch and Client Re-Announce
 
-Rebuilt rows keep their ledger `sync_seq`, so clients' sync cursors stay valid. When a rebuild cannot prove the sequence complete (a ledger chain break or lost tail), it numbers the rows it cannot place above every number the owner has used and increments the owner's **sync epoch**. A cursor carries the epoch it was minted in. A cursor from an older epoch is refused with `error.sync.cursor_stale`; the client drops its cursor and high-water marks, resyncs from zero and discards nothing ([invariant 5](/design/versioning/#system-invariants)).
+Rebuilt rows keep their ledger `sync_seq`, so clients' sync cursors stay valid. When a rebuild cannot prove the sequence complete (a ledger chain break or lost tail), it numbers the rows it cannot place above every number the owner has used and increments the owner's **sync epoch**. A cursor carries the epoch it was minted in. A cursor from an older epoch is refused with `error.sync.cursor_stale`; the client drops its cursor and high-water marks, resyncs from zero and discards nothing (invariant 5 of [](/design/versioning/#system-invariants)).
 
-After an epoch change, each client **re-announces** the signed manifests it holds whose blobs the server reports missing from the index: manifests only, no bytes. The server verifies each like an upload's manifest and restores the row if every named blob is present; otherwise the client re-uploads through the normal [transfer protocol](/design/transfer/upload/). A re-announced manifest can only restore what its owner's devices signed.
+After an epoch change, each client **re-announces** the signed manifests it holds whose blobs the server reports missing from the index: manifests only, no bytes. The server verifies each like an upload's manifest and restores the row if every named blob is present; otherwise the client re-uploads through the normal transfer protocol ([](/design/transfer/upload/)). A re-announced manifest can only restore what its owner's devices signed.
 
 The re-announce route ([](/reference/api/sync/), [`capsule-server::sync::reannounce`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-server/src/sync/reannounce.rs)) takes a batch of chain-head provenance records and answers each `restored`, `already_indexed`, `missing_blobs` (naming what the store lacks) or `refused` with an `error.sync.reannounce_*` code.
 
@@ -140,7 +140,7 @@ The client side is `capsule sync reannounce`, which `capsule sync` runs itself a
 
 ### What a Rebuild Cannot Recover
 
-Restored from the PostgreSQL backup, never derived from blobs: accounts, credentials and TOTP, escrow and sealed identities, share links and guest drops, moderation standing, federation capabilities and peers, revoked tokens, device cohorts, and in-flight album upgrades. This is why the [self-hosting guide](/guides/self-hosting/#backups) requires backing up PostgreSQL and `BLOB_ROOT` together. The ledger makes a stale or partial database backup recoverable, not optional.
+Restored from the PostgreSQL backup, never derived from blobs: accounts, credentials and TOTP, escrow and sealed identities, share links and guest drops, moderation standing, federation capabilities and peers, revoked tokens, device cohorts, and in-flight album upgrades. This is why the self-hosting guide ([](/guides/self-hosting/#backups)) requires backing up PostgreSQL and `BLOB_ROOT` together. The ledger makes a stale or partial database backup recoverable, not optional.
 
 ## Manifest Envelope Validation
 
@@ -160,21 +160,21 @@ Only key-free facts:
 - `uploaded` flag and server-visible lifecycle state
 - the server's trusted `received_at` (authoritative for time-based policy) beside the client's audit-only `timestamp`
 - `client_version` (audit-only, queryable to scope a defective build)
-- [provenance records](/design/cryptography/provenance/#provenance-of-library-modifications)
+- provenance records ([](/design/cryptography/provenance/#provenance-of-library-modifications))
 
-No plaintext capture date, dimensions, EXIF, tags or filename ever reaches the server; those live in the encrypted [metadata blob](/design/cryptography/encryption/#metadata-encryption). Session creation writes a pending row (`uploaded = false`) that finalization flips ([state machine](/design/transfer/upload/#session-state-machine)).
+No plaintext capture date, dimensions, EXIF, tags or filename ever reaches the server; those live in the encrypted metadata blob ([](/design/cryptography/encryption/#metadata-encryption)). Session creation writes a pending row (`uploaded = false`) that finalization flips ([](/design/transfer/upload/#session-state-machine)).
 
 ## Ownership, Partitioning, and Quota
 
-`owner_id` is the billing and namespace entity, mirrored as an MLS group ([Owner Group Key](/design/cryptography/keys/#owner-group-keys-ogks)). Quota is charged to `upload_user_id` ([](/design/quota/)). The blob store is global; every *reference* is owner-scoped, and dedup is owner-scoped.
+`owner_id` is the billing and namespace entity, mirrored as an MLS group ([](/design/cryptography/keys/#owner-group-keys-ogks)). Quota is charged to `upload_user_id` ([](/design/quota/)). The blob store is global; every *reference* is owner-scoped, and dedup is owner-scoped.
 
-The owner record carries a non-secret `default_album_id` (plus optional scope overrides) naming the [default album](/design/organization/#the-default-album). It is discovery only: writes are still gated on album write capability ([invariant 6](/design/threat-model/validation/#server-side-validation-invariants)).
+The owner record carries a non-secret `default_album_id` (plus optional scope overrides) naming the default album ([](/design/organization/#the-default-album)). It is discovery only: writes are still gated on album write capability (invariant 6 of [](/design/threat-model/validation/#server-side-validation-invariants)).
 
 ## Deletion and Garbage Collection
 
 The server cannot read `is_deleted`: lifecycle state is client-signalled and recorded on the asset row, and soft delete is a state change. A blob is removed only when provably unreferenced, and every failure mode biases toward keeping bytes.
 
-- **Reference count is a query** over committed asset, derivative, metadata and provenance rows, plus live [share-link](/design/share-links/#storing-the-record) records, never a maintained counter.
+- **Reference count is a query** over committed asset, derivative, metadata and provenance rows, plus live share-link records ([](/design/share-links/#storing-the-record)), never a maintained counter.
 - **Mark, then sweep.** Zero references marks a blob (`collectable_since`). It is swept only after a 24 h grace window ([`DEFAULT_GRACE_WINDOW`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-server/src/gc/mod.rs)) and only if zero references is re-confirmed at sweep time. A reappearing reference cancels the mark. This reclaims the crash-after-rename orphan without racing a late reference.
 - **A Postgres↔filesystem mismatch is never resolved by deletion.** An unreferenced blob is an orphan for GC. A committed row referencing a missing blob is a loud integrity error: logged, surfaced, never auto-deleted.
 - Every GC decision is logged with hash, observed count and mark/sweep times; a dry-run mode reports without removing.

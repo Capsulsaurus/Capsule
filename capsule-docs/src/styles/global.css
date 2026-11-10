@@ -8,6 +8,8 @@
 @import "tailwindcss";
 @import "./api-reference.css";
 @import "./sdk-reference.css";
+@import "./motion.css";
+@import "./backdrop.css";
 
 /* Upstream Geist 1.9 variable cuts, vendored in src/assets/fonts (see its
    README). Vite fingerprints them into /_astro/, which public/_headers marks
@@ -63,6 +65,14 @@
     --capsule-radius-card: 12px;
     --capsule-radius-md: 16px;
     --capsule-radius-lg: 22px;
+    /* Fully rounded ends, for pills: header links, controls, badges, tags. */
+    --capsule-radius-pill: 999px;
+
+    /* Header controls (version switcher, theme toggle): one height, and a
+       hairline border that firms up on hover. */
+    --capsule-control-size: 2.25rem;
+    --capsule-control-border: var(--sl-color-gray-5);
+    --capsule-control-border-hover: var(--sl-color-gray-3);
 
     --sl-font:
         "Geist", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji",
@@ -103,8 +113,18 @@
     --sl-color-black: #ffffff;
 }
 
-/* Header: a translucent bar, the web's analogue of the apps' glass chrome. */
-.header {
+/* Header: a translucent bar, the web's analogue of the apps' glass chrome.
+   Its layout is identical on every page (src/components/Header.astro), and
+   the page transition (./motion.css) holds it in place between pages. */
+
+/* The glass is one even layer from the bar's top edge to its bottom edge.
+   Scoped to Starlight's <header>: the override's inner `.header` div sits
+   inside the bar's vertical padding, and glazing it too stacks a second,
+   denser band across the middle, so text scrolling under the bar's top edge
+   would show through and then vanish. The blur stays on the <header> itself:
+   its view-transition-name makes it a backdrop root, so a blurred child layer
+   would see nothing behind it. */
+header.header {
     background-color: color-mix(
         in srgb,
         var(--sl-color-black) 78%,
@@ -130,6 +150,33 @@
     border-inline-end-color: var(--sl-color-hairline);
 }
 
+/*
+ * Balanced columns. Starlight gives the table of contents every spare pixel
+ * of a wide window and pushes the content against it (TwoColumnContent.astro),
+ * so the "On this page" column outgrows the sidebar and the gap opens on the
+ * left alone. Instead both side columns are the sidebar's width and the
+ * content is centred in what is left, so the text has equal space on each
+ * side at every width. Below 72rem Starlight shows no table-of-contents
+ * column, and a page without a sidebar or contents keeps Starlight's layout.
+ */
+@media (min-width: 72rem) {
+    [data-has-sidebar][data-has-toc] .right-sidebar-container,
+    [data-has-sidebar][data-has-toc] .right-sidebar {
+        width: var(--sl-sidebar-width);
+    }
+
+    [data-has-sidebar][data-has-toc] .main-pane {
+        --sl-content-margin-inline: auto;
+        width: calc(100% - var(--sl-sidebar-width));
+    }
+
+    /* The contents fill their column as the sidebar's links fill theirs,
+       not the quarter of the window Starlight caps them at. */
+    [data-has-sidebar][data-has-toc] .right-sidebar-panel .sl-container {
+        max-width: none;
+    }
+}
+
 /* The current page: an accent-tinted pill, not a solid accent block. */
 .sidebar-content a[aria-current="page"],
 .sidebar-content a[aria-current="page"]:hover,
@@ -137,6 +184,53 @@
     color: var(--sl-color-text-accent);
     background-color: var(--sl-color-accent-low);
     border-radius: var(--capsule-radius-sm);
+}
+
+/*
+ * Sticky footer. The site footer (src/components/SiteFooter.astro) closes the
+ * last content panel, so on a page shorter than the window it would stop
+ * mid-screen. Instead `main` is at least the window's height below the
+ * header, its last panel takes the spare height, and the footer takes the
+ * spare height inside that panel, so it rests on the window's bottom edge; on
+ * a long page there is no spare height and it follows the content. Only the
+ * boxes' heights change: the widths Starlight lays out (sidebar, content,
+ * table of contents) are untouched. The boxes are Starlight's own (Page.astro,
+ * PageFrame.astro, ContentPanel.astro):
+ *
+ *   main > .content-panel:last-child > .sl-container > … .site-footer
+ */
+.main-pane > main {
+    display: flex;
+    flex-direction: column;
+    /* .main-frame's top padding is the header and the mobile contents bar. */
+    min-height: calc(
+        100dvh -
+        var(--sl-nav-height) -
+        var(--sl-mobile-toc-height, 0rem)
+    );
+}
+
+.main-pane > main > .content-panel:last-child {
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+}
+
+.main-pane > main > .content-panel:last-child > .sl-container {
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+    width: 100%;
+}
+
+/* The footer's spare-height margin; what precedes it keeps the footer's
+   minimum distance, which a flex column would otherwise not collapse into. */
+.sl-container > .site-footer {
+    margin-block-start: auto;
+}
+
+.sl-container > :has(+ .site-footer) {
+    margin-block-end: 3rem;
 }
 
 /* Front-page hero: the theme-matched app screenshot. */
@@ -191,7 +285,7 @@
 .sl-badge {
     font-family: var(--sl-font);
     font-weight: 500;
-    border-radius: 999px;
+    border-radius: var(--capsule-radius-pill);
 }
 
 .sidebar-content .sl-badge {
@@ -220,7 +314,7 @@
     display: list-item;
     list-style-type: disc;
     list-style-position: outside;
-    margin-left: 1.5rem;
+    margin-inline-start: 1.5rem;
 }
 
 /*
@@ -301,7 +395,7 @@
 .sl-blog-tags .sl-blog-tag {
     padding: 0.125rem 0.625rem;
     border: 0;
-    border-radius: 999px;
+    border-radius: var(--capsule-radius-pill);
     background: var(--sl-color-accent-low);
     color: var(--sl-color-text-accent);
     font-size: var(--sl-text-xs);
@@ -332,14 +426,85 @@
 }
 
 /* Natural size, never scaled down: a diagram's text stays the size of the
-   page's small text, and a wide one scrolls inside its card. */
+   page's small text, and a wide one scrolls inside its card. Tailwind's
+   preflight makes an SVG a block, which `text-align` cannot centre, so the
+   auto margins centre it under its caption; a diagram wider than the card
+   has no spare width, starts at the card's edge and scrolls. */
 .sl-markdown-content .diagram svg {
     max-width: none;
     height: auto;
+    margin-inline: auto;
 }
 
 .sl-markdown-content figure.diagram figcaption {
-    margin-top: 0.5rem;
+    margin-block-start: 0.5rem;
     color: var(--sl-color-gray-3);
     font-size: var(--sl-text-sm);
+}
+
+/* Cross-references: a link to a docs page or heading, labelled from its
+   target by src/lib/remark-link-titles.mjs ("Page — Heading"). It is an
+   ordinary link, meant to be followed; the em dash is quieter than the
+   words, so the page and the heading read as two parts of one address. */
+.sl-markdown-content a.xref .xref-sep {
+    color: var(--sl-color-gray-3);
+}
+
+/* Library badges: the first mention of a library, which
+   src/lib/remark-library-links.mjs turns into a link to its source
+   repository. The mention itself is the badge: its words stay where they
+   were, a touch smaller, inside a hairline pill with a code-brackets glyph,
+   so it reads as part of the sentence yet is plainly not a link an author
+   chose. Inline, so it sits on the text's baseline and leaves the line's
+   height alone; never broken across lines. */
+.sl-markdown-content a.lib-badge {
+    padding: 0.05em 0.45em;
+    border: 1px solid var(--sl-color-hairline-light);
+    border-radius: var(--capsule-radius-pill);
+    background-color: color-mix(
+        in srgb,
+        var(--sl-color-gray-6) 55%,
+        transparent
+    );
+    color: inherit;
+    font-size: 0.9em;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+/* A code-brackets glyph after the name, drawn in the text colour through a
+   mask, and quieter than the name. */
+.sl-markdown-content a.lib-badge::after {
+    content: "";
+    display: inline-block;
+    width: 0.85em;
+    height: 0.85em;
+    margin-inline-start: 0.3em;
+    vertical-align: -0.1em;
+    background-color: currentColor;
+    opacity: 0.55;
+    mask:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M5.5 4 2 8l3.5 4m5-8L14 8l-3.5 4' fill='none' stroke='%23000' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+        center / contain no-repeat;
+}
+
+/* An inline-code mention keeps its monospace, but the pill is its frame:
+   no second box inside it. */
+.sl-markdown-content a.lib-badge code {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font-size: 0.95em;
+}
+
+.sl-markdown-content a.lib-badge:hover,
+.sl-markdown-content a.lib-badge:focus-visible {
+    border-color: var(--sl-color-accent);
+    color: var(--sl-color-text-accent);
+}
+
+.sl-markdown-content a.lib-badge:hover::after,
+.sl-markdown-content a.lib-badge:focus-visible::after {
+    opacity: 1;
 }

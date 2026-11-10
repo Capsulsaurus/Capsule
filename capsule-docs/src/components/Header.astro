@@ -73,29 +73,20 @@ const shouldRenderSearch =
     gap: 0.75rem;
   }
 
+  /* Every rule below depends on the window's width alone, never on the
+     page's layout, so the bar is the same on every page: the splash front
+     page, which has no sidebar, included. (Starlight's own header sizes its
+     title column from --sl-content-inline-start, which only sidebar pages
+     set, so its bar moves between the two.) */
   @media (min-width: 50rem) {
     .header {
       display: grid;
-      /* The title column runs to the sidebar's edge, as in Starlight's own
-         header, so the wordmark lines up with the navigation below it. */
-      grid-template-columns:
-        minmax(
-          calc(
-            max(
-              0rem,
-              var(--sl-content-inline-start, 0rem) - var(--sl-nav-pad-x)
-            )
-          ),
-          auto
-        )
-        1fr
-        auto;
+      grid-template-columns: auto 1fr auto;
     }
 
-    .nav-wrapper {
-      display: flex;
-      justify-content: center;
-      min-width: 0;
+    /* Its own column, whether or not the section links are shown. */
+    .right-group {
+      grid-column: 3;
     }
 
     .actions {
@@ -105,6 +96,25 @@ const shouldRenderSearch =
     /* Search shrinks to a compact field so the section links own the middle. */
     .search {
       width: clamp(9rem, 16vw, 15rem);
+    }
+  }
+
+  /* The section links need the width the table of contents also waits for.
+     Below it, the sidebar (and on narrow screens the menu) carries them. */
+  @media (min-width: 72rem) {
+    .header {
+      /* The title column runs to the sidebar's edge, so the wordmark lines
+         up with the navigation below it. */
+      grid-template-columns:
+        minmax(calc(var(--sl-sidebar-width) - var(--sl-nav-pad-x)), auto)
+        1fr
+        auto;
+    }
+
+    .nav-wrapper {
+      display: flex;
+      justify-content: center;
+      min-width: 0;
     }
   }
 </style>

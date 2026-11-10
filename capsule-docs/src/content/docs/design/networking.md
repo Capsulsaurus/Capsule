@@ -4,7 +4,7 @@ description: The HTTP transport contract, connection classes and the path snapsh
 status: draft
 ---
 
-This page owns the primitives every transfer surface consumes. Protocol mechanics stay with the [transfer protocol](/design/transfer/), [sync](/design/sync/), [peering](/design/peering/) and [federation](/design/federation/).
+This page owns the primitives every transfer surface consumes. Protocol mechanics stay with [](/design/transfer/), [](/design/sync/), [](/design/peering/) and [](/design/federation/).
 
 ## HTTP Transport
 
@@ -20,7 +20,7 @@ Every Capsule operation is a plain HTTP request and response, and means the same
   - Only a request that is safe to send twice rides QUIC: an idempotent method, or an upload chunk, which is addressed by offset and checked by checksum. Any other request rides TCP whatever is advertised. A request that fails on QUIC is re-sent once over TCP; one whose TCP leg already failed reaches the retry engine as that failure.
   - Every response's `Alt-Svc`, on either transport, feeds discovery. Beyond the path-progress check above, riding QUIC adds no bound: a request is cut under the same stall and response-wait bounds it runs under over TCP.
   - An advertisement is believed only for an `https` origin, and the alternative endpoint must present a certificate valid for the origin.
-- **Parallelism is connections, not streams.** On a lossy or high-latency link a single TCP connection's throughput is bounded by its round trip and loss rate, and HTTP/2 multiplexes every stream onto that one window. Bulk transfers therefore SHOULD spread across several connections, within the [in-flight windows](/design/transfer/upload/#queueing-across-servers), where the platform's HTTP stack allows it. Correctness never depends on it.
+- **Parallelism is connections, not streams.** On a lossy or high-latency link a single TCP connection's throughput is bounded by its round trip and loss rate, and HTTP/2 multiplexes every stream onto that one window. Bulk transfers therefore SHOULD spread across several connections, within the in-flight windows ([](/design/transfer/upload/#queueing-across-servers)), where the platform's HTTP stack allows it. Correctness never depends on it.
 - **Windows cover the bandwidth-delay product.** Flow-control and socket buffers (on QUIC, the stream and connection windows and the UDP socket buffers) are sized to the target bandwidth times round trip, within a fixed memory budget. The sender owns congestion control (the client on upload, the server on download), and neither side steers the other's controller.
 
 ## Transport Security
@@ -28,11 +28,11 @@ Every Capsule operation is a plain HTTP request and response, and means the same
 - TLS 1.3 is required wherever both ends support it, and clients try it first. TLS 1.2 is the absolute floor, for legacy ingress only; nothing lower is accepted.
 - Deployments SHOULD enable hybrid X25519+ML-KEM key exchange on 1.3.
 - Ingress, not the application server, terminates TLS. This is operator-configured and documented, not enforced.
-- Capsule's own TLS (the SDK, [LAN peering](/design/peering/) mTLS, server egress) is rustls, never native-tls or OpenSSL, under the same policy.
+- Capsule's own TLS (the SDK, LAN [](/design/peering/) mTLS, server egress) is rustls, never native-tls or OpenSSL, under the same policy.
 
 ## Connection Classes
 
-A closed enum, derived from the [path snapshot](#path-snapshot) and evaluated on every change to it:
+A closed enum, derived from the [](#path-snapshot) and evaluated on every change to it:
 
 | Class | Meaning | Detection |
 | --- | --- | --- |
@@ -42,14 +42,14 @@ A closed enum, derived from the [path snapshot](#path-snapshot) and evaluated on
 | `adverse` | Connected but unreliable | Behavioral: repeated resets or stalls within a sliding window; demoted after a clean period |
 | `offline` | No usable path | OS path state |
 
-Consumers: [sync criteria](/design/sync/#synchronization-criteria), [staged-upload tiers](/design/transfer/upload/#upload-tiering-staged-uploads), [cache budget](/design/filesystem/client/#automatic-cache-management), [prefetch](/design/transfer/download/#prefetch-and-frugality), and [chunk sizing](/design/transfer/upload/#adaptive-chunk-sizing).
+Consumers: [](/design/sync/#synchronization-criteria), [](/design/transfer/upload/#upload-tiering-staged-uploads), [](/design/filesystem/client/#automatic-cache-management) (cache budget), [](/design/transfer/download/#prefetch-and-frugality), and [](/design/transfer/upload/#adaptive-chunk-sizing).
 
 ## Path Snapshot
 
 A platform shell (or the CLI's flags) reports one normalized sample of the path: **cost** (unmetered, metered, constrained), **reachability**, **interface** (wired, Wi-Fi, cellular, other), **power** (external, battery, low-power), **thermal** state (nominal, fair, serious, critical) and **execution** (foreground, or background with a deadline). The SDK stamps it with a **path generation**.
 
 - **The generation advances only when reachability, interface or cost changes.** Power, thermal state and execution change the plan, never the path.
-- **The transfer plan is a pure function** of the snapshot, the link behaviour the `adverse` detector observed, the [server's advice](#server-advice), and the client's compiled window bounds. The server is never in the loop; its advice can only lower a window.
+- **The transfer plan is a pure function** of the snapshot, the link behaviour the `adverse` detector observed, the server's advice ([](#server-advice)), and the client's compiled window bounds. The server is never in the loop; its advice can only lower a window.
 - **Plan rules, in precedence order.**
   1. No path, or a critical thermal state, runs nothing.
   2. Anything but an unmetered, well-behaved link holds the bulk tiers back, as do low-power mode, a serious thermal state, and a background deadline under one minute. The index tier still runs.
@@ -67,13 +67,13 @@ The server tunes clients it cannot redeploy through **advice**: one `X-Capsule-A
 
 ## Retry Policy Classes
 
-Every retrying surface declares one class. All use exponential backoff with full jitter, honor `Retry-After`, give up into a user-visible state, and never hot-loop. Errors are classified before any retry: transport failures, `5xx`, `408`, `425` and `429` are retryable, and contract `4xx` codes are terminal unless the [recovery matrix](/design/transfer/upload/#idempotency-and-resumption) names an action. Besides each item's own attempt cap, each server lane holds one shared retry budget, so a server that fails every request costs a bounded number of retries rather than one ladder per queued item.
+Every retrying surface declares one class. All use exponential backoff with full jitter, honor `Retry-After`, give up into a user-visible state, and never hot-loop. Errors are classified before any retry: transport failures, `5xx`, `408`, `425` and `429` are retryable, and contract `4xx` codes are terminal unless the recovery matrix in [](/design/transfer/upload/#idempotency-and-resumption) names an action. Besides each item's own attempt cap, each server lane holds one shared retry budget, so a server that fails every request costs a bounded number of retries rather than one ladder per queued item.
 
 | Class | Shape | Instances |
 | --- | --- | --- |
 | `interactive` | short timeout, ≤ 2 retries | auth, on-demand fetches |
-| `bulk-transfer` | resume-first (committed set / `Range`) | [upload](/design/transfer/upload/#idempotency-and-resumption), [download](/design/transfer/download/#resumption-and-verification) |
-| `control/ceremony` | slow ladder, never abandons silently | [MLS recovery](/design/mls-resilience/), federation circuit breaker |
+| `bulk-transfer` | resume-first (committed set / `Range`) | [](/design/transfer/upload/#idempotency-and-resumption), [](/design/transfer/download/#resumption-and-verification) |
+| `control/ceremony` | slow ladder, never abandons silently | [](/design/mls-resilience/), federation circuit breaker |
 
 ## Adverse-Network Posture
 
@@ -84,7 +84,7 @@ Hostile paths (captive portals, congested carriers, the Great Firewall) MUST deg
 - Bulk transfers cut on stall (no bytes for T seconds), not total duration, then resume. The server applies it to a request body it is reading, the client to every body it sends or receives. Once a request body is fully sent, the client waits for the response under a separate, longer bound that covers the server's write and fsync. Waiting on a session whose finalization is still running is not a stall; it is observed by polling `HEAD`.
 - Under `adverse`, fetches use bounded `Range` windows and uploads a shorter target request duration.
 - Racing happens only at dial (Happy Eyeballs v2, and HTTP/3 against TCP); a request is never sent twice in parallel.
-- On a persistently bad WAN, [delegation](/design/peering/#delegation) hands originals to a better-connected device of the same user. The remedy is in-region self-hosting, not circumvention.
+- On a persistently bad WAN, delegation ([](/design/peering/#delegation)) hands originals to a better-connected device of the same user. The remedy is in-region self-hosting, not circumvention.
 
 ## Packet Marking
 

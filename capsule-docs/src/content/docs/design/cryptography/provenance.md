@@ -4,42 +4,42 @@ description: Capsule's signed asset manifest, append-only provenance chains, and
 status: draft
 ---
 
-Every stored asset carries a client-signed **manifest**, and its manifests form an **append-only, hash-chained provenance log**. This separates legitimate writes from malicious or buggy ones after the fact and defeats [stale revival](/design/threat-model/scenarios/#damage-scenario--invariant-map).
+Every stored asset carries a client-signed **manifest**, and its manifests form an **append-only, hash-chained provenance log**. This separates legitimate writes from malicious or buggy ones after the fact and defeats stale revival ([](/design/threat-model/scenarios/#damage-scenario--invariant-map)).
 
-Structs live in `capsule-core/src/crypto/provenance/`. Verification is the `verify_asset` chokepoint ([](/design/cryptography/keys/#write-authorization)). The server-signed counterpart is the [custody receipt](/design/transfer/durability/#custody-receipts).
+Structs live in `capsule-core/src/crypto/provenance/`. Verification is the `verify_asset` chokepoint ([](/design/cryptography/keys/#write-authorization)). The server-signed counterpart is the custody receipt ([](/design/transfer/durability/#custody-receipts)).
 
 ## Asset Manifest
 
-A signed manifest, not a Merkle tree: [STREAM](/design/cryptography/encryption/#stream-construction) already catches chunk tampering, truncation and reordering. Load-bearing fields:
+A signed manifest, not a Merkle tree: STREAM ([](/design/cryptography/encryption/#stream-construction)) already catches chunk tampering, truncation and reordering. Load-bearing fields:
 
 | Field | Rule |
 | --- | --- |
-| `crypto_suite_id`, `protocol_version` | Signed [suite](/design/cryptography/primitives/#versioning-identifiers) and album protocol pin; not downgradable. |
+| `crypto_suite_id`, `protocol_version` | Signed suite ([](/design/cryptography/primitives/#versioning-identifiers)) and album protocol pin; not downgradable. |
 | `file_id`, `album_id`, `amk_version` | `amk_version` selects the epoch whose write-tier key verifies `write_sig`. |
 | `ciphertext_hash` | Content address of the original blob, hashed while streaming. |
-| `metadata_blob_hash` | Content address of the [encrypted metadata blob](/design/cryptography/encryption/#metadata-encryption). Present on `create`, `replace`, `metadata-update` only. |
+| `metadata_blob_hash` | Content address of the encrypted metadata blob ([](/design/cryptography/encryption/#metadata-encryption)). Present on `create`, `replace`, `metadata-update` only. |
 | `plaintext_size`, `chunk_size`, `nonce_prefix` | STREAM parameters; `nonce_prefix` is random per file. |
 | `key_mode`, `wrapped_file_key` | `derived` (default) or `wrapped` (key sealed under the AMK). See below. |
 | `created_by_user`, `created_by_device` | The **signer of this record**; the creator is the `create` record's signer. |
-| `client_version` | [Exact build](#client-build-identification); audit-only. |
+| `client_version` | Exact build ([](#client-build-identification)); audit-only. |
 | `timestamp` | Self-asserted; audit-only. |
-| `action` | Closed set owned by [Authorization](/design/authorization/#the-closed-action-set). |
+| `action` | Closed set owned by [](/design/authorization/#the-closed-action-set). |
 | `prior_provenance_hash` | SHA-256 of the previous manifest. Null **only** on `create`, else rejected by client and server. |
-| `retention_until` | Set only on `delete` ([retention](/design/organization/)). |
+| `retention_until` | Set only on `delete` (retention window: [](/design/organization/#retention-window)). |
 | `device_sig`, `write_sig` | Hybrid Ed25519 + ML-DSA-65 over all fields. **Both, and both halves, must verify.** |
 
-`device_sig` proves provenance: it is by the uploading [DSK](/design/cryptography/keys/#device-keys), chained to the user IK via the [device directory](/design/cryptography/keys/#device-directory). `write_sig` proves write authority at `amk_version`: it is by the epoch's [write-tier key](/design/cryptography/keys/#album-master-keys-amks).
+`device_sig` proves provenance: it is by the uploading DSK ([](/design/cryptography/keys/#device-keys)), chained to the user IK via the device directory ([](/design/cryptography/keys/#device-directory)). `write_sig` proves write authority at `amk_version`: it is by the epoch's write-tier key ([](/design/cryptography/keys/#album-master-keys-amks)).
 
-- **Physical placement.** The manifest is never embedded in ciphertext. It is the bundle's **envelope object**: server-visible canonical CBOR (no secrets) uploaded under the `provenance` [blob role](/design/transfer/upload/#what-gets-uploaded) and stored verbatim, which makes the index [rebuildable without PostgreSQL](/design/filesystem/server/#recovering-the-index-from-blobs-alone). The server also projects the fields it reads into PostgreSQL. Other blobs are referenced by hash only.
-- **The signed bytes are the served bytes.** No surface ([sync feed](/design/sync/#discovering-what-changed), index rebuild, [federation](/design/federation/)) may re-encode a manifest from the projection, because the projection holds no signature and signatures cover one exact encoding.
-- **Rewrite re-rolls keys** ([](/design/cryptography/encryption/#re-keying-on-rewrite)). The signed `metadata_blob_hash` binds server metadata to the client's [sidecar](/design/metadata/#local-and-server-metadata-equivalence).
-- **Wrapped key mode** exists only for an adopted [web-upload drop](/design/web-upload/#why-adopt-in-place). It is set on the adopting `create`, never on `replace`, and is authorization-neutral ([](/design/cryptography/encryption/#asset-key-derivation)).
+- **Physical placement.** The manifest is never embedded in ciphertext. It is the bundle's **envelope object**: server-visible canonical CBOR (no secrets) uploaded under the `provenance` blob role ([](/design/transfer/upload/#what-gets-uploaded)) and stored verbatim, which makes the index rebuildable without PostgreSQL ([](/design/filesystem/server/#recovering-the-index-from-blobs-alone)). The server also projects the fields it reads into PostgreSQL. Other blobs are referenced by hash only.
+- **The signed bytes are the served bytes.** No surface, whether the sync feed ([](/design/sync/#discovering-what-changed)), an index rebuild or [](/design/federation/), may re-encode a manifest from the projection, because the projection holds no signature and signatures cover one exact encoding.
+- **Rewrite re-rolls keys** ([](/design/cryptography/encryption/#re-keying-on-rewrite)). The signed `metadata_blob_hash` binds server metadata to the client's sidecar ([](/design/metadata/#local-and-server-metadata-equivalence)).
+- **Wrapped key mode** exists only for an adopted web-upload drop ([](/design/web-upload/#why-adopt-in-place)). It is set on the adopting `create`, never on `replace`, and is authorization-neutral ([](/design/cryptography/encryption/#asset-key-derivation)).
 
 **Wire presence rules (normative).** Present-`null` and absent keys sign differently:
 
 - `prior_provenance_hash` and `retention_until` encode as **present `null`** when unset.
 - `metadata_blob_hash`, `key_mode`, `wrapped_file_key`, `upgraded_from`, and the `DerivativeManifest`'s `amk_version` and `protocol_version` encode as **absent keys** when unset. Absent `key_mode` means `derived`; writing it explicitly breaks verification.
-- A key the reader does not know is kept verbatim, re-emitted canonically beside the known keys, and covered by both signatures ([invariant 2](/design/versioning/#system-invariants)). A newer writer's manifest that only adds a field verifies on an older reader; stripping the field fails verification.
+- A key the reader does not know is kept verbatim, re-emitted canonically beside the known keys, and covered by both signatures (invariant 2 of [](/design/versioning/#system-invariants)). A newer writer's manifest that only adds a field verifies on an older reader; stripping the field fails verification.
 
 ## Client Build Identification
 
@@ -51,21 +51,21 @@ client_id      capsule-ios | capsule-android | capsule-web | capsule-cli | <out-
 commit         git hash of the client's own tree (full, or a prefix of at least 12 hex chars)
 ```
 
-Example: `capsule-ios/1.4.2+9f3a1c7d2b4e`, and nothing else (no OS or model). It is audit-only: the server enforces only the [size bound](/design/threat-model/schema-rules/). Parser: `capsule-core/src/client_build.rs`.
+Example: `capsule-ios/1.4.2+9f3a1c7d2b4e`, and nothing else (no OS or model). It is audit-only: the server enforces only the size bound ([](/design/threat-model/schema-rules/)). Parser: `capsule-core/src/client_build.rs`.
 
 ## Provenance of Library Modifications
 
-Every data or metadata change appends a record anchored by its [manifest](#asset-manifest).
+Every data or metadata change appends a record anchored by its manifest ([](#asset-manifest)).
 
 ### Chained, Append-Only Structure
 
-`ProvenanceRecord { version, asset_id, manifest, prior_provenance_hash }`. `version` is an integer (currently `1`) that sorts first in canonical CBOR and is decoded before anything else. A record of a version the reader does not implement is quarantined and kept, never applied or dropped ([invariants 3 and 5](/design/versioning/#system-invariants)). The record's hash mirrors the manifest's, so the link is signed, and the match is a checked invariant: a record whose copies differ is **rejected**. Rewriting any past record breaks the forward walk from `create`.
+`ProvenanceRecord { version, asset_id, manifest, prior_provenance_hash }`. `version` is an integer (currently `1`) that sorts first in canonical CBOR and is decoded before anything else. A record of a version the reader does not implement is quarantined and kept, never applied or dropped (invariants 3 and 5 of [](/design/versioning/#system-invariants)). The record's hash mirrors the manifest's, so the link is signed, and the match is a checked invariant: a record whose copies differ is **rejected**. Rewriting any past record breaks the forward walk from `create`.
 
 Clients cache the verified head (O(1) steady state). Full walks run on first fetch, restore, or suspected tamper. A signed checkpoint record is the designated v2 extension.
 
 ### What an Attacker With All Current Keys Still Cannot Do
 
-An attacker holding every current DSK, AMK and write-tier key **can** append. It **cannot rewrite** a past record, which needs the earlier device's hybrid signature, verifiable via the [device directory](/design/cryptography/keys/#device-directory). It **cannot remove** one, because successors carry its hash. History is read-only.
+An attacker holding every current DSK, AMK and write-tier key **can** append. It **cannot rewrite** a past record, which needs the earlier device's hybrid signature, verifiable via the device directory ([](/design/cryptography/keys/#device-directory)). It **cannot remove** one, because successors carry its hash. History is read-only.
 
 ### Legacy Inherited-Device Records
 
@@ -86,7 +86,7 @@ A `BadDeviceSig` becomes `LegacyInheritedDevice { named_device, signing_device, 
 - **Client:** append-only `media/{YYYY}/{YYYY-MM}/{uuid}.provenance.cbor`, kept as a tombstone after hard-delete. It is a **non-authoritative cache**, rebuilt from the server on mismatch.
 - **Server:** the append-only envelope sequence, served unchanged. The server reads `prior_provenance_hash`, `action` and `retention_until` to enforce chain advance and the purge floor keylessly ([](/design/threat-model/validation/#server-side-validation-invariants)).
 
-No API overwrites or deletes an entry: the [action set](/design/authorization/#the-closed-action-set) has no such action and [invariant 17](/design/threat-model/validation/#in-the-index-critical-section-every-manifest-write-upload-or-lifecycle) refuses non-advancing writes.
+No API overwrites or deletes an entry: the action set ([](/design/authorization/#the-closed-action-set)) has no such action and invariant 17 ([](/design/threat-model/validation/#in-the-index-critical-section-every-manifest-write-upload-or-lifecycle)) refuses non-advancing writes.
 
 ## Derivative Provenance
 
@@ -106,13 +106,13 @@ It travels as the `derivative_manifest` blob, served verbatim. Only it carries t
 
 | Failure | Detected / contained by | Recovery |
 | --- | --- | --- |
-| Stale revival (an old, valid manifest re-served) | `prior_provenance_hash` chain, client and [server](/design/threat-model/validation/) | Quarantine; chain advance refused |
+| Stale revival (an old, valid manifest re-served) | `prior_provenance_hash` chain, client and server ([](/design/threat-model/validation/)) | Quarantine; chain advance refused |
 | Suite downgrade | Both signatures cover `crypto_suite_id` and `protocol_version` | Quarantine |
-| Derivative poisoning | [`DerivativeManifest`](#derivative-provenance) chain | Unsigned overwrite rejected; existing derivative kept |
+| Derivative poisoning | `DerivativeManifest` chain ([](#derivative-provenance)) | Unsigned overwrite rejected; existing derivative kept |
 
 ## Validation
 
-Negative cases map to [damage scenarios](/design/threat-model/scenarios/#damage-scenario--invariant-map).
+Negative cases map to the [](/design/threat-model/scenarios/#damage-scenario--invariant-map).
 
 - **`verify_asset`:** fixed positive vectors, and one negative fixture each for reader-signed, retired epoch, wrong epoch, forged cert chain (unknown device or late `added_at`), replay and suite downgrade.
 - **Wrapped key:** tampering with `key_mode` or `wrapped_file_key` fails verification; a valid wrapped key unwraps and decrypts.

@@ -72,7 +72,7 @@ flag for one.
   library's album keys. It writes an original only once its ciphertext matches the signed manifest
   and its plaintext matches the signed metadata's digest. An interrupted run resumes from the part
   files it left in `OUT/.capsule-restore/`.
-- The server endpoints behind the networked commands are the [REST API](/reference/api/)
+- The server endpoints behind the networked commands are the [](/reference/api/)
   reference.
 - The CLI and TUI are English-only. The shared `error.*` codes render through the English catalog
   described in [](/design/i18n/), and the remaining locale negotiation is to be dropped. The command

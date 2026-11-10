@@ -10,15 +10,15 @@ Every native app is a **complete local gallery first** and a synced client secon
 
 - **FR1** — Browse, search, view locally-held assets and organize with zero connectivity; none has a server dependency.
 - **FR2** — Never signing in is a valid mode: import, organize, search, export.
-- **FR3** — [Import](/design/import/pipeline/) is local; [streaming import](/design/import/pipeline/#import-upload-streaming-mode) is the one server-requiring exception.
-- **FR4** — An unavailable remote representation degrades along the [fetch ladder](/design/transfer/download/#tiered-on-demand-fetch); no offline condition removes an asset, album, or index entry.
-- **FR5** — A damaged index rebuilds from local sidecars ([maintenance](/design/filesystem/maintenance/)) without network.
+- **FR3** — Import ([](/design/import/pipeline/)) is local; streaming import ([](/design/import/pipeline/#import-upload-streaming-mode)) is the one server-requiring exception.
+- **FR4** — An unavailable remote representation degrades along the fetch ladder ([](/design/transfer/download/#tiered-on-demand-fetch)); no offline condition removes an asset, album, or index entry.
+- **FR5** — A damaged index rebuilds from local sidecars ([](/design/filesystem/maintenance/)) without network.
 
 ## Security Requirements
 
 - **SR1** — The Recently Deleted and Hidden views require fresh local authentication (biometric, else credential) with a short per-view grace window. This is UX protection, not a cryptographic boundary.
 - **SR2** — At rest, mobile relies on the app sandbox plus file-based encryption, and desktop on OS user permissions and full-disk encryption only. A rooted device voids the sandbox guarantee.
-- **SR3** — Decoded previews, caches and temp files stay inside the app-private library root ([placement](/design/filesystem/client/#mobile-clients)); export applies the [privacy strip](/design/metadata/#privacy-on-export).
+- **SR3** — Decoded previews, caches and temp files stay inside the app-private library root ([](/design/filesystem/client/#mobile-clients)); export applies the privacy strip ([](/design/metadata/#privacy-on-export)).
 
 ## Non-Functional Requirements
 

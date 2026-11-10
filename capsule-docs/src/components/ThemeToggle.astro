@@ -78,11 +78,11 @@ import { toggleLabel } from '../lib/theme-cycle.mjs';
   .toggle {
     display: inline-grid;
     place-items: center;
-    width: 2.25rem;
-    height: 2.25rem;
+    width: var(--capsule-control-size);
+    height: var(--capsule-control-size);
     padding: 0;
-    border: 1px solid var(--sl-color-gray-5);
-    border-radius: 999px;
+    border: 1px solid var(--capsule-control-border);
+    border-radius: var(--capsule-radius-pill);
     background: transparent;
     color: var(--sl-color-gray-2);
     font-size: 1.125rem;
@@ -92,7 +92,7 @@ import { toggleLabel } from '../lib/theme-cycle.mjs';
   .toggle:hover,
   .toggle:focus-visible {
     color: var(--sl-color-white);
-    border-color: var(--sl-color-gray-3);
+    border-color: var(--capsule-control-border-hover);
     background: var(--sl-color-gray-6);
   }
 
