@@ -21,11 +21,8 @@ capsule-library = { path = "../capsule-library" }
 # binary would each bundle their own std and collide at link time. capsule-core exports no
 # namespace of its own, so this pair is the whole of what the app links (ADR-0005).
 capsule-sdk = { path = "../capsule-sdk", features = ["ffi"] }
-ciborium = "0.2"
 # Catalog access through `capsule-library`'s connection types; the workspace pin (see its rationale).
 rusqlite = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 uniffi = { version = "0.31", features = ["cli"] }

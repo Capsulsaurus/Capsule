@@ -1223,7 +1223,6 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
- "walkdir",
 ]
 
 [[package]]
@@ -1246,7 +1245,6 @@ dependencies = [
  "hex",
  "hkdf 0.12.4",
  "hmac 0.12.1",
- "indexmap 2.14.0",
  "jiff",
  "kamadak-exif",
  "ml-dsa",
@@ -1281,11 +1279,8 @@ dependencies = [
  "capsule-core",
  "capsule-library",
  "capsule-sdk",
- "ciborium",
  "oslog",
  "rusqlite",
- "serde",
- "serde_json",
  "tempfile",
  "thiserror 2.0.20",
  "tracing",
@@ -1333,7 +1328,6 @@ dependencies = [
 name = "capsule-library"
 version = "0.1.0"
 dependencies = [
- "aead",
  "aes-gcm",
  "capsule-core",
  "ciborium",
