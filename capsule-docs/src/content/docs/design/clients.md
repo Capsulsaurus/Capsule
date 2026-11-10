@@ -4,7 +4,7 @@ description: Platform tiers and design language, what every client must validate
 status: draft
 ---
 
-Clients are native per platform. Cross-platform logic ([`verify_asset`](/design/cryptography/keys/#write-authorization), the [import pipeline](/design/import/pipeline/), the [library layout](/design/filesystem/client/)) lives in `capsule-core`, reached through `capsule-sdk`; a client owns rendering, input and platform integration. This doc owns what every client MUST do, since skipping it makes the client [*faulty*](/design/threat-model/#client-class-taxonomy), and the sandboxed decoder. [](/design/local-gallery/) owns the offline-first requirements.
+Clients are native per platform. Cross-platform logic (`verify_asset` per [](/design/cryptography/keys/#write-authorization), the [](/design/import/pipeline/), the library layout of [](/design/filesystem/client/)) lives in `capsule-core`, reached through `capsule-sdk`; a client owns rendering, input and platform integration. This doc owns what every client MUST do, since skipping it makes the client *faulty* ([](/design/threat-model/#client-class-taxonomy)), and the sandboxed decoder. [](/design/local-gallery/) owns the offline-first requirements.
 
 ## Design Priorities
 
@@ -53,39 +53,39 @@ The TUI follows the same frame bound for input response ([](/development/testing
 
 ### Web Client
 
-**Permanently read-only**: authenticated viewing, public [share links](/design/share-links/) and guest [upload links](/design/web-upload/). It never writes library state or enrolls a device, because a browser holds neither hardware-bound device keys nor write-tier keys ([key hierarchy](/design/cryptography/keys/)). Guest drops are keyless and sealed to the recipient, so they need no write authority; [](/design/web-upload/) owns that path.
+**Permanently read-only**: authenticated viewing, public share links ([](/design/share-links/)) and guest upload links ([](/design/web-upload/)). It never writes library state or enrolls a device, because a browser holds neither hardware-bound device keys nor write-tier keys ([](/design/cryptography/keys/)). Guest drops are keyless and sealed to the recipient, so they need no write authority; [](/design/web-upload/) owns that path.
 
 A web session opens through either door the server offers: a password or, where `server-info` publishes `auth.oidc`, the identity provider's authorization-code flow. The browser binds itself to that ceremony with an S256 `binding_challenge` whose secret stays in the tab's `sessionStorage` until the provider redirects back to `/login/oidc-callback`, which the deployment registers as its `OIDC_REDIRECT_URL`. Either door ends in the same session and second-factor step, and neither grants anything a read-only client lacks.
 
-It is **server-owned** (shipped and updated with the server) and **version-locked** to it, the one client allowed to assume its peer's exact version. Native clients MUST stay lenient across server versions, which is why [protocol evolution is additive](/design/versioning/).
+It is **server-owned** (shipped and updated with the server) and **version-locked** to it, the one client allowed to assume its peer's exact version. Native clients MUST stay lenient across server versions, which is why protocol evolution is additive ([](/design/versioning/)).
 
 A **progressive web app is out of scope, permanently**: no web app manifest, service worker, offline mode or install prompt. Offline and installed use is what the native clients are for, and a cached web client would outlive its server's version, breaking the version lock.
 
 ## Platform Limitations
 
-Some features are platform-limited, notably [auto sync](/design/sync/#auto-syncing). Background upload and OS-scheduled sync are post-v1, so v1 sync is foreground-initiated. Server-driven wake is post-v1 and never uses APNs/FCM ([](/design/notifications/#tier-1--wake)). Local, pre-armed alerts are v1 ([](/design/notifications/)).
+Some features are platform-limited, notably auto sync ([](/design/sync/#auto-syncing)). Background upload and OS-scheduled sync are post-v1, so v1 sync is foreground-initiated. Server-driven wake is post-v1 and never uses APNs/FCM ([](/design/notifications/#tier-1--wake)). Local, pre-armed alerts are v1 ([](/design/notifications/)).
 
 ## Client Validation Duties
 
 Clients MUST refuse to apply state they cannot validate. The full checklist is [](/design/threat-model/validation/#client-side-validation-invariants); in summary:
 
-- **Run [`verify_asset`](/design/cryptography/keys/#write-authorization)** on every received manifest, on every receiving path (sync, federation, peering, restore). Quarantine on failure; never silently drop or accept.
+- **Run `verify_asset`** ([](/design/cryptography/keys/#write-authorization)) on every received manifest, on every receiving path (sync, federation, peering, restore). Quarantine on failure; never silently drop or accept.
 - **Refuse forward-version writes**: any `sidecar_schema`, `crypto_suite_id` or `protocol_version` above the client's max.
 - **Enforce the handshake**: send `X-Capsule-Protocol` on every request; on `426` stop, never downgrade.
 - **Check the provenance chain**: refuse a manifest whose `prior_provenance_hash` is behind the local `latest_provenance_hash` ([](/design/sync/#stale-revival-detection)).
-- **Reject unknown values of every closed enum** as structural errors ([Schema Rules](/design/threat-model/schema-rules/#schema-evolution-and-field-grammar)).
+- **Reject unknown values of every closed enum** as structural errors ([](/design/threat-model/schema-rules/#schema-evolution-and-field-grammar)).
 - **Preserve unknown CBOR keys** within a known schema, but never act on them.
 - **Decode remote-origin bytes only in the [](#sandboxed-decoder).**
-- **Honour the [forbidden behaviours](/design/threat-model/schema-rules/#forbidden-client-behaviors)**: backdating, stripping unknown fields, overwriting provenance, signing for an unheld epoch, `revoke_all_sessions` without master-key proof.
-- **Run the [recovery verification cadence](/design/backup-recovery/#recovery-verification-cadence)** and never persist the passphrase or anything that can satisfy the check.
+- **Honour the forbidden behaviours** ([](/design/threat-model/schema-rules/#forbidden-client-behaviors)): backdating, stripping unknown fields, overwriting provenance, signing for an unheld epoch, `revoke_all_sessions` without master-key proof.
+- **Run the recovery verification cadence** ([](/design/backup-recovery/#recovery-verification-cadence)) and never persist the passphrase or anything that can satisfy the check.
 
 ## Reading State From a Newer Client
 
-Tolerant reads, fail-closed writes ([Postel's Law, asymmetric](/design/principles/#postels-law-asymmetric)):
+Tolerant reads, fail-closed writes ([](/design/principles/#postels-law-asymmetric)):
 
 - **Render the known, surface the unknown.** Show every understood field plus a non-destructive "created with a newer version" indicator; do not fail, hide or quarantine. A higher `sidecar_schema` is readable only under explicit read-only opt-in.
 - **Never strip or rewrite** a structure the client cannot fully represent; editing is disabled behind the indicator.
-- **Writes still fail closed** at the [handshake](/design/threat-model/validation/#protocol-and-capability-negotiation).
+- **Writes still fail closed** at the handshake ([](/design/threat-model/validation/#protocol-and-capability-negotiation)).
 
 ## Sandboxed Decoder
 
@@ -97,7 +97,7 @@ The server never holds plaintext, so decoding, the client's largest attack surfa
 - IPC carries only the pixel buffer or an error code.
 - **The sandbox may crash.** The host logs it, reports a decode failure and restarts the sandbox on the next request.
 - Local-origin bytes may bypass the sandbox by user option; the default is to sandbox everything.
-- After a small retry budget (default 3), the asset is shown as "unreadable on this device" and **kept**, never removed ([Filesystem — Repair](/design/filesystem/maintenance/#repair)).
+- After a small retry budget (default 3), the asset is shown as "unreadable on this device" and **kept**, never removed ([](/design/filesystem/maintenance/#repair)).
 
 ## Test and Performance Tooling
 

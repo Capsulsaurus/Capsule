@@ -4,11 +4,11 @@ description: How Capsule binds MLS (RFC 9420) to its identity layer and uses it 
 status: draft
 ---
 
-Album membership is MLS (RFC 9420) over OpenMLS with the X-Wing [ciphersuite](/design/cryptography/primitives/#mls-ciphersuite) `0x004D`. `OpenMlsAuthority` (`capsule-core/src/crypto/authority/openmls_authority/`) implements [`AlbumAuthority`](/design/cryptography/keys/#write-authority-interface); `ReferenceAuthority` is the deterministic fixture.
+Album membership is MLS (RFC 9420) over OpenMLS with the X-Wing ciphersuite `0x004D` ([](/design/cryptography/primitives/#mls-ciphersuite)). `OpenMlsAuthority` (`capsule-core/src/crypto/authority/openmls_authority/`) implements `AlbumAuthority` ([](/design/cryptography/keys/#write-authority-interface)); `ReferenceAuthority` is the deterministic fixture.
 
-- **A private codepoint is fine** because interop is a non-goal. A ratified suite is a re-pin via the [upgrade ceremony](/design/versioning/#album-upgrade-ceremony) and [`crypto_suite_id`](/design/cryptography/primitives/#versioning-identifiers).
-- **ChaCha20-Poly1305** ([MLS control AEAD](/design/cryptography/primitives/#mls-control-aead)) protects only control traffic. User data uses [AES-GCM](/design/cryptography/primitives/#bulk-aead).
-- **PQ authentication lives at the identity layer.** LeafNodes are Ed25519-only, so identity certificates sign the MLS key with **both** [hybrid](/design/cryptography/primitives/#signature-scheme) halves. Peers MUST verify both before admitting a leaf.
+- **A private codepoint is fine** because interop is a non-goal. A ratified suite is a re-pin via the upgrade ceremony ([](/design/versioning/#album-upgrade-ceremony)) and `crypto_suite_id` ([](/design/cryptography/primitives/#versioning-identifiers)).
+- **ChaCha20-Poly1305** ([](/design/cryptography/primitives/#mls-control-aead)) protects only control traffic. User data uses AES-GCM ([](/design/cryptography/primitives/#bulk-aead)).
+- **PQ authentication lives at the identity layer.** LeafNodes are Ed25519-only, so identity certificates sign the MLS key with **both** halves of the hybrid signature ([](/design/cryptography/primitives/#signature-scheme)). Peers MUST verify both before admitting a leaf.
 - **Blocking a user** removes all their devices in one `Commit`, so one epoch bump.
 
 ## Membership Operations
@@ -17,9 +17,9 @@ Every ceremony is idempotent ([](/design/threat-model/validation/#idempotency-in
 
 ### Add user Bob to album
 
-1. Fetch Bob's [device directory](/design/cryptography/keys/#device-directory) KeyPackages.
+1. Fetch Bob's KeyPackages from the device directory ([](/design/cryptography/keys/#device-directory)).
 2. `Add` + `Commit` with all of his devices as leaves.
-3. The `Welcome` carries the current AMK plus older AMKs as the album's [history policy](#history-delivery-for-new-joiners) allows.
+3. The `Welcome` carries the current AMK plus older AMKs as the album's history policy ([](#history-delivery-for-new-joiners)) allows.
 
 ### Remove user Charlie
 
@@ -37,9 +37,9 @@ Any of the user's remaining devices issues `Remove`. As with a user removal, the
 
 ## History Delivery for New Joiners
 
-The wrapper's only custom protocol is `AlbumKeyDistribution { amk_version, amk_bytes }`, broadcast on an epoch bump and batched in a `Welcome`. [Keys](/design/cryptography/keys/#album-master-keys-amks) owns the AMK and [Encryption](/design/cryptography/encryption/#asset-key-derivation) consumes it.
+The wrapper's only custom protocol is `AlbumKeyDistribution { amk_version, amk_bytes }`, broadcast on an epoch bump and batched in a `Welcome`. Key management owns the AMK ([](/design/cryptography/keys/#album-master-keys-amks)) and encryption consumes it ([](/design/cryptography/encryption/#asset-key-derivation)).
 
-- **`history_policy` is fixed per album, not per add.** It is set at creation: `Full` (every AMK since v1, the default for shared albums) or `Capped(n)` (only recent epochs; older assets show placeholders). A user's readable range therefore never depends on who added them. Changing the policy requires an [album upgrade ceremony](/design/versioning/#album-upgrade-ceremony).
+- **`history_policy` is fixed per album, not per add.** It is set at creation: `Full` (every AMK since v1, the default for shared albums) or `Capped(n)` (only recent epochs; older assets show placeholders). A user's readable range therefore never depends on who added them. Changing the policy requires an album upgrade ceremony ([](/design/versioning/#album-upgrade-ceremony)).
 - **Epoch ceiling on join.** The joiner takes the highest `amk_version` attested by the Welcome's commit chain as its monotonic ceiling and rejects any manifest claiming a higher epoch, so it never trusts the server's counter ([](/design/cryptography/keys/#write-authorization)).
 
 ## Forward Secrecy & Post-Compromise Security

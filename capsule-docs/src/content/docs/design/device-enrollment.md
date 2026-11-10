@@ -4,15 +4,15 @@ description: First-device bootstrap and cross-device add ceremonies for Capsule 
 status: draft
 ---
 
-Each device holds a DSK + DEK cross-signed into the user's [device directory](/design/cryptography/keys/#device-directory). Two ceremonies put a device there. Recovery after losing every device is [cross-device recovery](/design/backup-recovery/#default-mechanisms), not enrollment.
+Each device holds a DSK + DEK cross-signed into the user's device directory ([](/design/cryptography/keys/#device-directory)). Two ceremonies put a device there. Recovery after losing every device is cross-device recovery ([](/design/backup-recovery/#default-mechanisms)), not enrollment.
 
 **Trust split:** account-creation auth ([](/design/authentication/)) establishes *who owns the account* and confers no data access. Data authority is cryptographic: the master key and device keys verified against the directory.
 
 ## First-Device Enrollment
 
-1. **Master key** from the [OS CSPRNG](/design/cryptography/primitives/#randomness) ([shape](/design/cryptography/keys/#registered-accounts)), wrapped under the recovery secret and uploaded as the [master-key escrow](/design/backup-recovery/#master-key-escrow).
-2. **User IK** ([composition](/design/cryptography/keys/#user-identity-keys-user-iks)), with private halves wrapped under the master key and public halves in the directory.
-3. **Device keys** ([composition](/design/cryptography/keys/#device-keys)), signed by the IK. The classical half MUST be non-exportable in the secure element where one exists. Secure elements offer only P-256, so the hardware path is the planned P-256 hybrid with the PQ half software-sealed under hardware-protected material. Until then both halves are software.
+1. **Master key** from the OS CSPRNG ([](/design/cryptography/primitives/#randomness)), shaped per [](/design/cryptography/keys/#registered-accounts), wrapped under the recovery secret and uploaded as the master-key escrow ([](/design/backup-recovery/#master-key-escrow)).
+2. **User IK** (composition: [](/design/cryptography/keys/#user-identity-keys-user-iks)), with private halves wrapped under the master key and public halves in the directory.
+3. **Device keys** (composition: [](/design/cryptography/keys/#device-keys)), signed by the IK. The classical half MUST be non-exportable in the secure element where one exists. Secure elements offer only P-256, so the hardware path is the planned P-256 hybrid with the PQ half software-sealed under hardware-protected material. Until then both halves are software.
 4. **Publish** the IK-signed directory.
 5. **Default album:** a new MLS group at the master-key-derived `album_id` ([](/design/cryptography/keys/#key-chain)), with this device as sole admin and writer. Set `default_album_id` ([](/design/filesystem/server/#ownership-partitioning-and-quota)).
 6. **Show the recovery secret** behind a **type-back gate**, which is not advisory. It is never persisted.
@@ -29,7 +29,7 @@ Precondition: device A is signed in and holds the master key.
 4. **Verify.** Both devices show a transcript-derived safety code in the same chunked fixed-length format, **with each device's model and key fingerprint**. The user MUST explicitly confirm match and identity on **both** devices, and a mismatch aborts. This defeats a relay MITM or device swap.
 5. **Transfer.** A wraps the master key under the channel key. B unwraps it, generates its own DSK + DEK, and returns their public halves.
 6. **Cross-sign.** A signs B's keys with the IK, unwrapped via the master key, so any fully enrolled device can authorize an add. A then publishes the directory.
-7. **Join MLS** via [Add new device](/design/cryptography/mls/#add-new-device-for-existing-member).
+7. **Join MLS** via [](/design/cryptography/mls/#add-new-device-for-existing-member).
 
 The server surface and the CLI path have shipped. The native add UI (QR, safety-code screens) is post-v1.
 

@@ -16,29 +16,29 @@ Shipped:
 - signed report intake and the server-level blocklist;
 - the events/hour and bytes/hour budgets with the serving-side probation tier;
 - the operator commands that pin, block, unblock and show a peer (`capsule-server peer …`);
-- the [egress pull worker](#egress-pull-worker): the job schedule and lease, hint scheduling and the signed [hint channel](#pull-hints) that feeds it, the error budget and circuit breaker, CPU/hour, the receiving-side probation budgets, local album subscriptions (at most 1,000 per account), the pull itself over the server's HTTP client with re-validation of pulled data, and the worker running in `serve`;
+- the egress pull worker ([](#egress-pull-worker)): the job schedule and lease, hint scheduling and the signed hint channel ([](#pull-hints)) that feeds it, the error budget and circuit breaker, CPU/hour, the receiving-side probation budgets, local album subscriptions (at most 1,000 per account), the pull itself over the server's HTTP client with re-validation of pulled data, and the worker running in `serve`;
 - the per-`(receiving_user, source_peer)` caching budget on what a pull holds, the rejected-hash table a pull records each refused stale revival in, and the breadcrumb index read from what a pull committed.
 
 Open: counting pulled blobs in the receiver's `quota_used`. A peer whose key no operator has pinned can present no capability (`401`) and file no report or hint (`403 error.federation.peer_unknown`).
 
-**Before federation is enabled in a real deployment**, every MUST in this document holds, including re-validation of pulled data at the [boundary](#validation-at-the-boundary) and the [per-peer limits](#per-peer-compartmentalization).
+**Before federation is enabled in a real deployment**, every MUST in this document holds, including re-validation of pulled data at the boundary ([](#validation-at-the-boundary)) and the per-peer limits ([](#per-peer-compartmentalization)).
 
 ## Threat Model
 
-**A remote server is hostile until proven otherwise.** It may be outdated, buggy, compromised or malicious, and peers may collude. Capsule trusts only cryptography it verifies itself; every other peer claim is unverified input. This extends the [cryptography](/design/cryptography/) posture for Capsule's own server ("trust the server for storage, never for authorization") to servers Capsule does not operate.
+**A remote server is hostile until proven otherwise.** It may be outdated, buggy, compromised or malicious, and peers may collude. Capsule trusts only cryptography it verifies itself; every other peer claim is unverified input. This extends the cryptography posture for Capsule's own server ("trust the server for storage, never for authorization", [](/design/cryptography/)) to servers Capsule does not operate.
 
 ## Federation Reuses Existing Primitives
 
-Federation introduces **no new data protocol**. A peer reads the same content-addressed primitives a client uses ([Sync](/design/sync/#discovering-what-changed), [](/design/api-surfaces/#surfaces)):
+Federation introduces **no new data protocol**. A peer reads the same content-addressed primitives a client uses ([](/design/sync/#discovering-what-changed), [](/design/api-surfaces/#surfaces)):
 
 | Operation | Purpose |
 | --- | --- |
 | `GET /v1/sync?album_id=…&cursor=…` | Metadata changes after a cursor, for an album the peer holds a capability for. |
 | `GET /v1/blob/{hash}` (HTTP `Range`) | An opaque ciphertext blob by content address. |
-| `Authorization: Bearer <capability>` | Presents a [federation capability](#federation-capabilities). |
-| `X-Capsule-Request-Signature` | Binds that presentation to the peer named in `sub` ([request signatures](#request-signatures)). |
+| `Authorization: Bearer <capability>` | Presents a federation capability ([](#federation-capabilities)). |
+| `X-Capsule-Request-Signature` | Binds that presentation to the peer named in `sub` ([](#request-signatures)). |
 
-Rejections follow [](/reference/api/conventions/#errors). [Hints](/design/notifications/#vocabulary) and presence ride a separate low-trust channel and never feed validation. Capsule recomputes every blob's content hash on arrival, so a peer cannot lie about what a hash contains.
+Rejections follow [](/reference/api/conventions/#errors). Hints ([](/design/notifications/#vocabulary)) and presence ride a separate low-trust channel and never feed validation. Capsule recomputes every blob's content hash on arrival, so a peer cannot lie about what a hash contains.
 
 ## Pull-Only Federation
 
@@ -46,7 +46,7 @@ Peers **pull** and never push into Capsule's database. Capsule fetches on its ow
 
 ## Album Ownership (v1: Single Home Server)
 
-**Each album has exactly one home server**, the authoritative origin for every blob in it; other servers hold caches, never origins. Only the home server serves an asset's *current* manifest. This rules out split-brain ownership, cross-server delete races and conflicting epoch advances without cross-server consensus. Multi-writer albums across servers are v2 ([open question #1](/design/threat-model/schema-rules/#open-questions)); until then, aggregated albums provide multi-party sharing.
+**Each album has exactly one home server**, the authoritative origin for every blob in it; other servers hold caches, never origins. Only the home server serves an asset's *current* manifest. This rules out split-brain ownership, cross-server delete races and conflicting epoch advances without cross-server consensus. Multi-writer albums across servers are v2 (open question #1 in [](/design/threat-model/schema-rules/#open-questions)); until then, aggregated albums provide multi-party sharing.
 
 ## Federated Shared Albums (Aggregated Albums)
 
@@ -54,7 +54,7 @@ An **aggregated album** is N ordinary single-writer container albums, one per co
 
 ### The Album-Group Assertion
 
-The creator mints a `group_id` (UUIDv7) and shares it in the invite. Each contributor writes an assertion into *their own* album's encrypted collaborative-metadata stream ([operation path](/design/metadata/#how-operations-travel)). This doc owns the schema:
+The creator mints a `group_id` (UUIDv7) and shares it in the invite. Each contributor writes an assertion into *their own* album's encrypted collaborative-metadata stream ([](/design/metadata/#how-operations-travel)). This doc owns the schema:
 
 ```rust
 AlbumGroupAssertion {
@@ -69,8 +69,8 @@ There is **no shared mutable group object**; the group is the union of per-album
 ### Membership and Rendering
 
 - A constituent joins the local aggregate only if the user is a **member** of that album (holds its AMK) **and** it asserts the `group_id`. A stranger's album cannot inject itself, since `member_hint` only says where to ask.
-- The aggregate is a computed view ordered by `capture_timestamp`, tiebreak `asset_id`, with nothing stored, no keys and no access-control boundary (like [view albums](/design/organization/#system--smart-albums-views)). The name converges by LWW; the cover is a per-viewer setting in the [library-settings document](/design/metadata/#the-library-settings-document).
-- An unreachable origin degrades only its own constituent ([connectivity loss](#robustness-against-connectivity-loss)); nothing is removed.
+- The aggregate is a computed view ordered by `capture_timestamp`, tiebreak `asset_id`, with nothing stored, no keys and no access-control boundary (like view albums, [](/design/organization/#system--smart-albums-views)). The name converges by LWW; the cover is a per-viewer setting in the library-settings document ([](/design/metadata/#the-library-settings-document)).
+- An unreachable origin degrades only its own constituent ([](#robustness-against-connectivity-loss)); nothing is removed.
 
 ### Leaving, Revocation, and Moderation
 
@@ -80,11 +80,11 @@ There is **no shared mutable group object**; the group is the union of per-album
 
 ## Federation Capabilities
 
-Sharing an album with `alice@other.tld` gives her server an **album-scoped capability token**: a signed, expiring, revocable EdDSA-JWT reusing the [access-token machinery](/design/authentication/#access-token). "Capability token" always means this JWT, never a [share link](/design/share-links/) or [upload link](/design/web-upload/). It is a **transport control, not a confidentiality control**: it gates who may fetch at all, while confidentiality is [MLS album membership](/design/cryptography/mls/).
+Sharing an album with `alice@other.tld` gives her server an **album-scoped capability token**: a signed, expiring, revocable EdDSA-JWT reusing the access-token machinery ([](/design/authentication/#access-token)). "Capability token" always means this JWT, never a share link ([](/design/share-links/)) or upload link ([](/design/web-upload/)). It is a **transport control, not a confidentiality control**: it gates who may fetch at all, while confidentiality is MLS album membership ([](/design/cryptography/mls/)).
 
 ### Token Contents
 
-The format is normative; every peer parses it. It is signed with the home server's operational key, classical Ed25519 ([carve-out](/design/cryptography/primitives/#signature-scheme)).
+The format is normative; every peer parses it. It is signed with the home server's operational key, classical Ed25519 (a carve-out in [](/design/cryptography/primitives/#signature-scheme)).
 
 | Claim | Meaning |
 | --- | --- |
@@ -109,7 +109,7 @@ A grant is bound to the epoch its member was admitted at, so a member removed an
 
 ### Request Signatures
 
-A capability alone is a bearer token that whoever holds it could present. So every request presenting one also carries a signature by the peer named in its `sub`, made with that peer's operational Ed25519 key, which the issuer verifies against the key its operator [pinned](#server-identity-and-key-rotation) for that peer. A leaked capability is then useless without the peer's key. The format is normative; every peer produces it.
+A capability alone is a bearer token that whoever holds it could present. So every request presenting one also carries a signature by the peer named in its `sub`, made with that peer's operational Ed25519 key, which the issuer verifies against the key its operator pinned for that peer ([](#server-identity-and-key-rotation)). A leaked capability is then useless without the peer's key. The format is normative; every peer produces it.
 
 The header is declared on the three operations a capability is presented to: `GET /v1/sync`, `GET /v1/blob/{hash}` and `POST /v1/federation/capabilities/refresh`. It is a comma-separated list of exactly three `key=value` members, each once, in any order, with optional whitespace around each member:
 
@@ -148,9 +148,9 @@ Neither the query string nor any other header is covered. What binds the present
 
 ## Validation at the Boundary
 
-Every federated write is checked against the [server-side validation invariants](/design/threat-model/validation/#server-side-validation-invariants), including the [federation-pull checks](/design/threat-model/validation/#on-federation-pull-server-to-server). Federation never loosens a rule. In particular:
+Every federated write is checked against [](/design/threat-model/validation/#server-side-validation-invariants), including the federation-pull checks ([](/design/threat-model/validation/#on-federation-pull-server-to-server)). Federation never loosens a rule. In particular:
 
-- **Strict schema** for the album's pinned [protocol version](/design/versioning/#album-protocol-version-pinning); an unknown `crypto_suite_id` or `sidecar_schema` is rejected.
+- **Strict schema** for the album's pinned protocol version ([](/design/versioning/#album-protocol-version-pinning)); an unknown `crypto_suite_id` or `sidecar_schema` is rejected.
 - **Closed enums** (`action`, `content_type`, `DerivativeManifest.role`, `gps.source`); an unknown value is a structural error.
 - **Hard caps** on field size, nesting depth, collection length and per-peer rate.
 - **Unknown fields** are rejected at top level; unknown CBOR keys inside a known schema are preserved verbatim, never interpreted.
@@ -170,20 +170,20 @@ Each peer is its own blast radius. Transfer budgets per peer cover events, bytes
 | Storage | — | per-`(receiving_user, source_peer)` caching budget, default 25% of the receiver's hard limit |
 
 - **Serving windows** are fixed and keyed on the peer's origin. Every `GET /v1/blob/{hash}` that carries bytes (`200`, `206`) charges the blob's whole size in one atomic weighted charge before the body is sent. A delivery that does not fit what is left of the window is refused whole, `429 error.federation.rate_budget_exceeded`; a revalidation (`304`) is not charged.
-- **Receiving CPU** is the [pull worker's](#egress-pull-worker) validation time per source peer, the one per-peer CPU this server spends that it can meter. It is charged in milliseconds after each pull, at least one for any validation. A pull whose validation would take the open window past its budget spends what is left, so the peer's other jobs read it as spent. A pull abandoned at its deadline charges nothing, since its validation time is lost with it; it is a transport failure, and its back-off bounds how often a peer can cost a deadline's worth. A spent peer's jobs are queued to the window's end, neither failed nor backed off.
-- **Storage:** cached blobs are charged to the **receiving user's** [quota](/design/quota/#accounting-model), deduped, against the caching budget. Each subscriber of a pulled album is charged its blobs in full. A page that would take any subscriber past its budget writes nothing and defers the album; it costs the peer no error budget, since the peer did nothing wrong.
+- **Receiving CPU** is the pull worker's ([](#egress-pull-worker)) validation time per source peer, the one per-peer CPU this server spends that it can meter. It is charged in milliseconds after each pull, at least one for any validation. A pull whose validation would take the open window past its budget spends what is left, so the peer's other jobs read it as spent. A pull abandoned at its deadline charges nothing, since its validation time is lost with it; it is a transport failure, and its back-off bounds how often a peer can cost a deadline's worth. A spent peer's jobs are queued to the window's end, neither failed nor backed off.
+- **Storage:** cached blobs are charged to the **receiving user's** quota ([](/design/quota/#accounting-model)), deduped, against the caching budget. Each subscriber of a pulled album is charged its blobs in full. A page that would take any subscriber past its budget writes nothing and defers the album; it costs the peer no error budget, since the peer did nothing wrong.
 - **Error budget and circuit breaker:** malformed input trips exponential back-off (`error.federation.circuit_open`).
 - **Probation:** a new peer gets tighter quotas, stricter validation and no hints until it has behaved. A peer is on probation for **7 days** from when this server first recorded it (a pin or a block; a key rotation does not restart it), and a peer with no record is on probation.
 
 ## Egress Pull Worker
 
-The receiving half of [pull-only federation](#pull-only-federation): what fetches from a peer, when, and what happens when it fails.
+The receiving half of [](#pull-only-federation): what fetches from a peer, when, and what happens when it fails.
 
-- **Ownership.** A task of `serve`, started only when the deployment federates. It runs a round every **30 seconds**, and a round starts only the jobs that are due. It drives the same orchestration as the SDK's client-side pull (sync pages, then blobs, then validation) over the server's rustls HTTP client, signing each presentation as [request signatures](#request-signatures) require.
+- **Ownership.** A task of `serve`, started only when the deployment federates. It runs a round every **30 seconds**, and a round starts only the jobs that are due. It drives the same orchestration as the SDK's client-side pull (sync pages, then blobs, then validation) over the server's rustls HTTP client, signing each presentation as [](#request-signatures) requires.
 - **Jobs and leases.** The unit of work is a **job**: one local album subscription and its source peer. A job is claimed under a lease held in volatile state, so two replicas never pull one job and a replica that dies releases its jobs when the lease lapses. The lease is **10 minutes** and one pull is abandoned as a transport failure after **5**, so a live holder always finishes inside its lease; a holder whose lease lapsed and was claimed by another records nothing. A blocked peer's jobs do not run. Losing the volatile state loses only schedules, since a job with none is due.
-- **Schedule.** Every job is pulled every **15 minutes**, jittered ±20%, matching the revocation list's cache bound. A [hint](#pull-only-federation) moves a job's next pull earlier, but never sooner than **1 minute** after its previous pull, so a burst of hints is one pull. A hint moves only a job with no failures, so a failing peer cannot hint its own jobs back to the floor. A peer on [probation](#per-peer-compartmentalization) has its hints ignored.
-- **Failure policy.** A failed pull backs off exponentially per job, from 1 minute doubling to a 6-hour cap, with full jitter. A transport failure (unreachable peer, timeout, `5xx`) only backs off. A validation failure also spends the source peer's **error budget**. A spent budget, or one the counter store cannot charge, opens the peer's **circuit breaker** (`error.federation.circuit_open`) for the backoff interval of the failure that spent it, during which none of its jobs runs. An opening never shortens a circuit already open. Nothing that fails validation is written ([soft-fail](#soft-fail-semantics)), and a failure never removes an index entry ([connectivity loss](#robustness-against-connectivity-loss)).
-- **Caching-budget deferral is not a failure.** A page refused for a subscriber's [caching budget](/design/quota/#accounting-model) defers the album to its next interval with its failure count untouched and the peer's error budget unspent, and the pages before it stay written.
+- **Schedule.** Every job is pulled every **15 minutes**, jittered ±20%, matching the revocation list's cache bound. A hint ([](#pull-hints)) moves a job's next pull earlier, but never sooner than **1 minute** after its previous pull, so a burst of hints is one pull. A hint moves only a job with no failures, so a failing peer cannot hint its own jobs back to the floor. A peer on probation ([](#per-peer-compartmentalization)) has its hints ignored.
+- **Failure policy.** A failed pull backs off exponentially per job, from 1 minute doubling to a 6-hour cap, with full jitter. A transport failure (unreachable peer, timeout, `5xx`) only backs off. A validation failure also spends the source peer's **error budget**. A spent budget, or one the counter store cannot charge, opens the peer's **circuit breaker** (`error.federation.circuit_open`) for the backoff interval of the failure that spent it, during which none of its jobs runs. An opening never shortens a circuit already open. Nothing that fails validation is written ([](#soft-fail-semantics)), and a failure never removes an index entry ([](#robustness-against-connectivity-loss)).
+- **Caching-budget deferral is not a failure.** A page refused for a subscriber's caching budget ([](/design/quota/#accounting-model)) defers the album to its next interval with its failure count untouched and the peer's error budget unspent, and the pages before it stay written.
 
 ### Pull Hints
 
@@ -195,7 +195,7 @@ A home server tells a receiving server that an album has news with `POST /v1/fed
 
 `signature` is the home server's operational Ed25519 key over the canonical CBOR of a map holding the other five fields, each whitespace-trimmed and otherwise exactly as sent, plus `context`, the text `capsule-federation-hint-v1`, so the signature cannot be mistaken for any other this key makes. `nonce` is 16 to 64 bytes and never signed twice.
 
-The receiver verifies a hint exactly as it verifies a [report](/design/moderation/#federated-reporting), in order:
+The receiver verifies a hint exactly as it verifies a report ([](/design/moderation/#federated-reporting)), in order:
 
 1. Structural bounds (`400 error.federation.hint_malformed`).
 2. Addressed to this server and signed within **5 minutes** of its clock either way.
@@ -207,7 +207,7 @@ A verified, admitted hint is answered `202 { received_at }` whether it moved a j
 
 ## Stale-Revival Defense
 
-The home server serves only an asset's **current** manifest. A presented manifest whose `prior_provenance_hash` is behind the stored `latest_provenance_hash` is rejected `409` and its hash recorded ([soft-fail](#soft-fail-semantics)); receiving clients apply the same check, which needs no keys. Owner: [Provenance](/design/cryptography/provenance/#provenance-of-library-modifications).
+The home server serves only an asset's **current** manifest. A presented manifest whose `prior_provenance_hash` is behind the stored `latest_provenance_hash` is rejected `409` and its hash recorded ([](#soft-fail-semantics)); receiving clients apply the same check, which needs no keys. Owner: [](/design/cryptography/provenance/#provenance-of-library-modifications).
 
 ## Soft-Fail Semantics
 
@@ -215,7 +215,7 @@ A federated event that fails validation is not applied, not shown and grants no 
 
 ## Reconstructing State Without Trusting Peers
 
-Capsule never trusts a peer's result order; state is reconciled from content hashes and [manifest](/design/cryptography/provenance/#asset-manifest) signatures. A manifest's `timestamp` is audit-only. A client may diff album state from the home server against a peer to detect a misbehaving server.
+Capsule never trusts a peer's result order; state is reconciled from content hashes and manifest signatures ([](/design/cryptography/provenance/#asset-manifest)). A manifest's `timestamp` is audit-only. A client may diff album state from the home server against a peer to detect a misbehaving server.
 
 ## Robustness Against Connectivity Loss
 
@@ -224,11 +224,11 @@ An unreachable remote asset is shown as unavailable and retried, and its index e
 ## Security Against Malicious Files
 
 - Assets from an **untrusted server** are not loaded without explicit user consent.
-- The server never decodes media; clients decode remote-origin bytes in the [sandboxed decoder](/design/clients/#sandboxed-decoder).
+- The server never decodes media; clients decode remote-origin bytes in the sandboxed decoder ([](/design/clients/#sandboxed-decoder)).
 
 ## Federated Breadcrumb Index
 
-Search has two tiers: the full local [AI/ML](/design/ai/) index for local and cached content, and a lightweight per-asset breadcrumb (hash, timestamp, author, size, album) for accessible remote albums. A breadcrumb is read from the asset's latest entry a pull committed, so it is only ever built from re-validated input and stores nothing of its own; an asset whose latest entry is a delete or a purged tombstone has none. Reads are paged by asset id, at most 1,000 at a time. Viewing a remote album fetches and **promotes** its assets through the normal indexing pipeline, charged to the receiver's quota. Nothing is pre-indexed wholesale.
+Search has two tiers: the full local AI/ML index ([](/design/ai/)) for local and cached content, and a lightweight per-asset breadcrumb (hash, timestamp, author, size, album) for accessible remote albums. A breadcrumb is read from the asset's latest entry a pull committed, so it is only ever built from re-validated input and stores nothing of its own; an asset whose latest entry is a delete or a purged tombstone has none. Reads are paged by asset id, at most 1,000 at a time. Viewing a remote album fetches and **promotes** its assets through the normal indexing pipeline, charged to the receiver's quota. Nothing is pre-indexed wholesale.
 
 ## Moderation Hooks
 
@@ -236,7 +236,7 @@ Federation supplies the transport for federated reports and the untrusted-server
 
 ## Server Identity and Key Rotation
 
-- **Two keys**, both at the well-known path. The **operational key** (Ed25519) signs server-to-server traffic and capabilities. The **attestation key** (hybrid Ed25519 + ML-DSA-65) signs [custody receipts](/design/transfer/durability/#custody-receipts) and keeps an **append-only history** so old receipts still verify.
+- **Two keys**, both at the well-known path. The **operational key** (Ed25519) signs server-to-server traffic and capabilities. The **attestation key** (hybrid Ed25519 + ML-DSA-65) signs custody receipts ([](/design/transfer/durability/#custody-receipts)) and keeps an **append-only history** so old receipts still verify.
 - **Peer keys are pinned on first contact.** A rotation is accepted only after **at least two** independent vantage points (trusted peers or a configured notary) agree **unanimously**, and a failed corroboration is surfaced.
 - **Today peer keys are operator-pinned only.** `capsule-server peer pin ORIGIN KEY` takes the `signing_key` field of the peer's `server-info`, read out of band, and replaces any key already pinned. `peer block` refuses the peer at every boundary and revokes and publishes every live grant it holds; `peer unblock` keeps the key and restores no grant.
 

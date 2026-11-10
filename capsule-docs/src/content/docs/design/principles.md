@@ -11,7 +11,7 @@ doc in `design/`.
 
 - **Determinism and idempotency.** Raw original data is the source of truth. Every process is repeatable from its inputs.
 - **4 KiB alignment.** Data crossing disk or memory boundaries is processed and written 4 KiB-aligned unless a concrete case demands otherwise.
-- **Forward and backward compatibility.** Old clients ignore new fields and new clients tolerate missing ones, subject to the [asymmetry](#postels-law-asymmetric) below.
+- **Forward and backward compatibility.** Old clients ignore new fields and new clients tolerate missing ones, subject to the asymmetry below ([](#postels-law-asymmetric)).
 - **Data integrity.** Capsule never deletes data unexpectedly. It acts only in strict scenarios and otherwise crashes early. Server data is assumed durable; client data is assumed losable.
 - **Ephemeral derived data.** Anything that is not an original asset is rebuildable and treated as such.
 - **Encryption and compartmentalization.** Metadata is encrypted alongside data. Every boundary (album, peer, event, user, version) is a failure-containment boundary.
@@ -73,7 +73,7 @@ Every primitive, construction, format or component identity is **declared in exa
 
 ## Doc Structure
 
-Design docs are not templated, but each must answer four questions: **where it lives** (crate or module), **what its public surface is** (schema, wire format, trait, error domain), **what it defers to** (owner-doc links) and **how it is validated** (a [tier](#validation-tiers), where non-obvious). The code is the source of truth for module layout. Docs state contracts, not restated code.
+Design docs are not templated, but each must answer four questions: **where it lives** (crate or module), **what its public surface is** (schema, wire format, trait, error domain), **what it defers to** (owner-doc links) and **how it is validated** (a tier from [](#validation-tiers), where non-obvious). The code is the source of truth for module layout. Docs state contracts, not restated code.
 
 ### Implementation Status
 
