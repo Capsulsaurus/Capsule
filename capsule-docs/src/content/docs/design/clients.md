@@ -33,7 +33,7 @@ A difference between two clients MUST be justified by a difference in the platfo
 
 ### Design Language
 
-The skeleton (which screens exist and how they nest) is shared and the material is per-platform: HIG, stock controls and SF Symbols on Apple, Material on Android. Neither emulates the other, and there is no third house style. Bespoke components exist only for concepts without a platform analogue (seal state, verification verdicts, quarantine, the degrade ladder, the smart-album predicate builder, ceremony progress), drawn in each platform's idiom. Strings are keyed by surface, not client ([](/design/i18n/)). [](/development/visual-language/) owns the one brand token a native client adopts, its accent.
+The skeleton (which screens exist and how they nest) is shared and the material is per-platform: HIG, stock controls and SF Symbols on Apple, Material on Android. Neither emulates the other, and there is no third house style. Bespoke components exist only for concepts without a platform analogue (seal state, verification verdicts, quarantine, the degrade ladder, the smart-album predicate builder, ceremony progress), drawn in each platform's idiom. Strings are keyed by surface, not client ([](/design/i18n/)), and layout is direction-agnostic and expansion-tolerant on every client ([](/design/i18n/#layout)). [](/development/visual-language/) owns the one brand token a native client adopts, its accent.
 
 ### Responsiveness
 

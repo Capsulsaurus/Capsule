@@ -6,6 +6,7 @@
 // provider's `locale` is the formatting locale, so every `intl.formatDate` and
 // `intl.formatNumber` follows the region.
 
+import { DirectionProvider } from '@radix-ui/react-direction';
 import {
     createContext,
     type ReactNode,
@@ -19,6 +20,7 @@ import { IntlProvider } from 'react-intl';
 
 import {
     applyDocumentLocale,
+    directionFor,
     messagesFor,
     readLanguagePreference,
     resolveLocale,
@@ -127,7 +129,12 @@ export function LocaleSettingsProvider({ children }: { children: ReactNode }) {
                 defaultLocale={SOURCE_LOCALE}
                 messages={messagesFor(language)}
             >
-                {children}
+                {/* Radix reads direction from context, not from <html dir>, so
+                    without this a submenu opens to the right and arrow keys
+                    move the wrong way under an RTL language. */}
+                <DirectionProvider dir={directionFor(language)}>
+                    {children}
+                </DirectionProvider>
             </IntlProvider>
         </LocaleSettingsContext.Provider>
     );

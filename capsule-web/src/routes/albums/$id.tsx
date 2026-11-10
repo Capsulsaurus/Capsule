@@ -33,7 +33,7 @@ function Album() {
                     className="w-full h-full object-cover opacity-60"
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-background to-transparent" />
-                <div className="absolute bottom-0 left-0 p-6 md:p-10 w-full flex items-end justify-between">
+                <div className="absolute bottom-0 start-0 p-6 md:p-10 w-full flex items-end justify-between">
                     <div>
                         <h1 className="text-4xl font-bold mb-2">
                             {album.title}
@@ -47,7 +47,7 @@ function Album() {
                     </div>
                     <div className="flex gap-2">
                         <Button>
-                            <Play className="w-4 h-4 mr-2" />
+                            <Play className="w-4 h-4 me-2" />
                             <FormattedMessage id="album.slideshow" />
                         </Button>
                         <Button variant="secondary" size="icon">

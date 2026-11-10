@@ -79,6 +79,15 @@ jobs:
               - 'capsule-web/src/i18n/messages/**'
               - 'capsule-swift/Generated/**'
               - 'capsule-android/src/main/res/values*/strings.xml'
+              # `i18n-guard` scans these client sources for hard-coded literals and
+              # physical-direction layout, and the `rust` job is the only CI route to
+              # it, so a client-only change must pay the Rust gate. Same surfaces as
+              # hk.pkl's `i18n-guard` glob; keep the two in step.
+              - 'capsule-web/src/routes/**/*.tsx'
+              - 'capsule-web/src/components/**/*.tsx'
+              - 'capsule-swift/App/**/*.swift'
+              - 'capsule-swift/Modules/**/*.swift'
+              - 'capsule-android/src/**/*.kt'
               - '.github/workflows/ci.yml'
             web:
               - 'capsule-web/**'
