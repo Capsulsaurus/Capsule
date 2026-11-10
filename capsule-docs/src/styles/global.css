@@ -8,6 +8,8 @@
 @import "tailwindcss";
 @import "./api-reference.css";
 @import "./sdk-reference.css";
+@import "./motion.css";
+@import "./backdrop.css";
 
 /* Upstream Geist 1.9 variable cuts, vendored in src/assets/fonts (see its
    README). Vite fingerprints them into /_astro/, which public/_headers marks
@@ -112,25 +114,17 @@
 }
 
 /* Header: a translucent bar, the web's analogue of the apps' glass chrome.
-   Its layout is identical on every page (src/components/Header.astro), and a
-   cross-document view transition keeps it in place while the page below it
-   changes, so moving between pages never redraws the bar. Browsers without
-   view transitions, and readers who ask for reduced motion, navigate as
-   usual. */
-@media (prefers-reduced-motion: no-preference) {
-    @view-transition {
-        navigation: auto;
-    }
-}
+   Its layout is identical on every page (src/components/Header.astro), and
+   the page transition (./motion.css) holds it in place between pages. */
 
-/* The name goes on Starlight's <header> alone: the Header override's root
-   div is also `.header`, and a name two elements share cancels the whole
-   transition. */
+/* The glass is one even layer from the bar's top edge to its bottom edge.
+   Scoped to Starlight's <header>: the override's inner `.header` div sits
+   inside the bar's vertical padding, and glazing it too stacks a second,
+   denser band across the middle, so text scrolling under the bar's top edge
+   would show through and then vanish. The blur stays on the <header> itself:
+   its view-transition-name makes it a backdrop root, so a blurred child layer
+   would see nothing behind it. */
 header.header {
-    view-transition-name: site-header;
-}
-
-.header {
     background-color: color-mix(
         in srgb,
         var(--sl-color-black) 78%,
@@ -143,14 +137,6 @@ header.header {
         var(--sl-color-gray-5) 60%,
         transparent
     );
-}
-
-/* The bar is the same on both sides of a navigation: swap it without the
-   default crossfade, so it holds still while the content fades. */
-::view-transition-group(site-header),
-::view-transition-old(site-header),
-::view-transition-new(site-header) {
-    animation: none;
 }
 
 /* Sidebar: the same surface as the page, divided by a hairline, so it reads

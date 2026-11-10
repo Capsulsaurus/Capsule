@@ -100,12 +100,25 @@ one is designed.
   shown, naming the version being read: Latest, or `vX.Y`, with each released version once one
   exists, in a menu drawn like the site's other controls rather than the browser's native
   dropdown, the version being read an accent-tinted pill), a labelled GitHub button and a theme toggle that cycles Auto, Light and Dark. The bar
+  is one even pane of tinted glass from its top edge to its bottom edge, the page blurred beneath
+  it, so text scrolling under it fades uniformly rather than showing through at the edges. The bar
   is laid out by the window's width alone, so it is identical on every page, the front page
   included, and a navigation in a browser with view transitions keeps it in place. The section
   links need a wide window (72rem, where the table of contents also appears); narrower, the sidebar
   carries the sections, and below 50rem the menu carries the section links and the switcher.
   Splash pages such as the front page have no menu, so there the sections are reached through the
   page's own links.
+- **Page transitions.** Moving between pages animates the content, never the chrome: the header
+  holds still, the sidebar crossfades so only its current-page pill changes, and the content and
+  table of contents fade out as the new page's fade in, the content leaving from where the reader
+  saw it and rising a few pixels into place. A step back through history reverses the direction,
+  the new content settling down from above. It is a browser view transition, so a browser without
+  one, or a reader who asks for reduced motion, navigates with no animation.
+- **Background.** Every page carries a fine dot grid in its top-right corner, fixed to the window and
+  dissolving toward the middle: small neutral dots, faint in both themes, so it reads as texture and
+  never competes with text. It shows behind the content and the table of contents; the sidebar
+  covers it, the header's glass blurs it away, and it is not printed. It stays put while a page
+  scrolls; a page transition carries it with the content, so it settles with the new page.
 - **Status badges.** Every authored page carries a review `status`
   ([](/design/principles/#review-status)). The page title always shows
   it. The sidebar shows it only for a page that is not `stable`, so the navigation lists exactly what
