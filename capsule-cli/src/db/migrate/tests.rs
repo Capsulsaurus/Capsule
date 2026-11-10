@@ -1,6 +1,8 @@
 //! The CLI database migrator: a fresh create, the adoption of a sea-orm database in place, the
 //! refusals that leave a database untouched, and the peering triggers holding on both paths.
 
+use std::fmt::Write as _;
+
 use sha2::{Digest, Sha256};
 
 use super::*;
@@ -13,9 +15,9 @@ fn render(step: &Step) -> String {
     let mut out = format!("{}->{} {}\n", step.from, step.to, step.name);
     for ddl in step.ddl {
         match ddl {
-            Ddl::Always(sql) => out.push_str(&format!("A|{sql}\n")),
+            Ddl::Always(sql) => writeln!(out, "A|{sql}").expect("writing to a String"),
             Ddl::IfColumnMissing { table, column, sql } => {
-                out.push_str(&format!("M|{table}.{column}|{sql}\n"));
+                writeln!(out, "M|{table}.{column}|{sql}").expect("writing to a String");
             }
         }
     }
