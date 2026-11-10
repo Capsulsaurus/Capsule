@@ -40,21 +40,10 @@ const RETIRED_DEPENDENCIES: &[&str] = &[
 // only options for a not-yet-wired pin are "delete it" or "leave the tree carrying a
 // declaration nothing can verify" — which is how `testcontainers` came to be cited by nine
 // design docs as proof of a smoke tier that has never run.
-const PLANNED_WORKSPACE_DEPENDENCIES: &[(&str, &str)] = &[
-    (
-        "bb8",
-        "Valkey adapter pooling for the two typed state ports (.claude/rules/capsule-server.md)",
-    ),
-    (
-        "bb8-redis",
-        "Valkey adapter pooling for the two typed state ports (.claude/rules/capsule-server.md)",
-    ),
-    (
-        "redis",
-        "the `redis-rs` Valkey adapters .claude/rules/capsule-server.md requires for \
-         AuthStateStore/UploadSessionStore",
-    ),
-];
+// Empty: the Valkey adapters' `bb8`/`bb8-redis` pins never gained a consumer (one multiplexed
+// `ConnectionManager` replaced a pool) and `redis` graduated into `capsule-server`'s manifest
+// before Valkey itself was retired (ADR-0015).
+const PLANNED_WORKSPACE_DEPENDENCIES: &[(&str, &str)] = &[];
 
 // Lock-graph edges into a retired crate that are not the decision the retirement records, each
 // with its reason. `prost`/`tonic` are retired as **Capsule's public surface** (no gRPC; see

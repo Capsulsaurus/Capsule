@@ -36,7 +36,7 @@ path = "junit.xml"
 # test module named `postgres_conformance`, so the filterset below is mechanical rather than a
 # list somebody has to remember to extend — a new port's suite joins the group by being named
 # like the others. Each of those cases starts its **own** container (nextest runs a process per
-# test, so a shared one would buy nothing), which is why one thread matters: five Postgres
+# test, so a shared one would buy nothing), which is why one thread matters: dozens of Postgres
 # instances racing to bind ports and warm up is the flakiness the group exists to prevent.
 #
 # **These tests skip themselves without `CAPSULE_TEST_POSTGRES=1`**, printing one line each that

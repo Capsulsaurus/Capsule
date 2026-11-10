@@ -168,8 +168,8 @@ color-eyre = "0.6.5"
 #
 # Three features and no more: `macros` for the `FromQueryResult` derive the adapters' private row
 # structs use, `sqlx-postgres` for the driver, `runtime-tokio-rustls` because the workspace's TLS
-# rule is rustls only. Already a workspace dependency (ORM for rebuildable indexes only), consumed
-# until now only by `capsule-cli/entity`.
+# rule is rustls only. Already a workspace dependency, consumed until #402 only by
+# `capsule-cli/entity`.
 #
 # Spelled out rather than `workspace = true`, and only because cargo forbids the one thing this
 # needs: a member may add features to an inherited dependency but may not turn the workspace's
@@ -217,8 +217,8 @@ capsule-server-migration = { path = "migration" }
 # container yet". These are the tests that start one, so the two entries leave that list.
 # Dev-only: the served binary links neither.
 #
-# `postgres` and `redis` are on the workspace pin; `valkey` is added here because it is the image
-# `capsule-server/compose.yaml` runs and no other member needs it.
+# `postgres` is on the workspace pin; `valkey` is added here (and in `capsule-e2e`) because it is
+# the image `capsule-server/compose.yaml` runs.
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["valkey"] }
 
