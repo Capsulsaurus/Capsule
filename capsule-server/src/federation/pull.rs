@@ -41,6 +41,7 @@ pub mod conformance;
 #[cfg(test)]
 pub(crate) mod fixtures;
 pub mod jobs;
+pub mod postgres;
 pub mod pulled;
 pub mod puller;
 pub mod remote;

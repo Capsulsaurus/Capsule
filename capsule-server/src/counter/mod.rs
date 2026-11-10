@@ -1352,6 +1352,8 @@ pub fn unix_seconds(at: Timestamp) -> u64 {
 
 pub mod budgets;
 pub mod conformance;
+pub mod postgres;
+pub mod split;
 pub mod valkey;
 
 #[cfg(test)]
