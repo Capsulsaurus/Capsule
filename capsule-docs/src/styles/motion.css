@@ -1,0 +1,148 @@
+/*
+ * Page transitions. A navigation between pages is a cross-document view
+ * transition: the chrome holds still and the page's content moves. The header
+ * is identical on every page and does not animate at all. The sidebar and the
+ * table of contents swap in a short crossfade, so only what differs (the
+ * current-page pill, the new page's headings) changes, and softly. The
+ * content steps out, lifting a few pixels as it fades, then the new content
+ * rises into place. A step back through history reverses the direction: the
+ * old content sinks and the new content settles down from above. The `back`
+ * transition type is added by the inline <head> script built from
+ * src/lib/page-transition.mjs.
+ *
+ * The contract is the Visual Language doc's "Page transitions" rule
+ * (src/content/docs/development/visual-language.md). Motion is decorative:
+ * readers who ask for reduced motion, and browsers without cross-document
+ * view transitions, navigate with no animation at all.
+ *
+ * Every name is given to exactly one element. Two elements sharing a name
+ * cancel the whole transition, so the header's name goes on Starlight's
+ * <header> alone (the Header override's root div is also `.header`).
+ */
+@media (prefers-reduced-motion: no-preference) {
+    @view-transition {
+        navigation: auto;
+    }
+
+    :root {
+        --capsule-page-ease-out: cubic-bezier(0.2, 0, 0, 1);
+        --capsule-page-ease-in: cubic-bezier(0.4, 0, 1, 1);
+        --capsule-page-out: 120ms;
+        --capsule-page-in: 280ms;
+        --capsule-page-in-delay: 80ms;
+        --capsule-chrome-fade: 180ms;
+        /* Which way the content travels: forward lifts out and rises in;
+           back sinks out and settles down. */
+        --capsule-page-out-y: -4px;
+        --capsule-page-in-y: 10px;
+    }
+
+    :root:active-view-transition-type(back) {
+        --capsule-page-out-y: 4px;
+        --capsule-page-in-y: -10px;
+    }
+
+    header.header {
+        view-transition-name: site-header;
+    }
+
+    .sidebar-pane {
+        view-transition-name: site-sidebar;
+    }
+
+    .right-sidebar {
+        view-transition-name: site-toc;
+    }
+
+    main {
+        view-transition-name: page-content;
+    }
+
+    /* The bar is the same on both sides of a navigation. */
+    ::view-transition-group(site-header),
+    ::view-transition-old(site-header),
+    ::view-transition-new(site-header) {
+        animation: none;
+    }
+
+    /* Sidebar: the same links on both sides, so a short crossfade changes
+       only the current-page pill. A page without a sidebar (the front page)
+       fades it in or out over the same time. */
+    ::view-transition-group(site-sidebar) {
+        animation-duration: var(--capsule-chrome-fade);
+        animation-timing-function: var(--capsule-page-ease-out);
+    }
+
+    ::view-transition-old(site-sidebar),
+    ::view-transition-new(site-sidebar) {
+        animation-duration: var(--capsule-chrome-fade);
+    }
+
+    /* Table of contents: a different list on each page, which a crossfade
+       would overprint. It steps out and in with the content, without the
+       travel. */
+    ::view-transition-group(site-toc) {
+        animation: none;
+    }
+
+    ::view-transition-old(site-toc) {
+        animation: capsule-fade-out var(--capsule-page-out)
+            var(--capsule-page-ease-in) both;
+    }
+
+    ::view-transition-new(site-toc) {
+        animation: capsule-fade-in var(--capsule-chrome-fade)
+            var(--capsule-page-ease-out) var(--capsule-page-in-delay) both;
+    }
+
+    /* Content: no morph between the two pages' boxes (a long page and a
+       short one differ in height, the front page in width), just the old
+       content leaving and the new one arriving in its own place. */
+    ::view-transition-group(page-content) {
+        animation: none;
+    }
+
+    ::view-transition-old(page-content) {
+        animation: capsule-page-out var(--capsule-page-out)
+            var(--capsule-page-ease-in) both;
+    }
+
+    ::view-transition-new(page-content) {
+        animation: capsule-page-in var(--capsule-page-in)
+            var(--capsule-page-ease-out) var(--capsule-page-in-delay) both;
+    }
+
+    /* Whatever the named groups leave behind (the page background) fades
+       over the content's arrival rather than the browser's default 250ms. */
+    ::view-transition-old(root),
+    ::view-transition-new(root) {
+        animation-duration: var(--capsule-page-in);
+        animation-timing-function: var(--capsule-page-ease-out);
+    }
+}
+
+@keyframes capsule-page-out {
+    to {
+        opacity: 0;
+        transform: translateY(var(--capsule-page-out-y));
+    }
+}
+
+@keyframes capsule-page-in {
+    from {
+        opacity: 0;
+        transform: translateY(var(--capsule-page-in-y));
+    }
+}
+
+@keyframes capsule-fade-out {
+    to {
+        opacity: 0;
+    }
+}
+
+@keyframes capsule-fade-in {
+    from {
+        opacity: 0;
+    }
+}

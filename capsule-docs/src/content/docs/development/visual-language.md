@@ -108,6 +108,12 @@ one is designed.
   carries the sections, and below 50rem the menu carries the section links and the switcher.
   Splash pages such as the front page have no menu, so there the sections are reached through the
   page's own links.
+- **Page transitions.** Moving between pages animates the content, never the chrome: the header
+  holds still, the sidebar crossfades so only its current-page pill moves, and the content and table
+  of contents step out before the new page's arrive, the content rising a few pixels into place. A
+  step back through history reverses the direction, the new content settling down from above. It is
+  a browser view transition, so a browser without one, or a reader who asks for reduced motion,
+  navigates with no animation.
 - **Status badges.** Every authored page carries a review `status`
   ([](/design/principles/#review-status)). The page title always shows
   it. The sidebar shows it only for a page that is not `stable`, so the navigation lists exactly what
