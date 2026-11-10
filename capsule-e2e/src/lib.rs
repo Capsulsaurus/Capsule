@@ -6,7 +6,7 @@
 //! - **The server** is the composition root — [`capsule_server::boot::assemble`] under the
 //!   memory profile, the same function `capsule-server serve --memory` runs — bound to an
 //!   ephemeral port. The backup drill boots the durable profile instead
-//!   ([`Server::boot_durable`]) over a Postgres and a Valkey it starts itself. Real argon2 accounts, the real provisioned write authority, a real
+//!   ([`Server::boot_durable`]) over a Postgres it starts itself. Real argon2 accounts, the real provisioned write authority, a real
 //!   filesystem blob store under a temp root, the system clock. Not the test-only `Fixture`
 //!   the server's own suites use: its `SwallowingBlobs`, `TestAuthority` and `ManualClock` are
 //!   doubles, and a case that passed against them would prove the doubles.
@@ -131,13 +131,11 @@ pub const PAGE_SIZE: u32 = 64;
 pub const ATTESTATION_KEY_SEED: &str =
     "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQ==";
 
-/// Where a durable [`Server`] finds its two external services.
+/// Where a durable [`Server`] finds its one external service.
 #[derive(Debug, Clone)]
 pub struct DurableBackends {
     /// `DATABASE_URL`: a Postgres that already carries the server's schema.
     pub database_url: String,
-    /// `VALKEY_URL`.
-    pub valkey_url: String,
 }
 
 /// The composition root, assembled and listening on an ephemeral port.
@@ -208,7 +206,7 @@ impl Server {
     }
 
     /// Boot the **durable** profile, the one a deployment runs, over `blob_root` and the
-    /// Postgres and Valkey `backends` name.
+    /// Postgres `backends` names.
     ///
     /// `blob_root` is taken rather than created, so a case can boot a second server over a blob
     /// directory it restored from a backup. The database must already carry the server's
@@ -216,7 +214,6 @@ impl Server {
     pub async fn boot_durable(blob_root: TempDir, backends: &DurableBackends) -> Self {
         let mut env: BTreeMap<String, String> = BTreeMap::new();
         env.insert("DATABASE_URL".to_owned(), backends.database_url.clone());
-        env.insert("VALKEY_URL".to_owned(), backends.valkey_url.clone());
         env.insert(
             "ATTESTATION_KEY_SEED".to_owned(),
             ATTESTATION_KEY_SEED.to_owned(),

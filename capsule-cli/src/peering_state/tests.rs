@@ -5,10 +5,9 @@
 use std::path::PathBuf;
 
 use capsule_sdk::sync::{BlobManifest, ChangeKind, FeedEntry, SyncCursor, SyncPage};
-use migration::{Migrator, MigratorTrait};
-use sea_orm::{ConnectionTrait, Database, DatabaseConnection};
 
 use super::*;
+use crate::db::test_support::{exec, open, tombstone_row, tombstone_rows};
 use crate::syncstore::persist_page;
 
 /// A migrated SQLite file, removed when dropped.
@@ -20,11 +19,8 @@ impl TempDb {
     }
 
     /// A fresh connection to the file: what a restarted process opens.
-    async fn connect(&self) -> DatabaseConnection {
-        let url = format!("sqlite://{}?mode=rwc", self.0.display());
-        let db = Database::connect(&url).await.expect("connect sqlite");
-        Migrator::up(&db, None).await.expect("migrate");
-        db
+    async fn connect(&self) -> LocalDb {
+        open(&self.0).await
     }
 }
 
@@ -35,10 +31,6 @@ impl Drop for TempDb {
 }
 
 const DEVICE: Uuid = Uuid::from_u128(0xD1);
-
-async fn exec(db: &DatabaseConnection, sql: &str) -> Result<(), DbErr> {
-    db.execute_unprepared(sql).await.map(|_| ())
-}
 
 #[tokio::test]
 async fn a_fresh_device_starts_at_zero_and_the_floor_only_rises() {
@@ -439,11 +431,7 @@ async fn a_deleted_then_restored_asset_is_never_a_tombstone() {
             .is_empty()
     );
     assert!(
-        peering_tombstone::Entity::find()
-            .all(&db)
-            .await
-            .expect("reads")
-            .is_empty(),
+        tombstone_rows(&db).await.is_empty(),
         "a delete records nothing permanent"
     );
 }
@@ -523,10 +511,8 @@ async fn a_tombstone_keeps_its_first_record() {
     record_purged(&db, &[asset], Timestamp::now())
         .await
         .expect("recording again is not an error");
-    let row = peering_tombstone::Entity::find_by_id(asset.hyphenated().to_string())
-        .one(&db)
+    let row = tombstone_row(&db, &asset.hyphenated().to_string())
         .await
-        .expect("reads")
         .expect("a row");
     assert_eq!(row.recorded_at, first.to_string());
 }

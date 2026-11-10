@@ -1,5 +1,5 @@
-use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap};
+use std::cell::{Cell, RefCell};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 use capsule_core::domain::model_identity::TaskKind;
@@ -15,6 +15,74 @@ pub struct DatabaseDriver {
     /// so this is purely a hot-path memo — see [`crate::db::VectorTableSpec`] for why the
     /// tables are created by their writer rather than at open time.
     pub(in crate::db) vector_tables: RefCell<BTreeSet<TaskKind>>,
+    /// How many [`with_transaction`](Self::with_transaction) scopes are open right now. Each
+    /// scope names its `SAVEPOINT` after its depth, so a nested scope's `ROLLBACK TO` can never
+    /// reach past its own savepoint into the enclosing one's writes.
+    savepoint_depth: Cell<u32>,
+}
+
+/// One open [`DatabaseDriver::with_transaction`] scope.
+///
+/// Rolls its savepoint back on drop unless [`release`](Self::release) succeeded, so an `Err`
+/// from the scope's body, a failed `RELEASE`, or a panic all leave the catalog exactly as the
+/// scope found it. Always restores the driver's depth counter.
+struct SavepointGuard<'d> {
+    driver: &'d DatabaseDriver,
+    name: String,
+    open: bool,
+}
+
+impl<'d> SavepointGuard<'d> {
+    fn begin(driver: &'d DatabaseDriver) -> Result<Self, rusqlite::Error> {
+        let depth = driver.savepoint_depth.get() + 1;
+        let name = format!("capsule_sp_{depth}");
+        // An outermost `SAVEPOINT` (autocommit mode) opens a transaction exactly as `BEGIN`
+        // does, and releasing it commits; inside a transaction it nests. One statement covers
+        // both, so the commit point is always "the outermost scope released".
+        let outermost = driver.conn.is_autocommit();
+        driver.conn.execute_batch(&format!("SAVEPOINT {name}"))?;
+        driver.savepoint_depth.set(depth);
+        tracing::trace!(savepoint = %name, outermost, "catalog: savepoint opened");
+        Ok(Self {
+            driver,
+            name,
+            open: true,
+        })
+    }
+
+    fn release(mut self) -> Result<(), rusqlite::Error> {
+        self.driver
+            .conn
+            .execute_batch(&format!("RELEASE {}", self.name))?;
+        self.open = false;
+        tracing::trace!(savepoint = %self.name, "catalog: savepoint released");
+        Ok(())
+    }
+}
+
+impl Drop for SavepointGuard<'_> {
+    fn drop(&mut self) {
+        if self.open {
+            // `ROLLBACK TO` undoes the scope's writes but leaves the savepoint on the stack;
+            // the `RELEASE` pops it (and, for an outermost scope, ends the now-empty
+            // transaction).
+            let rolled_back = self.driver.conn.execute_batch(&format!(
+                "ROLLBACK TO {name}; RELEASE {name}",
+                name = self.name
+            ));
+            match rolled_back {
+                Ok(()) => tracing::debug!(savepoint = %self.name, "catalog: savepoint rolled back"),
+                Err(e) => tracing::warn!(
+                    savepoint = %self.name,
+                    error = %e,
+                    "catalog: savepoint rollback failed; the enclosing transaction (if any) still owns the writes"
+                ),
+            }
+        }
+        self.driver
+            .savepoint_depth
+            .set(self.driver.savepoint_depth.get().saturating_sub(1));
+    }
 }
 
 impl DatabaseDriver {
@@ -54,7 +122,66 @@ impl DatabaseDriver {
         Self {
             conn,
             vector_tables: RefCell::new(BTreeSet::new()),
+            savepoint_depth: Cell::new(0),
         }
+    }
+
+    // ── Transactions ─────────────────────────────────────────────────────────
+
+    /// Run `f` atomically: every catalog write it makes through this driver lands together or
+    /// not at all.
+    ///
+    /// Outside any transaction the scope is its own transaction and commits when `f` returns
+    /// `Ok`. Inside one — a [`begin_batch`](Self::begin_batch) batch, or an enclosing
+    /// `with_transaction` — it nests as a `SAVEPOINT`: `Ok` folds `f`'s writes into the
+    /// enclosing transaction (which commits them later), and `Err` (or a panic) rolls back
+    /// **only** `f`'s writes, leaving everything the enclosing transaction already wrote in
+    /// place. That is what lets a per-asset index write sit inside an import batch without one
+    /// failed asset costing its neighbours their rows.
+    pub fn with_transaction<T, E>(&self, f: impl FnOnce() -> Result<T, E>) -> Result<T, E>
+    where
+        E: From<rusqlite::Error>,
+    {
+        let guard = SavepointGuard::begin(self)?;
+        let value = f()?;
+        guard.release()?;
+        Ok(value)
+    }
+
+    /// Whether a transaction is open on the catalog connection — a
+    /// [`begin_batch`](Self::begin_batch) batch or a [`with_transaction`](Self::with_transaction)
+    /// scope. While it is, nothing written since it opened is durable yet.
+    pub fn in_transaction(&self) -> bool {
+        !self.conn.is_autocommit()
+    }
+
+    /// Open a batch: one outer transaction that every following write (each
+    /// [`with_transaction`](Self::with_transaction) scope nesting inside it as a savepoint)
+    /// joins until [`commit_batch`](Self::commit_batch). Bulk import uses it so a run of assets
+    /// costs one catalog commit instead of several per asset.
+    ///
+    /// Refused if a transaction is already open: batches do not nest, and silently joining
+    /// someone else's transaction would move this batch's commit point out of the caller's
+    /// control.
+    pub fn begin_batch(&self) -> Result<(), rusqlite::Error> {
+        self.conn.execute_batch("BEGIN")?;
+        tracing::debug!("catalog: batch opened");
+        Ok(())
+    }
+
+    /// Commit the batch [`begin_batch`](Self::begin_batch) opened, making every write in it
+    /// durable. On failure the batch's writes are rolled back rather than left pending, so the
+    /// connection is never stranded inside a transaction.
+    pub fn commit_batch(&self) -> Result<(), rusqlite::Error> {
+        if let Err(e) = self.conn.execute_batch("COMMIT") {
+            tracing::warn!(error = %e, "catalog: batch commit failed; rolling the batch back");
+            if !self.conn.is_autocommit() {
+                let _ = self.conn.execute_batch("ROLLBACK");
+            }
+            return Err(e);
+        }
+        tracing::debug!("catalog: batch committed");
+        Ok(())
     }
 
     /// Bring the catalog to the crate's `SCHEMA_VERSION`, creating it if the database is empty
@@ -82,7 +209,7 @@ impl DatabaseDriver {
 
     /// The underlying connection, for schema-level assertions inside `crate::db`'s tests.
     #[cfg(test)]
-    pub(in crate::db) fn connection(&self) -> &Connection {
+    pub(crate) fn connection(&self) -> &Connection {
         &self.conn
     }
 
@@ -397,19 +524,28 @@ impl DatabaseDriver {
     /// remaining member (by sequence, then id), and a stack it leaves empty is removed. An
     /// album cover naming it is cleared. The on-disk files are the caller's concern
     /// (`Workspace::purge` removes them first).
+    ///
+    /// Runs as one [`with_transaction`](Self::with_transaction) scope, so it also nests inside
+    /// an enclosing batch.
     pub fn purge_asset(&self, uuid: &str) -> Result<(), rusqlite::Error> {
-        let tx = self.conn.unchecked_transaction()?;
-        tx.execute("DELETE FROM asset_tags WHERE uuid = ?1", params![uuid])?;
+        self.with_transaction(|| self.purge_asset_rows(uuid))?;
+        tracing::debug!(asset_id = %uuid, "catalog: asset purged from the index");
+        Ok(())
+    }
+
+    fn purge_asset_rows(&self, uuid: &str) -> Result<(), rusqlite::Error> {
+        let conn = &self.conn;
+        conn.execute("DELETE FROM asset_tags WHERE uuid = ?1", params![uuid])?;
         // A purged asset's bundle is abandoned: its source guard goes with it.
-        tx.execute(
+        conn.execute(
             "DELETE FROM upload_guards WHERE asset_id = ?1",
             params![uuid],
         )?;
-        tx.execute(
+        conn.execute(
             "DELETE FROM cached_representations WHERE uuid = ?1",
             params![uuid],
         )?;
-        tx.execute(
+        conn.execute(
             "DELETE FROM stack_members WHERE asset_id = ?1",
             params![uuid],
         )?;
@@ -417,31 +553,31 @@ impl DatabaseDriver {
         // only until the `DELETE` below removes it.
         let successor = "(SELECT m.asset_id FROM stack_members m WHERE m.stack_id = asset_stacks.id
                           ORDER BY m.sequence_order, m.asset_id LIMIT 1)";
-        tx.execute(
+        conn.execute(
             &format!(
                 "UPDATE asset_stacks SET primary_asset_id = COALESCE({successor}, primary_asset_id)
                  WHERE primary_asset_id = ?1"
             ),
             params![uuid],
         )?;
-        tx.execute(
+        conn.execute(
             &format!(
                 "UPDATE asset_stacks SET cover_asset_id = {successor} WHERE cover_asset_id = ?1"
             ),
             params![uuid],
         )?;
-        tx.execute(
+        conn.execute(
             "DELETE FROM asset_stacks
              WHERE primary_asset_id = ?1
                AND NOT EXISTS (SELECT 1 FROM stack_members m WHERE m.stack_id = asset_stacks.id)",
             params![uuid],
         )?;
-        tx.execute(
+        conn.execute(
             "UPDATE albums SET cover_asset_id = NULL WHERE cover_asset_id = ?1",
             params![uuid],
         )?;
-        tx.execute("DELETE FROM assets WHERE uuid = ?1", params![uuid])?;
-        tx.commit()
+        conn.execute("DELETE FROM assets WHERE uuid = ?1", params![uuid])?;
+        Ok(())
     }
 
     // ── Albums ───────────────────────────────────────────────────────────────
@@ -653,16 +789,32 @@ impl DatabaseDriver {
     // ── User tags (asset_tags index) ────────────────────────────────────────────
 
     /// Replace the indexed user tags for `uuid` with `tags` (the asset's current OR-set value).
+    ///
+    /// Atomic: the delete and every insert run in one
+    /// [`with_transaction`](Self::with_transaction) scope, so a failure part-way leaves the
+    /// previous tag set intact rather than a truncated one.
     pub fn replace_asset_tags(&self, uuid: &str, tags: &[String]) -> Result<(), rusqlite::Error> {
-        self.conn
-            .execute("DELETE FROM asset_tags WHERE uuid = ?1", params![uuid])?;
-        for tag in tags {
-            self.conn.execute(
-                "INSERT OR IGNORE INTO asset_tags (uuid, tag) VALUES (?1, ?2)",
-                params![uuid, tag],
-            )?;
-        }
+        self.with_transaction(|| {
+            self.conn
+                .execute("DELETE FROM asset_tags WHERE uuid = ?1", params![uuid])?;
+            let mut insert = self
+                .conn
+                .prepare_cached("INSERT OR IGNORE INTO asset_tags (uuid, tag) VALUES (?1, ?2)")?;
+            for tag in tags {
+                insert.execute(params![uuid, tag])?;
+            }
+            Ok::<_, rusqlite::Error>(())
+        })?;
+        tracing::trace!(asset_id = %uuid, tags = tags.len(), "catalog: asset tags replaced");
         Ok(())
+    }
+
+    /// Every asset id the `assets` table holds — the cheap side of the open-time reconcile's
+    /// set comparison (one key-only scan, no row decoding).
+    pub fn asset_ids(&self) -> Result<HashSet<String>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare("SELECT uuid FROM assets")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        rows.collect()
     }
 
     /// The indexed user tags for `uuid`, sorted.

@@ -579,9 +579,8 @@ pub trait CounterStore: std::fmt::Debug + Send + Sync {
     ///
     /// **The two together, never separately.** Read-then-increment lets every request in a burst
     /// read the same under-limit value, which is the burst the limiter exists to stop. Every
-    /// adapter owes this atomically; the in-memory one gets it from a mutex and Valkey from one
-    /// Lua script that opens, charges or refuses the window in a single server-side step
-    /// ([`valkey::ValkeyCounters`]).
+    /// adapter owes this atomically; the in-memory one gets it from a mutex and Postgres from a
+    /// per-key advisory lock held across the read and the write ([`postgres::PostgresCounters`]).
     ///
     /// An adapter may answer [`StoreError::Rejected`](crate::store::StoreError::Rejected) when
     /// it cannot hold another key's window. That is an error and not a [`Verdict`], deliberately:
@@ -1352,7 +1351,8 @@ pub fn unix_seconds(at: Timestamp) -> u64 {
 
 pub mod budgets;
 pub mod conformance;
-pub mod valkey;
+pub mod postgres;
+pub mod split;
 
 #[cfg(test)]
 mod tests;

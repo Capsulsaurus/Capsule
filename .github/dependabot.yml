@@ -25,7 +25,7 @@ updates:
       # makes them, so waiting forces no migration. Lift this when both dependents move (#669).
       - dependency-name: "ed25519-dalek"
         update-types: ["version-update:semver-major"]
-  # The server's local service images (Postgres, Valkey). Same story: `/capsule-api/compose.yaml`
+  # The server's local service images (Postgres, and Dex for OIDC development). Same story: `/capsule-api/compose.yaml`
   # went with the Salvo tree, and `capsule-server/compose.yaml` is the live file (issue #401).
   #
   # There is no `docker` entry any more. It watched `/capsule-api/Containerfile`, and no

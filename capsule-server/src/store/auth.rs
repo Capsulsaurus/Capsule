@@ -37,7 +37,7 @@ use super::{SessionId, StoreFuture, UserId};
 /// One open authentication session.
 ///
 /// Deliberately derives no `serde`: how a session is encoded is the adapter's business (the
-/// Valkey adapter's hash fields, a Postgres row's columns), not the record's. A record that
+/// Postgres row's columns), not the record's. A record that
 /// carried its own wire format is how the generic blob store started.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionRecord {
@@ -202,7 +202,7 @@ pub trait AuthStateStore: std::fmt::Debug + Send + Sync {
     /// Every live session for `user`, oldest first, ties broken by session id.
     ///
     /// The order is part of the contract, not an accident of the backend: the devices listing
-    /// is a user-visible surface, and a set-backed adapter (Valkey `SMEMBERS`) must sort to
+    /// is a user-visible surface, and a set-backed adapter must sort to
     /// conform rather than serve whatever order it happens to hold.
     fn sessions_for_user<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Vec<SessionRecord>>;
 

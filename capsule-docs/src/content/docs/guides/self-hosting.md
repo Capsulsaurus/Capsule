@@ -1,6 +1,6 @@
 ---
 title: Self Hosting
-description: Running capsule-server on PostgreSQL, Valkey and a filesystem blob store
+description: Running capsule-server on PostgreSQL and a filesystem blob store
 status: draft
 ---
 
@@ -9,10 +9,8 @@ never decodes media; clients do all processing and encryption.
 
 ## What you need
 
-- **PostgreSQL 18**: the durable index (accounts, assets, quota).
-- **Valkey**: upload sessions, auth sessions and counters. It is correctness state, not a cache,
-  and required at every size. Run it with persistence on and `--maxmemory-policy noeviction`,
-  because an evicting policy can make "revoke all sessions" revoke nothing.
+- **PostgreSQL 18**: the durable index (accounts, assets, quota) and the server's expiring state
+  (sign-in sessions, upload sessions, rate counters). It is the only database the server uses.
 - **A blob directory** (`BLOB_ROOT`) on **one filesystem**. Finalization is an atomic rename, so
   the tree cannot span volumes or Kubernetes PersistentVolumes. It holds the blobs and, under
   `ledger/`, each owner's signed ledger, from which the index can be rebuilt. A network mount such
@@ -31,7 +29,7 @@ never decodes media; clients do all processing and encryption.
 
 ## Hardware
 
-These figures are for one node running the server, PostgreSQL and Valkey together. They are sizing
+These figures are for one node running the server and PostgreSQL together. They are sizing
 guidance derived from what the server does, not benchmarks.
 
 The server's work is light, so most of the hardware budget should go to **storage**. It hashes
@@ -45,18 +43,18 @@ is never buffered beyond one chunk, so memory does not grow with file size.
 | --- | --- | --- |
 | **CPU** | 2 cores, x86_64 or arm64 | 4 cores. SHA-2 instructions (SHA-NI on x86_64, the Armv8 crypto extensions) speed up hashing |
 | **RAM** | 2 GB | 4 to 8 GB. More helps PostgreSQL's cache on a large library, but storage pays back first |
-| **System storage** | SSD, 10 GB free | SSD or NVMe for PostgreSQL and Valkey's persistence |
+| **System storage** | SSD, 10 GB free | SSD or NVMe for PostgreSQL |
 | **Blob storage** | Your library's size, plus room for uploads in flight | Redundant disks (mirror, RAID or ZFS) sized for several years of growth. Spinning disks are fine |
 | **Network** | 10 Mbit/s upstream | Gigabit on the LAN, and 50 Mbit/s or more upstream if devices sync from outside it |
-| **Power** | — | A UPS, so a power cut does not interrupt PostgreSQL or Valkey mid-write |
+| **Power** | — | A UPS, so a power cut does not interrupt PostgreSQL mid-write |
 
 - **`BLOB_ROOT` stays on one filesystem.** The whole tree, `incoming/` included, must be one
   filesystem, so it cannot be split across an SSD and a disk array or across two ZFS datasets. Put
   it all on the array.
-- **Size Valkey's memory for the host.** `compose.yaml` caps Valkey at 4 GB, which suits a
-  development machine. What Valkey holds (sessions, upload sessions and counters) is small, so set
-  `--maxmemory` lower on a 2 GB host. Under `noeviction` a full Valkey refuses writes rather than
-  evicting state.
+- **Give PostgreSQL the memory the server does not use.** Every authenticated request reads its
+  session from PostgreSQL and every upload chunk records its range there, so its cache serves the
+  request path as well as the library index. Sessions, upload sessions and counters are small, and
+  the server deletes them once expired.
 - **Upstream bandwidth is the limit for remote devices.** A phone outside your network uploads at
   your connection's *download* speed, but every fetch of a preview or original leaves at your
   *upstream* speed. A chunk is cut only when it stops arriving, never for taking long, and a client
@@ -68,7 +66,7 @@ is never buffered beyond one chunk, so memory does not grow with file size.
 - **Users add bandwidth, not compute.** Search, thumbnails and organization run on the clients.
   More people browsing means more bytes served, but little more CPU or RAM.
 
-`capsule-server/compose.yaml` runs Postgres and Valkey with the right settings for local use
+`capsule-server/compose.yaml` runs Postgres with the right settings for local use
 (`mise run serve-deps`). Its credentials are for development only.
 
 ## Build
@@ -86,14 +84,14 @@ naming every missing variable at once, without:
 | Variable | Purpose |
 | --- | --- |
 | `DATABASE_URL` | PostgreSQL connection |
-| `VALKEY_URL` | Valkey connection |
 | `BLOB_ROOT` | Blob directory |
 | `JWT_ED25519_DER` | Base64 Ed25519 key that signs session tokens |
 | `ATTESTATION_KEY_SEED` | Base64 seed that signs custody receipts; must be independent of the token key |
 
 `SYNC_CURSOR_MAC_KEY` is derived from `JWT_ED25519_DER` when unset, so rotating the token key also
 invalidates outstanding sync cursors unless you set it explicitly. Federation is off unless
-`FEDERATION_ENABLED=true` and `FEDERATION_URL` are set; leave it off.
+`FEDERATION_ENABLED=true` and `FEDERATION_URL` are set; leave it off. `VALKEY_URL` is no longer
+read: a value left over from an older setup is ignored with a warning.
 
 Name your reverse proxy so the per-source rate limits see the client rather than the proxy.
 
@@ -131,11 +129,11 @@ production: it keeps everything except blobs in process memory.
 
 ## Maintenance
 
-Schedule these one-shot commands (cron or a timer). They need `DATABASE_URL`, `VALKEY_URL` and
-`--blob-root`, and default to a dry run:
+Schedule these one-shot commands (cron or a timer). They need `DATABASE_URL` and `--blob-root`, and
+default to a dry run:
 
-- `capsule-server gc --apply`: reclaims unreferenced blobs after a grace window and sweeps
-  upload-progress state. Run it regularly even when storage is not tight.
+- `capsule-server gc --apply`: reclaims unreferenced blobs after a grace window and deletes
+  expired sessions, upload sessions and counters. Run it regularly even when storage is not tight.
 - `capsule-server purge --apply`: hard-purges soft-deleted assets whose retention has elapsed. It
   also needs the server's `ATTESTATION_KEY_SEED`, because each purge is signed into the
   owner ledger ([](/design/filesystem/server/#the-owner-ledger)) first, and refuses without it. It
@@ -164,9 +162,9 @@ non-zero when a blob is missing or empty and leaves that reference as it was.
 
 ## Backups
 
-Durable state is PostgreSQL plus `BLOB_ROOT` (blobs and `ledger/`); back up both, together. Valkey
-holds only sessions and in-flight uploads, so losing it signs users out and restarts uploads but
-loses no library data. Keep the key variables above in your secret store too: they are not in the
+Durable state is PostgreSQL plus `BLOB_ROOT` (blobs and `ledger/`); back up both, together. The
+database also holds sign-in sessions and in-flight upload sessions, so a restore keeps users signed
+in. Keep the key variables above in your secret store too: they are not in the
 database, and the server's signing and attestation identity depends on them.
 
 Take the database first, then the blobs:
@@ -189,12 +187,9 @@ restore goes unreported. When a backup must capture every change, stop `serve` w
 halves. If a restore reports rows that differ and the old host still runs, take the backup again
 that way.
 
-Valkey needs no backup. If you keep one anyway (its `appendonly` files under `/data`), restore it
-only beside the database dump it was taken with.
-
 ### Restoring onto a new host
 
-1. Start an empty PostgreSQL and an empty Valkey, and set the same `JWT_ED25519_DER` and
+1. Start an empty PostgreSQL, and set the same `JWT_ED25519_DER` and
    `ATTESTATION_KEY_SEED` as the old host.
 2. Restore the database. The dump carries the schema and its migration record, so do not run
    `capsule-server-migration up` first:
@@ -204,8 +199,11 @@ only beside the database dump it was taken with.
    uploaded after the dump; `capsule-server rebuild --apply` restores them with the sequence
    numbers they had, so clients' sync cursors stay valid.
 5. Run `capsule-server scrub --deep`. It should report nothing; it exits non-zero on any finding.
-6. Start `serve`. Everyone signs in again, because their sessions were in Valkey. Clients resume
-   syncing where they stopped.
+6. Start `serve`. Sessions come back with the database, so a client signed in at the dump stays
+   signed in unless its session has since expired. Before it listens, `serve` discards every
+   unfinished upload session whose staged file under `BLOB_ROOT` was not restored, and deletes
+   every staged file with no session; a client whose upload was discarded starts that file again.
+   Clients resume syncing where they stopped.
 
 If the database is lost and there is no dump, migrate an empty database and run
 `capsule-server rebuild --apply` over the blob directory. It restores every asset row from the

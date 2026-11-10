@@ -12,7 +12,7 @@ flowchart TB
   dto[Capsule request/response<br/>DTO mapping]:::server
   service[Framework-neutral<br/>application service]:::accent
   port[Typed repository<br/>or backend port]:::server
-  backend[(Postgres, Valkey or<br/>Capsule BlobStore adapter)]:::store
+  backend[(Postgres or<br/>Capsule BlobStore adapter)]:::store
   endpoint --> dto --> service --> port --> backend
 ```
 
@@ -49,8 +49,8 @@ authoritative.
 - Capsule owns the blob-store contract, and backends implement one narrow trait.
 - Capsule owns the E2EE-aware resumable-upload state machine. No external transfer server owns
   reservation, provenance, bundle visibility or finalization.
-- `AuthStateStore` and `UploadSessionStore` are distinct typed ports with Valkey and in-memory
-  adapters passing the same conformance suites. Valkey is
+- `AuthStateStore` and `UploadSessionStore` are distinct typed ports with PostgreSQL and in-memory
+  adapters passing the same conformance suites. PostgreSQL is
   required ([](/design/filesystem/server/#required-services)); the in-memory adapter is a test double,
   not a deployment choice.
 

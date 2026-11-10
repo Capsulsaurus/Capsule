@@ -17,10 +17,22 @@
 //! | state | source |
 //! |---|---|
 //! | `hidden` (gated Hidden view) | the `hidden` LWW register |
+//! | `rating` | the `rating` LWW register |
+//! | user tags (`asset_tags`) | the `tags_user` OR-set, replaced atomically with the row |
+//! | `caption`, `latitude`/`longitude` | the `caption` register; the effective GPS fix |
+//! | capture time | the effective capture timestamp (the user's correction, else as imported) |
 //! | trash (`is_deleted`/`deleted_at`) | the provenance chain's lifecycle actions |
 //! | `album_id` | the provenance chain head manifest |
 //! | stacks | the `stack_membership` LWW register |
 //! | `cull` | *not an index projection* — see below |
+//!
+//! Not restored: `cached_representations` (local cache state, re-scannable from disk and left
+//! untouched by a rebuild) and the media-derived columns (`chromahash`, `dominant_color`,
+//! `duration_ms`), which the write path leaves NULL too.
+//!
+//! The same per-asset path serves the open-time reconcile:
+//! [`reindex_sidecars`] indexes just the bundles `Workspace::open` found on disk with no
+//! `assets` row (an import interrupted between its durable bundle and its index commit).
 //!
 //! An **importer-formed** stack used to be the one thing the sidecar did not carry: an
 //! older `import_asset_with` recorded it as `assets.stack_id` / `is_stack_hidden` and wrote no
@@ -80,7 +92,8 @@ struct ChainFacts {
 /// Rebuild the SQLite index from the sidecars on disk.
 ///
 /// Every `{uuid}.cbor` under `media/` is decoded as the signed [`SidecarV1`] shape and upserted
-/// as an `assets` row; stacks are then reconstructed from the `stack_membership` registers.
+/// as an `assets` row together with its user tags (one transaction per asset); stacks are then
+/// reconstructed from the `stack_membership` registers.
 ///
 /// A sidecar that does not decode as the signed shape — a torn or foreign file, or a retired
 /// unsigned pre-signed-path record — is warned about and skipped: a rebuild holds no keys and
@@ -110,41 +123,9 @@ pub fn rebuild_index(library: &Library) -> Result<(), LibraryError> {
             continue;
         }
 
-        let bytes = match fs::read(path) {
-            Ok(b) => b,
-            Err(e) => {
-                skipped += 1;
-                tracing::warn!(
-                    sidecar = %path.display(),
-                    error = %e,
-                    "rebuild_index: unreadable sidecar file; skipping"
-                );
-                continue;
-            }
-        };
-
-        // The signed shape is the only one read: it is what every write path emits, and it is
-        // the only shape that carries the `hidden` register the default projections gate on.
-        match SidecarV1::from_canonical_slice(&bytes, SIDECAR_SCHEMA_V1) {
-            Ok(sidecar) => {
-                let dir = path.parent().unwrap_or(&media_dir).to_path_buf();
-                tracing::debug!(
-                    sidecar = %path.display(),
-                    asset_id = %sidecar.uuid,
-                    shape = "sidecar-v1-signed",
-                    "rebuild_index: decoded sidecar"
-                );
-                signed.push(SignedOnDisk { dir, sidecar });
-            }
-            Err(signed_err) => {
-                skipped += 1;
-                tracing::warn!(
-                    sidecar = %path.display(),
-                    shape = ?shape::probe(&bytes),
-                    error = %signed_err,
-                    "rebuild_index: sidecar does not decode as the signed shape; skipping"
-                );
-            }
+        match decode_signed(path, &media_dir) {
+            Some(found) => signed.push(found),
+            None => skipped += 1,
         }
     }
 
@@ -152,27 +133,9 @@ pub fn rebuild_index(library: &Library) -> Result<(), LibraryError> {
     let mut trashed = 0usize;
 
     for found in &signed {
-        let facts = chain_facts(&found.dir, &found.sidecar.uuid);
-        // The row already in the index, if any. A rebuild normally runs against a lost index
-        // and finds nothing here; when it is run against a live one (`capsule rebuild`), this
-        // is what keeps it from erasing the index-only stack placement described below.
-        let prior = library
-            .db
-            .find_by_uuid(&found.sidecar.uuid.to_string())
-            .ok()
-            .flatten();
-        let row = signed_asset_row(&found.sidecar, &facts, prior.as_ref());
+        let row = index_signed(library, found)?;
         hidden += usize::from(row.is_hidden);
         trashed += usize::from(row.is_deleted);
-        tracing::trace!(
-            asset_id = %row.uuid,
-            album_id = ?row.album_id,
-            is_hidden = row.is_hidden,
-            is_deleted = row.is_deleted,
-            stack_id = ?row.stack_id,
-            "rebuild_index: upserting row rebuilt from a signed sidecar"
-        );
-        library.db.upsert_asset(&row)?;
     }
 
     let signed_stacks = rebuild_signed_stacks(library, &signed);
@@ -186,6 +149,112 @@ pub fn rebuild_index(library: &Library) -> Result<(), LibraryError> {
         "rebuild_index: index rebuilt from on-disk sidecars"
     );
     Ok(())
+}
+
+/// Index the signed sidecars at `sidecars` — and only them — exactly as [`rebuild_index`]
+/// indexes each one: the `assets` row and its tags in one transaction, then any stack their
+/// `stack_membership` registers form. Returns the ids it indexed.
+///
+/// This is the open-time reconcile's write path: `Workspace::open` hands it the bundles it
+/// restored from disk that have no `assets` row, so a crash between an import's durable bundle
+/// and its index commit costs nothing once the library is opened again. A sidecar that does not
+/// decode is warned about and skipped, as in a full rebuild.
+#[tracing::instrument(skip_all, fields(root = %library.root.display(), sidecars = sidecars.len()))]
+pub(crate) fn reindex_sidecars(
+    library: &Library,
+    sidecars: &[PathBuf],
+) -> Result<Vec<Uuid>, LibraryError> {
+    let media_dir = library.root.join("media");
+    let signed: Vec<SignedOnDisk> = sidecars
+        .iter()
+        .filter_map(|path| decode_signed(path, &media_dir))
+        .collect();
+    for found in &signed {
+        let row = index_signed(library, found)?;
+        tracing::debug!(
+            asset_id = %row.uuid,
+            album_id = ?row.album_id,
+            is_deleted = row.is_deleted,
+            "reconcile: unindexed bundle indexed from its sidecar"
+        );
+    }
+    let stacks = rebuild_signed_stacks(library, &signed);
+    tracing::debug!(
+        indexed = signed.len(),
+        skipped = sidecars.len() - signed.len(),
+        stacks,
+        "reconcile: sidecars re-indexed"
+    );
+    Ok(signed.iter().map(|found| found.sidecar.uuid).collect())
+}
+
+/// Read and decode one `{uuid}.cbor` as the signed shape, warning (and returning `None`) when
+/// it is unreadable or any other shape.
+fn decode_signed(path: &Path, media_dir: &Path) -> Option<SignedOnDisk> {
+    let bytes = match fs::read(path) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(
+                sidecar = %path.display(),
+                error = %e,
+                "rebuild_index: unreadable sidecar file; skipping"
+            );
+            return None;
+        }
+    };
+    // The signed shape is the only one read: it is what every write path emits, and it is
+    // the only shape that carries the `hidden` register the default projections gate on.
+    match SidecarV1::from_canonical_slice(&bytes, SIDECAR_SCHEMA_V1) {
+        Ok(sidecar) => {
+            let dir = path.parent().unwrap_or(media_dir).to_path_buf();
+            tracing::debug!(
+                sidecar = %path.display(),
+                asset_id = %sidecar.uuid,
+                shape = "sidecar-v1-signed",
+                "rebuild_index: decoded sidecar"
+            );
+            Some(SignedOnDisk { dir, sidecar })
+        }
+        Err(signed_err) => {
+            tracing::warn!(
+                sidecar = %path.display(),
+                shape = ?shape::probe(&bytes),
+                error = %signed_err,
+                "rebuild_index: sidecar does not decode as the signed shape; skipping"
+            );
+            None
+        }
+    }
+}
+
+/// Upsert `found`'s `assets` row and replace its user tags, atomically, returning the row.
+fn index_signed(library: &Library, found: &SignedOnDisk) -> Result<AssetRow, LibraryError> {
+    let facts = chain_facts(&found.dir, &found.sidecar.uuid);
+    // The row already in the index, if any. A rebuild normally runs against a lost index
+    // and finds nothing here; when it is run against a live one (`capsule rebuild`), this
+    // is what keeps it from erasing the index-only stack placement described below.
+    let prior = library
+        .db
+        .find_by_uuid(&found.sidecar.uuid.to_string())
+        .ok()
+        .flatten();
+    let row = signed_asset_row(&found.sidecar, &facts, prior.as_ref());
+    let tags: Vec<String> = found.sidecar.tags_user.value().into_iter().collect();
+    tracing::trace!(
+        asset_id = %row.uuid,
+        album_id = ?row.album_id,
+        is_hidden = row.is_hidden,
+        is_deleted = row.is_deleted,
+        stack_id = ?row.stack_id,
+        tags = tags.len(),
+        "rebuild_index: upserting row and tags rebuilt from a signed sidecar"
+    );
+    let db = &library.db;
+    db.with_transaction(|| {
+        db.upsert_asset(&row)?;
+        db.replace_asset_tags(&row.uuid, &tags)
+    })?;
+    Ok(row)
 }
 
 // ── the signed shape ────────────────────────────────────────────────────────
@@ -383,7 +452,12 @@ fn rebuild_signed_stacks(library: &Library, signed: &[SignedOnDisk]) -> usize {
 
         for (i, (uuid, membership)) in members.iter().enumerate() {
             let member_row = StackMemberRow {
-                id: format!("{stack_id}#{i}"),
+                // The member's declared index, as the importer numbers it, so a reconcile
+                // pass over part of a stack does not collide with the rows already there.
+                id: format!(
+                    "{stack_id}#{}",
+                    membership.member_index.map_or(i, |n| n as usize)
+                ),
                 stack_id: stack_id.to_string(),
                 asset_id: uuid.to_string(),
                 sequence_order: membership.member_index.map_or(i as i64, i64::from),

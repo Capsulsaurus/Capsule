@@ -1,6 +1,6 @@
 //! Deterministic in-memory adapters — **test doubles**, never a deployment mode.
 //!
-//! Valkey is required; the server refuses to boot without `VALKEY_URL`
+//! PostgreSQL is required; the server refuses to boot without `DATABASE_URL`
 //! (design/filesystem/server.md, "Required Services"). What these types are for is letting the
 //! rest of the rebuild be tested without a container, which is the acceptance gap set for
 //! Kynos — and they earn that only by passing the same
@@ -357,7 +357,7 @@ impl AuthStateStore for InMemoryAuthState {
 
 /// In-memory [`UploadSessionStore`].
 ///
-/// Both views the Salvo adapter maintained as separate Valkey keys — the uploader index and
+/// Both views the Salvo adapter maintained as separate keys — the uploader index and
 /// the progress sorted-set — are *derived* here: the uploader index from the record's
 /// `upload_user_id`, the progress order from its `last_progress_at`. A derived view cannot
 /// drift from the records it is derived from.
@@ -859,9 +859,9 @@ impl ChallengeStore for InMemoryChallenges {
 /// minute before anything is refused, which is far beyond a self-hosted deployment's sign-in
 /// rate and well inside the memory a record of four short strings costs. The ceiling exists so
 /// that a caller who begins ceremonies without ever finishing them grows this map to a bound and
-/// not to the heap. [`ValkeyOidcAuthorizations`](super::valkey::ValkeyOidcAuthorizations) has no
-/// ceiling: its records carry a `PEXPIRE`, and the authorize route's per-host budget bounds the
-/// rate they are written at — see that adapter's docs.
+/// not to the heap. [`PostgresOidcAuthorizations`](super::postgres::PostgresOidcAuthorizations)
+/// has no ceiling: its rows carry their own expiry and are swept, and the authorize route's
+/// per-host budget bounds the rate they are written at.
 pub const PENDING_AUTHORIZATION_CEILING: usize = 10_000;
 
 /// In-memory [`OidcAuthorizationStore`].

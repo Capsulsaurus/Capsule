@@ -189,11 +189,11 @@ pub enum Backends {
     /// Every deterministic in-crate adapter, over a real filesystem blob store.
     ///
     /// An explicit operator act — the `--memory` flag, and nothing in the environment — and
-    /// **never** a fallback: a deployment that forgets `VALKEY_URL` must fail closed rather than
-    /// come up holding state it will lose on the next restart. Boot logs a `WARN` every time it
-    /// assembles this family.
+    /// **never** a fallback: a deployment that forgets `DATABASE_URL` must fail closed rather
+    /// than come up holding state it will lose on the next restart. Boot logs a `WARN` every
+    /// time it assembles this family.
     Memory,
-    /// Postgres and Valkey, selected by `DATABASE_URL` and `VALKEY_URL`.
+    /// Postgres, selected by `DATABASE_URL`.
     Durable,
 }
 
@@ -365,10 +365,8 @@ pub struct Config {
     pub rejected_hash_bounds: crate::federation::rejected_hashes::RejectedHashBounds,
     /// The filesystem tree ciphertext blobs are written to. There is no object store.
     pub blob_root: Option<PathBuf>,
-    /// The Postgres URL, once an adapter reads it (#402).
+    /// The Postgres URL every durable port is on.
     pub database_url: Option<String>,
-    /// The Valkey URL the state ports' adapters connect to (`store::valkey`, #403).
-    pub valkey_url: Option<String>,
     /// The PKCS#8 Ed25519 private key access and refresh tokens are signed with.
     pub signing_key_der: Option<SecretBytes>,
     /// The HMAC key sync cursors are authenticated under.
@@ -575,7 +573,6 @@ impl fmt::Debug for Config {
             rejected_hash_bounds,
             blob_root,
             database_url,
-            valkey_url,
             signing_key_der,
             sync_cursor_mac_key,
             attestation_key_seed,
@@ -607,7 +604,6 @@ impl fmt::Debug for Config {
             .field("rejected_hash_bounds", rejected_hash_bounds)
             .field("blob_root", blob_root)
             .field("database_url", &database_url.as_deref().map(redacted_url))
-            .field("valkey_url", &valkey_url.as_deref().map(redacted_url))
             .field(
                 "signing_key_der",
                 &format_args!("{}", redacted(signing_key_der.as_ref())),
@@ -777,7 +773,15 @@ impl Config {
                 Some(legacy)
             });
         let database_url = env.var("DATABASE_URL");
-        let valkey_url = env.var("VALKEY_URL");
+        // Valkey is retired (ADR-0015): the state it held is on `DATABASE_URL`. A deployment's
+        // environment that still names it is told so rather than refused, because nothing about
+        // the variable being there is unsafe — it is just read by nothing.
+        if env.var("VALKEY_URL").is_some() {
+            tracing::warn!(
+                "VALKEY_URL is set and ignored: sessions, upload sessions and rate limits are \
+                 kept in PostgreSQL; remove it and the Valkey service"
+            );
+        }
 
         // ── Backend family ──────────────────────────────────────────────────────────────
         // Only the flag selects the in-memory family. The environment is where a deployment's
@@ -1053,19 +1057,15 @@ impl Config {
         // Last, and after every parse, so one message carries both "this is malformed" and
         // "that is missing" rather than a restart between them.
         //
-        // The durable backends are demanded here for every subcommand that opens a store, both
-        // URLs and in the order the stores are opened: `DATABASE_URL`, then `VALKEY_URL`. Left to
-        // the boot path, a missing database surfaced as a runtime error (exit 1) one restart
-        // after a missing Valkey surfaced as a configuration refusal (exit 2), and an operator
-        // missing both was told about one at a time.
+        // The durable backend is demanded here for every subcommand that opens a store. Left to
+        // the boot path, a missing database surfaced as a runtime error (exit 1) rather than as
+        // the configuration refusal (exit 2) every other missing setting is.
         let durable = backends == Backends::Durable;
         let require_durable_backends = |faults: &mut Vec<ConfigFault>| {
             if durable {
+                // The in-memory adapters are a development profile an operator opts into, never
+                // something to fall back on.
                 require(database_url.is_some(), "DATABASE_URL", faults);
-                // The refusal `store/mod.rs` has always documented: Valkey is required, and
-                // the in-memory adapters are a development profile an operator opts into
-                // rather than something to fall back on.
-                require(valkey_url.is_some(), "VALKEY_URL", faults);
             }
         };
         match demands {
@@ -1115,7 +1115,6 @@ impl Config {
                 rejected_hash_bounds,
                 blob_root,
                 database_url,
-                valkey_url,
                 signing_key_der,
                 sync_cursor_mac_key,
                 attestation_key_seed,

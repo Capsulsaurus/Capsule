@@ -1165,8 +1165,7 @@ impl Workspace {
         };
         let bytes = self.place_adopted_original(&mut asset, plaintext)?;
         self.write_signed_artifacts(&asset)?;
-        self.index_asset_row(&asset)?;
-        self.index_original_representation(&asset, usize::try_from(bytes).unwrap_or(usize::MAX))?;
+        self.index_asset_with_original(&asset, usize::try_from(bytes).unwrap_or(usize::MAX))?;
         self.assets.insert(asset.asset_id, asset);
         Ok(Adoption::Adopted)
     }

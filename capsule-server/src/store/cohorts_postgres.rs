@@ -1,9 +1,9 @@
 //! [`PostgresCohorts`] — the durable device-cohort map (#402).
 //!
-//! # Why this one port in `store` is Postgres and the other five are not
+//! # Why this one port in `store` has no expiry
 //!
-//! Everything else in [`super`] is volatile TTL state whose production adapter is Valkey. The
-//! cohort map is the exception the port's own docs argue for: *"A session store forgets a cohort
+//! Everything else in [`super`] is expiring state ([`super::postgres`]). The cohort map is the
+//! exception the port's own docs argue for: *"A session store forgets a cohort
 //! exactly when the 'have I seen this device before?' question becomes worth asking"* — the user
 //! reinstalls, gets a new `device_id` by design, and the sessions that carried the old one have
 //! long expired. A map that expired with them would answer the question it exists for with

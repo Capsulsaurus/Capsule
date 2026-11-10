@@ -22,12 +22,10 @@ flowchart TB
   subgraph server [Kynos server]
     api[Auth and structural validation]:::server
     machines[Upload and sync<br/>state machines]:::server
-    pg[(Postgres<br/>key-free index)]:::store
-    valkey[(Valkey<br/>volatile state)]:::store
+    pg[(Postgres<br/>key-free index,<br/>sessions and counters)]:::store
     blobs[(Opaque blob store)]:::store
     api --> machines
     machines --> pg
-    machines --> valkey
     machines --> blobs
   end
   sdk -- ciphertext only --> api

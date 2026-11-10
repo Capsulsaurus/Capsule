@@ -176,6 +176,14 @@ pub const EXPECTED_MIGRATIONS: &[ExpectedMigration] = &[
         name: "m20260902_000030_quota_pulled_holdings",
         checksum: "795624559ec2649b17981cc1614eee6d3fcc7b7332db39dbcbc84eacef6cad08",
     },
+    ExpectedMigration {
+        name: "m20260902_000031_volatile_state",
+        checksum: "b7a2b7611b2c610672d2339e43e726f90961c5b69b09a9de5b1b597015196819",
+    },
+    ExpectedMigration {
+        name: "m20260902_000032_quota_pulled_total_in_writers",
+        checksum: "88b78427093b9a00b6c9bf87e04d0a3943709251f23635124599940a8f9f092d",
+    },
 ];
 
 /// The command an operator runs to apply them.
@@ -226,7 +234,8 @@ pub enum PostgresError {
 /// consequence of what this server does:
 ///
 /// - `max_connections(32)` — the durable ports are on the request path but not the *byte* path;
-///   a chunk append touches the blob store and Valkey, never Postgres. Thirty-two is comfortably
+///   a chunk append costs one asynchronously committed update of its session row
+///   (`store::postgres`) and nothing else here. Thirty-two is comfortably
 ///   above the concurrency a finalization-bound workload reaches and well under a default
 ///   `max_connections = 100` shared with the migration binary and an operator's `psql`.
 /// - `connect_timeout(5s)` / `acquire_timeout(10s)` — a request that waits longer than this has

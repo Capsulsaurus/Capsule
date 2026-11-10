@@ -1444,3 +1444,119 @@ fn open_surfaces_a_too_new_catalog_as_a_typed_library_error() {
     assert_eq!(fs::read(&db_path).unwrap(), before, "nothing was written");
     assert!(!lib.path().join(".library/lock").exists());
 }
+
+// ── Open-time reconcile ─────────────────────────────────────────────────────
+
+fn committed_asset_count(root: &Path) -> i64 {
+    rusqlite::Connection::open(root.join("index/library.sqlite"))
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM assets", [], |r| r.get(0))
+        .unwrap()
+}
+
+/// **The crash window.** An import's bundle is durable before its index rows commit; here the
+/// rows sit in a batch that never commits (the process "dies" with it open), so the catalog
+/// holds no row for a bundle that is on disk. The next open re-indexes it — row, tags and the
+/// original's cache entry — from its sidecar.
+#[test]
+fn open_reindexes_a_bundle_whose_index_rows_never_committed() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let img = src.path().join("photo.jpg");
+    fs::write(&img, b"\xFF\xD8\xFF bundle without a row").unwrap();
+
+    let (album, id) = {
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Trip").unwrap();
+        ws.db().begin_batch().unwrap();
+        let id = ws.import_asset(album, &img).unwrap();
+        ws.tag_add(&id, "coast").unwrap();
+        // Dropped with the batch open: SQLite rolls the uncommitted rows back.
+        (album, id)
+    };
+    assert_eq!(
+        committed_asset_count(lib.path()),
+        0,
+        "the crash lost the index rows"
+    );
+
+    let ws = Workspace::open(lib.path(), b"passphrase", FAST_PARAMS).unwrap();
+    let uuid = id.to_string();
+    let row = ws
+        .db()
+        .find_by_uuid(&uuid)
+        .unwrap()
+        .expect("the bundle is indexed again");
+    assert_eq!(row.album_id.as_deref(), Some(album.to_string().as_str()));
+    assert_eq!(ws.db().tags_for(&uuid).unwrap(), vec!["coast".to_string()]);
+    let reps = ws.db().representations_for(&uuid).unwrap();
+    assert_eq!(reps.len(), 1);
+    assert!(reps[0].is_owned_original);
+    assert_eq!(ws.db().query_timeline(0, 100).unwrap().len(), 1);
+    assert_eq!(committed_asset_count(lib.path()), 1, "and it is committed");
+}
+
+/// A row the reconcile writes is the row the import would have written: deleting a live
+/// asset's rows and reopening restores the same projection.
+#[test]
+fn a_reconciled_row_matches_the_imported_one() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let img = src.path().join("photo.jpg");
+    fs::write(&img, b"\xFF\xD8\xFF reconciled projection").unwrap();
+
+    let (id, imported_row, imported_tags) = {
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Trip").unwrap();
+        let id = ws.import_asset(album, &img).unwrap();
+        ws.tag_add(&id, "harbour").unwrap();
+        let uuid = id.to_string();
+        let row = ws.db().find_by_uuid(&uuid).unwrap().unwrap();
+        (id, row, ws.db().tags_for(&uuid).unwrap())
+    };
+    let uuid = id.to_string();
+    rusqlite::Connection::open(lib.path().join("index/library.sqlite"))
+        .unwrap()
+        .execute_batch(&format!(
+            "DELETE FROM asset_tags WHERE uuid = '{uuid}';
+             DELETE FROM cached_representations WHERE uuid = '{uuid}';
+             DELETE FROM assets WHERE uuid = '{uuid}';"
+        ))
+        .unwrap();
+
+    let ws = Workspace::open(lib.path(), b"passphrase", FAST_PARAMS).unwrap();
+    let row = ws.db().find_by_uuid(&uuid).unwrap().unwrap();
+    assert_eq!(row, imported_row);
+    assert_eq!(ws.db().tags_for(&uuid).unwrap(), imported_tags);
+}
+
+/// With nothing missing the reconcile writes nothing: an asset's rows — including a
+/// projection only the index carries — are left exactly as they were.
+#[test]
+fn open_leaves_an_already_indexed_library_untouched() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let img = src.path().join("photo.jpg");
+    fs::write(&img, b"\xFF\xD8\xFF already indexed").unwrap();
+
+    let id = {
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Trip").unwrap();
+        ws.import_asset(album, &img).unwrap()
+    };
+    let uuid = id.to_string();
+    // A marker the sidecar does not carry: a reconcile that re-indexed this asset would
+    // overwrite it.
+    rusqlite::Connection::open(lib.path().join("index/library.sqlite"))
+        .unwrap()
+        .execute(
+            "UPDATE assets SET dominant_color = 'marker' WHERE uuid = ?1",
+            rusqlite::params![uuid],
+        )
+        .unwrap();
+
+    let ws = Workspace::open(lib.path(), b"passphrase", FAST_PARAMS).unwrap();
+    let row = ws.db().find_by_uuid(&uuid).unwrap().unwrap();
+    assert_eq!(row.dominant_color.as_deref(), Some("marker"));
+    assert_eq!(committed_asset_count(lib.path()), 1);
+}

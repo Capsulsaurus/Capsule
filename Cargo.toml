@@ -1,8 +1,6 @@
 [workspace]
 members = [
     "capsule-cli",
-    "capsule-cli/entity",
-    "capsule-cli/migration",
     "capsule-core",
     "capsule-core-ffi",
     "capsule-e2e",
@@ -19,8 +17,6 @@ members = [
 # capsule-server/openapi.json; regenerate it with `mise run openapi-kynos`.
 default-members = [
     "capsule-cli",
-    "capsule-cli/entity",
-    "capsule-cli/migration",
     "capsule-core",
     "capsule-core-ffi",
     "capsule-e2e",
@@ -67,8 +63,6 @@ subtle = "2.6.1"
 # transport.
 kynos = { version = "0.4.0", features = ["openapi32"] }
 base64 = "0.22.1"
-bb8 = "0.9.1"
-bb8-redis = "0.26.0"
 bytes = "1.12.1"
 # Reading a response body back to bytes, for the coded-problem interceptor.
 # `http-body-util` is already in the lock file — Kynos and hyper both depend on it — and it is
@@ -90,9 +84,6 @@ socket2 = { version = "0.6.5", features = ["all"] }
 # lock file through reqwest and hyper. The server's bounded federation-pull transport uses it
 # the same way.
 http = "1.4.2"
-# Only as the sea-orm column type in `capsule-cli/entity` and in `capsule-server-migration` (a
-# server dev-dependency); everything else uses `jiff`. `cargo xtask architecture-check` gates it.
-chrono = { version = "0.4.45", features = ["serde"] }
 ed25519-dalek = "2"
 # Binaries report errors with `eyre` + `color-eyre`; libraries use `thiserror`. No `anyhow`.
 eyre = "0.6.12"
@@ -104,8 +95,6 @@ jiff = { version = "0.2", features = ["serde"] }
 # `openidconnect`, which pulls `chrono`, `log` and a vulnerable `rsa`.
 jsonwebtoken = { version = "10.4.0", features = ["aws_lc_rs"] }
 nanoid = "0.4.0"
-# Valkey for volatile state: one `ConnectionManager`, no pool (see `capsule-server`'s manifest).
-redis = { version = "1.2.2", features = ["tokio-comp", "connection-manager"] }
 # The HTTP client. `capsule-sdk` is the sanctioned client network path and `capsule-server`'s
 # OIDC relying party is the one server egress: discovery, JWKS and the token
 # exchange against an identity provider, and the federation pull worker; both server clients run
@@ -116,8 +105,15 @@ reqwest = { version = "0.12.28", default-features = false, features = [
     "rustls-tls",
 ] }
 ring = "0.17.14"
-# Rebuildable indexes only (`sqlx-postgres` server, `sqlx-sqlite` CLI); sidecars stay canonical.
-sea-orm = { version = "2.0.4" }
+# The one client-side SQLite stack: `capsule-library`'s catalog, the FFI's catalog access and the
+# CLI's `capsule.sqlite` (sync store and peering state). `bundled` compiles SQLite in, so every
+# client carries the same engine whatever the host ships. Pinned once here because
+# `libsqlite3-sys` is `links = "sqlite3"`: two rusqlite versions in one build cannot link, which
+# is why the CLI left sea-orm's `sqlx-sqlite` (a second SQLite driver) for this crate.
+rusqlite = { version = "0.32", features = ["bundled"] }
+# The server's Postgres schema migrator (`capsule-server-migration`). sea-orm itself has no
+# workspace pin: `capsule-server` is its one direct consumer and declares it with its defaults
+# off (see that manifest); keep the two versions in step. The CLI's SQLite is on `rusqlite` above.
 sea-orm-migration = { version = "2.0.4", features = [
     "sqlx-postgres",
     "runtime-tokio-rustls",
@@ -143,10 +139,7 @@ ratatui = { version = "0.30.2", default-features = false, features = [
     "layout-cache",
 ] }
 crossterm = { version = "0.29.0", features = ["event-stream"] }
-testcontainers-modules = { version = "0.15.0", features = [
-    "postgres",
-    "redis",
-] }
+testcontainers-modules = { version = "0.15.0", features = ["postgres"] }
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["full"] }
 # UUIDv7 for every new identifier (members enable `v7`); UUIDv4 only where creation time must

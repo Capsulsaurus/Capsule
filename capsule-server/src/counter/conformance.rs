@@ -5,10 +5,10 @@
 //! conformance note records — so most of what is asserted here is the *observable consequence*:
 //! the n-th hit inside a window is refused, and no sequence of calls admits more than the budget.
 //! [`concurrent_hits_admit_exactly_the_budget`] is the one case that does race, on a
-//! multi-threaded runtime, and it is the case a Valkey adapter built on read-then-`INCR` fails.
+//! multi-threaded runtime, and it is the case an adapter built on read-then-increment fails.
 //!
 //! Like [`crate::store::conformance`], this lives in `src/` because it is part of the contract:
-//! the in-memory double is a legitimate stand-in for Valkey only to the extent it passes the
+//! the in-memory double is a legitimate stand-in for Postgres only to the extent it passes the
 //! same cases the container-backed adapter does.
 //!
 //! # Time

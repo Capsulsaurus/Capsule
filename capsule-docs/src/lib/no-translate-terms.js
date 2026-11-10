@@ -65,7 +65,6 @@ const INFRA = [
     'TUS',
     'PostgreSQL',
     'Postgres',
-    'Valkey',
     'MinIO',
     'Kubernetes',
     'RKE2',

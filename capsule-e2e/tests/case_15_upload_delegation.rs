@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use capsule_cli::db::LocalDb;
 use capsule_cli::peer::{
     self, ACK_SUFFIX, AcceptOptions, BootClock, DelegateOptions, PeerListener, PeerState,
 };
@@ -47,7 +48,6 @@ use capsule_sdk::push::{bundle_blobs, create_request};
 use capsule_sdk::recovery::RecoveryClient;
 use capsule_sdk::sync::ChangeKind;
 use capsule_sdk::upload::{UploadError, UploadOutcome};
-use migration::{Migrator, MigratorTrait as _};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -83,16 +83,9 @@ impl Cli {
             .save(&session.export().await.expect("a live session exports"))
             .expect("the session persists");
         let state = PeerState::new(home.path().join("peer"));
-        let url = format!(
-            "sqlite://{}?mode=rwc",
-            home.path().join("cli.sqlite").display()
-        );
-        let db = sea_orm::Database::connect(&url)
+        let db = LocalDb::open_async(home.path().join("cli.sqlite"))
             .await
-            .expect("the CLI database opens");
-        Migrator::up(&db, None)
-            .await
-            .expect("the CLI database migrates");
+            .expect("the CLI database opens and migrates");
         let versions = DbDirectoryVersions::open(db, device)
             .await
             .expect("the directory floor opens");

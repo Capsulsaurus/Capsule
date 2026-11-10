@@ -3,8 +3,8 @@
 //! # Why this is not in [`crate::store`]
 //!
 //! Everything in `store` is **volatile**: an upload session, a login session, a ceremony. Each
-//! has a TTL that is a property of its store, each is reconstructible from a retry, and the
-//! adapter that will serve them in production is Valkey. Nothing here is any of those things.
+//! has a TTL that is a property of its store and is reconstructible from a retry. Nothing here
+//! is either of those things.
 //! An asset row is the library — losing one loses a photo's existence, not a transfer's
 //! progress — so it has no TTL, no expiry semantics, and exactly one production adapter shape:
 //! PostgreSQL. Folding it into `AuthStateStore`'s neighbourhood would put a permanent record
