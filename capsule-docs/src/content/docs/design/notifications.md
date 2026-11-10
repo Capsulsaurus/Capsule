@@ -116,5 +116,5 @@ Tiers per [](/design/principles/#validation-tiers).
 - **Trigger predicates (unit):** each class fires exactly at its threshold.
 - **Pre-arm lifecycle (unit):** arm, re-arm, cancel; never two timers per class.
 - **Snooze, disable, denial (unit):** each degrades to a badge and changes no behavior.
-- **Pre-armed delivery (smoke, per platform):** fires with the app terminated.
+- **Pre-armed delivery (smoke, per platform):** fires with the app terminated, and its tap opens the class's destination: a `recovery = rewrap` alert opens the guided re-wrap, never the routine check. On Android the alarm also survives a reboot. Run by hand on a device or simulator, because no harness can terminate the app and wait out an OS timer.
 - **Wake contentlessness (unit, post-v1):** no library-derived field; response identical to the scheduled poll.
