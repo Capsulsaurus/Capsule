@@ -230,7 +230,8 @@ pub enum PostgresError {
 /// consequence of what this server does:
 ///
 /// - `max_connections(32)` — the durable ports are on the request path but not the *byte* path;
-///   a chunk append touches the blob store and Valkey, never Postgres. Thirty-two is comfortably
+///   a chunk append costs one asynchronously committed update of its session row
+///   (`store::postgres`) and nothing else here. Thirty-two is comfortably
 ///   above the concurrency a finalization-bound workload reaches and well under a default
 ///   `max_connections = 100` shared with the migration binary and an operator's `psql`.
 /// - `connect_timeout(5s)` / `acquire_timeout(10s)` — a request that waits longer than this has

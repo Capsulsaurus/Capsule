@@ -127,16 +127,6 @@ subtle = { workspace = true }
 # parameter set rather than the escrow KDF's tiered one — see `auth::credential` for why those
 # are unrelated numbers. The Postgres adapter (#402) uses the same helper.
 argon2 = { workspace = true }
-# The Valkey adapters behind the state ports and the counter port (`store::valkey`,
-# `counter::valkey`; #403). `redis-rs` is the crate the Rust
-# Architecture Decisions name for exactly this; the workspace pin carries `tokio-comp` and
-# `connection-manager`, and two features are added here: `tokio-rustls-comp`, so a `rediss://`
-# URL terminates TLS in rustls and never in native-tls, and `script`, because every multi-key
-# mutation is one Lua script rather than a `WATCH`/`MULTI` round trip a multiplexed connection
-# could not hold. No `bb8`: one `ConnectionManager` is a self-reconnecting multiplexed
-# connection, which is the whole of what a server talking to one Valkey needs. Lua scripts for
-# multi-key writes mean no Redis Cluster. No `object_store` or generic TTL/CAS crate.
-redis = { workspace = true, features = ["tokio-rustls-comp", "script"] }
 # The OIDC relying party's egress: the discovery document, the JWK Set and the
 # form-encoded token exchange, against the configured identity provider and nothing else. The
 # one outbound HTTP client in this crate. Already in the lock file through `capsule-sdk`, so this
@@ -216,11 +206,9 @@ capsule-server-migration = { path = "migration" }
 # `PLANNED_WORKSPACE_DEPENDENCIES` sanctioned them as planned because "no test starts a
 # container yet". These are the tests that start one, so the two entries leave that list.
 # Dev-only: the served binary links neither.
-#
-# `postgres` is on the workspace pin; `valkey` is added here (and in `capsule-e2e`) because it is
-# the image `capsule-server/compose.yaml` runs.
+# `postgres`, the only module on the workspace pin, is the image `capsule-server/compose.yaml` runs.
 testcontainers = { workspace = true }
-testcontainers-modules = { workspace = true, features = ["valkey"] }
+testcontainers-modules = { workspace = true }
 
 # Throwaway directories on disk. `tests/binary.rs` gives the spawned server a blob root of its
 # own and deletes it afterwards; `tests/sdk_client.rs` puts a **real** `capsule_library::Workspace`

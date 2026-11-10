@@ -17,22 +17,23 @@
 //! `compose` builds the application out of them identically, so the two profiles cannot drift
 //! into serving different applications.
 //!
-//! Both halves of the [`Backends::Durable`] arm are real. `open_durable_database` demands
+//! The [`Backends::Durable`] arm has one backend (ADR-0015). `open_durable_database` demands
 //! `DATABASE_URL`, opens the pool, and refuses to continue against a database whose schema is not
-//! the one this binary was built for — naming the command that fixes it, never the URL.
-//! `valkey` then connects to `VALKEY_URL` and proves it answers `PING`; a server that cannot be
-//! reached is [`BootError::Valkey`] — the refusal `store/mod.rs` has always said a
-//! required service earns: *"Valkey is required; the server refuses to boot without
-//! `VALKEY_URL`"*. Every durable port is then on one of the two (#402, #403, #446): Postgres for
-//! every record a restart must not lose, Valkey for the volatile state.
+//! the one this binary was built for — naming the command that fixes it, never the URL. Every
+//! durable port is then on that pool: the records a restart must not lose, and the expiring
+//! state — sessions, upload sessions, the ceremonies, the counters and the pull schedule — each
+//! in its own table with its own expiry.
 //!
-//! OIDC is no exception since #460: the pending ceremonies are on Valkey and the federated
-//! accounts are rows of the Postgres account table, so a durable boot that configures
-//! `OIDC_ISSUER` runs on the same two backends as everything else and holds no state a restart,
-//! or a callback landing on another replica, would lose.
+//! OIDC is no exception: the pending ceremonies and the federated accounts are both rows on the
+//! same database, so a durable boot that configures `OIDC_ISSUER` holds no state a restart, or a
+//! callback landing on another replica, would lose.
 //!
-//! No `DATABASE_URL` or no `VALKEY_URL`, and no `--memory`, is a configuration fault naming every
-//! missing variable ([`Config::load`]). Nothing here ever silently becomes an in-memory server.
+//! The two per-chunk upload budgets are the one exception to "every port on the pool": they are
+//! counted in this process ([`SplitCounters`]), because a chunk is only ever written by the
+//! process that owns its stage and those budgets bound throughput rather than a secret.
+//!
+//! No `DATABASE_URL`, and no `--memory`, is a configuration fault ([`Config::load`]). Nothing
+//! here ever silently becomes an in-memory server.
 //!
 //! # What the memory profile is, precisely
 //!
@@ -72,7 +73,8 @@ use crate::auth::{
 };
 use crate::blob::FilesystemBlobStore;
 use crate::config::{Backends, Config};
-use crate::counter::valkey::ValkeyCounters;
+use crate::counter::postgres::PostgresCounters;
+use crate::counter::split::SplitCounters;
 use crate::counter::{CounterContext, CounterStore, InMemoryCounters};
 use crate::directory::postgres::PostgresDeviceDirectory;
 use crate::directory::{DeviceDirectoryContext, DeviceDirectoryStore, InMemoryDeviceDirectory};
@@ -87,7 +89,7 @@ use crate::federation::postgres::{PostgresCapabilities, PostgresPeers};
 use crate::federation::pull::pulled::postgres::{PeerBudgetCharge, PostgresPulledAlbums};
 use crate::federation::pull::pulled::{PeerCachingBudget, PulledAlbumReads};
 use crate::federation::pull::remote::{egress_client, rest};
-use crate::federation::pull::valkey::ValkeyPullJobs;
+use crate::federation::pull::postgres::PostgresPullJobs;
 use crate::federation::pull::{
     Ed25519RequestSigner, InMemoryPullJobs, InMemoryPulledAlbums, PullJobs, PullWorker,
     PullWorkerParts, PulledAlbums, RemotePuller, RemotePullerParts, SystemJitter,
@@ -125,7 +127,8 @@ use crate::store::memory::{
     InMemoryAuthState, InMemoryChallenges, InMemoryChannels, InMemoryCohorts, InMemoryEnrollments,
     InMemoryOidcAuthorizations, InMemoryOidcDevices, InMemoryUploadSessions,
 };
-use crate::store::valkey::ValkeyStores;
+use crate::store::postgres::PostgresStores;
+use crate::store::sweep::{ExpirySweeper, SWEEP_TICK};
 use crate::store::{
     AuthStateStore, ChallengeStore, ChannelStore, Clock, CohortStore, EnrollmentStore,
     OidcAuthorizationStore, OidcDeviceStore, PostgresCohorts, SystemClock, UploadSessionStore,
@@ -203,16 +206,6 @@ pub enum BootError {
         /// What reqwest reported.
         detail: String,
     },
-    /// The Valkey at `VALKEY_URL` could not be reached, or did not answer `PING`.
-    ///
-    /// Required means required: a server that came up without its session store would answer
-    /// nothing an authenticated client sent, and saying so at boot beats discovering it per
-    /// request. `detail` never carries the URL, which carries the password.
-    #[error("the Valkey at VALKEY_URL could not be reached: {detail}")]
-    Valkey {
-        /// The adapter's own description of the failure.
-        detail: String,
-    },
     /// The router's own types do not describe a buildable server.
     ///
     /// Unreachable in practice — the conformance suite builds the same router on every test run
@@ -272,6 +265,9 @@ pub struct Assembled {
     /// application. `Some` exactly when the deployment federates (`FEDERATION_ENABLED` and
     /// `FEDERATION_URL`); nothing runs it until [`Assembled::spawn_pull_worker`] does.
     pub pull_worker: Option<Arc<PullWorker>>,
+    /// The sweeper that reclaims expired state rows. `Some` on the durable arm only: the
+    /// in-memory adapters purge as they go.
+    pub expiry: Option<Arc<ExpirySweeper>>,
     /// The operator workers, over the same stores.
     pub maintenance: Maintenance,
 }
@@ -317,6 +313,30 @@ impl Assembled {
                 ticks.tick().await;
                 let report = worker.tick().await;
                 tracing::debug!(jobs = report.outcomes.len(), "a pull round returned");
+            }
+        }))
+    }
+
+    /// Start the expiry sweeper's loop, on the durable arm.
+    ///
+    /// One sweep every [`SWEEP_TICK`], the first straight away. Detached and harmless to stop
+    /// mid-sweep: every batch is its own statement, and a row the sweeper did not reach is one
+    /// every read already treats as absent. A sweep that fails is logged and retried on the next
+    /// tick; it never stops the server.
+    pub fn spawn_expiry_sweeper(&self) -> Option<tokio::task::JoinHandle<()>> {
+        let sweeper = self.expiry.clone()?;
+        tracing::info!(
+            tick_secs = SWEEP_TICK.as_secs(),
+            "starting the expiry sweeper"
+        );
+        Some(tokio::spawn(async move {
+            let mut ticks = tokio::time::interval(SWEEP_TICK);
+            ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                ticks.tick().await;
+                if let Err(error) = sweeper.sweep().await {
+                    tracing::warn!(%error, "an expiry sweep failed; the next tick retries");
+                }
             }
         }))
     }
@@ -412,15 +432,14 @@ async fn assemble_on(config: &Config, clock: Arc<dyn Clock>) -> Result<Assembled
             compose(config, stores, ports, "the in-memory adapters")
         }
         Backends::Durable => {
-            // Both probes run for real, in the order the ports are declared: `DATABASE_URL` is
-            // demanded and the pool opened first — a schema that is not the one this binary was
-            // built for refuses here — and then Valkey must answer `PING`. Only then is any
-            // module assembled, and every port it is assembled from is on one of the two.
+            // `DATABASE_URL` is demanded and the pool opened first — a schema that is not the one
+            // this binary was built for refuses here. Only then is any module assembled, and
+            // every port it is assembled from is on that one pool.
             let connection = open_durable_database(config).await?;
-            let valkey = valkey(config).await?;
-            let stores = base.durable(&connection, &valkey);
-            let ports = durable_ports(config, &stores.clock, &connection, &valkey)?;
-            compose(config, stores, ports, "the Postgres and Valkey adapters")
+            let state = state_stores(config, &connection, &base.clock);
+            let stores = base.durable(&connection, &state);
+            let ports = durable_ports(config, &stores.clock, &connection, &state)?;
+            compose(config, stores, ports, "the Postgres adapters")
         }
     }
 }
@@ -485,23 +504,16 @@ pub async fn assemble_maintenance(config: &Config) -> Result<Maintenance, BootEr
                 "the in-memory adapters",
             )
         }
-        // The same two probes, in the same order, as `serve`'s durable arm — and the same
-        // stores, so a `gc` pass reads the index the server writes and the marks the previous
-        // pass left. That last part is the reason the arm exists: the collector marks a blob on
-        // one pass and sweeps it on a later one, so a mark store that forgets is a collector that
-        // can only ever mark.
-        //
-        // `VALKEY_URL` is demanded too, after `DATABASE_URL`. The scrub reads the upload-session
-        // store to tell a live transfer from an orphan, and that store is Valkey's (#403); a
-        // scrub over the durable index that consulted an empty in-memory session table instead
-        // would report every in-flight upload as an orphan.
+        // The same probe as `serve`'s durable arm — and the same stores, so a `gc` pass reads
+        // the index the server writes and the marks the previous pass left. That last part is
+        // the reason the arm exists: the collector marks a blob on one pass and sweeps it on a
+        // later one, so a mark store that forgets is a collector that can only ever mark. The
+        // scrub reads the same upload-session table the server writes, so an in-flight upload
+        // is never reported as an orphan.
         Backends::Durable => {
             let connection = open_durable_database(config).await?;
-            let valkey = valkey(config).await?;
-            (
-                base.durable(&connection, &valkey),
-                "the Postgres and Valkey adapters",
-            )
+            let state = state_stores(config, &connection, &base.clock);
+            (base.durable(&connection, &state), "the Postgres adapters")
         }
     };
     let purge_signer = purge_attestation(config, &stores);
@@ -517,29 +529,19 @@ pub async fn assemble_maintenance(config: &Config) -> Result<Maintenance, BootEr
     Ok(maintenance)
 }
 
-/// Connect to `VALKEY_URL` and prove it answers, before any module is assembled.
-///
-/// Straight after the durable pool, and before a socket is bound: a Valkey that cannot be
-/// reached is the fault an operator most needs named early. Every Valkey store — sessions,
-/// upload sessions and the three ceremonies — comes back on one connection and the real clock;
-/// the counter adapter shares that connection.
-async fn valkey(config: &Config) -> Result<ValkeyStores, BootError> {
-    let url = config
-        .valkey_url
-        .as_deref()
-        .ok_or(BootError::Missing { key: "VALKEY_URL" })?;
-    let stores = ValkeyStores::connect(
-        url,
-        Arc::new(SystemClock),
+/// The expiring-state stores on the durable pool: sessions, upload sessions and the ceremonies,
+/// on the composition root's clock and the configured session lifetimes.
+fn state_stores(
+    config: &Config,
+    connection: &DatabaseConnection,
+    clock: &Arc<dyn Clock>,
+) -> PostgresStores {
+    PostgresStores::new(
+        connection.clone(),
+        clock.clone(),
         config.session_ttl,
         config.session_hard_cap,
     )
-    .await
-    .map_err(|error| BootError::Valkey {
-        detail: error.to_string(),
-    })?;
-    tracing::info!("VALKEY_URL answers; the volatile state ports are on Valkey");
-    Ok(stores)
 }
 
 /// The trust anchors `OIDC_CA_BUNDLE` names, read once at boot.
@@ -613,6 +615,9 @@ struct Stores {
     /// The account activity log: durable, so Postgres on the durable arm (design/activity-log.md).
     /// Written by the application and swept by `gc` (#1112). Here so both are one store.
     activity: Arc<dyn ActivityStore>,
+    /// The expired-state sweeper: run by `serve` on a tick and by every applied `gc` pass.
+    /// `None` on the in-memory arm, whose adapters purge as they go.
+    expiry: Option<Arc<ExpirySweeper>>,
 }
 
 impl Stores {
@@ -635,19 +640,23 @@ impl Stores {
             self.clock.clone(),
             grace_window,
         )
-        // The upload-progress view has no lifetime of its own, so `gc --apply` is what keeps
-        // it from growing with every abandoned upload (#519). The same pass releases the quota
-        // reservations of sessions that expired without their bytes (#1059): expiry has no
-        // other observer. Re-charged under the limits the application charges under.
-        .with_progress_sweep(Arc::new(UploadHousekeeping::new(
-            self.uploads.clone(),
-            ReservationSweep::new(
-                self.quotas.clone(),
-                self.blobs.clone(),
+        // An applied `gc` pass is the server's periodic housekeeping: it deletes expired state
+        // rows (the same sweep `serve` runs on a tick, so a deployment whose server is down still
+        // reclaims them), then releases the quota reservations of sessions that expired without
+        // their bytes (#1059): expiry has no other observer. Re-charged under the limits the
+        // application charges under.
+        .with_progress_sweep(Arc::new(
+            UploadHousekeeping::new(
                 self.uploads.clone(),
-                QuotaLimits::unlimited(),
-            ),
-        )))
+                ReservationSweep::new(
+                    self.quotas.clone(),
+                    self.blobs.clone(),
+                    self.uploads.clone(),
+                    QuotaLimits::unlimited(),
+                ),
+            )
+            .with_expiry_sweep(self.expiry.clone()),
+        ))
         // An account that stopped recording keeps its expired activity rows until a sweep
         // deletes them, so `gc --apply` does (#1112).
         .with_activity_sweep(self.activity.clone())
@@ -791,6 +800,7 @@ impl Base {
             rejected: Arc::new(InMemoryRejectedHashes::new(self.rejected_bounds)),
             moderation: Arc::new(InMemoryModeration::new()),
             activity: Arc::new(InMemoryActivity::new()),
+            expiry: None,
             root: self.root,
             clock: self.clock,
             blobs: self.blobs,
@@ -798,15 +808,15 @@ impl Base {
         }
     }
 
-    /// The shared stores on Postgres, and the upload sessions on Valkey.
-    fn durable(self, connection: &DatabaseConnection, valkey: &ValkeyStores) -> Stores {
+    /// The shared stores on Postgres, the upload sessions among them.
+    fn durable(self, connection: &DatabaseConnection, state: &PostgresStores) -> Stores {
         let pulled = Arc::new(
             PostgresPulledAlbums::new(connection.clone(), self.blobs.clone())
                 .with_charge(Arc::new(PeerBudgetCharge::new(self.pulled_budget))),
         );
         Stores {
             index: Arc::new(PostgresAssetIndex::new(connection.clone())),
-            uploads: valkey.uploads(),
+            uploads: state.uploads(),
             marks: Arc::new(PostgresCollection::new(connection.clone())),
             quotas: Arc::new(PostgresQuota::new(connection.clone())),
             shares: Arc::new(PostgresShares::new(connection.clone())),
@@ -825,6 +835,10 @@ impl Base {
             )),
             moderation: Arc::new(PostgresModeration::new(connection.clone())),
             activity: Arc::new(PostgresActivity::new(connection.clone())),
+            expiry: Some(Arc::new(ExpirySweeper::new(
+                connection.clone(),
+                self.clock.clone(),
+            ))),
             root: self.root,
             clock: self.clock,
             blobs: self.blobs,
@@ -949,9 +963,9 @@ struct Ports {
     channels: Arc<dyn ChannelStore>,
     drops: Arc<dyn DropStore>,
     counters: Arc<dyn CounterStore>,
-    /// The egress pull worker's schedule, leases and circuits: volatile state, so Valkey on the
-    /// durable arm (#964). Built on both arms whether or not the deployment federates, and read
-    /// only when it does.
+    /// The egress pull worker's schedule, leases and circuits: expiring state on the durable
+    /// pool (#964). Built on both arms whether or not the deployment federates, and read only
+    /// when it does.
     pull_jobs: Arc<dyn PullJobs>,
     /// The pending OIDC ceremonies. Built on both arms whether or not `OIDC_ISSUER` is set, and
     /// read only when it is.
@@ -1008,16 +1022,15 @@ fn memory_ports(
     })
 }
 
-/// The durable profile's ports: Postgres for every record a restart must not lose, Valkey for
-/// the volatile state design/filesystem/server.md assigns it.
+/// The durable profile's ports, every one on the Postgres pool (ADR-0015).
 ///
-/// Nothing here is in-memory, the OIDC ports included (#460): the federated accounts are the
-/// account table's rows and the pending ceremonies are Valkey's.
+/// The one exception is the per-chunk throughput budgets, which [`SplitCounters`] counts in this
+/// process; every other counter, the replay nonces among them, is the shared Postgres count.
 fn durable_ports(
     config: &Config,
     clock: &Arc<dyn Clock>,
     connection: &DatabaseConnection,
-    valkey: &ValkeyStores,
+    state: &PostgresStores,
 ) -> Result<Ports, BootError> {
     let db = || connection.clone();
     Ok(Ports {
@@ -1028,10 +1041,8 @@ fn durable_ports(
             config.lockout_attempts,
             config.lockout_window,
         ))),
-        sessions: valkey.auth(),
-        challenges: valkey.challenges(),
-        // Postgres rather than `valkey.cohorts()`: the cohort map has no expiry and is the one
-        // auth record design/filesystem/server.md puts beside the accounts (#402).
+        sessions: state.auth(),
+        challenges: state.challenges(),
         cohorts: Arc::new(PostgresCohorts::new(db())),
         totp: Arc::new(PostgresTotp::new(db())),
         albums: Arc::new(PostgresAlbums::new(db())),
@@ -1039,13 +1050,16 @@ fn durable_ports(
         directories: Arc::new(PostgresDeviceDirectory::new(db())),
         receipts: Arc::new(PostgresReceipts::new(db())),
         escrow: Arc::new(PostgresEscrow::new(db())),
-        enrollments: valkey.enrollments(),
-        channels: valkey.channels(),
+        enrollments: state.enrollments(),
+        channels: state.channels(),
         drops: Arc::new(PostgresDrops::new(db())),
-        counters: Arc::new(ValkeyCounters::new(valkey.valkey().clone())),
-        pull_jobs: Arc::new(ValkeyPullJobs::new(valkey.valkey().clone())),
-        oidc_authorizations: valkey.oidc_authorizations(),
-        oidc_devices: valkey.oidc_devices(),
+        counters: Arc::new(SplitCounters::new(
+            Arc::new(InMemoryCounters::new()),
+            Arc::new(PostgresCounters::new(db())),
+        )),
+        pull_jobs: Arc::new(PostgresPullJobs::new(db())),
+        oidc_authorizations: state.oidc_authorizations(),
+        oidc_devices: state.oidc_devices(),
     })
 }
 
@@ -1362,6 +1376,7 @@ fn compose(
     Ok(Assembled {
         app,
         pull_worker,
+        expiry: stores.expiry.clone(),
         // The same stores, so "upload it, then let the collector see it" is a property of the
         // server rather than of two disconnected assemblies.
         maintenance: stores.maintenance(

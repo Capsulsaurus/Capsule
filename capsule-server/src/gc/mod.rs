@@ -77,16 +77,15 @@
 //! would do without touching anything. A sweep that looks wrong should be inspectable before it
 //! runs, and an operator who cannot preview a destructive batch will eventually run one blind.
 //!
-//! # The pass also sweeps the upload-progress view (#519)
+//! # The pass also runs the expiring-state housekeeping (#519, ADR-0015)
 //!
-//! The Valkey upload-session adapter keeps one global sorted set of evictable sessions by last
-//! progress, and that set has no lifetime of its own: a session whose record expired leaves its
-//! member behind until something walks over it, and the only walk is the pressure sweep,
-//! [`UploadSessionStore::least_recently_progressed`].
-//! Nothing on the request path runs it, so the set grew with every abandoned upload. A collection
-//! pass is the server's periodic housekeeping already, so an **applied** pass ends by running
-//! that sweep over the whole view — see [`ProgressSweep`]. A dry run skips it, because it
-//! removes entries, and a dry run removes nothing.
+//! Expired state rows — sessions, upload sessions, ceremonies, counter windows — are invisible
+//! to every read the moment they expire, but they occupy the database until something deletes
+//! them. `serve` sweeps them on a tick; a collection pass is the server's periodic
+//! housekeeping too, so an **applied** pass also runs that sweep and then walks the evictable
+//! upload sessions through [`UploadSessionStore::least_recently_progressed`] — see
+//! [`ProgressSweep`]. A dry run skips both, because they remove rows, and a dry run removes
+//! nothing.
 //!
 //! # The pass also sweeps expired account activity (#1112)
 //!

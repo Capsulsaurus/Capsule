@@ -8,16 +8,16 @@ The server holds ciphertext blobs and a key-free index mapping assets to blobs. 
 
 ## Required Services
 
-Three required systems, one code path:
+Two required systems, one code path:
 
 - **Blob store**: the encrypted bytes. Adapters: filesystem and in-memory ([`capsule-server::blob`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-server/src/blob/mod.rs)).
-- **PostgreSQL 18**: the authoritative durable index of ownership, album and blob references, lifecycle state, pending-asset rows, the device-cohort map and the quota ledger. Tested against `postgres:18` on glibc, because asset-id order relies on `COLLATE "C"` behaving as deployed.
-- **Valkey**: volatile state only (upload-session records and [](/design/authentication/) sessions) with native TTL. [](/design/transfer/upload/#session-lifetime-and-discard) owns session lifetime.
+- **PostgreSQL 18**: the authoritative durable index of ownership, album and blob references, lifecycle state, pending-asset rows, the device-cohort map and the quota ledger, and the expiring state: upload-session records, [](/design/authentication/) sessions and ceremonies, rate counters and federation pull leases. Tested against `postgres:18` on glibc, because asset-id order relies on `COLLATE "C"` behaving as deployed. [](/design/transfer/upload/#session-lifetime-and-discard) owns session lifetime.
 
 Rules:
 
-- The server MUST refuse to start without `DATABASE_URL` and `VALKEY_URL` unless started with `--memory`, which binds every port to its in-memory adapter and logs a `WARN` on every start. `--memory` is a development profile, never a deployment mode.
-- Each state port has exactly two adapters: Valkey (redis-rs) and in-memory for volatile stores, PostgreSQL and in-memory for durable ports. A Postgres-resident session table, or any generic TTL abstraction, MUST NOT be introduced. [`capsule-server::store`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-server/src/store/mod.rs) states the map.
+- The server MUST refuse to start without `DATABASE_URL` unless started with `--memory`, which binds every port to its in-memory adapter and logs a `WARN` on every start. `--memory` is a development profile, never a deployment mode.
+- Each state port has exactly two adapters: PostgreSQL and in-memory. [`capsule-server::store`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-server/src/store/mod.rs) states the map. No other database or side store backs a port.
+- Each expiring port keeps its own typed table, and each row carries its own `expires_at`. A read MUST treat a row at or past its `expires_at` (by the injected clock) as absent, so deleting expired rows is housekeeping, never correctness; [`capsule-server::store::sweep`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-server/src/store/sweep.rs) deletes them in bounded batches. A generic TTL or compare-and-set abstraction MUST NOT be introduced.
 - The hot upload path (committed set, status) never touches the durable asset row.
 
 ### Schema migrations

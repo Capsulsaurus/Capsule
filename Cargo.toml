@@ -102,8 +102,6 @@ jiff = { version = "0.2", features = ["serde"] }
 # `openidconnect`, which pulls `chrono`, `log` and a vulnerable `rsa`.
 jsonwebtoken = { version = "10.4.0", features = ["aws_lc_rs"] }
 nanoid = "0.4.0"
-# Valkey for volatile state: one `ConnectionManager`, no pool (see `capsule-server`'s manifest).
-redis = { version = "1.2.2", features = ["tokio-comp", "connection-manager"] }
 # The HTTP client. `capsule-sdk` is the sanctioned client network path and `capsule-server`'s
 # OIDC relying party is the one server egress: discovery, JWKS and the token
 # exchange against an identity provider, and the federation pull worker; both server clients run

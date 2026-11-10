@@ -71,7 +71,7 @@ Authorization code + PKCE, plus the device grant ([](#signing-in-without-a-brows
 - **Scopes are fixed at `openid email`.** `profile` is not requested.
 - **`server-info` publishes `auth.oidc: { authorize, callback }` or `null`**, endpoints only, never issuer or client id. Unconfigured, the OIDC routes answer `404 error.auth.oidc_not_configured`.
 
-**Configuration** (`capsule-server/src/config.rs`): `OIDC_ISSUER` (absent = off), `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` (optional; absent = public PKCE-only client, RFC 8252 §8.5), `OIDC_REDIRECT_URL`, `OIDC_ALLOW_LOOPBACK_REDIRECT`, `OIDC_CA_BUNDLE`. An issuer without a client id, or the reverse, is a startup fault. Ceremonies live on Valkey (in-memory in development), and `capsule-server/compose.yaml` ships a [dex](https://github.com/dexidp/dex) service (`--profile oidc`).
+**Configuration** (`capsule-server/src/config.rs`): `OIDC_ISSUER` (absent = off), `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` (optional; absent = public PKCE-only client, RFC 8252 §8.5), `OIDC_REDIRECT_URL`, `OIDC_ALLOW_LOOPBACK_REDIRECT`, `OIDC_CA_BUNDLE`. An issuer without a client id, or the reverse, is a startup fault. Ceremonies live in PostgreSQL (in-memory in development), and `capsule-server/compose.yaml` ships a [dex](https://github.com/dexidp/dex) service (`--profile oidc`).
 
 #### OIDC-Only Deployments
 

@@ -219,12 +219,13 @@ run = [
 ]
 
 # The container tiers `test-rust` skips (#514): every Postgres adapter conformance suite, the
-# migration up/down round trip and the durable boot arm (all under a `postgres_conformance`
-# test module), the durable process cases in `tests/binary.rs`, the Valkey suite in
-# `tests/valkey.rs`, and `capsule-e2e`'s backup and restore drill (#676). The filterset is the one `.config/nextest.toml` puts in the one-thread
-# `containers` group, so a new suite joins both by being named like the others.
+# migration up/down round trip, the state-store, counter and pull-job suites and the durable
+# boot arm (all under a `postgres_conformance` test module), the durable process cases in
+# `tests/binary.rs`, and `capsule-e2e`'s backup and restore drill (#676). The filterset is the
+# one `.config/nextest.toml` puts in the one-thread `containers` group, so a new suite joins
+# both by being named like the others.
 #
-# The task admits both tiers itself, so it means the same thing locally and in CI: each case
+# The task admits the tier itself, so it means the same thing locally and in CI: each case
 # starts its own container through testcontainers (Docker's socket on CI; locally, `DOCKER_HOST`
 # at the podman socket and `CAPSULE_TEST_CONTAINER_USERNS=keep-id` for rootless podman).
 #
@@ -235,15 +236,15 @@ run = [
 # pass. `--no-tests=fail` covers the other way to run nothing: a filterset that matches no test.
 # CI runs this in the `rust-containers` job.
 [tasks.test-rust-containers]
-description = "Run the Postgres and Valkey container tiers; fail if any case skipped"
+description = "Run the Postgres container tier; fail if any case skipped"
 shell = "bash -c"
-env = { CAPSULE_TEST_POSTGRES = "1", CAPSULE_TEST_VALKEY = "1" }
+env = { CAPSULE_TEST_POSTGRES = "1" }
 run = '''
 set -euo pipefail
 log="${CARGO_TARGET_DIR:-target}/nextest/containers.log"
 mkdir -p "$(dirname "$log")"
 cargo nextest run -p capsule-server -p capsule-e2e \
-  -E 'test(postgres_conformance) or binary(valkey)' \
+  -E 'test(postgres_conformance)' \
   --no-tests=fail --success-output final 2>&1 | tee "$log"
 if grep -nE 'skipping [^:]+: |skipped: ' "$log" >&2; then
   echo "test-rust-containers: the cases above skipped instead of running against a container." >&2
@@ -385,7 +386,7 @@ run = "cargo deny --all-features check advisories bans sources"
 
 # Dump the Kynos OpenAPI 3.2 document to the committed capsule-server/openapi.json that spargen
 # generates the typed REST client from. The dump is state-free — no
-# database, Valkey, or key material, because the router takes `App` only as a type parameter — so
+# database or key material, because the router takes `App` only as a type parameter — so
 # it is deterministic and runs anywhere. Re-run and commit after any endpoint or model change.
 #
 # There were two documents and two drift guards while the rebuild ran, so a client had somewhere
@@ -405,17 +406,16 @@ run = "cargo run -q -p capsule-server -- gen-openapi --check"
 # `podman compose -f capsule-server/compose.yaml down`.
 
 [tasks.serve-deps]
-description = "Start Postgres 18 + Valkey 9 for the server (podman compose)"
+description = "Start Postgres 18 for the server (podman compose)"
 # `podman compose` shells out to the compose provider; `docker compose -f …` accepts the same
-# file. A durable `serve` reads both services: Postgres (#402) and Valkey (#403).
+# file. A durable `serve` reads one service: Postgres (ADR-0015 retired Valkey).
 run = "podman compose -f capsule-server/compose.yaml up -d"
 
 [tasks.serve]
-description = "Run the durable Kynos server on Postgres + Valkey (needs serve-deps, a migrated database, and the capsule-server/.env.example environment)"
-# No environment is supplied on purpose. `serve` without `--memory` needs `DATABASE_URL` and
-# `VALKEY_URL`, and refuses to boot naming every one that is missing (exit 2). With both set it
-# opens the pool, refuses a schema it was not built for until `capsule-server-migration up` has
-# run, proves Valkey answers, and serves. Start `serve-deps`, copy
+description = "Run the durable Kynos server on Postgres (needs serve-deps, a migrated database, and the capsule-server/.env.example environment)"
+# No environment is supplied on purpose. `serve` without `--memory` needs `DATABASE_URL`, and
+# refuses to boot naming it when it is missing (exit 2). With it set it opens the pool, refuses a
+# schema it was not built for until `capsule-server-migration up` has run, and serves. Start `serve-deps`, copy
 # `capsule-server/.env.example` and export it, or use `serve-memory` below.
 run = "cargo run -p capsule-server -- serve"
 

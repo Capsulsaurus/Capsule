@@ -709,18 +709,20 @@ impl ReservationSweep {
     }
 }
 
-/// An applied collection pass's upload housekeeping: the upload-progress view's sweep, then the
-/// reservation sweep.
+/// An applied collection pass's housekeeping: the expired-state sweep when there is one, the
+/// upload-progress count, then the reservation sweep.
 ///
 /// The collector's one periodic hook into the upload sessions
-/// ([`crate::gc::CollectionContext::with_progress_sweep`]) runs both, because expiry is what
-/// both clean up after and an applied `gc` pass is the server's periodic housekeeping. A dry
-/// run runs neither. A reservation sweep that fails is logged and does not fail the collection
-/// pass: what it leaves is an over-charge the next pass releases, never lost bytes.
+/// ([`crate::gc::CollectionContext::with_progress_sweep`]) runs all three, because expiry is
+/// what they clean up after and an applied `gc` pass is the server's periodic housekeeping. A
+/// dry run runs none. An expiry or reservation sweep that fails is logged and does not fail the
+/// collection pass: what either leaves is dead rows or an over-charge the next pass reclaims,
+/// never lost bytes.
 #[derive(Debug, Clone)]
 pub struct UploadHousekeeping {
     sessions: Arc<dyn UploadSessionStore>,
     reservations: ReservationSweep,
+    expiry: Option<Arc<crate::store::sweep::ExpirySweeper>>,
 }
 
 impl UploadHousekeeping {
@@ -729,13 +731,29 @@ impl UploadHousekeeping {
         Self {
             sessions,
             reservations,
+            expiry: None,
         }
+    }
+
+    /// The same housekeeping, deleting expired state rows with `expiry` first when given one.
+    #[must_use]
+    pub fn with_expiry_sweep(
+        mut self,
+        expiry: Option<Arc<crate::store::sweep::ExpirySweeper>>,
+    ) -> Self {
+        self.expiry = expiry;
+        self
     }
 }
 
 impl crate::gc::ProgressSweep for UploadHousekeeping {
     fn sweep_progress(&self, now: Timestamp) -> StoreFuture<'_, usize> {
         Box::pin(async move {
+            if let Some(expiry) = &self.expiry
+                && let Err(error) = expiry.sweep().await
+            {
+                tracing::error!(%error, "the expired state rows could not be swept");
+            }
             let evictable = crate::gc::ProgressSweep::sweep_progress(&self.sessions, now).await?;
             if let Err(error) = self.reservations.sweep(now).await {
                 tracing::error!(%error, "the expired upload reservations could not be swept");

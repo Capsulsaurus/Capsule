@@ -82,7 +82,7 @@ pub enum Victim {
     /// The `capsule` process running the phase.
     Cli,
     /// The `capsule-server` process the phase talks to; the suite restarts it on the same port
-    /// at once, over the same Postgres, Valkey and blob root.
+    /// at once, over the same Postgres and blob root.
     Server,
 }
 

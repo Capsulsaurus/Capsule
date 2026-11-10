@@ -260,7 +260,7 @@ pub struct CommittedRange {
 /// Always normal: ranges are non-empty, sorted, and neither overlap nor touch, so two sets
 /// holding the same bytes are equal and the fragment count is the number of gaps a client still
 /// has to fill, plus one. Every operation is pure; the stores merge through
-/// [`Self::with_range`]'s rule, the Valkey adapter in Lua.
+/// [`Self::with_range`]'s rule, which the Postgres adapter calls under the row's lock.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CommittedSet {
     ranges: Vec<(u64, u64)>,
@@ -360,7 +360,7 @@ impl CommittedSet {
     }
 
     /// The stored spelling: comma-separated **half-open** `start-end` pairs, the empty string
-    /// for an empty set. The Valkey adapter's merge script reads and writes the same form.
+    /// for an empty set. The Postgres adapter's `committed` column holds the same form.
     pub fn to_stored(&self) -> String {
         self.ranges
             .iter()
@@ -411,7 +411,7 @@ pub enum UnclaimedDiscard {
 
 /// The lifetime cap an upload session is stored under.
 ///
-/// 24 hours, from design/filesystem/server.md: Valkey's native TTL *is* the cap. The record
+/// 24 hours, from design/filesystem/server.md: the store's own expiry *is* the cap. The record
 /// carries no `expires_at` of its own — a caller-written expiry field alongside a store-owned
 /// TTL is two clocks for one fact, and they drift. A route that must publish an expiry renders
 /// `record.created_at + store.ttl()`.

@@ -117,7 +117,7 @@ stateDiagram-v2
     WaitingForProcessing --> FailedProcessing: hash, size or envelope failure
 ```
 
-`WaitingForProcessing` is neither evictable nor cancellable and always reaches a terminal state ([](#finalization-and-integrity)). `FailedProcessing` removes the staged bytes and reservation but keeps the status record, so a client whose ACK was lost can read the outcome. Session state lives in the session store (Valkey via [`redis-rs`](https://github.com/redis-rs/redis-rs), or in-memory), never in PostgreSQL ([](/design/filesystem/server/#required-services)).
+`WaitingForProcessing` is neither evictable nor cancellable and always reaches a terminal state ([](#finalization-and-integrity)). `FailedProcessing` removes the staged bytes and reservation but keeps the status record, so a client whose ACK was lost can read the outcome. Session state lives in the session store (PostgreSQL, or in-memory in development), in its own table apart from the asset index ([](/design/filesystem/server/#required-services)).
 
 ## Session Lifetime and Discard
 
@@ -141,6 +141,7 @@ Each session owns one staged file, sized to the declared `size` and written posi
 
 - A write that fails before the record leaves bytes the committed set does not cover, which the next write of that range overwrites.
 - A record the session store loses is a range the client sends again. The finalize re-hash, not the record, admits bytes to a content address.
+- Recording a range MAY therefore commit without waiting for its write-ahead log to be flushed (PostgreSQL's `synchronous_commit = off`), so a chunk costs one blob `fsync`, not two. A crash may forget the last ranges recorded; the client's next `HEAD` reports them uncommitted and it sends them again. Creating, claiming, failing and discarding a session commit synchronously.
 - A discarded or deleted session takes no further record.
 
 Hashing runs off the async reactor. Total in-flight bytes are bounded by the cache limit, with the discard window as the relief valve.

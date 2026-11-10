@@ -88,7 +88,7 @@ Every authored page carries a required `status` frontmatter field tracking human
 The tier is decided by **what is mocked**, not by where the test lives.
 
 - **Unit:** in-module tests against the contract, with peers and externals mocked. Deterministic and fast.
-- **Smoke:** one module's real implementation with real I/O and backing services (e.g. testcontainers Postgres or Valkey), peers mocked.
+- **Smoke:** one module's real implementation with real I/O and backing services (e.g. testcontainers Postgres), peers mocked.
 - **E2E:** several modules wired against real infrastructure. The list is **bounded** in the [E2E case index](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-e2e/src/lib.rs); growth past it signals unwanted coupling.
 
 ## Damage Containment

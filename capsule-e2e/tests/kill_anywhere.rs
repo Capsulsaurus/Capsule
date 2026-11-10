@@ -23,8 +23,8 @@
 //!   final `capsule push --json` reports every one verified (durable verdict plus a signed custody
 //!   receipt per blob) and none failed, and the server's feed lists exactly the library's assets,
 //!   each with its original held;
-//! - **no orphaned index rows** — the server's own integrity scrub, run over the same Postgres,
-//!   Valkey and blob root, finds no row without its blob, no chain or ledger fault, and no
+//! - **no orphaned index rows** — the server's own integrity scrub, run over the same Postgres
+//!   and blob root, finds no row without its blob, no chain or ledger fault, and no
 //!   mirrored fact out of step. What a crash may legitimately leave — bytes nothing references,
 //!   debris under the blob root, a stage with no session — is the collector's to reclaim, and is
 //!   counted in the log rather than failed, and nothing else is filtered;
@@ -38,7 +38,7 @@
 //!
 //! # Running it
 //!
-//! It needs a container runtime for Postgres and Valkey, so it skips — one line on stderr, and
+//! It needs a container runtime for Postgres, so it skips — one line on stderr, and
 //! a pass — unless `CAPSULE_TEST_KILL_ANYWHERE=1`. `CAPSULE_KILL_SEED` names the first seed and
 //! `CAPSULE_KILL_SEEDS` how many to try; every seed's schedule is printed, so a nightly failure
 //! replays with `CAPSULE_KILL_SEED=<seed> CAPSULE_KILL_SEEDS=1`. Rootless podman needs
@@ -71,7 +71,6 @@ use tempfile::TempDir;
 use testcontainers::runners::AsyncRunner as _;
 use testcontainers::{ContainerAsync, ImageExt as _};
 use testcontainers_modules::postgres::Postgres;
-use testcontainers_modules::valkey::{VALKEY_PORT, Valkey};
 use uuid::Uuid;
 
 /// The phases every run drives, in pipeline order, each asserted to converge.
@@ -87,10 +86,8 @@ const LOG_DIR_VAR: &str = "CAPSULE_KILL_LOG_DIR";
 /// The rootless-podman user-namespace mode, when the host needs one (`postgres::testing`).
 const USERNS_MODE: &str = "CAPSULE_TEST_CONTAINER_USERNS";
 
-/// The tags `capsule-server/compose.yaml` runs, as the server's container tiers pin them.
+/// The tag `capsule-server/compose.yaml` runs, as the server's container tiers pin it.
 const POSTGRES_TAG: &str = "18";
-/// See [`POSTGRES_TAG`].
-const VALKEY_TAG: &str = "9.0.4";
 
 /// How long any one `capsule` run may take before the suite fails it. A CLI that outlives this
 /// after its server came back is a hang, which is a finding in its own right.
@@ -114,12 +111,10 @@ fn corpus() -> Vec<(String, Vec<u8>)> {
         .collect()
 }
 
-/// A migrated Postgres and a Valkey, held for the length of the test.
+/// A migrated Postgres, held for the length of the test.
 struct Backends {
     database_url: String,
-    valkey_url: String,
     _postgres: ContainerAsync<Postgres>,
-    _valkey: ContainerAsync<Valkey>,
 }
 
 impl Backends {
@@ -151,22 +146,9 @@ impl Backends {
             .expect("the schema applies");
         drop(connection);
 
-        let mut valkey = Valkey::default().with_tag(VALKEY_TAG);
-        if let Some(mode) = &userns {
-            valkey = valkey.with_userns_mode(mode);
-        }
-        let valkey = valkey.start().await.expect("the Valkey container starts");
-        let host = valkey.get_host().await.expect("a host");
-        let port = valkey
-            .get_host_port_ipv4(VALKEY_PORT)
-            .await
-            .expect("a port");
-
         Self {
             database_url,
-            valkey_url: format!("redis://{host}:{port}"),
             _postgres: postgres,
-            _valkey: valkey,
         }
     }
 
@@ -174,7 +156,6 @@ impl Backends {
     fn environment(&self) -> Vec<(String, String)> {
         vec![
             ("DATABASE_URL".to_owned(), self.database_url.clone()),
-            ("VALKEY_URL".to_owned(), self.valkey_url.clone()),
             ("JWT_ED25519_DER".to_owned(), JWT_ED25519_DER.to_owned()),
             (
                 "ATTESTATION_KEY_SEED".to_owned(),
@@ -230,7 +211,7 @@ impl World {
         }
     }
 
-    /// The server's integrity scrub over the same Postgres, Valkey and blob root the server
+    /// The server's integrity scrub over the same Postgres and blob root the server
     /// process writes, run in-process through the composition root `capsule-server scrub` runs,
     /// so the findings come back typed rather than parsed out of a report.
     async fn scrub(&self) -> Vec<Finding> {

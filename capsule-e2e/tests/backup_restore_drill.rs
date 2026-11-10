@@ -3,7 +3,7 @@
 //!
 //! The procedure under test is the one the self-hosting guide gives an operator
 //! (`capsule-docs/src/content/docs/guides/self-hosting.md`, "Backups" and "Restoring onto a new
-//! host"), run against the real durable profile: a Postgres 18 and a Valkey in containers, the
+//! host"), run against the real durable profile: a Postgres 18 in a container, the
 //! filesystem blob store, the composition root `capsule-server serve` runs, the real SDK and a
 //! real library on the client side.
 //!
@@ -11,9 +11,10 @@
 //! 2. **A hot backup**, in the guide's order: `pg_dump` first, then a third asset is pushed, and
 //!    only then is `BLOB_ROOT` copied. The copy therefore holds a blob and a ledger entry the
 //!    dump has no row for, which is the gap a hot backup always has.
-//! 3. **Host B** is fresh: an empty Postgres the dump is `pg_restore`d into, a Valkey with
-//!    nothing in it (Valkey is deliberately not restored), and the copied blob directory.
-//!    - the session issued by host A is refused: its session record lived in Valkey;
+//! 3. **Host B** is fresh: an empty Postgres the dump is `pg_restore`d into, and the copied blob
+//!    directory.
+//!    - the session issued by host A is accepted: sessions are Postgres rows (ADR-0015), so
+//!      they are part of the database backup and a restore does not sign users out;
 //!    - `capsule-server rebuild` (dry run) names exactly the third asset as the row to restore,
 //!      and `--apply` restores it;
 //!    - a deep scrub finds nothing;
@@ -24,7 +25,7 @@
 //!    rebuilt from the same blob directory's owner ledgers, holds the same rows as host B's
 //!    restored index.
 //!
-//! Gated on `CAPSULE_TEST_POSTGRES=1` and `CAPSULE_TEST_VALKEY=1`, like every container tier: it
+//! Gated on `CAPSULE_TEST_POSTGRES=1`, like every container tier: it
 //! prints why it skipped and passes otherwise. The test lives under a `postgres_conformance`
 //! module so `.config/nextest.toml` runs it in the one-thread `containers` group and
 //! `mise run test-rust-containers` selects it.
@@ -61,13 +62,10 @@ mod postgres_conformance {
     use testcontainers::runners::AsyncRunner as _;
     use testcontainers::{ContainerAsync, ImageExt as _};
     use testcontainers_modules::postgres::Postgres;
-    use testcontainers_modules::valkey::{VALKEY_PORT, Valkey};
     use uuid::Uuid;
 
-    /// The tags `capsule-server/compose.yaml` runs, as the server's own harnesses pin them.
+    /// The tag `capsule-server/compose.yaml` runs, as the server's own harnesses pin it.
     const POSTGRES_TAG: &str = "18";
-    /// See [`POSTGRES_TAG`].
-    const VALKEY_TAG: &str = "9.0.4";
     /// The rootless-podman user-namespace mode, when the host needs one
     /// (`capsule_server::postgres::testing`).
     const USERNS_MODE: &str = "CAPSULE_TEST_CONTAINER_USERNS";
@@ -81,15 +79,14 @@ mod postgres_conformance {
     /// The database the index-rebuild drill rebuilds into, beside host B's restored one.
     const REBUILT_DATABASE: &str = "rebuilt";
 
-    /// Whether both container tiers are admitted.
+    /// Whether the Postgres container tier is admitted.
     fn admitted(case: &str) -> bool {
-        let gate = |name: &str| std::env::var(name).ok().as_deref() == Some("1");
-        if gate("CAPSULE_TEST_POSTGRES") && gate("CAPSULE_TEST_VALKEY") {
+        if std::env::var("CAPSULE_TEST_POSTGRES").ok().as_deref() == Some("1") {
             return true;
         }
         eprintln!(
-            "skipping {case}: the backup drill needs CAPSULE_TEST_POSTGRES=1 and \
-             CAPSULE_TEST_VALKEY=1 with a reachable container runtime"
+            "skipping {case}: the backup drill needs CAPSULE_TEST_POSTGRES=1 with a reachable \
+             container runtime"
         );
         false
     }
@@ -100,16 +97,15 @@ mod postgres_conformance {
             .filter(|mode| !mode.is_empty())
     }
 
-    /// One host's two external services.
+    /// One host's external service: its Postgres.
     struct Host {
         postgres: ContainerAsync<Postgres>,
-        _valkey: ContainerAsync<Valkey>,
         backends: DurableBackends,
     }
 
     impl Host {
-        /// A Postgres and a Valkey, both empty. `dump`, when given, is copied into the Postgres
-        /// container at [`DUMP_PATH`] before it starts, for a restore.
+        /// An empty Postgres. `dump`, when given, is copied into the container at [`DUMP_PATH`]
+        /// before it starts, for a restore.
         async fn start(dump: Option<Vec<u8>>) -> Self {
             let mut postgres = Postgres::default()
                 .with_tag(POSTGRES_TAG)
@@ -129,23 +125,10 @@ mod postgres_conformance {
             let port = postgres.get_host_port_ipv4(5432).await.expect("a port");
             let database_url = format!("postgres://{PG_USER}:postgres@{host}:{port}");
 
-            let mut valkey = Valkey::default().with_tag(VALKEY_TAG);
-            if let Some(mode) = userns() {
-                valkey = valkey.with_userns_mode(&mode);
-            }
-            let valkey = valkey.start().await.expect("the Valkey container starts");
-            let host = valkey.get_host().await.expect("a host");
-            let port = valkey
-                .get_host_port_ipv4(VALKEY_PORT)
-                .await
-                .expect("a port");
-
             Self {
                 postgres,
-                _valkey: valkey,
                 backends: DurableBackends {
                     database_url: format!("{database_url}/{PG_DATABASE}"),
-                    valkey_url: format!("redis://{host}:{port}"),
                 },
             }
         }
@@ -301,13 +284,11 @@ mod postgres_conformance {
     async fn rebuild_pass(
         blob_root: &Path,
         database_url: &str,
-        valkey_url: &str,
         mode: Mode,
     ) -> RebuildReport {
         let mut env = BTreeMap::new();
         env.insert("BLOB_ROOT".to_owned(), blob_root.display().to_string());
         env.insert("DATABASE_URL".to_owned(), database_url.to_owned());
-        env.insert("VALKEY_URL".to_owned(), valkey_url.to_owned());
         // The restored host keeps its secrets: with the seed, the ledgers are verified by
         // signature rather than by links alone.
         env.insert(
@@ -404,7 +385,7 @@ mod postgres_conformance {
         drop(server_a);
         drop(host_a);
 
-        // ── 3. Host B: the dump restored, the blob directory copied, Valkey empty ────────
+        // ── 3. Host B: the dump restored, the blob directory copied ──────────────────────
         let host_b = Host::start(Some(dump)).await;
         host_b
             .psql_exec(&[
@@ -431,7 +412,6 @@ mod postgres_conformance {
         let dry = rebuild_pass(
             blob_root_b.path(),
             &host_b.backends.database_url,
-            &host_b.backends.valkey_url,
             Mode::DryRun,
         )
         .await;
@@ -444,7 +424,6 @@ mod postgres_conformance {
         let applied = rebuild_pass(
             blob_root_b.path(),
             &host_b.backends.database_url,
-            &host_b.backends.valkey_url,
             Mode::Apply,
         )
         .await;
@@ -457,7 +436,6 @@ mod postgres_conformance {
         let again = rebuild_pass(
             blob_root_b.path(),
             &host_b.backends.database_url,
-            &host_b.backends.valkey_url,
             Mode::DryRun,
         )
         .await;
@@ -487,17 +465,21 @@ mod postgres_conformance {
         // both must agree with the manifests they publish, so any finding is a defect.
         assert!(scrubbed.findings.is_empty(), "{scrubbed:#?}");
 
-        // Host A's session lived in Valkey, which was not restored: it is refused.
-        let refused = device
+        // Host A's session record is a Postgres row (ADR-0015), so it is in the dump: the
+        // restore does not sign anybody out, and host B accepts the session host A issued.
+        let profile = device
             .generated(&server_b)
             .get_profile(PROTOCOL_VERSION, None)
-            .await;
-        assert!(
-            refused.is_err(),
-            "a session from before the restore is refused"
+            .await
+            .expect("a session from before the restore is accepted by the restored host")
+            .into_inner();
+        assert_eq!(
+            Uuid::parse_str(&profile.user_id).expect("the account id is a UUID"),
+            device.user_id,
+            "the restored session is the same account's"
         );
 
-        // The account itself was in the database: it signs in again, and the feed lists every
+        // The account was in the database too: it signs in again, and the feed lists every
         // asset at the number host A gave it.
         let session_b = device.login_again(&server_b).await;
         let feed_b = capsule_e2e::feed_from_start(&server_b, session_b.clone()).await;
@@ -580,7 +562,6 @@ mod postgres_conformance {
         let from_ledgers = rebuild_pass(
             server_b.blob_root.path(),
             &rebuilt_url,
-            &host_b.backends.valkey_url,
             Mode::Apply,
         )
         .await;
