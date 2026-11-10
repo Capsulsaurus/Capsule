@@ -1,6 +1,6 @@
 # ADR-0006 — The server is one binary with one configuration loader and two adapters per port
 
-- **Status:** accepted (amended 2026-10-17)
+- **Status:** accepted (amended 2026-10-17, 2026-11-10)
 - **Date:** 2026-09-01
 - **Supersedes:** —
 - **Superseded by:** —
@@ -117,3 +117,12 @@ payload is an unversioned `ProvenanceRecord`).
    `open_durable_database` in [`capsule-server/src/boot.rs`](../capsule-server/src/boot.rs).
    Contract: [Filesystem — Server](../capsule-docs/src/content/docs/design/filesystem/server.md),
    "Schema migrations".
+
+## Amendment (2026-11-10)
+
+[ADR-0015](0015-postgresql-is-the-servers-only-database.md) retires Valkey. Every port this
+record gave a Valkey adapter now has a PostgreSQL adapter beside its in-memory double, so the
+"Valkey is required" decision, the Postgres session-table refusal and the rejection of
+"Postgres-only, with TTLs emulated in SQL" no longer hold. What still holds: one binary, one
+config loader, typed ports with one conformance suite each, in-memory adapters as test doubles
+only, no generic TTL or CAS abstraction, and `serve` never migrates.
