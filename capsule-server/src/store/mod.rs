@@ -77,6 +77,7 @@ pub mod cohorts_postgres;
 pub mod conformance;
 pub mod ids;
 pub mod memory;
+pub mod postgres;
 pub mod upload;
 pub mod valkey;
 

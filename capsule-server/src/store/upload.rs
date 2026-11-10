@@ -131,6 +131,19 @@ impl UploadSessionStatus {
         matches!(self, Self::Pending | Self::Uploading)
     }
 
+    /// The status [`Self::as_str`] spells `token`, or `None` for a token no status spells.
+    pub fn from_token(token: &str) -> Option<Self> {
+        [
+            Self::Pending,
+            Self::Uploading,
+            Self::WaitingForProcessing,
+            Self::Completed,
+            Self::FailedProcessing,
+        ]
+        .into_iter()
+        .find(|status| status.as_str() == token)
+    }
+
     /// The token the `X-Capsule-Upload-Status` response header carries.
     pub fn as_str(self) -> &'static str {
         match self {

@@ -38,6 +38,9 @@
 //! - `000030` (#1171): `quota_pulled_holdings` and `quota_usage.pulled`, the quota ledger's
 //!   per-account pulled total, kept by triggers on the subscriptions, the pulled metadata blobs
 //!   and the attributions, and backfilled from them.
+//! - `000031` (ADR-0015): the state Valkey held — `auth_sessions`, `upload_sessions`, the
+//!   ceremony tables, `rate_counters` and the federation pull schedule — each row carrying its
+//!   own `expires_at`.
 //!
 //! # Every instant is a `BIGINT` of microseconds since the Unix epoch
 //!
@@ -131,6 +134,7 @@ migrations![
     m20260902_000028_federation_pulled_albums,
     m20260902_000029_federation_rejected_hashes,
     m20260902_000030_quota_pulled_holdings,
+    m20260902_000031_volatile_state,
 ];
 
 /// The content checksum of one migration's source: lowercase hex SHA-256.
