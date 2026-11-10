@@ -12,6 +12,7 @@ import baseLinks from './src/lib/base-links.mjs';
 import { BLOG_AUTHORS, hasPublishedPost } from './src/lib/blog-posts.mjs';
 import { resolveBuildCommit } from './src/lib/build-commit.mjs';
 import { versionFromBranch } from './src/lib/docs-version.mjs';
+import markdownCacheKey from './src/lib/markdown-cache-key.mjs';
 import rehypeNoTranslate from './src/lib/rehype-notranslate.mjs';
 import remarkLibraryLinks from './src/lib/remark-library-links.mjs';
 import remarkLinkTitles from './src/lib/remark-link-titles.mjs';
@@ -81,6 +82,13 @@ export default defineConfig({
         }),
     },
     integrations: [
+        // Re-renders every page when the Markdown pipeline changes: hashes
+        // this config's local imports (the plugins among them) and the
+        // lockfile into the config Astro compares to its content store.
+        markdownCacheKey({
+            entries: [new URL(import.meta.url)],
+            extra: [new URL('./bun.lock', import.meta.url)],
+        }),
         // On a release build, keeps every built link inside its version.
         baseLinks({ base: docsVersion.base }),
         starlight({
