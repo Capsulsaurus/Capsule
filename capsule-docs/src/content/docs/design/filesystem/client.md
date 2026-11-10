@@ -15,7 +15,7 @@ Clients hold keys, so a client stores plaintext. Depending on the sync scope ([]
 │   ├── {uuid}.cbor             # canonical signed metadata sidecar
 │   └── {uuid}.provenance.cbor  # append-only signed provenance chain
 ├── cache/                      # thumbnails/, meta/, transcodes/ — sharded {uuid[0:2]}/{uuid[2:4]}
-├── index/library.sqlite        # rebuildable query + vector index
+├── index/library.sqlite        # query + vector index, migrated in place
 └── .library/
     ├── version, config, lock
     ├── docs/{albums,stacks}/{uuid}.cbor  # signed album and stack label records
@@ -73,7 +73,7 @@ The client surfaces the largest consumers and lets the user delete selectively, 
 - **Date bucketing (unit).** Asset lands in `media/{YYYY}/{YYYY-MM}/`; unexplained drift triggers repair.
 - **Lock contention (smoke).** A second process is refused with a structured error.
 - **Sandbox placement (smoke, per platform).** Library in app-private storage; survives cold start.
-- **Index rebuild (smoke).** Drop `library.sqlite`; re-open; queries match.
+- **Index rebuild (smoke).** Drop `library.sqlite`; rebuild; every query over sidecar facts matches. Index-only state (cache bookkeeping, upload guards, importer-formed stack placement) is not expected back.
 - **Eviction (unit).** LRU order, tier order at equal recency, recency promotion, pin exemption; no canonical file touched; metadata tier never reclaimed.
 - **Connection-class budget (unit).** Each class yields its budget and bulk deferral; a class change mid-session re-plans without evicting pinned or device-owned originals.
 - **Release gate (smoke).** Non-`durable` verdict retains the original and surfaces it; `durable` releases.

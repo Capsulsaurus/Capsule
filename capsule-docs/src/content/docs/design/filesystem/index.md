@@ -26,6 +26,6 @@ Byte transfer is covered by [](/design/transfer/); metadata sync by [](/design/s
 | --- | --- | --- |
 | Stored form | Opaque ciphertext blobs | Plaintext media + CBOR sidecars |
 | Naming | Ciphertext hash | UUIDv7, date-bucketed |
-| Index | PostgreSQL, authoritative, key-free | SQLite, rebuildable |
+| Index | PostgreSQL, authoritative, key-free | SQLite, migrated in place; partly rebuildable |
 | Derived data | Client-generated encrypted blobs | Generated locally, evictable |
 | Originals | Retained while referenced | Present only if synced locally |
