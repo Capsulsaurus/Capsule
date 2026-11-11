@@ -123,7 +123,7 @@ chromahash = { version = "0.7.1", default-features = false, features = ["simd"] 
 jiff = { workspace = true }
 # EXIF reading, transitional: removed once Rawshift's metadata extraction covers capture time,
 # GPS and orientation (design/thumbnails.md, "Media Is Rawshift's").
-kamadak-exif = "0.5"
+kamadak-exif = "0.6"
 # Still-image decode/encode for `capsule_core::media` (`media` feature). A **registry**
 # dependency, not the pinned `rawshift/` submodule, which is an uninitialised newer
 # v1-in-progress tree and is not a workspace member. Depended on directly rather than through
