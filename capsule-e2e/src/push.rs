@@ -81,14 +81,14 @@ pub fn sdk_envelope(core: &ManifestCore, blob_hash: &str) -> ManifestEnvelope {
 pub fn wire_envelope(core: &ManifestCore, blob_hash: &str) -> rest::types::ManifestEnvelope {
     let envelope = sdk_envelope(core, blob_hash);
     rest::types::ManifestEnvelope {
-        crypto_suite_id: i64::from(envelope.crypto_suite_id),
+        crypto_suite_id: envelope.crypto_suite_id,
         protocol_version: envelope.protocol_version,
         album_id: envelope.album_id,
         file_id: envelope.file_id,
-        amk_version: i64::from(envelope.amk_version),
+        amk_version: envelope.amk_version,
         ciphertext_hash: envelope.ciphertext_hash,
-        plaintext_size: envelope.plaintext_size as i64,
-        chunk_size: i64::from(envelope.chunk_size),
+        plaintext_size: envelope.plaintext_size,
+        chunk_size: envelope.chunk_size,
         key_mode: envelope.key_mode,
         metadata_blob_hash: envelope.metadata_blob_hash,
         original_blob_hash: None,

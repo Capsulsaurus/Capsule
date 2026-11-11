@@ -244,7 +244,7 @@ fn map_error(error: rest::Error<rest::ReannounceManifestsError>) -> SyncError {
 fn decode_result(result: rest::types::ReannounceResult) -> ReannounceResult {
     let outcome = match result.outcome {
         rest::types::ReannounceOutcome::Restored => ReannounceOutcome::Restored {
-            sync_seq: result.sync_seq.and_then(|seq| u64::try_from(seq).ok()),
+            sync_seq: result.sync_seq,
         },
         rest::types::ReannounceOutcome::AlreadyIndexed => ReannounceOutcome::AlreadyIndexed,
         rest::types::ReannounceOutcome::MissingBlobs => {

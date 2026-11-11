@@ -317,13 +317,21 @@ mod route_classes {
         )));
         let url = Url::parse(&server.base_url()).unwrap();
 
-        let read = reqwest::Request::new(Method::GET, url.join("/v1/quota").unwrap());
+        let request = |method: Method, path: &str| {
+            http::Request::builder()
+                .method(method)
+                .uri(url.join(path).unwrap().as_str())
+                .body(rest::HttpBody::empty())
+                .unwrap()
+        };
+
+        let read = request(Method::GET, "/v1/quota");
         assert_eq!(
             backend.execute(read).await.unwrap().status(),
             StatusCode::OK
         );
 
-        let write = reqwest::Request::new(Method::DELETE, url.join("/v1/sessions/x").unwrap());
+        let write = request(Method::DELETE, "/v1/sessions/x");
         let answered = backend.execute(write).await.unwrap();
         assert_eq!(answered.status(), StatusCode::UPGRADE_REQUIRED);
         assert_eq!(
@@ -333,7 +341,11 @@ mod route_classes {
                 .and_then(|v| v.to_str().ok()),
             Some("999.0.0")
         );
-        let body = answered.text().await.unwrap();
+        let body = http_body_util::BodyExt::collect(answered.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        let body = String::from_utf8_lossy(&body).into_owned();
         assert!(
             body.contains(error_codes::PROTOCOL_VERSION_UNSUPPORTED),
             "{body}"

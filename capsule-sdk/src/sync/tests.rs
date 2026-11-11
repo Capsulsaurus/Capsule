@@ -479,6 +479,31 @@ async fn a_feed_pull_is_served_and_latches_the_window() {
     );
 }
 
+/// **An unreachable server is backed off and retried.** The generated taxonomy files a refused
+/// connection under `Transport`, which the feed's retry engine treats as transient, so a pull
+/// rides out a server that is briefly not listening within its interactive budget rather than
+/// failing on the first refusal.
+#[tokio::test]
+async fn a_refused_connection_is_retried_as_transient() {
+    // Bind, read the port, then drop the listener: the address is now certain to refuse.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    crate::net::negotiation::forget_addr(listener.local_addr().unwrap());
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    let consumer =
+        SyncConsumer::with_static_token(&format!("http://{addr}"), "test-token").unwrap();
+
+    let error = consumer
+        .call(&SyncCursor::start(), 10, None, None)
+        .await
+        .expect_err("nothing is listening there");
+    assert!(
+        matches!(error, rest::Error::Transport(_)),
+        "a refused connection is a transport failure, got {error:?}"
+    );
+    assert!(is_transient(&error), "and one the feed retries");
+}
+
 // ─── Provenance history ──────────────────────────────────────────────────────
 
 /// A blob source holding a set of blobs at their addresses, answering `404` for any other, and
