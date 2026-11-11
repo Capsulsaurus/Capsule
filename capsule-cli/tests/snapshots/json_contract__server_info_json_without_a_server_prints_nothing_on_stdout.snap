@@ -7,4 +7,4 @@ status: 1
 
 --- stderr ---
 Error: 
-   0: Could not read the server's info: could not reach server-info: request construction failed
+   0: Could not read the server's info: could not reach server-info: transport failed

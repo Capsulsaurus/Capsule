@@ -24,7 +24,7 @@ hk = "1.48.0"
 # `wasm-bindgen` crate version in `capsule-wasm/Cargo.toml` — the two must match or wasm-bindgen
 # aborts. Bump both together. Chosen over wasm-pack so the gate stays fully offline (no runtime
 # fetch of a version-matched wasm-bindgen) once the toolchain is installed.
-"cargo:wasm-bindgen-cli" = "0.2.100"
+"cargo:wasm-bindgen-cli" = "0.2.130"
 # cargo-deny enforces the dependency-licence allowlist in deny.toml (the policy it
 # implements is capsule-docs/.../design/licensing.md) offline, as `license-check`, and
 # the RustSec advisories, bans and sources online, as `deny-check` (CI only: the

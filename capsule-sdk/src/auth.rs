@@ -739,10 +739,10 @@ impl AuthClient {
         let backend: Arc<dyn rest::HttpBackend> = Arc::new(crate::client::Negotiate::observing(
             crate::net::backend(http.clone()),
         ));
-        let rest = rest::Client::with_backend(backend, &base.server_root).map_err(|e| {
+        let rest = crate::net::generated_client(backend, &base.server_root).map_err(|reason| {
             AuthError::InvalidBaseUrl {
                 url: base_url.to_string(),
-                reason: e.to_string(),
+                reason,
             }
         })?;
         Ok(Self {
@@ -887,7 +887,7 @@ impl AuthClient {
             authorization_url: body.authorization_url,
             state: SecretString::from(body.state),
             binding,
-            expires_by: u64::try_from(body.expires_by).unwrap_or(0),
+            expires_by: body.expires_by,
         })
     }
 
@@ -965,7 +965,7 @@ impl AuthClient {
                 tracing::info!("the identity provider sign-in needs a second factor");
                 LoginOutcome::SecondFactorRequired {
                     mfa_token: SecretString::from(challenge.mfa_token),
-                    expires_by: u64::try_from(challenge.expires_by).unwrap_or(0),
+                    expires_by: challenge.expires_by,
                 }
             }
             rest::CompleteOidcLoginResponse::Status200(pair) => {
@@ -974,7 +974,7 @@ impl AuthClient {
                     TokenResponseBody {
                         access_token: pair.access_token,
                         refresh_token: pair.refresh_token,
-                        expires_by: u64::try_from(pair.expires_by).unwrap_or(0),
+                        expires_by: pair.expires_by,
                     },
                 )?;
                 tracing::info!("the identity provider sign-in succeeded; session established");
@@ -1034,8 +1034,8 @@ impl AuthClient {
             user_code: body.user_code,
             verification_uri: body.verification_uri,
             verification_uri_complete: body.verification_uri_complete,
-            interval_secs: u64::try_from(body.interval).unwrap_or(0),
-            expires_by: u64::try_from(body.expires_by).unwrap_or(0),
+            interval_secs: body.interval,
+            expires_by: body.expires_by,
         })
     }
 
@@ -1103,7 +1103,7 @@ impl AuthClient {
                 tracing::info!("the device sign-in needs a second factor");
                 LoginOutcome::SecondFactorRequired {
                     mfa_token: SecretString::from(challenge.mfa_token),
-                    expires_by: u64::try_from(challenge.expires_by).unwrap_or(0),
+                    expires_by: challenge.expires_by,
                 }
             }
             rest::PollOidcDeviceLoginResponse::Status200(pair) => {
@@ -1112,7 +1112,7 @@ impl AuthClient {
                     TokenResponseBody {
                         access_token: pair.access_token,
                         refresh_token: pair.refresh_token,
-                        expires_by: u64::try_from(pair.expires_by).unwrap_or(0),
+                        expires_by: pair.expires_by,
                     },
                 )?;
                 tracing::info!("the device sign-in succeeded; session established");

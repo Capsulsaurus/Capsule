@@ -68,7 +68,7 @@ async fn adopt_in_place(server: &Server) -> AdoptedInPlace {
             &ProvisionLinkRequest {
                 opaque_id: opaque_id.clone(),
                 drop_pubkey: BASE64.encode(&link.drop_pubkey),
-                crypto_suite_id: i64::from(CRYPTO_SUITE_ID),
+                crypto_suite_id: CRYPTO_SUITE_ID,
                 expires_at: None,
                 max_total_bytes: None,
                 max_file_count: None,
@@ -92,7 +92,7 @@ async fn adopt_in_place(server: &Server) -> AdoptedInPlace {
             &opaque_id,
             &CreateDropRequest {
                 content_type: "image/jpeg".to_owned(),
-                size: sealed.ciphertext.len() as i64,
+                size: sealed.ciphertext.len() as u64,
                 ciphertext_hash: ciphertext_hash.clone(),
                 kem_ct: BASE64.encode(&sealed.descriptor.kem_ct),
                 passphrase_proof: None,
@@ -110,7 +110,7 @@ async fn adopt_in_place(server: &Server) -> AdoptedInPlace {
                 x_capsule_offset: Some("0".to_owned()),
                 x_capsule_checksum: Some(hash_bytes(&sealed.ciphertext).to_hex()),
             },
-            &rest::types::RequestBody4e14fb73::from(sealed.ciphertext.clone()),
+            &sealed.ciphertext.clone().into(),
         )
         .await
         .expect("the exempt chunk operation admits the bytes");
@@ -137,7 +137,7 @@ async fn adopt_in_place(server: &Server) -> AdoptedInPlace {
     let pending = &inbox.drops[0];
     assert_eq!(pending.opaque_id, opaque_id);
     assert_eq!(pending.ciphertext_hash, ciphertext_hash);
-    assert_eq!(pending.size, sealed.ciphertext.len() as i64);
+    assert_eq!(pending.size, sealed.ciphertext.len() as u64);
     assert!(!pending.adopting);
     assert_eq!(
         std::fs::read(server.blob_path(&ciphertext_hash)).expect("the drop is filed"),
@@ -173,10 +173,10 @@ async fn adopt_in_place(server: &Server) -> AdoptedInPlace {
             &AdoptRequest {
                 album_id: album.to_string(),
                 asset_id: asset.to_string(),
-                size: sealed.ciphertext.len() as i64,
+                size: sealed.ciphertext.len() as u64,
                 hash: ciphertext_hash.clone(),
                 content_type: "image/jpeg".to_owned(),
-                crypto_suite_id: i64::from(CRYPTO_SUITE_ID),
+                crypto_suite_id: CRYPTO_SUITE_ID,
                 protocol_version: core.protocol_version.clone(),
                 key_mode: "wrapped".to_owned(),
                 manifest_envelope: wire_envelope(core, &ciphertext_hash),

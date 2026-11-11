@@ -354,6 +354,27 @@ async fn a_published_roster_reports_what_the_server_holds() {
     );
 }
 
+/// A counter the contract types unsigned cannot arrive negative: the answer is malformed, never a
+/// wire failure a caller would retry, and never a counter wrapped round to a huge value.
+#[tokio::test]
+async fn a_negative_counter_is_a_malformed_answer() {
+    let id = album();
+    let (server, _) = recording(move |_| {
+        MockResponse::new(200, "OK").json_body(format!(
+            r#"{{"album_id":"{id}","roster_version":-1,"amk_epoch":2,"member_count":1,"replayed":false}}"#
+        ))
+    })
+    .await;
+    let error = client_for(&server)
+        .publish_roster(&signed_roster(3))
+        .await
+        .expect_err("a negative roster_version does not decode");
+    assert!(
+        matches!(error, AlbumError::Malformed(_)),
+        "an unreadable answer is malformed: {error:?}"
+    );
+}
+
 /// The `409` is the one refusal a client acts on differently — re-sync and republish above the
 /// version the server names — so its code must come through.
 #[tokio::test]

@@ -817,11 +817,10 @@ async fn an_unavailable_store_keeps_its_catalog_code() {
     assert_eq!(error.error_code(), Some(error_codes::ESCROW_UNAVAILABLE));
 }
 
-/// **An unreachable server is not an expired session.** reqwest reports a refused
-/// connection as a *request* error, which the generated taxonomy files under
-/// `RequestConstruction` next to the genuine pre-flight failures — so classifying that
-/// whole class as an auth failure would tell an offline device to sign in again, the one
-/// remedy that cannot work without a network.
+/// **An unreachable server is not an expired session.** A refused connection must never
+/// read as an auth failure: that would tell an offline device to sign in again, the one
+/// remedy that cannot work without a network. The generated taxonomy files it under
+/// `Transport` today; this pins the outcome whichever class a spargen release chooses.
 #[tokio::test]
 async fn an_unreachable_endpoint_is_a_transport_failure_not_an_auth_one() {
     // Bind, read the port, then drop the listener: the address is now certain to refuse.
@@ -849,10 +848,10 @@ async fn an_unreachable_endpoint_is_a_transport_failure_not_an_auth_one() {
 /// **A session that cannot mint a bearer is an auth failure, not a network one.**
 ///
 /// This is the other side of `an_unreachable_endpoint_is_a_transport_failure_not_an_auth_one`
-/// and it pins the discrimination that separates them. Both arrive as the generated
-/// taxonomy's `RequestConstruction`; the only thing telling them apart is the boxed source,
-/// which is the runtime's own `AuthError` when — and only when — the bearer provider is
-/// what failed. Without this case, a spargen change to how a provider failure is boxed
+/// and it pins the discrimination that separates them. A dead session arrives as the generated
+/// taxonomy's `RequestConstruction`, beside causes that are not auth failures; the only thing
+/// telling them apart is the boxed source, which is the runtime's own `AuthError` when — and
+/// only when — the bearer provider is what failed. Without this case, a spargen change to how a provider failure is boxed
 /// would silently demote every expired refresh token to `Transport`, and the FFI would tell
 /// a user to retry where it must tell them to sign in again. The escrow calls themselves
 /// never leave the process here: there is no bearer to send them with.

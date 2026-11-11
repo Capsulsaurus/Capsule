@@ -215,7 +215,7 @@ pub async fn unsubscribe(
 }
 
 /// How many assets each page `assets` asks for: the most the server answers in one.
-const PULLED_ASSETS_PAGE: i64 = 1_000;
+const PULLED_ASSETS_PAGE: u32 = 1_000;
 
 /// One asset of an album this account's server pulled, as `assets` reports it: its breadcrumb.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -239,7 +239,7 @@ impl From<rest::types::PulledAssetView> for PulledAssetEntry {
             head: view.head,
             timestamp: view.timestamp,
             author: view.author,
-            size: u64::try_from(view.size).unwrap_or(0),
+            size: view.size,
         }
     }
 }

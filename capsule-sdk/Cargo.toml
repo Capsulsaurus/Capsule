@@ -32,7 +32,7 @@ ffi-bindgen = ["ffi", "uniffi/cli"]
 # h3-quinn on the `ring` rustls provider) and makes the opportunistic HTTP/3 policy
 # (`net::h3::H3Policy::for_build`) capable, so it may answer a race at dial. Off by default, so
 # default builds link none of it; `tokio/rt` spawns each connection's HTTP/3 driver and the dial
-# that lost a race. It deliberately does not forward `reqwest/http3`: reqwest 0.12
+# that lost a race. It deliberately does not forward `reqwest/http3`: reqwest (0.13 too)
 # refuses that feature without `RUSTFLAGS="--cfg reqwest_unstable"`, which would break every
 # `--all-features` build.
 http3 = ["dep:quinn", "dep:h3", "dep:h3-quinn", "dep:webpki-roots", "tokio/rt"]
@@ -72,15 +72,24 @@ hex = { workspace = true }
 tokio = { version = "1", features = ["sync", "time", "net", "io-util"] }
 
 uuid = { version = "1.23.3", features = ["v7", "serde"] }
-reqwest = { version = "0.12.28", default-features = false, features = [
+# rustls with no provider of reqwest's own: client builds run on `ring`, installed as the process
+# default by `net::ensure_crypto_provider` before any client is built, so the SDK, the CLI and
+# the mobile FFI link one crypto provider rather than ring beside aws-lc-rs (see the workspace
+# pin).
+reqwest = { version = "0.13.5", default-features = false, features = [
     "json",
-    "rustls-tls",
+    "rustls-no-provider",
     "stream",
     "multipart",
 ] }
-# Rebuilds a `401` the reactive refresh layer (`client::RefreshOn401`) read the problem code
-# out of; `reqwest::Response` is constructible only from an `http::Response`.
+# The currency of spargen's transport seam (`rest::HttpBackend` executes an `http::Request` into
+# an `http::Response`): the SDK's backends — the reactive refresh layer (`client::RefreshOn401`),
+# the protocol-window screen (`client::Negotiate`) and the HTTP/3 router — are written over it.
 http = { workspace = true }
+# Reads a response body crossing that seam back to bytes, so the refresh layer and the window
+# screen can inspect a problem body and hand the generated operation the same bytes. Already in
+# the lock file through hyper and Kynos; the canonical adapter for the `http-body` trait.
+http-body-util = { workspace = true }
 # The paced chunk body (`net::PacedBody`): a request body that records each piece hyper pulls,
 # so the per-request stall timer cuts a stalled upload and never a slow one. Already in the
 # lock file through reqwest and hyper.
@@ -88,14 +97,18 @@ http-body = { workspace = true }
 # Packet marking (`net::mark_lower_effort`): the Lower Effort DSCP on a bulk-transfer socket the
 # SDK holds, which neither std nor tokio can set. Already in the lock file through tokio.
 socket2 = { workspace = true }
+# The bundled root set every SDK client trusts (`net::http_builder`), the same one the HTTP/3
+# leg trusts below; see the workspace pin for why it replaces reqwest 0.13's OS-store default.
+webpki-root-certs = { workspace = true }
 
 # ── LAN peering ───────────────────────────────────────────────────────
 # The peering channel is mutually-authenticated TLS 1.3 with no CA (the device keys
 # are the trust anchor, checked at the application layer). rustls is the only TLS stack
 # (never native-tls or OpenSSL); tokio-rustls is its async
 # adapter and rcgen mints the per-connection self-signed leaf the handshake presents.
-# The `ring` provider is pinned across all three so the peering stack never depends on
-# an ambiguous process-default CryptoProvider (reqwest's rustls-tls uses aws-lc-rs).
+# The `ring` provider is pinned across all three so the peering stack never depends on the
+# process-default CryptoProvider. It is also the provider `net::ensure_crypto_provider` installs
+# for reqwest, so every TLS stack in a client build is ring.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 rcgen = { version = "0.13", default-features = false, features = ["ring", "crypto"] }
@@ -107,9 +120,10 @@ bytes = { workspace = true }
 
 # ── HTTP/3 (optional; `http3` feature) ────────────────────────────────────
 # The QUIC transport (quinn), the HTTP/3 framing over it (h3) and the adapter between the two
-# (h3-quinn), adopted directly because reqwest 0.12's HTTP/3 needs `--cfg reqwest_unstable`. The
-# `ring` rustls provider is pinned, as for LAN peering, and quinn's default `platform-verifier`,
-# `log` and `bloom` are off: trust anchors are the same webpki roots reqwest's `rustls-tls` uses.
+# (h3-quinn), adopted directly because reqwest's HTTP/3 (0.13 too) needs `--cfg reqwest_unstable`.
+# The `ring` rustls provider is pinned, as for LAN peering, and quinn's default
+# `platform-verifier`, `log` and `bloom` are off: trust anchors are the bundled webpki roots, the
+# same release `webpki-root-certs` hands every SDK reqwest client, so both legs trust one set.
 # TLS 1.3, no early data. Off by default, so no default build or shipped client links it (an
 # `--all-features` build would refuse reqwest's unstable cfg). Retire it for reqwest's own
 # HTTP/3 once that is stable.
@@ -119,7 +133,7 @@ quinn = { version = "0.11.9", default-features = false, features = [
 ], optional = true }
 h3 = { version = "0.0.8", optional = true }
 h3-quinn = { version = "0.0.10", optional = true }
-webpki-roots = { version = "1.0.10", optional = true }
+webpki-roots = { version = "1.0.12", optional = true }
 
 # ── FFI (optional; `ffi` feature) ──────────────────────────────────────────
 # uniffi proc-macro bindings for Swift/Kotlin/Linux over the SDK's user-flow
@@ -137,7 +151,7 @@ uniffi = { version = "0.31", features = ["tokio"], optional = true }
 # in the SDK's runtime dependency tree. The generated runtime needs `secrecy` beside the
 # `bytes`/`reqwest`/`serde`/`serde_json` floors; bump those floors together with spargen.
 # Everything that parses is generated; only orchestration is hand-written. Not Progenitor.
-spargen = { version = "0.5.0", default-features = false }
+spargen = { version = "0.7.0", default-features = false }
 
 [dev-dependencies]
 # `test-util` gives `tests/upload_fault_schedules.rs` a paused clock, so the retry engine's real

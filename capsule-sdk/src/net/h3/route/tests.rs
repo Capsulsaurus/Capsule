@@ -70,7 +70,7 @@ impl Carrier for ScriptedCarrier {
             Script::Stall => Err(TransportError::PathStalled),
             Script::TcpFailed => {
                 let port = closed_port().await;
-                let error = reqwest::Client::new()
+                let error = bare_client()
                     .get(format!("http://127.0.0.1:{port}/"))
                     .send()
                     .await
@@ -157,7 +157,7 @@ fn only_an_https_origin_races_or_is_believed() {
     let transport = H3Transport::new(
         Arc::new(H3Policy::for_build(SystemClock::new())),
         H3Dialer::new(&H3Config::default()).unwrap(),
-        ReqwestLeg::new(reqwest::Client::new()),
+        ReqwestLeg::new(bare_client()),
         NoHttpsRecords,
     );
     let mut advertised = http::HeaderMap::new();
@@ -365,9 +365,8 @@ async fn a_builder_that_does_not_build_still_fails_without_dialing() {
 async fn the_generated_clients_backend_routes_through_the_process_transport() {
     let (server, seen) = advertising().await;
     let backend = RoutedBackend::new(crate::net::http_client().unwrap());
-    let request = reqwest::Client::new()
-        .get(format!("{}/v1/thing", server.base_url()))
-        .build()
+    let request = http::Request::get(format!("{}/v1/thing", server.base_url()))
+        .body(crate::rest::HttpBody::empty())
         .unwrap();
 
     let response = crate::rest::HttpBackend::execute(&backend, request)
@@ -419,4 +418,11 @@ fn the_network_follows_the_reported_generation() {
     assert_eq!(current_generation(), PathGeneration(41));
     observe_generation(PathGeneration(42));
     assert_eq!(current_generation(), PathGeneration(42));
+}
+
+/// A plain reqwest client (no SDK handshake), after the process crypto provider the SDK's own
+/// builders install.
+fn bare_client() -> reqwest::Client {
+    crate::net::ensure_crypto_provider();
+    reqwest::Client::new()
 }

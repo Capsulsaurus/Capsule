@@ -287,12 +287,10 @@ impl FederationPull {
                 refusal("the revocation list", code, &error.to_string())
             })?
             .into_inner();
-        // Fail **closed** on a bound this client cannot read: a negative or absurd
-        // `max_staleness_seconds` means the snapshot is stale the instant it is taken, so the
-        // next `admit` re-polls rather than honouring the list forever. `u64::MAX` here would
-        // have read as fail-open the day the schema widened.
-        let max_staleness =
-            Duration::from_secs(u64::try_from(list.max_staleness_seconds).unwrap_or(0));
+        // The bound is unsigned on the wire, so a negative one never decodes: that refresh
+        // fails (through `refusal`, as every generated failure here does) and no snapshot is
+        // taken from the list.
+        let max_staleness = Duration::from_secs(u64::from(list.max_staleness_seconds));
         let snapshot = RevocationSnapshot {
             revoked: list
                 .revoked

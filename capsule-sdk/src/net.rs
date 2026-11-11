@@ -1202,7 +1202,8 @@ pub fn protocol_headers() -> reqwest::header::HeaderMap {
 }
 
 /// The builder every SDK transport starts from: rustls only (the SDK's `reqwest` has no
-/// default features and only `rustls-tls`) and the protocol handshake as default headers.
+/// default features and only `rustls`), the bundled webpki roots as the only trust anchors
+/// ([`trust_roots`]), and the protocol handshake as default headers.
 ///
 /// One builder rather than one client because [`dial_client`] adds a connect timeout on top
 /// and the auth, sync and typed clients do not; what they share is the handshake, and this is
@@ -1218,9 +1219,67 @@ pub fn protocol_headers() -> reqwest::header::HeaderMap {
 /// leaving `http2` out, so a feature another crate enables can never fold the windows back
 /// onto one connection.
 pub fn http_builder() -> reqwest::ClientBuilder {
+    ensure_crypto_provider();
     reqwest::Client::builder()
+        .tls_certs_only(trust_roots())
         .default_headers(protocol_headers())
         .http1_only()
+}
+
+/// Make `ring` the process's rustls crypto provider, unless the embedding application already
+/// installed one — which is then respected.
+///
+/// The SDK's reqwest carries no provider of its own (`rustls-no-provider`): client builds link
+/// `ring` alone, as the HTTP/3 leg and LAN peering already do, instead of the aws-lc-rs that
+/// reqwest's `rustls` feature would add to every client binary. reqwest then takes the
+/// process default, and panics building a client without one. Idempotent and cheap, so every
+/// path that builds a reqwest client calls it first: [`http_builder`], and the crate's one
+/// generated-client constructor, for the client spargen builds internally.
+pub fn ensure_crypto_provider() {
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        // A concurrent first caller may win the race; whichever provider it installed is ring
+        // too, so the loser's error carries nothing to act on.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+}
+
+/// A generated client over `backend` for `base_url`: the one way this crate constructs one.
+///
+/// spargen's `with_backend` builds a default `reqwest::Client` of its own to *assemble*
+/// requests (every byte is executed through `backend`), so the crypto provider must be in
+/// place before it is called; this is where that is guaranteed.
+///
+/// The error is the generated client's description of why it could not be built — a `base_url`
+/// it cannot parse, in practice.
+pub(crate) fn generated_client(
+    backend: Arc<dyn crate::rest::HttpBackend>,
+    base_url: &str,
+) -> Result<crate::rest::Client, String> {
+    ensure_crypto_provider();
+    crate::rest::Client::with_backend(backend, base_url).map_err(|error| error.to_string())
+}
+
+/// The trust anchors every SDK reqwest client verifies a server against: the bundled Mozilla
+/// root set (`webpki-root-certs`), the same release of the same bundle the HTTP/3 leg trusts, so
+/// a server is trusted or refused alike over TCP and QUIC. reqwest 0.13's `rustls` would
+/// otherwise consult the OS store instead.
+///
+/// The DER bytes are copied out of the bundle once per process; reqwest parses them into its
+/// root store on every client build.
+#[must_use]
+pub fn trust_roots() -> Vec<reqwest::Certificate> {
+    static ROOTS: std::sync::OnceLock<Vec<reqwest::Certificate>> = std::sync::OnceLock::new();
+    ROOTS
+        .get_or_init(|| {
+            webpki_root_certs::TLS_SERVER_ROOT_CERTS
+                .iter()
+                .map(|der| {
+                    reqwest::Certificate::from_der(der)
+                        .expect("every bundled webpki root is a DER certificate")
+                })
+                .collect()
+        })
+        .clone()
 }
 
 /// The plain SDK client: [`http_builder`], built.
@@ -1272,6 +1331,21 @@ pub(crate) fn backend(http: reqwest::Client) -> Arc<dyn crate::rest::HttpBackend
     {
         Arc::new(crate::rest::ReqwestBackend::new(http))
     }
+}
+
+/// A copy of a request crossing the generated client's transport seam, to send again: method,
+/// URI, version, headers, extensions and body alike. `None` when the body is a stream, which can
+/// be read only once — half a body on the wire twice is worse than the failure it would retry.
+pub(crate) fn try_clone_request(
+    request: &http::Request<crate::rest::HttpBody>,
+) -> Option<http::Request<crate::rest::HttpBody>> {
+    let mut clone = http::Request::new(request.body().try_clone()?);
+    *clone.method_mut() = request.method().clone();
+    *clone.uri_mut() = request.uri().clone();
+    *clone.version_mut() = request.version();
+    *clone.headers_mut() = request.headers().clone();
+    *clone.extensions_mut() = request.extensions().clone();
+    Some(clone)
 }
 
 /// Mark the request `builder` holds as safe to send twice, so under the `http3` feature it may
