@@ -32,7 +32,6 @@ tpm = ["dep:tss-esapi"]
 [dependencies]
 capsule-core = { path = "../capsule-core" }
 
-aead = { version = "0.5", features = ["stream", "alloc"] }
 aes-gcm = { version = "0.10", features = ["aes"] }
 ciborium = "0.2"
 hex = { workspace = true }
@@ -88,6 +87,10 @@ windows-sys = { version = "0.60", features = [
 # The same `capsule-core` with `test-support` on: the lifecycle backup tests export at an explicit
 # fast Argon2id cost. A dev-dependency, so no shipping build carries the feature.
 capsule-core = { path = "../capsule-core", features = ["test-support"] }
+# `stream`: a drops test (`lifecycle/drops/tests.rs`) hand-seals a non-canonical drop with
+# `aes_gcm::aead::stream::EncryptorBE32`. Named here rather than through a direct `aead` pin or
+# capsule-core's feature unification; a dev-dependency, so only test builds ask for it.
+aes-gcm = { version = "0.10", features = ["stream"] }
 proptest = { workspace = true }
 # The encoders the fixtures need and the shipping graph does not (see `capsule-core`'s manifest
 # for why `jpeg-encode` stays out of every release binary).

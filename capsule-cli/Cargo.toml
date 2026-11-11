@@ -92,7 +92,6 @@ uuid = { workspace = true }
 # listener. Already in the graph under reqwest; named here so the listener does not hand-roll
 # percent-decoding.
 url = "2.5.8"
-walkdir = "2.5.0"
 # `capsule camera discover`, and `capsule camera import` without `--address`: browses DNS-SD
 # `_ptp._tcp` for a bounded window, behind a seam its tests script. Pure Rust, no async runtime,
 # builds for every client target; MIT OR Apache-2.0. Not `zeroconf` (binds Avahi/Bonjour) or

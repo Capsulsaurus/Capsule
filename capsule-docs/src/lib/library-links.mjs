@@ -299,7 +299,6 @@ export const LIBRARIES = [
         url: 'https://github.com/tailwindlabs/tailwindcss',
         names: ['Tailwind'],
     },
-    { url: 'https://github.com/colinhacks/zod', names: ['zod'] },
     { url: 'https://github.com/formatjs/formatjs', names: ['FormatJS'] },
     { url: 'https://github.com/shadcn-ui/ui', names: ['shadcn'] },
     // Media
