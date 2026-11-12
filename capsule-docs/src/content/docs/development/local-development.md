@@ -78,7 +78,7 @@ JWT_ED25519_DER="$(openssl genpkey -algorithm ed25519 -outform DER | base64 | tr
 
 ```bash
 cp capsule-server/.env.example capsule-server/.env   # then edit it
-mise run serve-deps                                  # Postgres + Valkey, on loopback
+mise run serve-deps                                  # Postgres, on loopback
 mise run serve
 ```
 
@@ -88,10 +88,10 @@ the token key ([](/design/transfer/durability/#custody-receipts)). Values are li
 expressions, because podman, compose and systemd read the file too.
 
 `serve` checks `DATABASE_URL`'s schema against its migrations and refuses if it is behind, naming
-`capsule-server-migration up`. It then `PING`s `VALKEY_URL`. A missing or unreachable store is a
-refusal, never a silent fall-back to in-memory adapters. `serve-deps` is separate on purpose; stop
-it with `podman compose -f capsule-server/compose.yaml down`. TLS is terminated by the ingress, not
-the server.
+`capsule-server-migration up`. A missing or unreachable database is a refusal, never a silent
+fall-back to in-memory adapters. `serve-deps` is separate on purpose; stop it with
+`podman compose -f capsule-server/compose.yaml down`. TLS is terminated by the ingress, not the
+server.
 
 ### Logs
 
@@ -103,9 +103,9 @@ filters.
 
 `gc`, `purge` and `scrub` are the jobs in [](/design/filesystem/maintenance/). They take a blob root
 and **no token-signing key**. Only `purge --apply` also needs `ATTESTATION_KEY_SEED`: it signs each
-purge into the [owner ledger](/design/filesystem/server/#the-owner-ledger) first and refuses to
-apply without it. Without `--memory` they read Postgres (index, marks) and, for `scrub`, Valkey
-(live upload sessions). `gc` and `purge` dry-run unless `--apply`. `scrub` mutates nothing and exits
+purge into the owner ledger ([](/design/filesystem/server/#the-owner-ledger)) first and refuses to
+apply without it. Without `--memory` they read Postgres (index, marks and, for `scrub`, live
+upload sessions). `gc` and `purge` dry-run unless `--apply`. `scrub` mutates nothing and exits
 non-zero on a non-empty report, including a `--deep` pass that ran out of budget.
 
 ### Without running anything
@@ -117,9 +117,8 @@ mise run openapi-kynos                # regenerate capsule-server/openapi.json
 
 ### The container tiers
 
-`test-rust` needs no podman. Cases needing Postgres or Valkey are gated on
-`CAPSULE_TEST_POSTGRES=1` and `CAPSULE_TEST_VALKEY=1`, and otherwise print a skip line and pass.
-`test-rust-containers` enables both and runs every gated case one container at a time, **failing on
+`test-rust` needs no podman. Cases needing Postgres are gated on `CAPSULE_TEST_POSTGRES=1`, and
+otherwise print a skip line and pass. `test-rust-containers` enables it and runs every gated case one container at a time, **failing on
 any skip line**. CI runs it as the blocking `rust-containers` job. Locally, with rootless podman:
 
 ```bash
@@ -128,9 +127,6 @@ export DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock
 export CAPSULE_TEST_CONTAINER_USERNS=keep-id
 mise run test-rust-containers
 ```
-
-`CAPSULE_TEST_VALKEY_URL=redis://127.0.0.1:6379` runs the Valkey suite against an existing server
-instead, writing under the `capsule:` namespace.
 
 ## Profiling a build
 

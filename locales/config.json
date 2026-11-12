@@ -15,6 +15,21 @@
         "hi",
         "ar"
     ],
+    "displayNames": {
+        "en": "English",
+        "zh-Hans": "简体中文",
+        "zh-Hant": "繁體中文",
+        "ja": "日本語",
+        "ko": "한국어",
+        "fr": "Français",
+        "de": "Deutsch",
+        "es": "Español",
+        "pt-BR": "Português (Brasil)",
+        "it": "Italiano",
+        "ru": "Русский",
+        "hi": "हिन्दी",
+        "ar": "العربية"
+    },
     "fallbacks": {
         "zh-Hans": "en",
         "zh-Hant": "en",

@@ -19,7 +19,7 @@ own devices, a server that never holds a key, and sharing across servers.
 ## Outline
 
 - Why another photo library: the trade between features and privacy that existing services force.
-- What Capsule does differently: [a key-free server](/design/cryptography/),
-  [on-device organization](/features/smart-albums/), and [federated sharing](/design/federation/).
+- What Capsule does differently: a key-free server ([](/design/cryptography/)),
+  on-device organization ([](/features/smart-albums/)), and federated sharing ([](/design/federation/)).
 - Where it is today: the mobile clients are being stabilized before beta.
 - How to follow along and get involved.

@@ -76,13 +76,13 @@ Capture time and location each have two fields: the value the import recorded an
 ### Schema Versioning Rules
 
 - `sidecar_schema` is CBOR field 0 under deterministic key order, so a reader knows the schema before parsing the rest.
-- A client whose `max_known_sidecar_schema < sidecar_schema` **refuses to write** the sidecar and reads it only in opted-in read-only mode ([refuse-by-default](/design/threat-model/)), so an old client cannot strip-and-resign a newer sidecar.
+- A client whose `max_known_sidecar_schema < sidecar_schema` **refuses to write** the sidecar and reads it only in opted-in read-only mode (refuse-by-default, [](/design/threat-model/)), so an old client cannot strip-and-resign a newer sidecar.
 - The signature covers `_unknown`, so stripping unknown fields is detectable.
 - An album's pinned protocol version constrains which sidecar schemas may be written into it ([](/design/versioning/#album-protocol-version-pinning)).
 
 ### Closed Enum Value Sets
 
-These value sets are closed ([Schema Rules](/design/threat-model/schema-rules/)); adding a value requires a new, later-dated `protocol_version`.
+These value sets are closed ([](/design/threat-model/schema-rules/)); adding a value requires a new, later-dated `protocol_version`.
 
 - **`content_type`**: exactly one canonical MIME value per format, never an alias such as `image/jpg`.
   - images: `image/jpeg`, `image/png`, `image/webp`, `image/gif`, `image/tiff`, `image/heic`, `image/avif`, `image/jxl`, `image/x-adobe-dng`
@@ -92,7 +92,7 @@ These value sets are closed ([Schema Rules](/design/threat-model/schema-rules/))
 
 ### Canonical CBOR Encoding
 
-The sidecar and the [encrypted metadata blob](/design/cryptography/encryption/#metadata-encryption), whose plaintext is this document, MUST serialize byte-identically in every implementation because the [signed manifest](/design/cryptography/provenance/#asset-manifest) commits to the bytes. Encoding is RFC 8949 §4.2 deterministic:
+The sidecar and the encrypted metadata blob ([](/design/cryptography/encryption/#metadata-encryption)), whose plaintext is this document, MUST serialize byte-identically in every implementation because the signed manifest ([](/design/cryptography/provenance/#asset-manifest)) commits to the bytes. Encoding is RFC 8949 §4.2 deterministic:
 
 - Definite-length encoding only.
 - Shortest-form integers.
@@ -100,16 +100,16 @@ The sidecar and the [encrypted metadata blob](/design/cryptography/encryption/#m
 - Map keys sorted by bytewise order of their encoded form, no duplicates. This includes `_unknown`, re-sorted on write so round-trips are byte-stable.
 - Floats in the shortest IEEE-754 form that round-trips exactly; canonical quiet NaN. Prefer integers or strings in signed structures.
 
-Conformance is a **blocking cross-language gate** against shared known-answer vectors, the same fixtures [Encryption](/design/cryptography/encryption/#metadata-blob-wire-format) uses.
+Conformance is a **blocking cross-language gate** against shared known-answer vectors, the same fixtures the metadata blob wire format uses ([](/design/cryptography/encryption/#metadata-blob-wire-format)).
 
 ### Local and Server Metadata Equivalence
 
 The plaintext of the server's encrypted metadata blob *is* this signed `SidecarV1`, the same bytes the client stores at `media/{uuid}.cbor`:
 
-- The [signed manifest](/design/cryptography/provenance/#asset-manifest) commits to `metadata_blob_hash` on every `create`, `replace` and `metadata-update`.
+- The signed manifest ([](/design/cryptography/provenance/#asset-manifest)) commits to `metadata_blob_hash` on every `create`, `replace` and `metadata-update`.
 - A client that decrypts the blob MUST find it byte-identical to its locally stored signed sidecar, and the blob's content hash MUST equal `metadata_blob_hash`.
 
-A client never persists a sidecar that does not round-trip to the committed hash ([client-side invariant](/design/threat-model/validation/#client-side-validation-invariants)); the server enforces the blob-hash match as [invariant 25](/design/threat-model/validation/#server-side-validation-invariants).
+A client never persists a sidecar that does not round-trip to the committed hash ([](/design/threat-model/validation/#client-side-validation-invariants)); the server enforces the blob-hash match as invariant 25 of [](/design/threat-model/validation/#server-side-validation-invariants).
 
 ### Provenance Binding and Sealing Order
 
@@ -119,14 +119,14 @@ Sealing order:
 
 1. Fix the prior head `H` (`None` on `create`).
 2. Author and sign the sidecar with `provenance_chain_hash = H`.
-3. Seal it into the [metadata blob](/design/cryptography/encryption/#metadata-blob-wire-format) and compute its content hash.
+3. Seal it into the metadata blob ([](/design/cryptography/encryption/#metadata-blob-wire-format)) and compute its content hash.
 4. Build and sign the manifest with `prior_provenance_hash = H` and that `metadata_blob_hash`; append it as the new head.
 
 ### Add-id Binding
 
-`add_id = (device_id: UUIDv4, monotonic_counter: u64)`, the counter incremented per device per (asset, OR-set). Every OR-set remove targets a specific `add_id`. A remove naming an `add_id` the receiver never observed is **rejected**, not a no-op ([Threat Model](/design/threat-model/scenarios/)).
+`add_id = (device_id: UUIDv4, monotonic_counter: u64)`, the counter incremented per device per (asset, OR-set). Every OR-set remove targets a specific `add_id`. A remove naming an `add_id` the receiver never observed is **rejected**, not a no-op ([](/design/threat-model/scenarios/)).
 
-**Counter durability.** A counter MUST never repeat for a `(device_id, asset, OR-set)` once it reached a written sidecar, or two adds alias. It is persisted in the local [index](/design/filesystem/client/#desktop-library-layout) and on restart reseeded to one past the maximum counter in the device's own signed sidecars, fetched from the server if not held locally. It resets to zero only when no sidecar bears the `device_id`; in practice a reinstall enrolls a new `device_id`.
+**Counter durability.** A counter MUST never repeat for a `(device_id, asset, OR-set)` once it reached a written sidecar, or two adds alias. It is persisted in the local index ([](/design/filesystem/client/#desktop-library-layout)) and on restart reseeded to one past the maximum counter in the device's own signed sidecars, fetched from the server if not held locally. It resets to zero only when no sidecar bears the `device_id`; in practice a reinstall enrolls a new `device_id`.
 
 ## Identifiers
 
@@ -134,11 +134,11 @@ The sidecar `uuid`, manifest `file_id`, provenance/server `asset_id` and metadat
 
 - **`camera_id`**: device model plus a per-device identifier such as the serial.
 - **`device_id`**: generated on the importing device.
-- **`session_id`**: the authenticated import session ([Session Management](/design/authentication/#session-id)).
+- **`session_id`**: the authenticated import session ([](/design/authentication/#session-id)).
 
 ## Privacy on Export
 
-When an asset crosses a trust boundary (a [share link](/design/share-links/) for a non-member, an external backup handed off, or a [federated](/design/federation/) peer outside the owner's home server), these fields are stripped unless the user opts in **per export**:
+When an asset crosses a trust boundary (a share link for a non-member, an external backup handed off, or a federated peer outside the owner's home server; see [](/design/share-links/) and [](/design/federation/)), these fields are stripped unless the user opts in **per export**:
 
 | Field | Default on export | Opt-in retains |
 | --- | --- | --- |
@@ -161,7 +161,7 @@ A share link carries each covered asset's stripped sidecar inside its sealed rec
 
 User-editable fields may be edited concurrently and offline, so they are CRDTs:
 
-- **Tags**: OR-sets with [`add_id` binding](#add-id-binding).
+- **Tags**: OR-sets with `add_id` binding ([](#add-id-binding)).
 - **Single-value fields** (`caption_lww`, `rating_lww`, `capture_timestamp_user`, `gps_user`, `stack_membership`, `cull`, `hidden`): LWW registers ordered by signed timestamp, with `device_id` as lexicographic tiebreaker. `stack_membership` admits a stamped `None`, so join, move and leave are each one LWW write.
 
 ### Surfacing Concurrent Edits
@@ -170,13 +170,13 @@ The losing value of a concurrent caption edit is appended to `superseded_caption
 
 ### How Operations Travel
 
-Capsule encrypts **operations**, not state. Merges are commutative and associative, so arrival order and stale replays do not matter. Operations reconcile into the sidecar, which stays the source of truth. They name **known fields only** (unknown-field ops are version-gated), and reconciliation re-emits `_unknown` verbatim. Each operation carries the `prior_provenance_hash` chain link like any [lifecycle action](/design/authorization/#the-closed-action-set).
+Capsule encrypts **operations**, not state. Merges are commutative and associative, so arrival order and stale replays do not matter. Operations reconcile into the sidecar, which stays the source of truth. They name **known fields only** (unknown-field ops are version-gated), and reconciliation re-emits `_unknown` verbatim. Each operation carries the `prior_provenance_hash` chain link like any lifecycle action ([](/design/authorization/#the-closed-action-set)).
 
-The same path carries each album's [album-group assertion](/design/federation/#the-album-group-assertion) and the per-owner [library-settings document](#the-library-settings-document). The [default-album](/design/organization/#the-default-album) designation is separate: a non-secret server-side pointer.
+The same path carries each album's album-group assertion ([](/design/federation/#the-album-group-assertion)) and the per-owner library-settings document ([](#the-library-settings-document)). The default-album designation ([](/design/organization/#the-default-album)) is separate: a non-secret server-side pointer.
 
 ### The Library-Settings Document
 
-**Deferred post-v1** with the [OGK](/design/cryptography/keys/#owner-group-keys-ogks) cluster it is keyed under. The schema is normative as written.
+**Deferred post-v1** with the OGK cluster it is keyed under ([](/design/cryptography/keys/#owner-group-keys-ogks)). The schema is normative as written.
 
 ```rust
 LibrarySettingsV1 {
@@ -189,11 +189,11 @@ LibrarySettingsV1 {
 }
 ```
 
-This page owns the envelope, keying, versioning and merge. [Organization](/design/organization/#smart-album-definition-schema), [Scope Grammar](/design/organization/#scope-grammar-local-source--album-mapping) and [Federation](/design/federation/#membership-and-rendering) own the section value schemas. An absent or `None` cover falls back to the newest constituent asset.
+This page owns the envelope, keying, versioning and merge. [](/design/organization/#smart-album-definition-schema), [](/design/organization/#scope-grammar-local-source--album-mapping) and [](/design/federation/#membership-and-rendering) own the section value schemas. An absent or `None` cover falls back to the newest constituent asset.
 
 - **Shape.** Every section is a keyed map of LWW registers over `Option<value>`; a stamped `None` is a tombstone. The document has no `signature` field: each mutation is a signed operation.
-- **Keying.** Readable by the owner's devices and owner-set members and by **no** album co-member, so it is keyed under the OGK, not an AMK. `settings_doc_id` is an identifier, not a key, derived from the [account master key](/design/cryptography/keys/#key-chain) under a dedicated label. Operations use the [metadata-blob wire format](/design/cryptography/encryption/#metadata-blob-wire-format) with key `HKDF-SHA512(ikm = OGK_v{n}, salt = settings_doc_id || nonce, info = "library-settings/v1", length = 32)` and a server-visible big-endian `u32` `ogk_version` before the nonce. A fresh nonce per write re-rolls key and nonce; a reused nonce is refused. Rewrites use the current epoch, and removed owner-set members derive no future epoch.
-- **Versioning.** [Canonical CBOR](#canonical-cbor-encoding), with refuse-to-write when `max_known_settings_schema < settings_schema`, as for sidecars. A `SmartAlbumDefinition` with a newer `predicate_schema` is preserved verbatim and never evaluated or stripped.
+- **Keying.** Readable by the owner's devices and owner-set members and by **no** album co-member, so it is keyed under the OGK, not an AMK. `settings_doc_id` is an identifier, not a key, derived from the account master key ([](/design/cryptography/keys/#key-chain)) under a dedicated label. Operations use the metadata-blob wire format ([](/design/cryptography/encryption/#metadata-blob-wire-format)) with key `HKDF-SHA512(ikm = OGK_v{n}, salt = settings_doc_id || nonce, info = "library-settings/v1", length = 32)` and a server-visible big-endian `u32` `ogk_version` before the nonce. A fresh nonce per write re-rolls key and nonce; a reused nonce is refused. Rewrites use the current epoch, and removed owner-set members derive no future epoch.
+- **Versioning.** [](#canonical-cbor-encoding), with refuse-to-write when `max_known_settings_schema < settings_schema`, as for sidecars. A `SmartAlbumDefinition` with a newer `predicate_schema` is preserved verbatim and never evaluated or stripped.
 - **Merge.** Each mutation is a device-signed, OGK-sealed `(section, key, stamped value)` operation with the `prior_provenance_hash` link. Merge is field-wise LWW on `(ts, device_id)` with no cross-field invariants. The server sees only ciphertext and `ogk_version`.
 
 ### Grouping Convergence (Requirement)
@@ -205,16 +205,16 @@ This page owns the envelope, keying, versioning and merge. [Organization](/desig
 | Tags (`tags_user` / `tags_ai`) | OR-set | Add/remove keyed by `add_id`; commutative, associative, idempotent |
 | Regions (`regions`) | Map of LWW registers, each holding an OR-set of labels | Merged as a semilattice: a delete is final, live writes keep the later shape and the union of labels |
 | Caption / rating / `capture_timestamp_user` / `gps_user` / `stack_membership` / `cull` / `hidden` | LWW register | Total order on `(ts, device_id)`; replay is a no-op |
-| Smart albums, people clusters, [aggregated federated albums](/design/federation/) | Computed views | Nothing stored; membership is a deterministic function of inputs ([views](/design/organization/#system--smart-albums-views), [AI](/design/ai/#ai-output-containment)) |
-| Container-album membership | Single home + ordered lifecycle ops | One container per asset; a replayed move no-ops ([Organization](/design/organization/#container-albums)); concurrency ordered by MLS commits |
+| Smart albums, people clusters, aggregated federated albums ([](/design/federation/)) | Computed views | Nothing stored; membership is a deterministic function of inputs ([](/design/organization/#system--smart-albums-views), [](/design/ai/#ai-output-containment)) |
+| Container-album membership | Single home + ordered lifecycle ops | One container per asset; a replayed move no-ops ([](/design/organization/#container-albums)); concurrency ordered by MLS commits |
 
-Album membership is not a CRDT: [MLS](/design/cryptography/mls/) commits already give a total order.
+Album membership is not a CRDT: MLS commits ([](/design/cryptography/mls/)) already give a total order.
 
 ## Tag Provenance and Namespacing
 
 User and AI tags are **structurally separate** OR-sets (`tags_user`, `tags_ai`), so an AI tag can never overwrite user intent.
 
-- Every `tags_ai` entry carries `model_id` and `model_version` ([](/design/ai/#embedding-provenance)). When the canonical model changes, old tags are stale; cross-model comparison is forbidden ([client-side invariants](/design/threat-model/validation/#client-side-validation-invariants)).
+- Every `tags_ai` entry carries `model_id` and `model_version` ([](/design/ai/#embedding-provenance)). When the canonical model changes, old tags are stale; cross-model comparison is forbidden ([](/design/threat-model/validation/#client-side-validation-invariants)).
 - **Promote**: an explicit, signed user action, never automatic, copies the entry to `tags_user` with a fresh `add_id`.
 - **Dismiss**: an OR-set remove on `tags_ai` by the original `add_id`.
 
@@ -222,13 +222,13 @@ Any future ML field overlaying a user-editable one (face labels, location guesse
 
 ## Geolocation
 
-GPS is stored in the datum the source supplied ([`gps.datum`](#closed-enum-value-sets)): WGS-84 by default, or GCJ-02 for coordinates from Chinese maps. BD-09 exists only at the input edge. Datum conversion for display or search is deterministic and client-side, with GCJ-02 → WGS-84 marked approximate; display-side conversion is unscheduled. Map-provider choice is a client concern. A user's location edit lands in `gps_user` beside the imported fix ([](#as-imported-and-user-values)), stored verbatim in the datum the user entered it in.
+GPS is stored in the datum the source supplied (`gps.datum`, [](#closed-enum-value-sets)): WGS-84 by default, or GCJ-02 for coordinates from Chinese maps. BD-09 exists only at the input edge. Datum conversion for display or search is deterministic and client-side, with GCJ-02 → WGS-84 marked approximate; display-side conversion is unscheduled. Map-provider choice is a client concern. A user's location edit lands in `gps_user` beside the imported fix ([](#as-imported-and-user-values)), stored verbatim in the datum the user entered it in.
 
 ## Failure Modes
 
 | Failure | Detected / contained by | Recovery |
 | --- | --- | --- |
-| CBOR non-determinism | [Canonical encoding](#canonical-cbor-encoding) | Byte-identical re-encode |
+| CBOR non-determinism | [](#canonical-cbor-encoding) | Byte-identical re-encode |
 | Old client strips unknown sidecar fields | Signature covers all bytes; writes above the client's max `sidecar_schema` refused | Quarantine |
 
 ## Validation

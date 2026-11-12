@@ -8,7 +8,7 @@ The adapter is `capsule-library::import::camera`. Cameras expose storage over **
 
 ## The Camera Is a Source Adapter
 
-A camera is an import source adapter on the same contract as the filesystem scanner and the [third-party importers](/design/import/pipeline/#third-party-importers). It feeds [Scan & Extract](/design/import/pipeline/#scan--extract), leaves planning, execution and [upload](/design/transfer/upload/) unchanged, and adds no pipeline stage and no server surface.
+A camera is an import source adapter on the same contract as the filesystem scanner and the third-party importers ([](/design/import/pipeline/#third-party-importers)). It feeds [](/design/import/pipeline/#scan--extract), leaves planning, execution and upload ([](/design/transfer/upload/)) unchanged, and adds no pipeline stage and no server surface.
 
 The adapter first copies every object into a client-local staging root, then hands that root to Scan & Extract exactly as a card reader's files would be, so the scanner's grouping (RAW+JPEG stacks) applies unchanged. Staged objects keep the camera's file names under one directory per camera folder, and a name invalid on any supported platform is repaired rather than trusted. Objects still arriving live outside the scanned tree.
 
@@ -16,11 +16,11 @@ The adapter first copies every object into a client-local staging root, then han
 
 - **Deterministic enumeration** by storage id, then object handle, then capture date, so the planner stays deterministic.
 - **Dedup by content, not source.** The planner's content-hash dedup prevents re-import; the adapter keeps no "seen" state.
-- **Integrity.** PTP/IP carries no checksum and TCP is transport-grade only. Every object is hashed on receipt, its staged bytes are read back and must re-hash to that digest, and a byte count other than the camera's declared size fails the object. The staged file that matched is the one the planner hashes and the [manifest](/design/cryptography/provenance/#asset-manifest) commits to, so corruption fails at import, before signing.
+- **Integrity.** PTP/IP carries no checksum and TCP is transport-grade only. Every object is hashed on receipt, its staged bytes are read back and must re-hash to that digest, and a byte count other than the camera's declared size fails the object. The staged file that matched is the one the planner hashes and the manifest ([](/design/cryptography/provenance/#asset-manifest)) commits to, so corruption fails at import, before signing.
 - **Resumable per object**, with partial-object transfer where the camera supports it. A partial file is continued only for the same object (handle, folder, name, size and capture date), since PTP promises handles only within a session, and only from a prefix that was synced to disk and still hashes to the digest recorded then.
 - **Never fetched twice.** An object already staged is not fetched again. "Already staged" means the identity recorded beside the staged file (folder, name, size and capture date) is this object's, so a different object reusing a staged path (a reformatted card restarts its file counter) is received beside it and never overwrites it.
 - **Nothing dropped silently.** An object the camera refuses or whose record cannot be read, and a storage the camera will not list (an empty or unavailable card slot), are reported and the run continues. A lost connection or a failing local disk ends the run and keeps what was staged for the next one.
-- **Read-only.** The adapter never mutates camera storage. Any future delete-after-import MUST pass [Verify Before Destroy](/design/transfer/durability/#verify-before-destroy).
+- **Read-only.** The adapter never mutates camera storage. Any future delete-after-import MUST pass the verify-before-destroy gate ([](/design/transfer/durability/#verify-before-destroy)).
 - **Discovery** via mDNS (`_ptp._tcp`) or manual IP; pairing state is client-local config.
 
 ## Pairing and the Session

@@ -121,7 +121,7 @@ struct PortBackedCullPortTests {
         try await port.moveToTrash(ids)
         let trashed = try await mock.library.assets(for: ids)
         #expect(trashed.map(\.id) == ids)
-        #expect(trashed.allSatisfy(\.isDeleted))
+        #expect(trashed.allSatisfy { $0.isDeleted })
     }
 
     @Test("the mock lane composes the port-backed pass")

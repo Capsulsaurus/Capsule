@@ -465,7 +465,7 @@ fn the_upload_source_ceilings_hold_their_stated_hostile_accounts() {
 /// `StoreError::Rejected { store: COUNTER_STORE, .. }`. Today that is safe by construction:
 /// `InMemoryCounters::hit`'s only error path *is* the ceiling, so no route can misclassify. It
 /// stops being safe by construction the moment a second `CounterStore` exists — `COUNTER_STORE`
-/// is `pub`, and a Valkey adapter (#460) that refuses under that same store name for an
+/// is `pub`, and a durable adapter that refuses under that same store name for an
 /// unrelated reason would have a genuine outage rendered `429 error.*_at_capacity`. That tells a
 /// caller to retry a store that is down and tells an operator nothing is wrong, which is a worse
 /// failure than the `500`-for-everything this round replaced.

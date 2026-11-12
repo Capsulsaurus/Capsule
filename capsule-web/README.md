@@ -48,11 +48,17 @@ Until then this path works and is tested; it is not dead code.
 `package.json` cannot hold comments, so the rationale for its pins lives here.
 
 - **Framework:** React 19 + Rsbuild. **Routing / data:** TanStack Router and TanStack Query.
-- **Styling:** Tailwind v4, class-based dark mode. **Validation:** zod.
+- **Styling:** Tailwind v4, class-based dark mode. **Fonts:** Geist, loaded from Google Fonts
+  (`src/index.css`) until it is self-hosted as the visual language plans; no font package.
+- **Validation:** none; no schema library is in the tree.
 - **Datetime:** none; native `Intl` / `Date`. Justify one here before adding it.
 - **LQIP decode:** none in JavaScript. Decoding goes through `capsule-wasm`; no `thumbhash`
   package (`rg thumbhash capsule-web` stays empty).
 - **i18n runtime:** FormatJS over the generated catalogs.
+- **Layout direction:** `@radix-ui/react-direction`, already in the tree under every Radix
+  menu and tabs primitive, pinned directly so `LocaleSettingsProvider` can hand Radix the
+  language's direction. Radix reads it from context, not from `<html dir>`; without it
+  submenus open to the right and arrow keys run backwards under Arabic.
 - **Guest share crypto:** `capsule-wasm` (`mise run build-wasm`), generated and never committed.
 - **Lint / format:** Biome. **Runtime, package manager and test runner:** bun.
 

@@ -38,14 +38,18 @@
 //! - `000030` (#1171): `quota_pulled_holdings` and `quota_usage.pulled`, the quota ledger's
 //!   per-account pulled total, kept by triggers on the subscriptions, the pulled metadata blobs
 //!   and the attributions, and backfilled from them.
+//! - `000031` (ADR-0015): the state Valkey held — `auth_sessions`, `upload_sessions`, the
+//!   ceremony tables, `rate_counters` and the federation pull schedule — each row carrying its
+//!   own `expires_at`.
+//! - `000032`: `000030`'s maintenance triggers and functions are dropped; the writers keep the
+//!   pulled total themselves (`capsule_server::quota::pulled_total`). The re-key guards stay.
 //!
 //! # Every instant is a `BIGINT` of microseconds since the Unix epoch
 //!
 //! Not `TIMESTAMPTZ`. Binding one needs sea-orm's `with-chrono` or `with-time`, and both are
-//! refused: `chrono` is banned outside `capsule-cli/entity` by a gate
-//! (`cargo xtask architecture-check`), and `time` would be a third datetime crate beside `jiff`
-//! and the CLI entity's `chrono`. `capsule_server::postgres::time` converts at the adapter boundary, exactly as the
-//! CLI converts at its entity boundary. What that costs is SQL date arithmetic; every expiry
+//! refused: `chrono` is banned by a gate (`cargo xtask architecture-check`), and `time` would be
+//! a second datetime crate beside `jiff`. `capsule_server::postgres::time` converts at the adapter
+//! boundary. What that costs is SQL date arithmetic; every expiry
 //! and retention comparison in these tables is an ordering on one column, and integers order
 //! identically.
 
@@ -131,6 +135,8 @@ migrations![
     m20260902_000028_federation_pulled_albums,
     m20260902_000029_federation_rejected_hashes,
     m20260902_000030_quota_pulled_holdings,
+    m20260902_000031_volatile_state,
+    m20260902_000032_quota_pulled_total_in_writers,
 ];
 
 /// The content checksum of one migration's source: lowercase hex SHA-256.

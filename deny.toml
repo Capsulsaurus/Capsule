@@ -128,6 +128,22 @@ ignore = [
     # latest release, still depends on it, so no uniffi upgrade drops it. It parses only
     # askama's build-time configuration. Remove when askama_derive replaces basic-toml, in #720.
     { id = "RUSTSEC-2026-0374", reason = "basic-toml (unmaintained) via askama_derive (latest 0.16.1) via uniffi_bindgen; compile-time only; tracked in #720" },
+
+    # libsqlite3-sys 0.30.1 bundles SQLite before 3.54.0 (CVE-2026-119375): a database opened
+    # with a crafted `-wal` of another page size can return stale page-cache memory. It comes
+    # from the workspace's one SQLite driver, rusqlite 0.32 (`bundled`), in capsule-library,
+    # capsule-core-ffi and capsule-cli; the fix, libsqlite3-sys 0.39, ships with rusqlite 0.41.
+    # Nothing else links `sqlite3` any more (the CLI left sea-orm's sqlx-sqlite), so the bump
+    # resolves; it is an API migration of its own. The only databases Capsule opens are its own
+    # library index and the CLI's state database, both under paths it creates. Remove this entry
+    # in #1232, with the rusqlite 0.41 bump.
+    { id = "RUSTSEC-2026-0459", reason = "libsqlite3-sys 0.30.1 via rusqlite 0.32; the fix ships with rusqlite 0.41, now unblocked (no sqlx-sqlite in the graph); tracked in #1232" },
+
+    # Unmaintained, no vulnerability. astral-tokio-tar 0.6.4 is reached only through
+    # testcontainers 0.27.3 (testcontainers-modules 0.15.0), dev-dependencies of capsule-server
+    # and capsule-e2e that start the test containers. testcontainers 0.28.0, the latest release,
+    # still requires it. Remove this entry in #1233, once testcontainers drops it.
+    { id = "RUSTSEC-2026-0440", reason = "astral-tokio-tar (unmaintained) via testcontainers 0.27.3 (0.28.0 latest still requires it); dev-dependency only; tracked in #1233" },
 ]
 
 [bans]

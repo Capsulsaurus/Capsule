@@ -15,11 +15,12 @@
 //! # One container per test, and why that is the right trade here
 //!
 //! nextest runs a process per test, so a `OnceCell` shared between cases would buy nothing —
-//! each process would fill its own. Rather than pretend otherwise, each port contributes
-//! exactly **one** container-backed test that runs its whole suite in one [`run_all`]-style
-//! pass, which is what `index/conformance.rs` said a Postgres smoke test should be. Five
-//! containers per run, serialized by the `containers` nextest group (`.config/nextest.toml`),
-//! is a few seconds; thirty would not be.
+//! each process would fill its own. Rather than pretend otherwise, most ports contribute one
+//! container-backed test that runs their whole suite in one [`run_all`]-style pass, which is
+//! what `index/conformance.rs` said a Postgres smoke test should be; a few (boot, the index, the
+//! migration checks in `postgres/tests.rs`) add targeted cases. The count therefore grows with
+//! the ports, and every one of those containers is serialized by the `containers` nextest group
+//! (`.config/nextest.toml`).
 //!
 //! A fresh container per test also removes the isolation problem entirely: no schema
 //! namespacing, no truncation between cases, and no case that passes because a previous one

@@ -10,33 +10,33 @@ Any server may meet any client: an app months older than its server, a server ol
 
 Every client and server implementation, of any version, MUST uphold these. Together they make the worst outcome of any version mismatch a refused write, never lost or corrupted data.
 
-1. **Bytes are immutable and content-addressed.** A blob is named by the hash of its bytes and never changes, so its identity does not depend on any protocol version ([Transfer](/design/transfer/#invariants)).
-2. **Every signed record leads with its version, and unknown fields survive.** A record's schema version is decoded before anything else. Fields a reader does not know are kept verbatim, re-emitted canonically and covered by the signature, so stripping one fails verification ([Schema Rules](/design/threat-model/schema-rules/#schema-evolution-and-field-grammar)).
+1. **Bytes are immutable and content-addressed.** A blob is named by the hash of its bytes and never changes, so its identity does not depend on any protocol version ([](/design/transfer/#invariants)).
+2. **Every signed record leads with its version, and unknown fields survive.** A record's schema version is decoded before anything else. Fields a reader does not know are kept verbatim, re-emitted canonically and covered by the signature, so stripping one fails verification ([](/design/threat-model/schema-rules/#schema-evolution-and-field-grammar)).
 3. **Never write what you do not understand.** A component that meets a record version, enum value, `crypto_suite_id` or `sidecar_schema` above what it implements may read and store it verbatim, but MUST NOT modify, re-sign or re-encode it. Reads of any version it does understand stay supported forever.
 4. **The server never rewrites client-signed data.** It stores and serves signed manifests and sealed blobs byte for byte. Data leaves the server only through a signed lifecycle action followed by garbage collection after a grace window.
 5. **A client never discards data to resolve a mismatch.** An entry it cannot apply is quarantined, a write it cannot send is queued, and a catalog newer than the binary is refused and left untouched. Each resumes after the user updates.
 6. **Concurrent edits converge deterministically.** Metadata merges by CRDT ([](/design/metadata/)); album membership and moves are ordered by MLS commit order. No merge depends on wall-clock agreement between devices or on which side is newer.
-7. **Local originals are released only on server custody**: a durable verdict, a signed custody receipt and a matching read-back hash ([Durability](/design/transfer/durability/#verify-before-destroy)). A copy on another device, including a [delegate](/design/peering/#delegation), is never custody.
+7. **Local originals are released only on server custody**: a durable verdict, a signed custody receipt and a matching read-back hash ([](/design/transfer/durability/#verify-before-destroy)). A copy on another device, including a delegate ([](/design/peering/#delegation)), is never custody.
 8. **One protocol version per binary.** A client sends the same `protocol_version` on every request it makes.
-9. **Evolution is additive.** New fields are optional and absent from the wire until set; new behaviour is a new `protocol_version`. A change no window can span goes through the [album upgrade ceremony](#album-upgrade-ceremony), never an in-place rewrite.
+9. **Evolution is additive.** New fields are optional and absent from the wire until set; new behaviour is a new `protocol_version`. A change no window can span goes through the album upgrade ceremony ([](#album-upgrade-ceremony)), never an in-place rewrite.
 
 ## Version Identifiers
 
 | Identifier | Carried on | Owner |
 | --- | --- | --- |
-| `protocol_version` (`YYYY-MM-DD`) | every request, every album pin | [Validation — Universal Headers](/design/threat-model/validation/#universal-headers) |
-| `crypto_suite_id` | every manifest and metadata blob | [Primitives](/design/cryptography/primitives/#versioning-identifiers) |
-| `sidecar_schema` | every sidecar, key 0 | [Metadata](/design/metadata/#schema-versioning-rules) |
-| provenance record version | every provenance record, leading field | [Provenance](/design/cryptography/provenance/) |
-| client build (semver) | `X-Capsule-Min-Client-Build` floor in every response | [Validation — Universal Headers](/design/threat-model/validation/#universal-headers) |
-| catalog `PRAGMA user_version` | the client's SQLite catalog | [below](#client-catalog-migration) |
-| server schema migrations | PostgreSQL `seaql_migrations` | [Filesystem — Server](/design/filesystem/server/) |
+| `protocol_version` (`YYYY-MM-DD`) | every request, every album pin | [](/design/threat-model/validation/#universal-headers) |
+| `crypto_suite_id` | every manifest and metadata blob | [](/design/cryptography/primitives/#versioning-identifiers) |
+| `sidecar_schema` | every sidecar, key 0 | [](/design/metadata/#schema-versioning-rules) |
+| provenance record version | every provenance record, leading field | [](/design/cryptography/provenance/) |
+| client build (semver) | `X-Capsule-Min-Client-Build` floor in every response | [](/design/threat-model/validation/#universal-headers) |
+| catalog `PRAGMA user_version` | the client's SQLite catalog | [](#client-catalog-migration) |
+| server schema migrations | PostgreSQL `seaql_migrations` | [](/design/filesystem/server/) |
 
 ## Update Policy
 
-**Servers update first.** A server release accepts a closed window `[Min, Max]` of `protocol_version` values and advertises it on every response. The window MUST include every version spoken by an app release still inside its support period, so a staggered app rollout never strands a user. A version leaves the window only through the [deprecation policy](/design/threat-model/schema-rules/#min-supported-client-deprecation-policy): announced ahead, after which writes from it are refused with `426` and reads keep working.
+**Servers update first.** A server release accepts a closed window `[Min, Max]` of `protocol_version` values and advertises it on every response. The window MUST include every version spoken by an app release still inside its support period, so a staggered app rollout never strands a user. A version leaves the window only through the deprecation policy ([](/design/threat-model/schema-rules/#min-supported-client-deprecation-policy)): announced ahead, after which writes from it are refused with `426` and reads keep working.
 
-**Apps stay lenient.** A native app must work against any server whose window contains its version, and treats every unknown response field as preserved data, not an error. It refuses to write, and tells the user to update, when the server answers `426` or advertises a minimum client build above its own. The [web client](/design/clients/) is the one exception: it is served by its own server and assumes that server's exact version.
+**Apps stay lenient.** A native app must work against any server whose window contains its version, and treats every unknown response field as preserved data, not an error. It refuses to write, and tells the user to update, when the server answers `426` or advertises a minimum client build above its own. The web client ([](/design/clients/)) is the one exception: it is served by its own server and assumes that server's exact version.
 
 **Server upgrades are forward-only.** Migrations run before `serve` (which refuses an unmigrated schema), never downgrade, and are preceded by a backup. A failed migration means restoring the backup, never rolling back and continuing.
 
@@ -48,9 +48,11 @@ The client catalog is the library as the user experiences it, so it carries the 
 
 A catalog stamped **above** the binary's version is refused with an error naming both versions and left byte-for-byte untouched (invariant 5). An older binary writing to it would fill columns it does not know are authoritative; refusing costs the user an update.
 
+The CLI's own database, `capsule.sqlite` (the sync store and peering's directory floor and tombstones), follows the same rule with its own `user_version` migrator. A copy written by an earlier sea-orm build is adopted in place, in one transaction, and one listing a migration this build does not know is refused untouched rather than recreated, so peering state is never discarded.
+
 ## Album Protocol Version Pinning
 
-Each album declares a `protocol_version` at creation, immutable for its lifetime, and every event in it must conform. A faulty implementation of a newer version can therefore only corrupt albums of that version, which matters most under [federation](/design/federation/).
+Each album declares a `protocol_version` at creation, immutable for its lifetime, and every event in it must conform. A faulty implementation of a newer version can therefore only corrupt albums of that version, which matters most under [](/design/federation/).
 
 - A client below the server's `Min` cannot write to any album.
 - A client below an album's pin cannot write to that album, even if the server still accepts its version elsewhere.
@@ -81,7 +83,7 @@ stateDiagram-v2
 6. **Replay.** Each member re-encodes its queued writes for `to_version` and replays them.
 7. **Resume.** A client that crashed mid-ceremony reads its local pending state and the album's phase from the server and continues from there.
 
-The server does only what clients cannot do themselves: verifying the proposer against the account's [device directory](/design/cryptography/keys/#device-directory), the expiry clock, the write filter and the drain count ([upgrade routes](/reference/api/albums/)). It never judges `frozen_state_hash`, which is each member's independent statement about its own view.
+The server does only what clients cannot do themselves: verifying the proposer against the account's device directory ([](/design/cryptography/keys/#device-directory)), the expiry clock, the write filter and the drain count (upgrade routes in [](/reference/api/albums/)). It never judges `frozen_state_hash`, which is each member's independent statement about its own view.
 
 ## Validation
 

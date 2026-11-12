@@ -305,23 +305,39 @@ fn every_fault_is_reported_in_one_pass() {
     let error =
         Config::load(&environment, &Overrides::default(), Demands::Serve).expect_err("it refuses");
     assert!(error.names("DATABASE_URL"), "{error}");
-    assert!(error.names("VALKEY_URL"), "{error}");
     assert!(error.names("ATTESTATION_KEY_SEED"), "{error}");
 }
 
 #[test]
-fn serving_without_valkey_and_without_the_memory_profile_is_refused_by_name() {
-    // `store/mod.rs` documents this refusal, and boot enforces it.
+fn valkey_is_neither_demanded_nor_read() {
+    // Valkey is retired (ADR-0015): a durable serve is refused for the database it lacks and
+    // never for a Valkey, and a leftover `VALKEY_URL` is ignored rather than refused.
     let error =
         Config::load(&serveable(), &Overrides::default(), Demands::Serve).expect_err("it refuses");
-    assert!(error.names("VALKEY_URL"), "{error}");
+    assert!(error.names("DATABASE_URL"), "{error}");
+    assert!(!error.names("VALKEY_URL"), "{error}");
+
+    let mut environment = serveable();
+    environment.insert(
+        "DATABASE_URL".to_owned(),
+        "postgres://db/capsule".to_owned(),
+    );
+    environment.insert("VALKEY_URL".to_owned(), "redis://cache:6379".to_owned());
+    environment.insert(
+        "ATTESTATION_KEY_SEED".to_owned(),
+        base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            [9_u8; 64].as_slice(),
+        ),
+    );
+    Config::load(&environment, &Overrides::default(), Demands::Serve)
+        .expect("a leftover VALKEY_URL is ignored");
 }
 
 #[test]
-fn a_durable_store_is_demanded_whole_and_in_the_order_it_is_opened() {
+fn a_durable_store_is_demanded_by_every_subcommand_that_opens_one() {
     // Every subcommand that opens the durable stores is refused here, by the aggregating
-    // front door and with its exit code, naming both URLs at once: the database first,
-    // because it is the first store opened.
+    // front door and with its exit code, naming the one URL they are all on.
     let maintenance = env(&[("BLOB_ROOT", "/blobs")]);
     for (environment, demands) in [
         (serveable(), Demands::Serve),
@@ -337,24 +353,10 @@ fn a_durable_store_is_demanded_whole_and_in_the_order_it_is_opened() {
                 _ => None,
             })
             .collect();
-        assert_eq!(
-            missing,
-            ["DATABASE_URL", "VALKEY_URL"],
-            "{demands:?}: {error}"
-        );
-
-        let mut with_database = environment.clone();
-        with_database.insert(
-            "DATABASE_URL".to_owned(),
-            "postgres://db/capsule".to_owned(),
-        );
-        let error =
-            Config::load(&with_database, &Overrides::default(), demands).expect_err("it refuses");
-        assert!(!error.names("DATABASE_URL"), "{demands:?}: {error}");
-        assert!(error.names("VALKEY_URL"), "{demands:?}: {error}");
+        assert_eq!(missing, ["DATABASE_URL"], "{demands:?}: {error}");
     }
 
-    // `--memory` reads neither.
+    // `--memory` reads none.
     Config::load(&maintenance, &memory(), Demands::Maintenance).expect("it loads");
     Config::load(&serveable(), &memory(), Demands::Serve).expect("it loads");
 }
@@ -362,12 +364,12 @@ fn a_durable_store_is_demanded_whole_and_in_the_order_it_is_opened() {
 #[test]
 fn the_memory_profile_is_not_reachable_from_the_environment() {
     // Only `--memory` selects it (#521): the retired variable is ignored, so a serve that
-    // names it and not the flag is the durable one, refused for the Valkey it lacks.
+    // names it and not the flag is the durable one, refused for the database it lacks.
     let mut environment = serveable();
     environment.insert("CAPSULE_PROFILE".to_owned(), "memory".to_owned());
     let error =
         Config::load(&environment, &Overrides::default(), Demands::Serve).expect_err("it refuses");
-    assert!(error.names("VALKEY_URL"), "{error}");
+    assert!(error.names("DATABASE_URL"), "{error}");
 
     let config =
         Config::load(&environment, &Overrides::default(), Demands::Nothing).expect("it loads");
@@ -382,7 +384,6 @@ fn maintenance_needs_a_blob_root_and_no_key_material() {
         &env(&[
             ("BLOB_ROOT", "/blobs"),
             ("DATABASE_URL", "postgres://127.0.0.1:5432/capsule"),
-            ("VALKEY_URL", "redis://127.0.0.1:6379"),
         ]),
         &Overrides::default(),
         Demands::Maintenance,
@@ -416,7 +417,6 @@ fn a_durable_serve_must_be_given_an_attestation_seed() {
         ("BLOB_ROOT", "/blobs"),
         ("JWT_ED25519_DER", EXAMPLE_DER),
         ("DATABASE_URL", "postgres://127.0.0.1:5432/capsule"),
-        ("VALKEY_URL", "redis://127.0.0.1:6379"),
     ]);
     let error =
         Config::load(&environment, &Overrides::default(), Demands::Serve).expect_err("it refuses");
@@ -1020,10 +1020,6 @@ fn a_secret_is_not_printed_by_debug() {
         "postgres://capsule:pg-hunter2@db.internal:5432/capsule?password=pg-query-secret"
             .to_owned(),
     );
-    environment.insert(
-        "VALKEY_URL".to_owned(),
-        "rediss://default:vk-hunter2@cache.internal:6380/0".to_owned(),
-    );
     let attestation_seed = [0x5a_u8; 32];
     environment.insert(
         "ATTESTATION_KEY_SEED".to_owned(),
@@ -1035,13 +1031,7 @@ fn a_secret_is_not_printed_by_debug() {
     for rendered in [format!("{config:?}"), format!("{config:#?}")] {
         assert!(rendered.contains("<redacted>"), "{rendered}");
         assert!(!rendered.contains("MC4CAQAwBQYDK2Vw"), "{rendered}");
-        for secret in [
-            "pg-hunter2",
-            "pg-query-secret",
-            "vk-hunter2",
-            "capsule:",
-            "default:",
-        ] {
+        for secret in ["pg-hunter2", "pg-query-secret", "capsule:"] {
             assert!(!rendered.contains(secret), "{secret} leaked: {rendered}");
         }
         // The fixed-size keys print as byte lists under a derived `Debug`.
@@ -1050,7 +1040,6 @@ fn a_secret_is_not_printed_by_debug() {
         }
         // What an operator needs to see which service was reached survives.
         assert!(rendered.contains("db.internal:5432/capsule"), "{rendered}");
-        assert!(rendered.contains("cache.internal:6380/0"), "{rendered}");
     }
 }
 

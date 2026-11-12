@@ -45,6 +45,7 @@ use crate::federation::capability::Scope;
 use crate::federation::pull::JobKey;
 use crate::postgres::error::Port;
 use crate::postgres::time::{from_micros, to_micros};
+use crate::quota::pulled_total::{self, Change};
 use crate::store::{AlbumId, StoreError, StoreFuture, UserId};
 
 /// Which port is speaking, for every error the adapter raises.
@@ -222,6 +223,20 @@ async fn put_on<C: ConnectionTrait>(
             .try_get("", "inserted")
             .map_err(SUBSCRIPTIONS.failing("recording a subscription"))?;
         let stored = subscription_from(&row)?;
+        if inserted {
+            // A new subscription holds its job's pulled blobs for its subscriber, in the same
+            // transaction as the row (design/quota.md, the pulled total).
+            pulled_total::subscriptions_changed(
+                connection,
+                &[(
+                    stored.subscriber.as_str().to_owned(),
+                    stored.peer.as_str().to_owned(),
+                    stored.album.as_str().to_owned(),
+                )],
+                Change::Added,
+            )
+            .await?;
+        }
         return Ok(if inserted {
             PutOutcome::Created(stored)
         } else {
@@ -263,7 +278,21 @@ async fn held_on<C: ConnectionTrait>(
 
 impl SubscriptionStore for PostgresSubscriptions {
     fn put(&self, subscription: Subscription) -> StoreFuture<'_, PutOutcome> {
-        Box::pin(async move { put_on(&self.connection, subscription).await })
+        Box::pin(async move {
+            // A transaction even uncapped: a new row and the pulled total it moves are one
+            // change, and a crash between them would leave the total wrong.
+            let transaction = self
+                .connection
+                .begin()
+                .await
+                .map_err(SUBSCRIPTIONS.failing("opening a subscription write"))?;
+            let outcome = put_on(&transaction, subscription).await?;
+            transaction
+                .commit()
+                .await
+                .map_err(SUBSCRIPTIONS.failing("committing a subscription"))?;
+            Ok(outcome)
+        })
     }
 
     fn put_within(
@@ -353,8 +382,12 @@ impl SubscriptionStore for PostgresSubscriptions {
         album: &'a AlbumId,
     ) -> StoreFuture<'a, bool> {
         Box::pin(async move {
-            let deleted = self
+            let transaction = self
                 .connection
+                .begin()
+                .await
+                .map_err(SUBSCRIPTIONS.failing("opening a subscription removal"))?;
+            let deleted = transaction
                 .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "DELETE FROM federation_subscriptions \
@@ -367,7 +400,25 @@ impl SubscriptionStore for PostgresSubscriptions {
                 ))
                 .await
                 .map_err(SUBSCRIPTIONS.failing("removing a subscription"))?;
-            Ok(deleted.rows_affected() > 0)
+            let removed = deleted.rows_affected() > 0;
+            if removed {
+                // The subscriber stops holding the job's pulled blobs in the same transaction.
+                pulled_total::subscriptions_changed(
+                    &transaction,
+                    &[(
+                        subscriber.as_str().to_owned(),
+                        peer.as_str().to_owned(),
+                        album.as_str().to_owned(),
+                    )],
+                    Change::Removed,
+                )
+                .await?;
+            }
+            transaction
+                .commit()
+                .await
+                .map_err(SUBSCRIPTIONS.failing("committing a subscription removal"))?;
+            Ok(removed)
         })
     }
 

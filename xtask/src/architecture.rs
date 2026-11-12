@@ -40,21 +40,10 @@ const RETIRED_DEPENDENCIES: &[&str] = &[
 // only options for a not-yet-wired pin are "delete it" or "leave the tree carrying a
 // declaration nothing can verify" — which is how `testcontainers` came to be cited by nine
 // design docs as proof of a smoke tier that has never run.
-const PLANNED_WORKSPACE_DEPENDENCIES: &[(&str, &str)] = &[
-    (
-        "bb8",
-        "Valkey adapter pooling for the two typed state ports (.claude/rules/capsule-server.md)",
-    ),
-    (
-        "bb8-redis",
-        "Valkey adapter pooling for the two typed state ports (.claude/rules/capsule-server.md)",
-    ),
-    (
-        "redis",
-        "the `redis-rs` Valkey adapters .claude/rules/capsule-server.md requires for \
-         AuthStateStore/UploadSessionStore",
-    ),
-];
+// Empty: the Valkey adapters' `bb8`/`bb8-redis` pins never gained a consumer (one multiplexed
+// `ConnectionManager` replaced a pool) and `redis` graduated into `capsule-server`'s manifest
+// before Valkey itself was retired (ADR-0015).
+const PLANNED_WORKSPACE_DEPENDENCIES: &[(&str, &str)] = &[];
 
 // Lock-graph edges into a retired crate that are not the decision the retirement records, each
 // with its reason. `prost`/`tonic` are retired as **Capsule's public surface** (no gRPC; see
@@ -503,15 +492,15 @@ fn member_dependency_names(root: &Path) -> Result<BTreeSet<String>> {
 
 /// `capsule-server` must not be on the `chrono` path.
 ///
-/// `cargo tree -i chrono -e no-dev` is a review-blocking gate: chrono exists in this workspace
-/// only as the sea-orm column type inside `capsule-cli/entity`, and the server's own datetime
-/// crate is `jiff`. #402 puts sea-orm into `capsule-server` for the
+/// `cargo tree -i chrono -e no-dev` is a review-blocking gate: chrono reaches this workspace only
+/// through `sea-orm-migration`'s defaults in `capsule-server-migration`, and the workspace's
+/// datetime crate is `jiff`. #402 puts sea-orm into `capsule-server` for the
 /// Postgres adapters, which makes that gate worth *enforcing* rather than reading.
 ///
 /// The check is deliberately **per package** rather than a grep of the workspace-wide tree.
-/// `capsule-cli` inherits sea-orm with its default features, `with-chrono` among them, and
-/// cargo unifies features across the packages a workspace build selects — so the workspace-wide
-/// `cargo tree` output lists `capsule-server` under sea-orm and always will, whatever this crate
+/// `capsule-server-migration` pulls sea-orm with its default features, `with-chrono` among them,
+/// and cargo unifies features across the packages a workspace build selects — so the
+/// workspace-wide `cargo tree` output can list `capsule-server` under sea-orm whatever this crate
 /// declares. What is actually decidable, and what the rule is about, is whether *this package's
 /// own manifest* asks for chrono: `cargo tree -p capsule-server -i chrono -e no-dev` must print
 /// nothing. That is what `default-features = false` on the server's sea-orm entry buys, and this
@@ -576,7 +565,7 @@ fn check_chrono_isolation(root: &Path, violations: &mut Vec<String>) -> Result<(
         if reaches_chrono && !expected {
             violations.push(format!(
                 "`{package}` reaches `chrono` through its own manifest; the workspace \
-                 permits chrono only as the sea-orm column type in `capsule-cli/entity` and in \
+                 permits chrono only through `sea-orm-migration` in \
                  `capsule-server-migration`. Check that sea-orm is declared with \
                  `default-features = false`"
             ));

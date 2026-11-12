@@ -22,10 +22,9 @@
 //!
 //! One application composed from cohesive internal modules — not separate public transports or
 //! microservices; each behaviour module is owned by its namesake design doc. Authentication
-//! state and upload-session state stay behind separate Capsule-owned ports whose adapters are Valkey and a
-//! deterministic in-memory double — **not** Postgres, which design/filesystem/server.md rejects
-//! for a session table — while the durable records go to Postgres. No generic CAS, transfer or
-//! TTL abstraction is planned.
+//! state and upload-session state stay behind separate Capsule-owned ports, each with a
+//! Postgres adapter and a deterministic in-memory double; every durable port is on Postgres too
+//! (ADR-0015). No generic CAS, transfer or TTL abstraction is planned.
 //!
 //! Each module owns one port and, where it has one, the surface over it. [`routes`](mod@routes) is the only
 //! module that knows about HTTP: everything under it — [`activity`], [`album`], [`directory`], [`discovery`],
@@ -53,9 +52,9 @@
 //! real adapter is written *against*, and a port with two implementations before it has one
 //! suite is a port whose two implementations will disagree.
 //!
-//! Every durable port now has the second implementation on Postgres (#402, #446) and every
-//! volatile one on Valkey (#403), each passing the same case list as its double — the two OIDC
-//! stores included since #460, so a durable boot that configures OIDC runs on them.
+//! Every port now has its second implementation on Postgres (#402, #446; the expiring-state
+//! ports since ADR-0015), each passing the same case list as its double — the two OIDC stores
+//! included, so a durable boot that configures OIDC runs on them.
 //!
 //! **The suite still runs without a container.** Every Postgres case is gated on
 //! `CAPSULE_TEST_POSTGRES=1` and prints one line naming itself when it is skipped, so

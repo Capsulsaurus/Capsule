@@ -139,7 +139,6 @@ export const LIBRARIES = [
         names: [],
         code: ['sqlite-vec'],
     },
-    { url: 'https://github.com/valkey-io/valkey', names: ['Valkey'] },
     {
         url: 'https://github.com/postgres/postgres',
         names: ['PostgreSQL', 'Postgres'],
@@ -300,7 +299,6 @@ export const LIBRARIES = [
         url: 'https://github.com/tailwindlabs/tailwindcss',
         names: ['Tailwind'],
     },
-    { url: 'https://github.com/colinhacks/zod', names: ['zod'] },
     { url: 'https://github.com/formatjs/formatjs', names: ['FormatJS'] },
     { url: 'https://github.com/shadcn-ui/ui', names: ['shadcn'] },
     // Media
@@ -337,7 +335,5 @@ export const EXPLICIT_ONLY = {
     subtle: 'an ordinary word, and the `subtle` crate',
     tracing: 'an ordinary word, and the `tracing` crate',
     uuid: 'the identifier format, and the `uuid` crate',
-    redis: 'the Redis protocol Valkey speaks, and the `redis` crate',
-    Redis: 'the Redis protocol Valkey speaks, and the `redis` crate',
     sqlite: 'the database, and the `sqlite` crate',
 };

@@ -41,6 +41,11 @@ android {
         }
     }
     buildTypes {
+        // Android's development pseudo-locales: `en-XA` (accented, expanded) and
+        // `ar-XB` (right to left), selectable in system settings on a debug build only.
+        getByName("debug") {
+            isPseudoLocalesEnabled = true
+        }
         getByName("release") {
             isMinifyEnabled = false
         }
@@ -53,6 +58,11 @@ android {
             matchingFallbacks += listOf("release")
             isDebuggable = false
         }
+    }
+    // Physical-direction layout is a lint error, not a warning (i18n contract, Layout);
+    // `i18n-guard` covers the Compose source, lint covers resources and the manifest.
+    lint {
+        error += setOf("RtlEnabled", "RtlHardcoded", "RtlSymmetry", "RtlCompat")
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -78,8 +88,9 @@ dependencies {
     implementation(libs.androidx.viewmodel.compose)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.koin.androidx.compose)
+    // Image loading for the scaffold screens. No network module: nothing loads a remote URL yet
+    // (`EmptyMuseumRepository`), so ktor would be dead weight; add a fetcher with real sources.
     implementation(libs.coil.compose)
-    implementation(libs.coil.network.ktor)
     // JankStats (field frame telemetry) and the trace sections the parity benchmark reads.
     implementation(libs.androidx.metrics.performance)
     implementation(libs.androidx.tracing.ktx)

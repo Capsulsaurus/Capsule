@@ -5,21 +5,12 @@ use capsule_core::crypto::keys::{AmkVersion, HybridSigningKey};
 use capsule_core::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
 use capsule_core::crypto::provenance::{ASSET_MANIFEST_VERSION, KeyMode, ManifestCore};
 use capsule_sdk::sync::{BlobManifest, FeedEntry};
-use entity::peering_tombstone;
-use migration::{Migrator, MigratorTrait};
-use sea_orm::{Database, DatabaseConnection};
 
 use super::*;
+use crate::db::test_support::{open as connect, synced_rows, tombstone_row, tombstone_rows};
 use crate::peering_state::load_tombstones;
 
-async fn connect(path: &std::path::Path) -> DatabaseConnection {
-    let url = format!("sqlite://{}?mode=rwc", path.display());
-    let db = Database::connect(&url).await.expect("connect sqlite");
-    Migrator::up(&db, None).await.expect("migrate");
-    db
-}
-
-async fn temp_db() -> (DatabaseConnection, std::path::PathBuf) {
+async fn temp_db() -> (LocalDb, std::path::PathBuf) {
     let path = std::env::temp_dir().join(format!(
         "capsule-cli-syncstore-{}.sqlite",
         nanoid::nanoid!()
@@ -72,7 +63,7 @@ fn delete(asset: Uuid, seq: u64, manifest_cbor: Vec<u8>, changed_at: &str) -> Fe
     }
 }
 
-fn retention_stored(rows: &[synced_asset::Model], asset: Uuid) -> Option<i64> {
+fn retention_stored(rows: &[SyncedAssetRow], asset: Uuid) -> Option<i64> {
     rows.iter()
         .find(|row| row.asset_id == encode_id(asset.as_bytes()))
         .expect("a row")
@@ -262,7 +253,7 @@ async fn a_delete_whose_window_has_closed_is_a_tombstone_after_a_restart() {
         BTreeSet::from([closed, by_text]),
         "only the deletes whose window has closed are purged"
     );
-    let rows = synced_asset::Entity::find().all(&db).await.unwrap();
+    let rows = synced_rows(&db).await;
     assert_eq!(
         retention_stored(&rows, open),
         Some(ts("2026-03-01T00:00:00Z").as_second())
@@ -290,7 +281,7 @@ async fn a_restore_inside_the_window_clears_the_deadline_and_leaves_no_tombstone
     );
     persist_page(&db, &restored).await.unwrap();
 
-    let rows = synced_asset::Entity::find().all(&db).await.unwrap();
+    let rows = synced_rows(&db).await;
     assert_eq!(retention_stored(&rows, asset), None);
     assert_eq!(
         record_elapsed_purges(&db, ts("2027-01-01T00:00:00Z"))
@@ -299,13 +290,7 @@ async fn a_restore_inside_the_window_clears_the_deadline_and_leaves_no_tombstone
         0,
         "a restored asset is out of the sweep however late it runs"
     );
-    assert!(
-        peering_tombstone::Entity::find()
-            .all(&db)
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    assert!(tombstone_rows(&db).await.is_empty());
     let _ = std::fs::remove_file(path);
 }
 
@@ -347,11 +332,7 @@ async fn a_restore_on_a_later_page_beats_a_deadline_passed_on_the_device_clock()
         0
     );
     assert!(
-        peering_tombstone::Entity::find()
-            .all(&db)
-            .await
-            .unwrap()
-            .is_empty(),
+        tombstone_rows(&db).await.is_empty(),
         "an on-time restore leaves no tombstone, however late the device comes back"
     );
     let _ = std::fs::remove_file(path);
@@ -398,7 +379,7 @@ async fn a_window_closes_at_its_deadline_and_not_before() {
         0,
         "a recorded purge leaves the sweep"
     );
-    let rows = synced_asset::Entity::find().all(&db).await.unwrap();
+    let rows = synced_rows(&db).await;
     assert_eq!(retention_stored(&rows, asset), None);
     assert_eq!(load_tombstones(&db).await.unwrap(), BTreeSet::from([asset]));
     let _ = std::fs::remove_file(path);
@@ -429,10 +410,8 @@ async fn the_sweep_judges_at_the_latest_server_clock_reading_in_the_page() {
     assert_eq!(at, ts("2026-03-01T00:00:00Z"));
     record_elapsed_purges(&db, at).await.unwrap();
     assert_eq!(load_tombstones(&db).await.unwrap(), BTreeSet::from([asset]));
-    let tombstone = peering_tombstone::Entity::find_by_id(asset.hyphenated().to_string())
-        .one(&db)
+    let tombstone = tombstone_row(&db, &asset.hyphenated().to_string())
         .await
-        .unwrap()
         .expect("a row");
     assert_eq!(
         tombstone.recorded_at,
@@ -492,13 +471,11 @@ async fn a_device_first_syncing_after_a_purge_records_its_tombstone() {
         BTreeSet::from([purged, by_text]),
         "the signal alone is evidence of a purge, whatever the device's clock says"
     );
-    let tombstone = peering_tombstone::Entity::find_by_id(purged.hyphenated().to_string())
-        .one(&db)
+    let tombstone = tombstone_row(&db, &purged.hyphenated().to_string())
         .await
-        .unwrap()
         .expect("a row");
     assert_eq!(tombstone.recorded_at, at.to_string());
-    let rows = synced_asset::Entity::find().all(&db).await.unwrap();
+    let rows = synced_rows(&db).await;
     assert!(rows.iter().all(|row| row.tombstoned));
     assert_eq!(
         retention_stored(&rows, purged),
@@ -580,7 +557,7 @@ async fn a_delete_served_without_a_manifest_stays_in_trash() {
         0
     );
     assert!(load_tombstones(&db).await.unwrap().is_empty());
-    let rows = synced_asset::Entity::find().all(&db).await.unwrap();
+    let rows = synced_rows(&db).await;
     assert!(rows[0].tombstoned, "the asset is in trash");
     assert_eq!(retention_stored(&rows, asset), None);
     let _ = std::fs::remove_file(path);
@@ -633,7 +610,7 @@ async fn a_delete_this_device_cannot_read_stays_in_trash() {
         load_tombstones(&db).await.unwrap().is_empty(),
         "a tombstone is permanent, so a delete with no readable deadline records none"
     );
-    let rows = synced_asset::Entity::find().all(&db).await.unwrap();
+    let rows = synced_rows(&db).await;
     assert!(
         rows.iter()
             .all(|row| row.tombstoned && row.retention_until.is_none())

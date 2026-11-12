@@ -79,6 +79,19 @@ jobs:
               - 'capsule-web/src/i18n/messages/**'
               - 'capsule-swift/Generated/**'
               - 'capsule-android/src/main/res/values*/strings.xml'
+              # `translate-readme-check` (also in `check-rust`) gates README.md's
+              # generated language regions and the translations derived from it,
+              # so a README-only edit must still pay the Rust gate.
+              - 'README*.md'
+              # `i18n-guard` scans these client sources for hard-coded literals and
+              # physical-direction layout, and the `rust` job is the only CI route to
+              # it, so a client-only change must pay the Rust gate. Same surfaces as
+              # hk.pkl's `i18n-guard` glob; keep the two in step.
+              - 'capsule-web/src/routes/**/*.tsx'
+              - 'capsule-web/src/components/**/*.tsx'
+              - 'capsule-swift/App/**/*.swift'
+              - 'capsule-swift/Modules/**/*.swift'
+              - 'capsule-android/src/**/*.kt'
               - '.github/workflows/ci.yml'
             web:
               - 'capsule-web/**'
@@ -279,7 +292,7 @@ jobs:
     # tests needed testcontainers (Docker), which is slower and flakier; that crate is now
     # review material. Every case this job runs uses a deterministic in-memory adapter, and
     # Kynos's `TestClient` drives a built service in-process; the container-gated cases skip
-    # here and run against real Postgres and Valkey containers in `rust-containers`. A gate
+    # here and run against a real Postgres container in `rust-containers`. A gate
     # that is allowed to fail is not a gate.
     #
     # Disk (#1193): the workspace's test binaries, plus the `ffi` and `http3` variants, filled a
@@ -341,11 +354,11 @@ jobs:
         if: always()
         run: df -h /
 
-  # The container tiers `rust-test` skips (#514). Every Postgres adapter conformance suite, the
-  # migration round trip, the durable boot arm and process cases, and the Valkey suite are gated
-  # on CAPSULE_TEST_POSTGRES / CAPSULE_TEST_VALKEY and pass as skipped without them — so before
-  # this job none of them had ever run in CI, and a broken adapter reported green. The task
-  # admits both tiers and fails on any skip line, so a runner that lost its container runtime
+  # The container tier `rust-test` skips (#514). Every Postgres adapter conformance suite, the
+  # migration round trip, and the durable boot arm and process cases are gated on
+  # CAPSULE_TEST_POSTGRES and pass as skipped without it — so before this job none of them had
+  # ever run in CI, and a broken adapter reported green. The task admits the tier and fails on
+  # any skip line, so a runner that lost its container runtime
   # fails here instead of passing vacuously. Each case starts its own container through
   # testcontainers on the runner's Docker socket; no `services:` block, because a shared
   # service would break the one-container-per-case isolation the suites rely on.
@@ -372,13 +385,13 @@ jobs:
         uses: jdx/mise-action@v2
         with:
           install: false
-      - name: Test (Postgres + Valkey containers)
+      - name: Test (Postgres containers)
         env:
           NEXTEST_PROFILE: ci
         run: mise run test-rust-containers
 
   # The kill-anywhere suite (#678): the real `capsule` and `capsule-server` binaries over a
-  # Postgres and a Valkey container, with either process SIGKILLed at seeded points during
+  # Postgres container, with either process SIGKILLed at seeded points during
   # the phases whose kill points are armed, and every phase rerun to convergence (the suite's
   # header says which are armed and why). It skips without
   # CAPSULE_TEST_KILL_ANYWHERE, so the job sets it and fails on the skip line, as
@@ -506,7 +519,7 @@ jobs:
       matrix:
         include:
           - name: apple
-            os: macos-14
+            os: macos-26
             recipe: build-apple
             targets: aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
             tier2: false

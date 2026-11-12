@@ -1048,6 +1048,7 @@ pub async fn current_state(
 
 pub mod conformance;
 pub mod postgres;
+pub(crate) mod pulled_total;
 
 pub use self::postgres::PostgresQuota;
 

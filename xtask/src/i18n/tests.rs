@@ -56,6 +56,7 @@ fn android_documents_contain_no_double_hyphen_in_comments() {
         source: "en".to_string(),
         supported: vec!["en".to_string()],
         messages: BTreeMap::from([("en".to_string(), catalog.clone())]),
+        reviewed: BTreeMap::new(),
     };
     let xml = catalogs.android_xml("en", &catalog).expect("renders");
     for line in xml.lines() {
@@ -78,6 +79,7 @@ fn android_locale_config_lists_every_supported_locale() {
         source: "en".to_string(),
         supported: owned(&["en", "zh-Hant", "pt-BR"]),
         messages: BTreeMap::new(),
+        reviewed: BTreeMap::new(),
     };
     let xml = catalogs.android_locale_config();
     let names: Vec<&str> = xml
@@ -310,6 +312,7 @@ fn catalogs(key: &str, entries: &[(&str, &str)]) -> Catalogs {
         source: "en".to_string(),
         supported: entries.iter().map(|(l, _)| (*l).to_string()).collect(),
         messages,
+        reviewed: BTreeMap::new(),
     }
 }
 
@@ -787,6 +790,7 @@ fn every_parity_violation_is_reported_at_once() {
         source: "en".to_string(),
         supported: vec!["en".to_string(), "fr".to_string()],
         messages,
+        reviewed: BTreeMap::new(),
     };
     let err = format!(
         "{:#}",
@@ -813,6 +817,7 @@ fn a_key_the_source_lacks_has_no_argument_plan() {
         source: "en".to_string(),
         supported: vec!["en".to_string(), "fr".to_string()],
         messages,
+        reviewed: BTreeMap::new(),
     };
     let err = format!(
         "{:#}",
@@ -904,4 +909,100 @@ fn the_committed_catalogs_have_no_lifecycle_problems() {
     let glossary = lifecycle::Glossary::load(&root).expect("glossary loads");
     let problems = lifecycle::problems(&catalogs.source, &entries, &glossary);
     assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+/// A catalog set where `fr` translates `translated` of `total` source keys, `reviewed` of
+/// them by a fluent reader.
+fn stats_catalogs(total: usize, translated: usize, reviewed: usize) -> Catalogs {
+    let keys: Vec<String> = (0..total).map(|i| format!("k{i}")).collect();
+    let en = keys.iter().map(|k| (k.clone(), "x".to_string())).collect();
+    let fr = keys
+        .iter()
+        .take(translated)
+        .map(|k| (k.clone(), "y".to_string()))
+        .collect();
+    Catalogs {
+        source: "en".to_string(),
+        supported: owned(&["en", "fr"]),
+        messages: BTreeMap::from([("en".to_string(), en), ("fr".to_string(), fr)]),
+        reviewed: BTreeMap::from([("fr".to_string(), reviewed)]),
+    }
+}
+
+fn stats_of(catalogs: &Catalogs) -> Value {
+    serde_json::from_str(&catalogs.stats_json().expect("renders")).expect("valid JSON")
+}
+
+/// Percentages are floored, so a locale one key short of complete never reads `100`.
+#[test]
+fn stats_floor_translated_and_reviewed_percentages() {
+    let stats = stats_of(&stats_catalogs(2305, 2143, 1));
+    assert_eq!(stats["fr"]["translated"], 92);
+    assert_eq!(stats["fr"]["reviewed"], 0);
+    let stats = stats_of(&stats_catalogs(200, 199, 199));
+    assert_eq!(stats["fr"]["translated"], 99);
+    let stats = stats_of(&stats_catalogs(4, 4, 2));
+    assert_eq!(stats["fr"]["translated"], 100);
+    assert_eq!(stats["fr"]["reviewed"], 50);
+}
+
+/// The source locale is authored, not translated, and gets no row; the banner marks the
+/// file generated.
+#[test]
+fn stats_cover_only_translated_locales_and_carry_the_banner() {
+    let stats = stats_of(&stats_catalogs(1, 1, 0));
+    assert!(stats.get("en").is_none());
+    assert!(
+        stats["$comment"]
+            .as_str()
+            .expect("string")
+            .contains("GENERATED")
+    );
+}
+
+/// An empty source catalog yields zeros rather than a division by zero.
+#[test]
+fn stats_of_an_empty_source_are_zero() {
+    let stats = stats_of(&stats_catalogs(0, 0, 0));
+    assert_eq!(stats["fr"]["translated"], 0);
+}
+
+/// `stats.json` is one of the rendered outputs, so `i18n --check` fails when it drifts.
+#[test]
+fn stats_json_is_a_generated_output() {
+    let outputs = Catalogs::load(&repo_root())
+        .expect("the real catalogs load")
+        .render()
+        .expect("renders");
+    assert!(
+        outputs
+            .iter()
+            .any(|(path, _)| path == Path::new(STATS_PATH))
+    );
+}
+
+/// `load` counts `origin: human` entries per locale.
+#[test]
+fn load_counts_reviewed_entries() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let locales = dir.path().join("locales");
+    fs::create_dir_all(&locales).expect("mkdir");
+    fs::write(
+        locales.join("config.json"),
+        r#"{"sourceLocale":"en","supportedLocales":["en","fr"]}"#,
+    )
+    .expect("write");
+    fs::write(
+        locales.join("en.json"),
+        r#"{"a":{"message":"A"},"b":{"message":"B"}}"#,
+    )
+    .expect("write");
+    fs::write(
+        locales.join("fr.json"),
+        r#"{"a":{"message":"A","origin":"human"},"b":{"message":"B","origin":"machine"}}"#,
+    )
+    .expect("write");
+    let catalogs = Catalogs::load(dir.path()).expect("loads");
+    assert_eq!(catalogs.reviewed.get("fr"), Some(&1));
+    assert_eq!(catalogs.reviewed.get("en"), Some(&0));
 }
