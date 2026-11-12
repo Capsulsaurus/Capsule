@@ -58,11 +58,20 @@ final class PseudolanguageRenderTests: CapsuleUITestCase {
 
     // MARK: Helpers
 
+    /// Identifier of the Albums toolbar's primary action, the bar's only other button.
+    private static let albumsPrimaryAction = "albums.new"
+
     /// Push a screen from the Browse index and return the navigation bar's back button.
+    ///
+    /// The pushed Albums screen's bar holds two buttons: back and its "New album"
+    /// primary action. `buttons.firstMatch` is the first in accessibility order, which
+    /// is not guaranteed to be back, so the primary action is excluded by identifier.
     private func pushedBackButton() throws -> XCUIElement {
         try XCTSkipUnless(openTab(showing: "browse.albums"), "this shell has no Browse tab")
         element("browse.albums").tap()
-        let back = app.navigationBars.buttons.firstMatch
+        let back = app.navigationBars.buttons
+            .matching(NSPredicate(format: "identifier != %@", Self.albumsPrimaryAction))
+            .firstMatch
         XCTAssertTrue(back.waitForExistence(timeout: 10), "Albums never pushed a screen")
         return back
     }
