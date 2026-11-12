@@ -34,7 +34,7 @@ dependencies {
     // The `capsule_sdk` namespace exports `async fn` flows (FfiSession, FfiCapsuleClient), which
     // uniffi lowers to Kotlin `suspend fun`s over kotlinx.coroutines — the generated source does
     // not compile without it, even though the harness itself calls only synchronous verbs.
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
     implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
 
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
