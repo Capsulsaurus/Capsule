@@ -322,12 +322,14 @@ final class SectionReachabilityTests: CapsuleUITestCase {
     /// never the back button.
     ///
     /// XCUITest does not promise that the first navigation-bar button is back:
-    /// Albums carries a New album action and the transfer center a force-now
-    /// action, and either can come first in accessibility order. Tapping one
-    /// instead of back opens a sheet or starts uploads, and the walk then judges
-    /// the wrong screen. A screen that gains a bar action adds its identifier
-    /// here.
-    private static let screenActions: Set<String> = ["albums.new", "transfer.force_now"]
+    /// Albums carries a New album action, the transfer center a force-now
+    /// action, and Imports a start-import action, and any of the three can come
+    /// first in accessibility order. Tapping one instead of back opens a sheet
+    /// or starts uploads, and the walk then judges the wrong screen. A screen
+    /// that gains a bar action adds its identifier here.
+    private static let screenActions: Set<String> = [
+        "albums.new", "transfer.force_now", "imports.start",
+    ]
 
     /// The navigation bar's back button: its first button that is not one of
     /// the pushed screen's own actions.
