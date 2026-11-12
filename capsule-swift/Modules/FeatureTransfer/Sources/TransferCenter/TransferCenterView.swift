@@ -72,6 +72,7 @@ public struct TransferCenterView: View {
                 Task { await model.forceUploads() }
             }
             .disabled(!model.phase.permitsNetworkActions || model.rows.isEmpty)
+            .accessibilityIdentifier("transfer.force_now")
         }
     }
 
