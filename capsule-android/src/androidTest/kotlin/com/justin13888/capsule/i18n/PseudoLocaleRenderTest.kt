@@ -170,10 +170,13 @@ class PseudoLocaleRenderTest {
         /** Right-to-left override: Android's `ar-XB` wraps every word in one. */
         const val RLO = '‮'
 
+        /** A content digest prefix, as the transfer board shows a blob's. */
+        val HEX = Regex("[0-9a-f]+")
+
         /**
-         * A string with no letters (a count, a size, a position) is a formatted value, not
-         * an app string, and is the same in every locale.
+         * A string with no letters (a count, a size, a position) or a hex digest is a
+         * value, not an app string, and is the same in every locale.
          */
-        fun isData(text: String): Boolean = text.none(Char::isLetter)
+        fun isData(text: String): Boolean = text.none(Char::isLetter) || HEX.matches(text)
     }
 }
