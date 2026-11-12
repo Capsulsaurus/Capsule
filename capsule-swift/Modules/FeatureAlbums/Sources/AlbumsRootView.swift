@@ -40,6 +40,7 @@ public struct AlbumsRootView: View {
                         Image(systemName: "plus")
                     }
                     .accessibilityLabel("app.albums.new_album.title")
+                    .accessibilityIdentifier("albums.new")
                 }
             }
             .task { await model.load() }

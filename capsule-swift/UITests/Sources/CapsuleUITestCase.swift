@@ -38,10 +38,14 @@ class CapsuleUITestCase: XCTestCase {
     /// accordingly, so a test can put the UI into a state — quarantined assets, a
     /// quota grace window, an unreachable federated origin — that would otherwise
     /// need a server, a network fault, and a fortnight of waiting.
+    ///
+    /// - Parameter arguments: extra launch arguments, such as the ones that select
+    ///   one of Xcode's pseudolanguages.
     @discardableResult
-    func launch(scenario: MockScenarioName = .healthy) -> XCUIApplication {
+    func launch(scenario: MockScenarioName = .healthy, arguments: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += ["-mock-scenario", scenario.rawValue]
+        app.launchArguments += arguments
         // Deterministic UI: no first-run coach marks, no animation timing races.
         app.launchArguments += ["-capsule-ui-testing", "1"]
         app.launch()
