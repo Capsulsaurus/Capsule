@@ -62,7 +62,7 @@ subtle = "2.6.1"
 # not select 3.2: the server emits with `openapi_as(SpecVersion::V3_2)`. No secondary public
 # transport.
 kynos = { version = "0.4.0", features = ["openapi32"] }
-base64 = "0.22.1"
+base64 = "0.23.1"
 bytes = "1.12.1"
 # Reading a response body back to bytes, for the coded-problem interceptor.
 # `http-body-util` is already in the lock file — Kynos and hyper both depend on it — and it is
