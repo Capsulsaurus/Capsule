@@ -288,6 +288,7 @@ async fn preflight_refresh_before_expiry_with_mock_clock() {
     let server = start_mock(handler).await;
     let clock = MockClock::new(BASE);
     let dyn_clock: Arc<dyn Clock> = clock.clone();
+    crate::net::ensure_crypto_provider();
     let http = reqwest::Client::builder().build().unwrap();
     let client = AuthClient::from_parts(&server.base_url, dyn_clock, http, 30).unwrap();
     let session = finished(client.login("a@example.com", "pw").await.unwrap());
@@ -350,6 +351,7 @@ async fn single_flight_coalesces_concurrent_refreshes() {
     let server = start_mock(handler).await;
     let clock = MockClock::new(BASE);
     let dyn_clock: Arc<dyn Clock> = clock.clone();
+    crate::net::ensure_crypto_provider();
     let http = reqwest::Client::builder().build().unwrap();
     let client = AuthClient::from_parts(&server.base_url, dyn_clock, http, 30).unwrap();
     let session = finished(client.login("a@example.com", "pw").await.unwrap());

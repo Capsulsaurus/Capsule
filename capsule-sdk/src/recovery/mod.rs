@@ -94,9 +94,9 @@ pub enum RecoveryError {
     /// timeout, a reset mid-body, or a refusal this client could not parse. Transient — the
     /// cadence's next tick tries again.
     ///
-    /// Note that reqwest classifies *every* failure of the request it executes as a request
-    /// error, so the generated taxonomy's `RequestConstruction` class carries connection
-    /// failures as well as genuine pre-flight ones; both land here.
+    /// The generated taxonomy files a connection failure under `Transport` and a genuine
+    /// pre-flight one under `RequestConstruction`; both land here, except a session that could
+    /// not mint a bearer, which is [`RecoveryError::Unauthorized`].
     #[error("the escrow endpoint could not be reached: {0}")]
     Transport(String),
     /// The credential was refused (`401`/`403`) and a refresh did not recover it — the user
@@ -1066,9 +1066,9 @@ where
             status: status.as_u16(),
             code: None,
         },
-        // Splitting `RequestConstruction` by class alone would report an unreachable server as
-        // "sign in again", which on an offline device is the one remedy that cannot work; the
-        // shared classifier reads the source instead.
+        // Reading `RequestConstruction` as an auth failure by class alone would report every
+        // request the runtime could not assemble as "sign in again"; the shared classifier
+        // reads the source instead, so only a dead session is one.
         rest::Error::RequestConstruction(_) if is_token_failure(error) => {
             RecoveryError::Unauthorized {
                 code: None,

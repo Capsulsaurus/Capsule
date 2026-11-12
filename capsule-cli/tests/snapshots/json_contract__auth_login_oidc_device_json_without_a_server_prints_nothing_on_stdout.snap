@@ -8,4 +8,4 @@ status: 1
 --- stderr ---
 Signing in to Capsule through your identity provider, from another device…
 Error: 
-   0: Login failed: could not reach oidc/device: request construction failed
+   0: Login failed: could not reach oidc/device: transport failed
