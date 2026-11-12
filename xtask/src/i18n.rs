@@ -6,6 +6,8 @@
 //!
 //! - `capsule-i18n/src/bundles/<locale>.json` + `generated.rs` — the Rust runtime bundle.
 //! - `capsule-web/src/i18n/messages/<locale>.json` — the FormatJS-consumable web catalog.
+//! - `capsule-web/src/i18n/messages/{en-XA,ar-XB}.json` — the web client's development-only
+//!   [`pseudo`]-locales, derived from the source catalog.
 //! - `capsule-android/.../res/values[-<qualifier>]/strings.xml` — Android resources.
 //! - `capsule-android/.../res/xml/locales_config.xml` — the Android per-app language list.
 //! - `capsule-swift/Generated/Localizable.xcstrings` — the iOS app's Apple String Catalog.
@@ -37,6 +39,7 @@ use eyre::{Context, ContextCompat, Result, bail};
 use serde_json::{Map, Value};
 
 mod lifecycle;
+mod pseudo;
 
 /// What `xtask i18n` does.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -262,6 +265,16 @@ impl Catalogs {
             outputs.push((
                 android_path(&self.source, locale),
                 self.android_xml(locale, map)?,
+            ));
+        }
+        let source = self
+            .messages
+            .get(&self.source)
+            .with_context(|| format!("source locale `{}` has no catalog", self.source))?;
+        for (locale, map) in pseudo::catalogs(source)? {
+            outputs.push((
+                PathBuf::from(format!("capsule-web/src/i18n/messages/{locale}.json")),
+                pseudo::escape_controls(&flat_json(&map)?),
             ));
         }
         outputs.push((
