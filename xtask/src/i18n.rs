@@ -36,16 +36,95 @@ use capsule_i18n::plural;
 use eyre::{Context, ContextCompat, Result, bail};
 use serde_json::{Map, Value};
 
-/// Render every target and either write the files or, in `check` mode, verify the
-/// committed files match (failing if any drifted).
-pub(crate) fn run(root: &Path, check: bool) -> Result<()> {
+mod lifecycle;
+
+/// What `xtask i18n` does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Mode {
+    /// Validate the catalogs and write every generated file.
+    Generate,
+    /// Validate the catalogs and verify the committed files match (the CI drift gate).
+    Check,
+    /// Print one locale's missing and stale keys as JSON, for a translation pass.
+    Todo(String),
+    /// Record `source` on every translation entry that lacks one.
+    Stamp,
+}
+
+impl Mode {
+    /// Parse the arguments after `i18n`.
+    pub(crate) fn parse(mut args: impl Iterator<Item = String>) -> Result<Self> {
+        const USAGE: &str = "usage: xtask i18n [--check | --todo <locale> | --stamp]";
+        let mode = match args.next().as_deref() {
+            None => Self::Generate,
+            Some("--check") => Self::Check,
+            Some("--stamp") => Self::Stamp,
+            Some("--todo") => Self::Todo(args.next().context(USAGE)?),
+            Some(other) => bail!("unknown flag `{other}`; {USAGE}"),
+        };
+        if let Some(extra) = args.next() {
+            bail!("unexpected argument `{extra}`; {USAGE}");
+        }
+        Ok(mode)
+    }
+}
+
+/// Run `xtask i18n` in `mode`. Generation and the check refuse a catalog set with any
+/// placeholder or [`lifecycle`] problem before rendering anything.
+pub(crate) fn run(root: &Path, mode: Mode) -> Result<()> {
     let catalogs = Catalogs::load(root)?;
-    catalogs.check_placeholder_parity()?;
-    let outputs = catalogs.render()?;
-    if check {
-        check_outputs(root, &outputs)
-    } else {
-        write_outputs(root, &outputs)
+    let entries = lifecycle::load(root, &catalogs.supported)?;
+    let source = entries
+        .get(&catalogs.source)
+        .with_context(|| format!("source locale `{}` has no catalog", catalogs.source))?;
+    match mode {
+        Mode::Todo(locale) => {
+            let translation = entries
+                .get(&locale)
+                .filter(|_| locale != catalogs.source)
+                .with_context(|| format!("`{locale}` is not a supported translation locale"))?;
+            let items = lifecycle::todo(source, translation);
+            tracing::info!(%locale, count = items.len(), "i18n: keys to translate");
+            println!("{}", serde_json::to_string_pretty(&items)?);
+            Ok(())
+        }
+        Mode::Stamp => {
+            for locale in catalogs.supported.iter().filter(|l| **l != catalogs.source) {
+                let path = root.join(format!("locales/{locale}.json"));
+                let mut catalog = read_json(&path)?
+                    .as_object()
+                    .cloned()
+                    .with_context(|| format!("{} must be a JSON object", path.display()))?;
+                let stamped = lifecycle::stamp(source, &mut catalog);
+                if stamped > 0 {
+                    let mut text = serde_json::to_string_pretty(&catalog)?;
+                    text.push('\n');
+                    fs::write(&path, text)
+                        .with_context(|| format!("writing {}", path.display()))?;
+                }
+                tracing::info!(%locale, stamped, "i18n: recorded source hashes");
+            }
+            Ok(())
+        }
+        Mode::Generate | Mode::Check => {
+            catalogs.check_placeholder_parity()?;
+            let glossary = lifecycle::Glossary::load(root)?;
+            let problems = lifecycle::problems(&catalogs.source, &entries, &glossary);
+            if !problems.is_empty() {
+                bail!(
+                    "locales/: {} catalog problem(s); `xtask i18n --todo <locale>` lists what to \
+                     translate:\n  {}",
+                    problems.len(),
+                    problems.join("\n  ")
+                );
+            }
+            let outputs = catalogs.render()?;
+            if mode == Mode::Check {
+                check_outputs(root, &outputs)
+            } else {
+                write_outputs(root, &outputs)
+            }
+        }
     }
 }
 
