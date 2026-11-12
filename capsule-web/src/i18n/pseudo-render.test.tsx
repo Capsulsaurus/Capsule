@@ -174,6 +174,20 @@ function decode(text: string): string {
 }
 
 /**
+ * Removes every HTML comment, repeating until none is left, so a comment that one pass
+ * splices back together (`<!-<!---->-->`) is removed too.
+ */
+function stripComments(html: string): string {
+    let previous: string;
+    let current = html;
+    do {
+        previous = current;
+        current = current.replace(/<!--[\s\S]*?-->/g, '');
+    } while (current !== previous);
+    return current;
+}
+
+/**
  * Every piece of text a person sees or hears: text nodes, plus the attributes a browser
  * shows (`placeholder`, `title`, `alt`) or announces (`aria-label`).
  *
@@ -183,9 +197,10 @@ function decode(text: string): string {
  * option has the empty value and is kept.
  */
 function visibleText(html: string): string[] {
-    const withoutComments = html
-        .replace(/<!--[\s\S]*?-->/g, '')
-        .replace(/<option value="[^"]+"[^>]*>[^<]*<\/option>/g, '');
+    const withoutComments = stripComments(html).replace(
+        /<option value="[^"]+"[^>]*>[^<]*<\/option>/g,
+        '',
+    );
     const nodes = withoutComments
         .split(/<[^>]*>/)
         .map((node) => decode(node).trim())
