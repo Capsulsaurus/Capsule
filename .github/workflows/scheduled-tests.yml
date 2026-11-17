@@ -37,7 +37,7 @@ jobs:
           - { crate: capsule-core, target: metadata_blob }
           - { crate: capsule-server, target: manifest_parser }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust toolchain
         run: rustup toolchain install
       - name: Cache cargo
@@ -57,7 +57,7 @@ jobs:
           -- -max_total_time=600 -max_len=65536
       - name: Upload the crashing input
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-artifacts-${{ matrix.target }}
           path: ${{ matrix.crate }}/fuzz/artifacts/${{ matrix.target }}/
@@ -71,7 +71,7 @@ jobs:
       matrix:
         shard: [0, 1, 2, 3, 4, 5, 6, 7]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust toolchain
         run: rustup toolchain install
       - name: Cache cargo
@@ -81,7 +81,7 @@ jobs:
         with:
           tool: nextest,cargo-mutants@27.1.0
       - name: Set up mise (task runner)
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
         with:
           install: false
       # Exits 2 when a mutant survives and 3 when one times out: a surviving mutant is a
@@ -106,7 +106,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload mutants.out
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mutants-shard-${{ matrix.shard }}
           path: mutants.out/
@@ -116,7 +116,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust toolchain
         run: rustup toolchain install
       - name: Cache cargo
@@ -148,7 +148,7 @@ jobs:
       matrix:
         shard: [0, 1, 2, 3]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust toolchain
         run: rustup toolchain install
       - name: Cache cargo
@@ -177,7 +177,7 @@ jobs:
           fi
       - name: Upload the processes' logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kill-anywhere-logs-${{ matrix.shard }}
           path: target/kill-anywhere-logs/

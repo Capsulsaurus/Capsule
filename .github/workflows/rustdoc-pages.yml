@@ -30,7 +30,7 @@ jobs:
     name: Render rustdoc
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust toolchain
         run: rustup toolchain install
       - name: Cache cargo
@@ -40,13 +40,13 @@ jobs:
       - name: Install nasm and libdav1d
         run: sudo apt-get update && sudo apt-get install -y nasm libdav1d-dev
       - name: Set up mise (task runner)
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
         with:
           install: false
       - name: Render the published rustdoc
         run: mise run doc-publish-rust
       - name: Upload the published rustdoc
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: target/doc
 
@@ -63,4 +63,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deploy
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
