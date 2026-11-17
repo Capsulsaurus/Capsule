@@ -87,7 +87,11 @@ object MockIdentifiers {
     private fun hex(
         value: Long,
         digits: Int,
-    ): String = java.lang.Long.toHexString(value).padStart(16, '0').takeLast(digits)
+    ): String =
+        java.lang.Long
+            .toHexString(value)
+            .padStart(16, '0')
+            .takeLast(digits)
 
     private const val GOLDEN = -0x61c8864680b583ebL
 }
