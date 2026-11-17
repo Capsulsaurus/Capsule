@@ -1,12 +1,11 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
-// A plain Android application: AGP, the Kotlin Android plugin and the Compose compiler, with
-// every androidx.compose artifact versioned by the Jetpack Compose BOM. Clients are native
-// (ADR-0013), so no Kotlin or Compose Multiplatform plugin is applied, and the sources sit in
-// the standard `src/main` and `src/test` sets that ktlint and detekt read by default.
+// A plain Android application: AGP, which compiles Kotlin itself since AGP 9, and the Compose
+// compiler, with every androidx.compose artifact versioned by the Jetpack Compose BOM. Clients
+// are native (ADR-0013), so no Kotlin or Compose Multiplatform plugin is applied, and the sources
+// sit in the standard `src/main` and `src/test` sets that ktlint and detekt read by default.
 plugins {
     alias(libs.plugins.androidApplication)
-    alias(libs.plugins.kotlinAndroid)
     alias(libs.plugins.composeCompiler)
     alias(libs.plugins.kotlinxSerialization)
 }
@@ -19,7 +18,7 @@ kotlin {
 
 android {
     namespace = "com.justin13888.capsule"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.justin13888.capsule"
@@ -97,8 +96,10 @@ dependencies {
     implementation(libs.kotlinx.serialization.core)
     implementation(projects.core)
 
-    // Plain JVM unit tests over the alert loop, which touches no Android API.
-    testImplementation(kotlin("test"))
+    // Plain JVM unit tests over the alert loop, which touches no Android API. The JUnit 4
+    // variant is named, because AGP 9's built-in Kotlin does not infer it from `kotlin("test")`
+    // as the Kotlin Android plugin did; JUnit 4 is the runner Android unit tests use.
+    testImplementation(kotlin("test-junit"))
 
     // Instrumented Compose UI tests with the accessibility checks (Accessibility Test
     // Framework) on every interaction, as the culling surface's audit requires. Test-only, API

@@ -9,8 +9,12 @@ plugins {
 }
 
 subprojects {
+    // The plugins that compile a module's Kotlin. Under AGP 9 that is the Android plugin itself
+    // (built-in Kotlin); `org.jetbrains.kotlin.android` is no longer applied anywhere.
     listOf(
-        "org.jetbrains.kotlin.android",
+        "com.android.application",
+        "com.android.library",
+        "com.android.test",
         "org.jetbrains.kotlin.jvm"
     ).forEach { kotlinPlugin ->
         pluginManager.withPlugin(kotlinPlugin) {
