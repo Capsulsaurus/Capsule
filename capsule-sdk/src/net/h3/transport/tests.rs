@@ -314,7 +314,9 @@ fn alt_svc_to(addr: SocketAddr) -> String {
 async fn server() -> Server {
     let certified = rcgen::generate_simple_self_signed(vec![SERVER_NAME.to_owned()]).expect("cert");
     let cert = CertificateDer::from(certified.cert.der().to_vec());
-    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
+    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
+        certified.signing_key.serialize_der(),
+    ));
     let mut roots = rustls::RootCertStore::empty();
     roots.add(cert.clone()).expect("root");
 

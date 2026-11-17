@@ -1,5 +1,14 @@
 use super::*;
 
+/// The sanctioned edges the lock-graph fixtures below are written against. Fixed here rather
+/// than read from [`SANCTIONED_TRANSITIVE_EDGES`], so the tests keep proving the sanction logic
+/// whatever the production list holds today.
+const FIXTURE_SANCTIONED: &[(&str, &str, &str)] = &[(
+    "tzf-rs",
+    "prost",
+    "fixture: an internal encoding, no RPC surface",
+)];
+
 fn core_violations(source: &str) -> Vec<String> {
     stateless_core_violations("capsule-core/src/x.rs", source)
 }
@@ -218,7 +227,8 @@ name = "tonic"
 version = "0.12.0"
 "#;
     let members = BTreeSet::from(["capsule-server".to_owned(), "capsule-cli".to_owned()]);
-    let found = transitive_retired_paths(lock, &members).expect("the lock parses");
+    let found =
+        transitive_retired_paths(lock, &members, FIXTURE_SANCTIONED).expect("the lock parses");
     assert_eq!(
         found,
         [
@@ -255,7 +265,8 @@ name = "prost"
 version = "0.13.0"
 "#;
     let members = BTreeSet::from(["capsule-core".to_owned()]);
-    let found = transitive_retired_paths(lock, &members).expect("the lock parses");
+    let found =
+        transitive_retired_paths(lock, &members, FIXTURE_SANCTIONED).expect("the lock parses");
     assert_eq!(found.len(), 1, "{found:?}");
     assert!(
         found[0].contains("capsule-core -> rpc-shim -> prost"),
@@ -286,7 +297,8 @@ name = "prost"
 version = "0.13.0"
 "#;
     let members = BTreeSet::from(["capsule-sdk".to_owned(), "capsule-core".to_owned()]);
-    let found = transitive_retired_paths(lock, &members).expect("the lock parses");
+    let found =
+        transitive_retired_paths(lock, &members, FIXTURE_SANCTIONED).expect("the lock parses");
     assert_eq!(
         found,
         [
@@ -330,7 +342,7 @@ name = "serde"
 version = "2.0.0"
 "#;
     let members = BTreeSet::from(["capsule-server".to_owned()]);
-    assert!(transitive_retired_paths(lock, &members).is_err());
+    assert!(transitive_retired_paths(lock, &members, FIXTURE_SANCTIONED).is_err());
 }
 
 #[test]

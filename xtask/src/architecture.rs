@@ -47,56 +47,12 @@ const PLANNED_WORKSPACE_DEPENDENCIES: &[(&str, &str)] = &[];
 
 // Lock-graph edges into a retired crate that are not the decision the retirement records, each
 // with its reason. `prost`/`tonic` are retired as **Capsule's public surface** (no gRPC; see
-// .claude/rules/capsule-server.md), and these crates use them as an internal encoding or a
-// container-runtime client, which exposes no surface of Capsule's. An edge is sanctioned, not a
-// crate: the same retired crate arriving through anything else is still a violation.
-const SANCTIONED_TRANSITIVE_EDGES: &[(&str, &str, &str)] = &[
-    (
-        "tzf-rs",
-        "prost",
-        "the timezone finder's compiled boundary data is protobuf; no RPC surface",
-    ),
-    (
-        "prost-build",
-        "prost",
-        "build-time code generation for tzf-rs's data format",
-    ),
-    (
-        "prost-build",
-        "prost-types",
-        "build-time code generation for tzf-rs's data format",
-    ),
-    (
-        "bollard",
-        "tonic",
-        "testcontainers' Docker client (dev-dependency); BuildKit over the local daemon socket",
-    ),
-    (
-        "bollard-stubs",
-        "prost",
-        "testcontainers' Docker client (dev-dependency); Docker API message types",
-    ),
-    (
-        "bollard-buildkit-proto",
-        "tonic",
-        "testcontainers' Docker client (dev-dependency); BuildKit message types",
-    ),
-    (
-        "bollard-buildkit-proto",
-        "prost",
-        "testcontainers' Docker client (dev-dependency); BuildKit message types",
-    ),
-    (
-        "bollard-buildkit-proto",
-        "prost-types",
-        "testcontainers' Docker client (dev-dependency); BuildKit message types",
-    ),
-    (
-        "bollard-buildkit-proto",
-        "tonic-prost",
-        "testcontainers' Docker client (dev-dependency); BuildKit message types",
-    ),
-];
+// .claude/rules/capsule-server.md); a crate that used one as an internal encoding, exposing no
+// surface of Capsule's, would be listed here. An edge is sanctioned, not a crate: the same
+// retired crate arriving through anything else is still a violation.
+// Empty: tzf-rs 2 ships its boundary data without protobuf, and testcontainers' Docker client
+// (`bollard`, over `tonic`) left with testcontainers.
+const SANCTIONED_TRANSITIVE_EDGES: &[(&str, &str, &str)] = &[];
 
 const RETIRED_COMPONENT_NAMES: &[&str] = &[
     "capsule-api-auth",
@@ -292,14 +248,23 @@ fn check_transitive_dependencies(root: &Path, violations: &mut Vec<String>) -> R
     let lock_path = root.join("Cargo.lock");
     let lock = fs::read_to_string(&lock_path)
         .wrap_err_with(|| format!("reading {}", lock_path.display()))?;
-    violations.extend(transitive_retired_paths(&lock, &members)?);
+    violations.extend(transitive_retired_paths(
+        &lock,
+        &members,
+        SANCTIONED_TRANSITIVE_EDGES,
+    )?);
     Ok(())
 }
 
 /// Every unsanctioned edge into a [`RETIRED_DEPENDENCIES`] entry reachable, two or more edges
 /// out, from a package in `members` of the lock file `lock` — one violation line each, carrying
-/// a shortest path to it.
-fn transitive_retired_paths(lock: &str, members: &BTreeSet<String>) -> Result<Vec<String>> {
+/// a shortest path to it. An edge `sanctioned` lists is not reported; the gate passes
+/// [`SANCTIONED_TRANSITIVE_EDGES`].
+fn transitive_retired_paths(
+    lock: &str,
+    members: &BTreeSet<String>,
+    sanctioned: &[(&str, &str, &str)],
+) -> Result<Vec<String>> {
     let document: DocumentMut = lock.parse().wrap_err("parsing Cargo.lock")?;
     let packages = document
         .get("package")
@@ -388,7 +353,7 @@ fn transitive_retired_paths(lock: &str, members: &BTreeSet<String>) -> Result<Ve
             for entry in graph.get(via).into_iter().flatten() {
                 let retired = name_of(&resolve(entry)?);
                 if !RETIRED_DEPENDENCIES.contains(&retired.as_str())
-                    || SANCTIONED_TRANSITIVE_EDGES
+                    || sanctioned
                         .iter()
                         .any(|(from, to, _)| *from == via_name && *to == retired)
                 {

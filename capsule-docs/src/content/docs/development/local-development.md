@@ -128,11 +128,12 @@ mise run openapi-kynos                # regenerate capsule-server/openapi.json
 
 `test-rust` needs no podman. Cases needing Postgres are gated on `CAPSULE_TEST_POSTGRES=1`, and
 otherwise print a skip line and pass. `test-rust-containers` enables it and runs every gated case one container at a time, **failing on
-any skip line**. CI runs it as the blocking `rust-containers` job. Locally, with rootless podman:
+any skip line**. CI runs it as the blocking `rust-containers` job. Each case starts its container
+with the `docker` CLI, or the one `CAPSULE_TEST_CONTAINER_CLI` names. Locally, with rootless
+podman:
 
 ```bash
-systemctl --user start podman.socket
-export DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock
+export CAPSULE_TEST_CONTAINER_CLI=podman
 export CAPSULE_TEST_CONTAINER_USERNS=keep-id
 mise run test-rust-containers
 ```

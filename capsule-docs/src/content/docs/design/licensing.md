@@ -39,7 +39,7 @@ a `NOTICE` entry.
 
 | Crate | Licence | Why it is bounded |
 | --- | --- | --- |
-| `tzf-rel` | `ODbL-1.0` | Share-alike binds the database only; embedded unmodified, no derivative database. |
+| `tzf-dist` | `ODbL-1.0` | Share-alike binds the database only; embedded unmodified, no derivative database. |
 | Geist, Geist Mono | `OFL-1.1` | Font files the docs site vendors unmodified; the licence binds the fonts, never the pages using them. Not a crate, so outside `deny.toml`. |
 
 ### Forbidden

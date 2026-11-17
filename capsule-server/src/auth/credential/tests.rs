@@ -167,6 +167,39 @@ async fn the_reduced_cost_constructor_is_cheaper_and_still_verifies() {
     assert!(!credentials.verify("no", &stored).await.expect("it reads"));
 }
 
+/// Hashes written by argon2 0.5.3, the release before password-hash 0.6 replaced `SaltString`.
+///
+/// A stored hash outlives the library that wrote it: an upgrade that stopped verifying these
+/// would lock out every account, which is the data loss the system invariants forbid. Both the
+/// production parameters and the reduced-cost ones, each over a fixed 16-byte salt of `0x07`.
+const HASHES_FROM_ARGON2_0_5: [&str; 2] = [
+    "$argon2id$v=19$m=8,t=1,p=1$BwcHBwcHBwcHBwcHBwcHBw$bZ1M0r8EjB8UIoeoCxBdhfhot1tOFfUbojxRPx/7TLE",
+    "$argon2id$v=19$m=19456,t=2,p=1$BwcHBwcHBwcHBwcHBwcHBw$eZ8SueF3EIJEgtgpg1rLafWpNVv3dMTwc0KCOxG5CSg",
+];
+
+#[tokio::test]
+async fn a_hash_stored_by_the_previous_argon2_release_still_verifies() {
+    // Verification reads its parameters from the PHC string, so the reduced-cost instance
+    // checks the production-cost hash too.
+    let credentials = Credentials::with_reduced_cost().expect("the platform hashes");
+    for stored in HASHES_FROM_ARGON2_0_5 {
+        assert!(
+            credentials
+                .verify("correct horse battery staple", stored)
+                .await
+                .expect("it reads"),
+            "{stored}"
+        );
+        assert!(
+            !credentials
+                .verify("Correct Horse Battery Staple", stored)
+                .await
+                .expect("it reads"),
+            "{stored}"
+        );
+    }
+}
+
 #[test]
 fn debug_names_the_algorithm_and_prints_no_hash() {
     let credentials = credentials();

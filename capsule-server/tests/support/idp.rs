@@ -188,7 +188,7 @@ impl PrivateCa {
         let leaf_params =
             rcgen::CertificateParams::new(vec!["127.0.0.1".to_owned()]).expect("params");
         let leaf = leaf_params
-            .signed_by(&leaf_key, &ca, &ca_key)
+            .signed_by(&leaf_key, &rcgen::Issuer::from_params(&ca_params, &ca_key))
             .expect("a leaf signed by the CA");
 
         // The provider is named: reqwest's `rustls` enables aws-lc-rs beside this crate's `ring`,

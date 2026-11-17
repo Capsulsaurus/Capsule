@@ -3,7 +3,7 @@ use std::path::Path;
 use sysinfo::Disks;
 
 pub(crate) fn get_available_space(path: &Path) -> Option<u64> {
-    let disks = Disks::new_with_refreshed_list();
+    let disks = Disks::new_with_refreshed_list().ok()?;
 
     disks
         .iter()

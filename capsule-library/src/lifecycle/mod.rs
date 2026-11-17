@@ -554,7 +554,7 @@ const CREATE_METADATA_DIR: &str = "create-metadata";
 fn media_dir(root: &Path, capture_utc: i64) -> PathBuf {
     let date = Timestamp::from_second(capture_utc)
         .unwrap_or(Timestamp::UNIX_EPOCH)
-        .to_zoned(jiff::tz::TimeZone::UTC)
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
         .date();
     root.join("media")
         .join(format!("{:04}", date.year()))

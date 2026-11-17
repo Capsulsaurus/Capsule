@@ -415,7 +415,7 @@ fn an_import_is_reconstructed_by_a_later_process_from_disk_alone() {
         .capture_timestamp
         .parse()
         .expect("capture_timestamp is RFC 3339");
-    let date = captured.to_zoned(jiff::tz::TimeZone::UTC).date();
+    let date = captured.to_zoned_datetime(jiff::tz::TimeZone::UTC).date();
     assert_eq!(
         bucket,
         fx.library

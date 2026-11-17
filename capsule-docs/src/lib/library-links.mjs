@@ -238,11 +238,6 @@ export const LIBRARIES = [
         code: ['cargo-nextest'],
     },
     {
-        url: 'https://github.com/testcontainers/testcontainers-rs',
-        names: [],
-        code: ['testcontainers'],
-    },
-    {
         url: 'https://github.com/proptest-rs/proptest',
         names: [],
         code: ['proptest'],

@@ -530,7 +530,9 @@ fn self_signed() -> Result<(CertificateDer<'static>, PrivateKeyDer<'static>), Pe
     let certified = rcgen::generate_simple_self_signed(vec![PEER_SNI.to_string()])
         .map_err(|e| PeeringError::Tls(e.to_string()))?;
     let cert = CertificateDer::from(certified.cert.der().to_vec());
-    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
+    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
+        certified.signing_key.serialize_der(),
+    ));
     Ok((cert, key))
 }
 

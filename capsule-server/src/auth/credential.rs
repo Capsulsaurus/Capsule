@@ -50,8 +50,7 @@
 use std::fmt;
 use std::time::Instant;
 
-use argon2::Argon2;
-use argon2::password_hash::{PasswordHash, PasswordHasher as _, PasswordVerifier as _, SaltString};
+use argon2::{Argon2, PasswordHash, PasswordHasher as _, PasswordVerifier as _};
 
 /// How many bytes of salt every hash carries.
 ///
@@ -240,7 +239,7 @@ impl Credentials {
         })?;
         match self.argon.verify_password(password.as_bytes(), &parsed) {
             Ok(()) => Ok(true),
-            Err(argon2::password_hash::Error::Password) => Ok(false),
+            Err(argon2::password_hash::Error::PasswordInvalid) => Ok(false),
             Err(error) => Err(CredentialError {
                 detail: error.to_string(),
             }),
@@ -283,11 +282,10 @@ fn hash_with(argon: &Argon2<'static>, password: &[u8]) -> Result<String, Credent
             detail: format!("the platform could not produce a salt ({error})"),
         },
     )?;
-    let salt = SaltString::encode_b64(&bytes).map_err(|error| CredentialError {
-        detail: format!("the salt could not be encoded ({error})"),
-    })?;
+    // The PHC string carries the salt B64-encoded, so raw bytes in give the same stored form the
+    // `SaltString` path produced before password-hash 0.6.
     Ok(argon
-        .hash_password(password, &salt)
+        .hash_password_with_salt(password, &bytes)
         .map_err(|error| CredentialError {
             detail: error.to_string(),
         })?

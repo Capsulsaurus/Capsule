@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "namespace": "capsule_sdk",
-  "uniffi": "0.31.1",
+  "uniffi": "0.32.2",
   "languages": {
     "swift": {
       "source": "capsule_sdk.swift",
