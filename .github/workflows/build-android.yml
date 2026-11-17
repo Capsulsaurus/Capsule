@@ -43,19 +43,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Gradle 8.11.1 supports JDK 21, not the JDK 26 on some dev machines — this pin
       # is the de-facto fix for the documented local Gradle break (see
       # capsule-core-kotlin/README.md and ci.yml's kotlin lane).
       - name: Set up JDK
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Install Android platform
         run: sdkmanager "platforms;android-36"
@@ -88,12 +88,12 @@ jobs:
           key: build-android
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       # stage-bindings.sh (invoked by the :core stageUniffiBindings task) shells out to
       # `mise run gen-bindings`, so mise must be on PATH — but install nothing implicitly.
       - name: Set up mise (exec shim)
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
         with:
           install: false
 
@@ -118,10 +118,10 @@ jobs:
     runs-on: [self-hosted, android, strongbox]
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up mise (exec shim)
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
         with:
           install: false
 

@@ -45,10 +45,10 @@ jobs:
     timeout-minutes: 120
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up JDK
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
@@ -56,7 +56,7 @@ jobs:
       # `mise run bench-apps` needs mise on PATH, and the `-Pcapsule.wireFfi` staging shells
       # out to `mise run gen-bindings` - but install nothing implicitly, as build-android.yml.
       - name: Set up mise (exec shim)
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
         with:
           install: false
 
@@ -76,7 +76,7 @@ jobs:
 
       - name: Upload the report and results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bench-apps-android-${{ inputs.device }}
           path: target/bench-apps/android/
@@ -90,10 +90,10 @@ jobs:
     timeout-minutes: 120
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up mise
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
         with:
           working_directory: capsule-swift
           install_args: tuist xcbeautify
@@ -108,7 +108,7 @@ jobs:
 
       - name: Upload the report and results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bench-apps-apple-${{ inputs.device }}
           path: target/bench-apps/apple/

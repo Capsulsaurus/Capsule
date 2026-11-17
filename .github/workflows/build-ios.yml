@@ -44,7 +44,7 @@ jobs:
     runs-on: macos-26
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
@@ -54,7 +54,7 @@ jobs:
       # Install only the Swift tools this job actually uses (tuist to generate the
       # project, xcbeautify to format the build/test log) — not the root [tools].
       - name: Set up mise
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
         with:
           working_directory: capsule-swift
           install_args: tuist xcbeautify
@@ -114,10 +114,10 @@ jobs:
     runs-on: [self-hosted, macos, secure-enclave]
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up mise
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
         with:
           working_directory: capsule-swift
           install_args: tuist xcbeautify
