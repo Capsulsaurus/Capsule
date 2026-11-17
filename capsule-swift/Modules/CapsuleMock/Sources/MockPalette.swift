@@ -110,8 +110,7 @@ public struct MockThumbnail: Sendable, Equatable {
     /// size for the declared dimensions, which would be a defect here.
     public func makeImage() -> CGImage? {
         let bytesPerRow = width * 4
-        guard width > 0, height > 0, pixels.count == bytesPerRow * height else { return nil }
-        guard let provider = CGDataProvider(data: pixels as CFData) else { return nil }
+        guard width > 0, height > 0, pixels.count == bytesPerRow * height, let provider = CGDataProvider(data: pixels as CFData) else { return nil }
         return CGImage(
             width: width,
             height: height,

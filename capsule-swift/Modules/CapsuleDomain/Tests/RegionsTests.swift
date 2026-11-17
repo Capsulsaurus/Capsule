@@ -1,7 +1,6 @@
+import CapsuleDomain
 import Foundation
 import Testing
-
-import CapsuleDomain
 
 /// The label rule and the region shape contract, which mirror the core's
 /// `normalize_label` and `RegionShape::validate` so an editor refuses before

@@ -136,7 +136,7 @@ extension MockLibraryStore: AlbumPort {
         await albumChanges.send(())
     }
 
-    public nonisolated func changes() -> AsyncStream<Void> {
+    nonisolated public func changes() -> AsyncStream<Void> {
         albumChanges.subscribe()
     }
 

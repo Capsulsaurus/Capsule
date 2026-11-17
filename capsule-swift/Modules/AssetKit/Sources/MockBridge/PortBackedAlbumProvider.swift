@@ -99,7 +99,7 @@ public struct PortBackedAlbumProvider: AlbumProvider {
         try await albums.move([assetID], to: albumID)
     }
 
-    public nonisolated func changes() -> AsyncStream<Void> {
+    nonisolated public func changes() -> AsyncStream<Void> {
         albums.changes()
     }
 

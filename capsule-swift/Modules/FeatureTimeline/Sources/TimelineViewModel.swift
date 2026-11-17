@@ -79,8 +79,8 @@ public final class TimelineViewModel {
     // `nonisolated(unsafe)` so `deinit` can cancel them: the properties are only
     // mutated on the main actor during the model's life, and `deinit` cannot
     // race with that (a live method call would be retaining `self`).
-    private nonisolated(unsafe) var changeObservation: Task<Void, Never>?
-    private nonisolated(unsafe) var hiddenObservation: Task<Void, Never>?
+    nonisolated(unsafe) private var changeObservation: Task<Void, Never>?
+    nonisolated(unsafe) private var hiddenObservation: Task<Void, Never>?
 
     /// The timeline minus hidden assets.
     private var visibleAssets: [Asset] {
@@ -220,12 +220,12 @@ public final class TimelineViewModel {
     }
 
     /// Materialise a snapshot into a plain asset array (cheap; index access).
-    private nonisolated static func materialize(_ snapshot: any AssetSnapshot) -> [Asset] {
+    nonisolated private static func materialize(_ snapshot: any AssetSnapshot) -> [Asset] {
         (0 ..< snapshot.count).map { snapshot.asset(at: $0) }
     }
 
     /// Section assets for a level, off the main actor.
-    private nonisolated static func buildSections(
+    nonisolated private static func buildSections(
         for level: TimelineLevel,
         from assets: [Asset]
     ) async -> [PhotoGridSection] {

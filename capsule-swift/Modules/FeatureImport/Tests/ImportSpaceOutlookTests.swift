@@ -1,7 +1,6 @@
 import CapsuleDomain
-import Testing
-
 @testable import FeatureImport
+import Testing
 
 /// The three space verdicts, and the arithmetic behind the sentence the red one
 /// puts on screen.

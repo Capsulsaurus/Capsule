@@ -34,7 +34,7 @@ public actor MockAlbumProvider: AlbumProvider {
         continuation?.yield(())
     }
 
-    public nonisolated func changes() -> AsyncStream<Void> {
+    nonisolated public func changes() -> AsyncStream<Void> {
         AsyncStream { continuation in
             Task { await self.attach(continuation) }
         }

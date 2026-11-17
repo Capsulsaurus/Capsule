@@ -149,7 +149,6 @@ public struct DropDetailView: View {
         }
     }
 
-    @ViewBuilder
     private var outcomeSection: some View {
         Section {
             switch model.outcome {

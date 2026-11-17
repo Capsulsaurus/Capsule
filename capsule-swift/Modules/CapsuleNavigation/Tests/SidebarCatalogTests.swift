@@ -1,9 +1,8 @@
-import Foundation
-import Testing
-
 import CapsuleDomain
 import CapsuleFoundation
 import CapsuleNavigation
+import Foundation
+import Testing
 
 /// The table is the only declaration of what sections exist. A section missing
 /// from it is a section that silently answers with Library's row.

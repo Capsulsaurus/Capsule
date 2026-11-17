@@ -54,5 +54,5 @@ public enum EmbeddedPreviewDecoder {
 
     /// One context for every orientation: creating a `CIContext` is the
     /// expensive part, and rendering through a shared one is thread-safe.
-    private nonisolated(unsafe) static let context = CIContext(options: [.cacheIntermediates: false])
+    nonisolated(unsafe) private static let context = CIContext(options: [.cacheIntermediates: false])
 }

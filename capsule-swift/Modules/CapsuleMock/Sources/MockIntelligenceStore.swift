@@ -14,7 +14,7 @@ import Foundation
 /// state rather than an error, and removing a model removes everything derived
 /// from it. Splitting these across four actors would let one of them forget.
 public actor MockIntelligenceStore {
-    private nonisolated let store: MockLibraryStore
+    nonisolated private let store: MockLibraryStore
     nonisolated let storeConfiguration: MockConfiguration
     private var slots: [ModelSlot: AIModelStatus]
     private var slotOrder: [ModelSlot]

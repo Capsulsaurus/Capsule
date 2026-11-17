@@ -43,4 +43,12 @@
 # "call can throw, but it is not marked with 'try'". Off, for the same reason as
 # hoistTry: the whole test suite is macro invocations.
 --disable preferKeyPath
+# SwiftLint 0.65's `modifier_order` puts `nonisolated` before the access level; SwiftFormat's
+# `modifierOrder` puts it after. SwiftLint wins, as for `opening_brace` above.
+--disable modifierOrder
+# The wrap-body rules SwiftFormat 0.64 turned on by default put every single-statement body
+# on lines of its own. That grows files and types past SwiftLint's `file_length` and
+# `type_body_length` limits for no change in meaning, so they stay off and a one-line body
+# stays one line.
+--disable wrapFunctionBodies,wrapPropertyBodies,wrapIfStatementBodies,wrapIfExpressionBodies,wrapLoopBodies
 --exclude .ffi,Derived,.build

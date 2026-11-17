@@ -64,7 +64,7 @@ public actor ManagedAlbumProvider: AlbumProvider {
         emitChange()
     }
 
-    public nonisolated func changes() -> AsyncStream<Void> {
+    nonisolated public func changes() -> AsyncStream<Void> {
         AsyncStream { continuation in
             let token = UUID()
             Task { await self.register(continuation, token: token) }

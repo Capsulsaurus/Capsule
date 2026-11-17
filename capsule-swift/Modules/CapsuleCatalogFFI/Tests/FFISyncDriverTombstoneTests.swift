@@ -1,7 +1,6 @@
+@testable import CapsuleCatalogFFI
 import Foundation
 import Testing
-
-@testable import CapsuleCatalogFFI
 
 extension FFISyncDriverFixture {
     /// An album page serves a `delete` with no metadata blob, no blob and

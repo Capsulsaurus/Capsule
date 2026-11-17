@@ -1,6 +1,5 @@
-import Testing
-
 @testable import Capsule
+import Testing
 
 /// When a tap's `inputToFrame` interval opens and closes, with frames driven by hand: it opens
 /// on the tap, stays open through the frame that answers it, and closes on the frame after.

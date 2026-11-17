@@ -1,7 +1,6 @@
+import CapsuleNavigation
 import Foundation
 import Testing
-
-import CapsuleNavigation
 
 /// The menu bar and the iPad shortcut overlay are both generated from this
 /// list, so a collision here is a collision on two platforms at once.

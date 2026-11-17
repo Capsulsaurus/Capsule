@@ -1,9 +1,8 @@
-import Foundation
-import Testing
-
 import CapsuleDomain
 import CapsuleMock
 import FeatureTransfer
+import Foundation
+import Testing
 
 /// Triage never decides for the user
 /// (*Threat Model — Quarantine Surfaces*).

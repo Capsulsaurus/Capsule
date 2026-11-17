@@ -1,3 +1,4 @@
+@testable import Capsule
 import CapsuleDomain
 import CapsuleFoundation
 import CapsuleNavigation
@@ -5,8 +6,6 @@ import FeatureSettings
 import Foundation
 import SwiftUI
 import Testing
-
-@testable import Capsule
 
 /// What every `Route` actually presents.
 ///

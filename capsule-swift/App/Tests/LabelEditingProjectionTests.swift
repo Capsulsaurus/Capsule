@@ -1,10 +1,9 @@
+@testable import Capsule
 import CapsuleDomain
 import CapsuleFoundation
 import CapsuleMock
 import FeatureViewer
 import Testing
-
-@testable import Capsule
 
 /// The label editor's ports, as the composition root hands them to the
 /// environment: the same label port every screen reads, and the stack the

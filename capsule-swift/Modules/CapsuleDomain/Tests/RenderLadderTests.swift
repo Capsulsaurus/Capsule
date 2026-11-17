@@ -1,7 +1,6 @@
+import CapsuleDomain
 import Foundation
 import Testing
-
-import CapsuleDomain
 
 /// The render ladder's seam: a surface's question reaches the function it was
 /// built over unchanged, and the answer comes back unchanged.

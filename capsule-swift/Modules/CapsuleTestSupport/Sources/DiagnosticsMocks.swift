@@ -34,7 +34,7 @@ public actor MockConsentReading: ConsentReading {
 
     public func current() -> DiagnosticsConsent { consent }
 
-    public nonisolated func changes() -> AsyncStream<DiagnosticsConsent> {
+    nonisolated public func changes() -> AsyncStream<DiagnosticsConsent> {
         AsyncStream { continuation in
             Task { await self.attach(continuation) }
         }

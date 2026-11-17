@@ -1,7 +1,6 @@
+import CapsuleDomain
 import Foundation
 import Testing
-
-import CapsuleDomain
 
 /// Derived group cull state, and the three-flags rule.
 @Suite("A group's cull state is derived from its members, never stored")

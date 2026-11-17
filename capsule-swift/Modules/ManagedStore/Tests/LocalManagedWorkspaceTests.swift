@@ -1,9 +1,8 @@
-import Foundation
-import Testing
-
 import CapsuleCatalog
 import CapsuleTestSupport
+import Foundation
 import ManagedStore
+import Testing
 
 /// The mock lane's workspace keeps the FFI workspace's trash contract: a
 /// delete opens a window, a late restore is refused, and a purge never skips

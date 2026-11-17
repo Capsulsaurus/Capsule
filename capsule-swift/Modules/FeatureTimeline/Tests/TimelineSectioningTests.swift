@@ -1,9 +1,8 @@
-import Foundation
-import Testing
-
 import AssetKit
 import CapsuleTestSupport
 import FeatureTimeline
+import Foundation
+import Testing
 
 // MARK: - Duplicate section identifiers
 

@@ -1,4 +1,5 @@
 import AssetKit
+@testable import Capsule
 import CapsuleFoundation
 import CapsuleMock
 import CoreGraphics
@@ -9,8 +10,6 @@ import ImagePipeline
 import ManagedStore
 import Testing
 import UniformTypeIdentifiers
-
-@testable import Capsule
 
 /// What the picker imports, the timeline shows.
 ///

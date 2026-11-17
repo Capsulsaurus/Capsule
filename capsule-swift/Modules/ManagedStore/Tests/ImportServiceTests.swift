@@ -1,10 +1,8 @@
 import CapsuleCatalog
-import Foundation
-import Testing
-
 import CapsuleTestSupport
-
+import Foundation
 @testable import ManagedStore
+import Testing
 
 @Suite("ImportService pipeline")
 struct ImportServiceTests {

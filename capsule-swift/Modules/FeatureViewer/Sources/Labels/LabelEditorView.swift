@@ -91,7 +91,6 @@ public struct LabelEditorView: View {
 
     // MARK: Drawing
 
-    @ViewBuilder
     private var drawingSection: some View {
         Section {
             if model.draft == nil {
@@ -178,7 +177,6 @@ public struct LabelEditorView: View {
 
     // MARK: Labels
 
-    @ViewBuilder
     private var labelsSection: some View {
         Section("app.labels.section") {
             if model.labelTarget == nil {

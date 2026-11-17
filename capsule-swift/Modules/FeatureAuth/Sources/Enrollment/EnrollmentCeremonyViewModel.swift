@@ -54,7 +54,7 @@ public final class EnrollmentCeremonyViewModel {
     public private(set) var acceptedSoftwareKeyDeviation = false
 
     private let enrollment: any FirstDeviceEnrollmentPort
-    private nonisolated(unsafe) var ceremony: Task<Void, Never>?
+    nonisolated(unsafe) private var ceremony: Task<Void, Never>?
 
     public init(enrollment: any FirstDeviceEnrollmentPort) {
         self.enrollment = enrollment

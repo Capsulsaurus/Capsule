@@ -15,7 +15,7 @@ public actor LastWordsStore {
 
     /// Whether the previous session terminated without a clean shutdown.
     /// `nonisolated` so callers can read this immutable snapshot synchronously.
-    public nonisolated let previousSessionEndedAbnormally: Bool
+    nonisolated public let previousSessionEndedAbnormally: Bool
 
     /// - Parameter suiteName: a `UserDefaults` suite; `nil` uses `.standard`.
     public init(suiteName: String? = nil) {

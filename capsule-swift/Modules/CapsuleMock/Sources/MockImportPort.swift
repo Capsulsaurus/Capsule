@@ -82,7 +82,7 @@ extension MockTransferStore: ImportPort {
     /// **stop, not a rollback**: everything already imported stays imported, and
     /// the summary says so — which is why the cancelled event carries the same
     /// tally the finished one does.
-    public nonisolated func execute(_ plan: ImportPlan) -> AsyncStream<ImportProgressEvent> {
+    nonisolated public func execute(_ plan: ImportPlan) -> AsyncStream<ImportProgressEvent> {
         AsyncStream { continuation in
             Task {
                 continuation.yield(.started(importID: plan.id, totalCandidates: plan.decisions.count))

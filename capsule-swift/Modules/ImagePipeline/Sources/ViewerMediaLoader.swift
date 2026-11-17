@@ -187,7 +187,7 @@ public final class ViewerMediaLoader {
     /// reads container properties only, never decoding the pixels. The parse
     /// is ``ContainerExif``'s, shared with the managed store; its GPS fix is
     /// not taken, because PhotoKit's location is the one this panel shows.
-    private nonisolated static func parseExif(from data: Data?) -> AssetExifMetadata {
+    nonisolated private static func parseExif(from data: Data?) -> AssetExifMetadata {
         var metadata = AssetExifMetadata()
         guard let data else { return metadata }
         let exif = ContainerExif.parse(data)
@@ -208,7 +208,7 @@ public final class ViewerMediaLoader {
     /// filename, and the byte count arrives as an undocumented-but-stable
     /// `fileSize` value on the resource — hence the guarded cast rather than a
     /// direct read.
-    private nonisolated static func applyResourceFacts(
+    nonisolated private static func applyResourceFacts(
         of phAsset: PHAsset,
         to metadata: inout AssetExifMetadata
     ) {
@@ -233,8 +233,7 @@ public final class ViewerMediaLoader {
     /// Video only. A still's codec is already implied by its resource UTI, and
     /// loading an `AVAsset` for a photograph would be a decode nobody asked for.
     private func applyTrackFacts(of phAsset: PHAsset, to metadata: inout AssetExifMetadata) async {
-        guard phAsset.mediaType == .video else { return }
-        guard let facts = await Self.videoFacts(for: phAsset) else { return }
+        guard phAsset.mediaType == .video, let facts = await Self.videoFacts(for: phAsset) else { return }
         metadata.frameRate = facts.frameRate
         metadata.codec = facts.codec
         metadata.hdrFormat = facts.hdrFormat
@@ -264,7 +263,7 @@ public final class ViewerMediaLoader {
         let value: Value
     }
 
-    private nonisolated static func videoFacts(for phAsset: PHAsset) async -> VideoFacts? {
+    nonisolated private static func videoFacts(for phAsset: PHAsset) async -> VideoFacts? {
         let boxed: Unchecked<AVAsset>? = await withCheckedContinuation { continuation in
             let options = PHVideoRequestOptions()
             options.deliveryMode = .fastFormat
@@ -301,7 +300,7 @@ public final class ViewerMediaLoader {
     /// default — HLG and HDR10 are indistinguishable at this level without
     /// reading the transfer function, and naming the wrong one is worse than
     /// naming the family.
-    private nonisolated static func hdrFormat(of asset: AVAsset) async -> HDRFormat {
+    nonisolated private static func hdrFormat(of asset: AVAsset) async -> HDRFormat {
         guard let tracks = try? await asset.loadTracks(withMediaType: .video) else { return .hdr10 }
         for track in tracks {
             guard let descriptions = try? await track.load(.formatDescriptions) else { continue }
@@ -318,7 +317,7 @@ public final class ViewerMediaLoader {
     /// The set the info panel can name. Anything else answers `nil` rather than
     /// printing the raw FourCC, which would be four characters of noise where
     /// the reader expected a format.
-    private nonisolated static func codecName(for subType: CMVideoCodecType) -> String? {
+    nonisolated private static func codecName(for subType: CMVideoCodecType) -> String? {
         switch subType {
         case kCMVideoCodecType_HEVC, kCMVideoCodecType_HEVCWithAlpha: "HEVC"
         case kCMVideoCodecType_DolbyVisionHEVC: "Dolby Vision HEVC"

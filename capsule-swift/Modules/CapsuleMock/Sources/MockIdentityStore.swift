@@ -18,7 +18,7 @@ import Foundation
 /// never hold, log, or serialise a credential.
 public actor MockIdentityStore {
     nonisolated let configuration: MockConfiguration
-    private nonisolated let gate: MockGate
+    nonisolated private let gate: MockGate
 
     private var authState: AuthState
     private var deviceRecords: [DeviceRecord]

@@ -1,8 +1,7 @@
+@testable import CapsuleAlerts
 import CapsulePorts
 import Testing
 import UserNotifications
-
-@testable import CapsuleAlerts
 
 @Suite("The system authorization maps onto the port's three states")
 struct UserNotificationAlertsTests {

@@ -1,9 +1,8 @@
 import CapsuleDomain
 import CapsuleFoundation
 import CapsuleMock
-import Testing
-
 @testable import FeatureTransfer
+import Testing
 
 /// The mock lane's recorded stream folds into the board the transfer view
 /// previews: every state the view draws is reached, and the stream replays

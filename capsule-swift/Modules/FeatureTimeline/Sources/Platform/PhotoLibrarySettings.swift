@@ -12,11 +12,11 @@ enum PhotoLibrarySettings {
     static var url: URL? {
         #if os(iOS)
             // Opens Capsule's own pane in Settings, where Photos access lives.
-            return URL(string: "app-settings:")
+            URL(string: "app-settings:")
         #else
             // macOS has no per-app settings pane; the Photos privacy list in
             // System Settings is the equivalent surface.
-            return URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Photos")
+            URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Photos")
         #endif
     }
 }

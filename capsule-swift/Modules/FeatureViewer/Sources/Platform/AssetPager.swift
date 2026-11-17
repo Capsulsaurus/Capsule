@@ -55,7 +55,6 @@ struct AssetPager: View {
     #if !os(iOS)
         /// A pointer-driven paging control, disabled at the ends of the list so
         /// the affordance stays honest about where the user is.
-        @ViewBuilder
         private func step(_ delta: Int, symbol: String, label: LocalizedStringKey) -> some View {
             Button {
                 _ = advance(by: delta)

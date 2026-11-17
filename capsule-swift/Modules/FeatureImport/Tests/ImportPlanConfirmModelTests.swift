@@ -1,9 +1,8 @@
 import CapsuleDomain
 import CapsuleFoundation
 import CapsuleMock
-import Testing
-
 @testable import FeatureImport
+import Testing
 
 /// The confirmation screen is the last point at which anything is reversible, so
 /// its refusals are what these tests are about.

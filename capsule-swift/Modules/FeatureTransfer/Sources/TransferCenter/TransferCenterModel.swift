@@ -41,9 +41,9 @@ public final class TransferCenterModel {
     private let library: any LibraryPort
     private let clock: TransferClock
     private var throughput = ThroughputBook()
-    // `nonisolated(unsafe)` so `deinit` can cancel without hopping actors; the
-    // task itself only ever touches main-actor state.
-    private nonisolated(unsafe) var observation: Task<Void, Never>?
+    /// `nonisolated(unsafe)` so `deinit` can cancel without hopping actors; the
+    /// task itself only ever touches main-actor state.
+    nonisolated(unsafe) private var observation: Task<Void, Never>?
 
     public init(
         uploads: any UploadPort,
@@ -145,8 +145,7 @@ public final class TransferCenterModel {
     /// yet still gets a row, drawn at the bottom of the degrade ladder.
     private func resolveAssets(for sessions: [UploadSession]) async -> [AssetID: LibraryAsset] {
         let ids = Set(sessions.map { AssetID.managed(uuid: $0.assetID) })
-        guard !ids.isEmpty else { return [:] }
-        guard let assets = try? await library.assets(for: Array(ids)) else { return [:] }
+        guard !ids.isEmpty, let assets = try? await library.assets(for: Array(ids)) else { return [:] }
         return Dictionary(assets.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 

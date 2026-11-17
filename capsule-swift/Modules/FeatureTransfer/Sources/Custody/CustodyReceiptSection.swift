@@ -54,7 +54,6 @@ struct CustodyReceiptSection: View {
 
     /// Binds the receipt to the asset's provenance-chain position. Absent is a
     /// fact worth showing, not a blank row.
-    @ViewBuilder
     private var envelopeRow: some View {
         LabeledContent("app.custody.field.envelope_hash") {
             if let envelopeHash = receipt.envelopeHash {
@@ -69,7 +68,6 @@ struct CustodyReceiptSection: View {
 
     /// `nil` only for the first receipt in the server's log — the append-only
     /// discipline of the provenance chain, applied to the server's own log.
-    @ViewBuilder
     private var priorRow: some View {
         LabeledContent("app.custody.field.prior_receipt") {
             if let priorReceiptHash = receipt.priorReceiptHash {

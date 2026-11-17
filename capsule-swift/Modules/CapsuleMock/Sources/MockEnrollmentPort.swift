@@ -38,7 +38,7 @@ extension MockIdentityStore: EnrollmentPort {
     /// reported **identically**, so redemption is not an oracle an attacker can
     /// probe for valid codes. The stream therefore fails with one code rather
     /// than a diagnosis.
-    public nonisolated func redeem(code: String) -> AsyncStream<EnrollmentProgress> {
+    nonisolated public func redeem(code: String) -> AsyncStream<EnrollmentProgress> {
         AsyncStream { continuation in
             Task {
                 guard await self.isRedeemable(code) else {
@@ -56,7 +56,7 @@ extension MockIdentityStore: EnrollmentPort {
     }
 
     /// Watch a ceremony from the issuing side.
-    public nonisolated func observeEnrollment(channelHandle: String) -> AsyncStream<EnrollmentProgress> {
+    nonisolated public func observeEnrollment(channelHandle: String) -> AsyncStream<EnrollmentProgress> {
         AsyncStream { continuation in
             Task {
                 guard await self.channels.contains(channelHandle) else {

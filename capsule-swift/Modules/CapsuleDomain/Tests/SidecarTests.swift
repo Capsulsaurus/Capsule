@@ -1,8 +1,7 @@
-import Foundation
-import Testing
-
 import CapsuleDomain
 import CapsuleFoundation
+import Foundation
+import Testing
 
 /// Parity rules 2, 3, and 4: `unknownFields` round-trips verbatim, the two
 /// timestamp conventions coexist, and the timeline sorts on

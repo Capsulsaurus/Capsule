@@ -1,10 +1,9 @@
-import Foundation
-import Testing
-
 import AssetKit
 import CapsuleDomain
 import CapsuleFoundation
 import CapsulePorts
+import Foundation
+import Testing
 
 // MARK: - Fixtures
 

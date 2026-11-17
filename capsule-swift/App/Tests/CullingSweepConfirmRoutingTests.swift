@@ -1,7 +1,6 @@
+@testable import Capsule
 import Foundation
 import Testing
-
-@testable import Capsule
 
 /// Confirming the sweep queues it behind the verdict writes ahead of it.
 @Suite("Culling sweep confirm routing")

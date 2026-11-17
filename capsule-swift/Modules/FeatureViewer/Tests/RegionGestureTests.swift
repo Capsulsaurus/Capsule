@@ -1,6 +1,5 @@
-import Testing
-
 @testable import FeatureViewer
+import Testing
 
 /// A simultaneous drag and pinch compose from one base, so neither erases the
 /// other and neither compounds when the other ends.

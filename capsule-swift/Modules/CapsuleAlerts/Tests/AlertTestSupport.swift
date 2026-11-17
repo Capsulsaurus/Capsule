@@ -1,9 +1,8 @@
+@testable import CapsuleAlerts
 import CapsuleDomain
 import CapsuleMock
 import CapsulePorts
 import Foundation
-
-@testable import CapsuleAlerts
 
 /// 2026-01-01T00:00:00Z.
 let epoch = CapsuleTimestamp(epochSeconds: 1767225600)

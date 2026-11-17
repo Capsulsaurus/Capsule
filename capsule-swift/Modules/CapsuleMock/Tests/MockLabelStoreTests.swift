@@ -1,10 +1,9 @@
 import CapsuleDomain
 import CapsuleFoundation
+@testable import CapsuleMock
 import CapsulePorts
 import Foundation
 import Testing
-
-@testable import CapsuleMock
 
 /// The mock's label store refuses what the core's workspace refuses, writes
 /// nothing on a refusal, and answers every write with what its target holds.

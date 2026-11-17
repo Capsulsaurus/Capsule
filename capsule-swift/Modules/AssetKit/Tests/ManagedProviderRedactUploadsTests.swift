@@ -1,13 +1,12 @@
-import Foundation
-import Testing
-
 import AssetKit
 import CapsuleCatalog
 import CapsuleDomain
 import CapsuleFoundation
 import CapsulePorts
 import CapsuleTestSupport
+import Foundation
 import ManagedStore
+import Testing
 
 /// A managed delete redacts the deleted asset's in-flight upload once the
 /// workspace holds the delete, and a redaction that fails never fails the
