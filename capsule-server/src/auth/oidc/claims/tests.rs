@@ -176,7 +176,7 @@ fn an_hmac_token_is_refused_before_any_key_is_consulted() {
     let token = jsonwebtoken::encode(
         &header,
         &good_claims(),
-        &EncodingKey::from_secret(b"anything"),
+        &EncodingKey::from_secret(b"anything").expect("an HMAC key"),
     )
     .expect("signs");
     assert_eq!(
@@ -256,10 +256,14 @@ fn a_critical_header_extension_is_refused() {
         verify(&token, &keys(&[&signer])),
         Err(ClaimRejection::CriticalHeader)
     );
-    // An empty `crit` is a malformed-but-harmless header and is not what the rule is about.
+    // An empty `crit` is not what the rule above is about, but RFC 7515 §4.1.11 forbids it, and
+    // jsonwebtoken 12 refuses such a header before the rule runs: it is a malformed token.
     header.crit = Some(Vec::new());
     let token = jsonwebtoken::encode(&header, &good_claims(), &signer.encoding).expect("signs");
-    assert!(verify(&token, &keys(&[&signer])).is_ok());
+    assert!(matches!(
+        verify(&token, &keys(&[&signer])),
+        Err(ClaimRejection::Malformed { .. })
+    ));
 }
 
 #[test]

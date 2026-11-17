@@ -166,7 +166,12 @@ pub(super) fn month_dir_timestamp(dir: &Path) -> i64 {
         let name = dir.file_name()?.to_string_lossy().into_owned();
         let (year, month) = name.split_once('-')?;
         let date = Date::new(year.parse().ok()?, month.parse().ok()?, 1).ok()?;
-        Some(date.to_zoned(TimeZone::UTC).ok()?.timestamp().as_second())
+        Some(
+            date.to_zoned_datetime(TimeZone::UTC)
+                .ok()?
+                .timestamp()
+                .as_second(),
+        )
     };
     parse().unwrap_or(0)
 }

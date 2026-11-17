@@ -181,6 +181,42 @@ fn find_named<'a>(declarations: &'a [Declaration], name: &str) -> &'a Declaratio
 }
 
 #[test]
+fn an_error_enum_whose_modifier_sits_on_its_own_line_is_still_scanned() {
+    // uniffi 0.32's error template: `public`, a newline, then the declaration.
+    let source = "/**\n * Every failure.\n */\npublic \nenum FfiError: Swift.Error, Equatable {\n    case Backend(detail: String)\n}\n";
+    let declarations = scan_swift(source).expect("it scans");
+    let error = find_named(&declarations, "FfiError");
+    assert_eq!(error.kind, "enum");
+    assert_eq!(
+        error.signature,
+        "public enum FfiError: Swift.Error, Equatable"
+    );
+    assert_eq!(error.doc, "Every failure.");
+    assert_eq!(names(&error.members), vec![("case", "Backend")]);
+}
+
+#[test]
+fn only_a_modifier_alone_on_its_line_is_joined() {
+    assert_eq!(
+        join_split_modifiers("public \nenum A {}\n"),
+        "public enum A {}\n"
+    );
+    assert_eq!(
+        join_split_modifiers("open\r\nclass B {}\n"),
+        "open class B {}\n"
+    );
+    // Already on one line, or not a modifier: untouched.
+    assert_eq!(
+        join_split_modifiers("public enum C {}\n"),
+        "public enum C {}\n"
+    );
+    assert_eq!(
+        join_split_modifiers("publicity\nenum D {}\n"),
+        "publicity\nenum D {}\n"
+    );
+}
+
+#[test]
 fn lex_ignores_braces_in_comments_strings_and_char_literals() {
     let lines = lex("a {\n/* { */ \"}\" '{'\n// }\n}\nb\n").unwrap();
     let depths: Vec<usize> = lines.iter().map(|line| line.depth).collect();

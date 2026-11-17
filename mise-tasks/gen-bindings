@@ -14,7 +14,7 @@ out="target/bindings"
 surface="target/bindings-surface"
 rm -rf "$out" "$surface"
 
-# The `capsule_sdk` namespace (one pinned uniffi, 0.31.1):
+# The `capsule_sdk` namespace (one pinned uniffi, 0.32.2):
 # capsule-sdk's `FfiCapsuleClient`/`FfiSession` user-flow primitives, its
 # `FfiWorkspace` workspace verbs, and the hardware-signer and key-agreement
 # seams the native harnesses implement. Generated library-mode from its own compiled

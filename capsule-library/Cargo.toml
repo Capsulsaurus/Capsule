@@ -77,7 +77,7 @@ rustix = { version = "1", features = ["fs"] }
 # library, so the crate cross-`check`s for `x86_64-pc-windows-msvc` off-Windows). Not tss-esapi
 # on Windows.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.60", features = [
+windows-sys = { version = "0.61", features = [
     "Win32_Storage_FileSystem",
     "Win32_Foundation",
     "Win32_System_TpmBaseServices",

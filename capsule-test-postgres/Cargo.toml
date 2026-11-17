@@ -1,0 +1,21 @@
+[package]
+name = "capsule-test-postgres"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "The Postgres test container the server and end-to-end container tiers start"
+
+[lib]
+name = "capsule_test_postgres"
+path = "src/lib.rs"
+
+# Test support only: `capsule-server` and `capsule-e2e` take it as a dev-dependency, so no served
+# binary links it. It replaces testcontainers, whose `astral-tokio-tar` is unmaintained
+# (RUSTSEC-2026-0440): the container tiers need one image, one published port and `exec`, which
+# the container CLI already does, so this drives the CLI and adds no crate of its own.
+[dependencies]
+thiserror = { workspace = true }
+# `process` and `time` only; the workspace pin enables `full`.
+tokio = { workspace = true }
+tracing = { workspace = true }

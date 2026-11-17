@@ -52,8 +52,8 @@ cargo nextest run -p capsule-server            # green, and says what it did not
 CAPSULE_TEST_POSTGRES=1 cargo nextest run -p capsule-server -E 'test(postgres_conformance)'
 ```
 
-On a rootless podman host that also needs `DOCKER_HOST` pointing at the user socket and
-`CAPSULE_TEST_CONTAINER_USERNS=keep-id`; `capsule_server::postgres::testing` says why.
+On a rootless podman host that also needs `CAPSULE_TEST_CONTAINER_CLI=podman` and
+`CAPSULE_TEST_CONTAINER_USERNS=keep-id`; the `capsule-test-postgres` crate says why.
 
 Two of the in-memory adapters live beside the ports rather than in `tests/support/`: `auth::accounts_memory`
 and `auth::totp`'s `InMemoryTotp`. The account ports' docs say a double in `src/` would be "a fake

@@ -5258,20 +5258,19 @@ pub(crate) fn totp_code(fixture: &Fixture, user: &UserId) -> String {
         .totp
         .secret_of(user)
         .expect("the account has an enrollment");
-    let bytes = totp_rs::Secret::Encoded(secret.expose_base32().to_owned())
-        .to_bytes()
+    let secret = totp_rs::Secret::try_from_base32(secret.expose_base32())
         .expect("the fixture's secret is base32");
-    totp_rs::TOTP::new(
-        totp_rs::Algorithm::SHA1,
-        capsule_server::auth::totp::DIGITS,
-        0,
-        capsule_server::auth::totp::STEP_SECONDS,
-        bytes,
-        Some("Capsule".to_owned()),
-        String::new(),
-    )
-    .expect("a usable secret")
-    .generate(u64::try_from(fixture.clock.now().as_second()).expect("a post-epoch instant"))
+    totp_rs::Builder::new()
+        .with_algorithm(totp_rs::Algorithm::SHA1)
+        .with_digits(u8::try_from(capsule_server::auth::totp::DIGITS).expect("a digit count"))
+        .with_skew(0)
+        .with_step_duration(capsule_server::auth::totp::STEP_SECONDS)
+        .with_secret(secret)
+        .with_issuer(Some("Capsule"))
+        .build()
+        .expect("a usable secret")
+        .generate(u64::try_from(fixture.clock.now().as_second()).expect("a post-epoch instant"))
+        .to_string()
 }
 
 // ===========================================================================================

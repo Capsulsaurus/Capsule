@@ -45,7 +45,7 @@ pub(crate) fn run_seed(root: &Path, mut args: impl Iterator<Item = String>) -> R
     }
     // The simulator shares the host's clock and time zone, so "today" here is "today" there —
     // and the app titles sections against that real clock, not against the anchor.
-    let today = jiff::Zoned::now().date();
+    let today = jiff::ZonedDateTime::now().date();
     let anchor = anchor.unwrap_or(today);
     if anchor > today {
         bail!("--anchor {anchor} is in the future; the app would title those days as upcoming");

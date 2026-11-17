@@ -896,23 +896,15 @@ fn an_operator_command_without_a_blob_root_refuses_by_name() {
 mod postgres_conformance {
     use std::process::Stdio;
 
+    use capsule_test_postgres::{DATABASE, GATE, PostgresContainer, Request};
     use server_migration::MigratorTrait as _;
-    use testcontainers::runners::AsyncRunner as _;
-    use testcontainers::{ContainerAsync, ImageExt as _};
-    use testcontainers_modules::postgres::Postgres;
 
     use super::{EXAMPLE_SEED, Serving, run, seeded_blob, seeded_root, server};
-
-    /// The tag `capsule-server/compose.yaml` runs, as the in-crate harnesses pin it.
-    const POSTGRES_TAG: &str = "18";
-
-    /// The rootless-podman user-namespace mode, when the host needs one (`postgres::testing`).
-    const USERNS_MODE: &str = "CAPSULE_TEST_CONTAINER_USERNS";
 
     /// A migrated Postgres, held for the length of a case.
     struct Backends {
         database_url: String,
-        _postgres: ContainerAsync<Postgres>,
+        _postgres: PostgresContainer,
     }
 
     impl Backends {
@@ -927,31 +919,17 @@ mod postgres_conformance {
 
     /// A migrated Postgres, or `None` — logged — unless the tier is admitted.
     async fn backends(case: &str) -> Option<Backends> {
-        if std::env::var("CAPSULE_TEST_POSTGRES").ok().as_deref() != Some("1") {
+        if std::env::var(GATE).ok().as_deref() != Some("1") {
             eprintln!(
-                "skipping {case}: the durable process tier needs CAPSULE_TEST_POSTGRES=1 with a \
-                 reachable container runtime"
+                "skipping {case}: the durable process tier needs {GATE}=1 with a reachable \
+                 container runtime"
             );
             return None;
         }
-        let userns = std::env::var(USERNS_MODE)
-            .ok()
-            .filter(|mode| !mode.is_empty());
-
-        let mut postgres = Postgres::default()
-            .with_tag(POSTGRES_TAG)
-            // Off the image's declared volume, for the reason `postgres::testing` gives.
-            .with_env_var("PGDATA", "/tmp/pgdata");
-        if let Some(mode) = &userns {
-            postgres = postgres.with_userns_mode(mode);
-        }
-        let postgres = postgres
-            .start()
+        let postgres = capsule_test_postgres::start(&Request::from_env())
             .await
-            .expect("the Postgres container starts");
-        let host = postgres.get_host().await.expect("a host");
-        let port = postgres.get_host_port_ipv4(5432).await.expect("a port");
-        let database_url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
+            .unwrap_or_else(|error| panic!("the Postgres container starts: {error}"));
+        let database_url = postgres.url(DATABASE);
         let connection = capsule_server::postgres::connect(&database_url)
             .await
             .expect("the container accepts a connection");

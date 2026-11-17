@@ -2081,7 +2081,8 @@ fn camera_pairing_store() -> Result<camera_pairing::PairingStore> {
 /// `capsule camera discover`, `capsule camera import` and `capsule camera identity`.
 fn camera_command(command: CameraCommands) -> Result<()> {
     let store = camera_pairing_store()?;
-    let default_name = || camera_pairing::default_name(sysinfo::System::host_name().as_deref());
+    let default_name =
+        || camera_pairing::default_name(sysinfo::System::host_name().ok().as_deref());
     match command {
         CameraCommands::Discover { timeout, json } => {
             let window = std::time::Duration::from_secs(timeout);

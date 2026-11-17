@@ -40,7 +40,7 @@ fn date_parts(capture_utc: Option<i64>) -> (u32, u8) {
         Some(ts) => {
             let date = jiff::Timestamp::from_second(ts)
                 .unwrap_or(jiff::Timestamp::UNIX_EPOCH)
-                .to_zoned(jiff::tz::TimeZone::UTC)
+                .to_zoned_datetime(jiff::tz::TimeZone::UTC)
                 .date();
             (
                 u32::try_from(date.year()).unwrap_or(1970),

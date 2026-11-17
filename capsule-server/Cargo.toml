@@ -155,7 +155,7 @@ http-body = { workspace = true }
 # binary is now one `capsule-server` with `serve | gc | purge | scrub | gen-openapi`
 # subcommands, for the reason `capsule-cli` is one binary — four executables would each carry
 # their own copy of the config loader and the adapter seam.
-clap = { version = "4.6.1", features = ["derive"] }
+clap = { version = "4.6.7", features = ["derive"] }
 color-eyre = "0.6.5"
 # The Postgres adapters for the durable ports (#402). `default-features = false` is
 # load-bearing rather than tidy: sea-orm's defaults include `with-chrono`, and
@@ -207,13 +207,10 @@ capsule-server-migration = { path = "migration" }
 # `mise run test-rust` still needs no podman, and `.config/nextest.toml` puts them in the
 # one-thread `containers` group.
 #
-# Both crates were pinned at the workspace and consumed by nothing — `xtask`'s
-# `PLANNED_WORKSPACE_DEPENDENCIES` sanctioned them as planned because "no test starts a
-# container yet". These are the tests that start one, so the two entries leave that list.
-# Dev-only: the served binary links neither.
-# `postgres`, the only module on the workspace pin, is the image `capsule-server/compose.yaml` runs.
-testcontainers = { workspace = true }
-testcontainers-modules = { workspace = true }
+# Capsule's own harness over the container CLI, which replaced testcontainers when its
+# `astral-tokio-tar` went unmaintained (RUSTSEC-2026-0440). Dev-only: the served binary does not
+# link it. It runs the image `capsule-server/compose.yaml` runs.
+capsule-test-postgres = { path = "../capsule-test-postgres" }
 
 # Throwaway directories on disk. `tests/binary.rs` gives the spawned server a blob root of its
 # own and deletes it afterwards; `tests/sdk_client.rs` puts a **real** `capsule_library::Workspace`
@@ -261,7 +258,7 @@ tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "tes
 # features `capsule-sdk` pins for the peering stack - the `ring` provider, named explicitly
 # because reqwest's `rustls` enables aws-lc-rs beside it - so nothing new enters the lock file.
 # Dev-only: the served binary terminates no TLS (design/networking.md#transport-security).
-rcgen = { version = "0.13", default-features = false, features = ["ring", "crypto"] }
+rcgen = { version = "0.14", default-features = false, features = ["ring", "crypto"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 # The feed's manifest bytes arrive base64-encoded, and a test that asserts byte equality has to

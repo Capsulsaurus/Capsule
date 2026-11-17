@@ -42,8 +42,8 @@
 //! a pass — unless `CAPSULE_TEST_KILL_ANYWHERE=1`. `CAPSULE_KILL_SEED` names the first seed and
 //! `CAPSULE_KILL_SEEDS` how many to try; every seed's schedule is printed, so a nightly failure
 //! replays with `CAPSULE_KILL_SEED=<seed> CAPSULE_KILL_SEEDS=1`. Rootless podman needs
-//! `DOCKER_HOST` at its socket and `CAPSULE_TEST_CONTAINER_USERNS=keep-id`, as the server's
-//! container tiers do. `CAPSULE_KILL_LOG_DIR` keeps every process's output after the run, and
+//! `CAPSULE_TEST_CONTAINER_CLI=podman` and `CAPSULE_TEST_CONTAINER_USERNS=keep-id`, as the
+//! server's container tiers do. `CAPSULE_KILL_LOG_DIR` keeps every process's output after the run, and
 //! `CAPSULE_E2E_SERVER_LOG` / `CAPSULE_E2E_CLI_LOG` set the processes' `RUST_LOG`.
 
 #![cfg(unix)]
@@ -66,11 +66,9 @@ use capsule_sdk::sync::ChangeKind;
 use capsule_server::boot;
 use capsule_server::config::{Config, Demands, Overrides};
 use capsule_server::scrub::{self, Depth, Finding};
+use capsule_test_postgres::{DATABASE, PostgresContainer, Request};
 use server_migration::MigratorTrait as _;
 use tempfile::TempDir;
-use testcontainers::runners::AsyncRunner as _;
-use testcontainers::{ContainerAsync, ImageExt as _};
-use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
 
 /// The phases every run drives, in pipeline order, each asserted to converge.
@@ -82,12 +80,6 @@ const GATE: &str = "CAPSULE_TEST_KILL_ANYWHERE";
 /// The variable naming a directory to keep every process's logs in, so a failed run can be
 /// read afterwards (CI uploads it). Unset, the logs go to a temp directory.
 const LOG_DIR_VAR: &str = "CAPSULE_KILL_LOG_DIR";
-
-/// The rootless-podman user-namespace mode, when the host needs one (`postgres::testing`).
-const USERNS_MODE: &str = "CAPSULE_TEST_CONTAINER_USERNS";
-
-/// The tag `capsule-server/compose.yaml` runs, as the server's container tiers pin it.
-const POSTGRES_TAG: &str = "18";
 
 /// How long any one `capsule` run may take before the suite fails it. A CLI that outlives this
 /// after its server came back is a hang, which is a finding in its own right.
@@ -114,29 +106,15 @@ fn corpus() -> Vec<(String, Vec<u8>)> {
 /// A migrated Postgres, held for the length of the test.
 struct Backends {
     database_url: String,
-    _postgres: ContainerAsync<Postgres>,
+    _postgres: PostgresContainer,
 }
 
 impl Backends {
     async fn start() -> Self {
-        let userns = std::env::var(USERNS_MODE)
-            .ok()
-            .filter(|mode| !mode.is_empty());
-
-        let mut postgres = Postgres::default()
-            .with_tag(POSTGRES_TAG)
-            // Off the image's declared volume, for the reason `postgres::testing` gives.
-            .with_env_var("PGDATA", "/tmp/pgdata");
-        if let Some(mode) = &userns {
-            postgres = postgres.with_userns_mode(mode);
-        }
-        let postgres = postgres
-            .start()
+        let postgres = capsule_test_postgres::start(&Request::from_env())
             .await
-            .expect("the Postgres container starts");
-        let host = postgres.get_host().await.expect("a host");
-        let port = postgres.get_host_port_ipv4(5432).await.expect("a port");
-        let database_url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
+            .unwrap_or_else(|error| panic!("the Postgres container starts: {error}"));
+        let database_url = postgres.url(DATABASE);
         let connection = capsule_server::postgres::connect(&database_url)
             .await
             .expect("the container accepts a connection");
@@ -507,8 +485,8 @@ async fn baseline(world: &World) -> BTreeMap<Phase, Duration> {
 async fn every_seeded_kill_converges_to_durable_once_and_indexed_once() {
     if std::env::var(GATE).ok().as_deref() != Some("1") {
         eprintln!(
-            "skipping kill-anywhere: set {GATE}=1 with a reachable container runtime \
-             (DOCKER_HOST) to run it"
+            "skipping kill-anywhere: set {GATE}=1 with a container CLI on PATH (`docker`, or \
+             name another in CAPSULE_TEST_CONTAINER_CLI) to run it"
         );
         return;
     }
