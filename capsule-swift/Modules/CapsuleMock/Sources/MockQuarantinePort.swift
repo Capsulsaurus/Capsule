@@ -78,7 +78,7 @@ extension MockSystemStore: QuarantinePort {
         await quarantineChanges.send(())
     }
 
-    public nonisolated func changes() -> AsyncStream<Void> {
+    nonisolated public func changes() -> AsyncStream<Void> {
         quarantineChanges.subscribe()
     }
 
@@ -104,7 +104,7 @@ extension MockSystemStore: MaintenancePort {
     /// A destructive job still runs behind verify-before-destroy: asking for it
     /// explicitly does not waive the gate that stops it deleting an only copy.
     /// So the stream reports what it found rather than what it removed.
-    public nonisolated func run(_ kind: MaintenanceTaskKind) -> AsyncStream<MaintenanceTask> {
+    nonisolated public func run(_ kind: MaintenanceTaskKind) -> AsyncStream<MaintenanceTask> {
         AsyncStream { continuation in
             Task {
                 await self.clearCancelled(kind)
@@ -132,7 +132,7 @@ extension MockSystemStore: MaintenancePort {
         markCancelled(kind)
     }
 
-    public nonisolated func changes() -> AsyncStream<[MaintenanceTask]> {
+    nonisolated public func changes() -> AsyncStream<[MaintenanceTask]> {
         maintenanceChanges.subscribe()
     }
 

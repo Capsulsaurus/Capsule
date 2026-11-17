@@ -1,10 +1,9 @@
-import Foundation
-import Testing
-
 import CapsuleDomain
 import CapsuleMock
 import CapsuleNavigation
 import FeatureSharing
+import Foundation
+import Testing
 
 // MARK: - ShareLinkListViewModelTests
 

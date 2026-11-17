@@ -24,7 +24,7 @@ public actor MockThumbnailRenderer {
     /// real decoded-image cache.
     public static let defaultByteBudget = 48 * 1024 * 1024
 
-    private nonisolated let library: MockLibrary
+    nonisolated private let library: MockLibrary
     private let cache = NSCache<NSString, CachedThumbnail>()
     private var renderCount = 0
 

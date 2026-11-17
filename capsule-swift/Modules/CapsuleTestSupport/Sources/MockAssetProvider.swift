@@ -46,7 +46,7 @@ public actor MockAssetProvider: AssetProvider {
         assets.first { $0.id == id }
     }
 
-    public nonisolated func changes() -> AsyncStream<AssetChange> {
+    nonisolated public func changes() -> AsyncStream<AssetChange> {
         AsyncStream { continuation in
             Task { await self.attach(continuation) }
         }

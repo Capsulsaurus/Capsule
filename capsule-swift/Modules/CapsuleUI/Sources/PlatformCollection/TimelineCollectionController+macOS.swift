@@ -47,8 +47,7 @@
     ///   document view of an `NSScrollView` the controller owns.
     /// * There is no `scrollViewDidScroll`, so the visible range is driven by the
     ///   clip view's bounds-changed notification instead.
-    final class TimelineCollectionController<ItemContent, HeaderContent>: NSViewController
-        where ItemContent: View, HeaderContent: View {
+    final class TimelineCollectionController<ItemContent: View, HeaderContent: View>: NSViewController {
         var itemContent: (Int) -> ItemContent
         var headerContent: (Int) -> HeaderContent
         var onSelect: ((Int) -> Void)?

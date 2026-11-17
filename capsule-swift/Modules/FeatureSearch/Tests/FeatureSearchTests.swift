@@ -1,9 +1,8 @@
-import Foundation
-import Testing
-
 import AssetKit
 import CapsuleTestSupport
 import FeatureSearch
+import Foundation
+import Testing
 
 @Suite("SearchFilter")
 struct SearchFilterTests {

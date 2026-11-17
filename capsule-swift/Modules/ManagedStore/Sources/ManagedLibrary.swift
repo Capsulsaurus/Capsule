@@ -24,18 +24,18 @@ public actor ManagedLibrary {
     public let layout: ManagedLibraryLayout
 
     /// The library's writes: sealing an import and every trash transition.
-    public nonisolated let workspace: any ManagedWorkspace
+    nonisolated public let workspace: any ManagedWorkspace
 
     /// Where a purge's `delete` goes to reach the server: the FFI lane's
     /// session over ``workspace``, once signed in. `nil` signed out and on the
     /// mock lane, where a purge stays local and its records wait on the
     /// workspace's kept chain.
-    public nonisolated let purgeDelivery: (any PurgeDelivering)?
+    nonisolated public let purgeDelivery: (any PurgeDelivering)?
 
     /// Where a delete's or restore's signed record goes to reach the server:
     /// the FFI lane's session over ``workspace``, once signed in. `nil` signed
     /// out and on the mock lane, where the record stays on the asset's chain.
-    public nonisolated let lifecycleDelivery: (any LifecycleDelivering)?
+    nonisolated public let lifecycleDelivery: (any LifecycleDelivering)?
 
     private let fileStore: any FileStore
     private let catalogOpener: any CatalogOpening

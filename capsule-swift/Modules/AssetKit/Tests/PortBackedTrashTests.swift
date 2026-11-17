@@ -1,11 +1,10 @@
-import Foundation
-import Testing
-
 import AssetKit
 import CapsuleCatalog
 import CapsuleDomain
 import CapsuleFoundation
 import CapsulePorts
+import Foundation
+import Testing
 
 @Suite("Port-backed trash provider")
 struct PortBackedTrashTests {

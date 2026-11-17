@@ -84,7 +84,6 @@ public struct ServerConnectView: View {
         }
     }
 
-    @ViewBuilder
     private var pinControls: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.small) {
             if model.isPinned {

@@ -1,9 +1,8 @@
 import CapsuleCatalog
+@testable import CapsuleCatalogFFI
 import CapsuleDomain
 import Foundation
 import Testing
-
-@testable import CapsuleCatalogFFI
 
 /// A workspace double: records every verb it receives and throws `failure`
 /// from the trash verbs when one is set.

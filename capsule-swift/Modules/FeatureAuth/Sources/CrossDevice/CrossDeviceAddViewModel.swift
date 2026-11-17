@@ -61,7 +61,7 @@ public final class CrossDeviceAddViewModel {
     private let enrollment: any EnrollmentPort
     private let ceremony: any CrossDeviceCeremonyPort
     private let now: @Sendable () -> CapsuleTimestamp
-    private nonisolated(unsafe) var observation: Task<Void, Never>?
+    nonisolated(unsafe) private var observation: Task<Void, Never>?
 
     public init(
         enrollment: any EnrollmentPort,

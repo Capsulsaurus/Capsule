@@ -1,10 +1,9 @@
+@testable import CapsuleCatalogFFI
 import CapsuleDomain
 import CapsuleFoundation
 import CapsulePorts
 import Foundation
 import Testing
-
-@testable import CapsuleCatalogFFI
 
 /// A workspace double: holds each asset's flag and stack place, records every
 /// write it receives, and throws `failure` from every verb when one is set, or

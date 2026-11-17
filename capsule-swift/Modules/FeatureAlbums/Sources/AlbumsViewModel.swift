@@ -12,8 +12,8 @@ public final class AlbumsViewModel {
     public private(set) var isLoading = true
 
     private let albumProvider: any AlbumProvider
-    // `nonisolated(unsafe)` so `deinit` can cancel it; see `TimelineViewModel`.
-    private nonisolated(unsafe) var observation: Task<Void, Never>?
+    /// `nonisolated(unsafe)` so `deinit` can cancel it; see `TimelineViewModel`.
+    nonisolated(unsafe) private var observation: Task<Void, Never>?
 
     public init(albumProvider: any AlbumProvider) {
         self.albumProvider = albumProvider

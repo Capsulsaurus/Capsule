@@ -1,8 +1,7 @@
 import CapsuleDomain
+@testable import CapsuleMock
 import CapsulePorts
 import Testing
-
-@testable import CapsuleMock
 
 /// The mock lane's predicate must agree with the core's documented rules, or
 /// the mock lane would rehearse a lifecycle the real app does not have.

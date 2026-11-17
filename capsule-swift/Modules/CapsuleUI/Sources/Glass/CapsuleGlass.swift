@@ -105,7 +105,6 @@ public extension View {
     ///
     /// The `#if` is a *capability* branch, not a version one: macOS has no tab
     /// bar for the behaviour to apply to, so the modifier does not exist there.
-    @ViewBuilder
     func capsuleTabBarMinimizeOnScroll() -> some View {
         #if os(iOS)
             tabBarMinimizeBehavior(.onScrollDown)
@@ -151,7 +150,6 @@ public extension View {
     /// The `#if` is a capability branch: macOS puts search in the window toolbar,
     /// where there is nothing to minimise into, so the modifier does not exist
     /// there.
-    @ViewBuilder
     func capsuleSearchToolbarBehavior() -> some View {
         #if os(iOS)
             searchToolbarBehavior(.minimize)
@@ -181,7 +179,6 @@ public extension View {
     /// a detail presentation is a window or a sheet rather than a view that
     /// takes over the screen, so there is no tile for it to grow from. The Mac
     /// keeps the system's own presentation animation.
-    @ViewBuilder
     func capsuleZoomTransition(id: some Hashable, in namespace: Namespace.ID) -> some View {
         #if os(iOS)
             navigationTransition(.zoom(sourceID: id, in: namespace))

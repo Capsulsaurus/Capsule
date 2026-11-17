@@ -1,9 +1,8 @@
+@testable import Capsule
 import CapsuleDomain
 import CapsuleFoundation
 import Foundation
 import Testing
-
-@testable import Capsule
 
 /// Verdict writes reach the library in the order the verdicts were given, even
 /// where an earlier verdict's write has to wait on the stack port first.
@@ -11,7 +10,7 @@ import Testing
 @MainActor
 struct CullingVerdictOrderTests {
     @Test("a stack verdict delayed on its members still lands before a later single-asset verdict")
-    func delayedStackMembersKeepVerdictOrder() async throws {
+    func delayedStackMembersKeepVerdictOrder() async {
         let library = Library()
         let gate = Gate()
         let queue = CullWriteQueue()
@@ -89,7 +88,7 @@ struct CullingVerdictOrderTests {
     }
 
     @Test("a queued sweep reads its candidates after the verdict write ahead of it settles")
-    func sweepReadsCandidatesAfterQueuedWrites() async throws {
+    func sweepReadsCandidatesAfterQueuedWrites() async {
         let gate = Gate()
         let queue = CullWriteQueue()
         let rejected = Rejected()

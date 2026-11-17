@@ -1,9 +1,8 @@
-import Foundation
-import Testing
-
 import AssetKit
 import CapsuleTestSupport
 import FeatureViewer
+import Foundation
+import Testing
 
 @Suite("AssetViewerModel")
 @MainActor

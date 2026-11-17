@@ -4,6 +4,6 @@
 # The Rust toolchain is pinned separately by /rust-toolchain.toml.
 [tools]
 tuist = "4"
-swiftlint = "0.57"
-swiftformat = "0.55"
-xcbeautify = "2"
+swiftlint = "0.65"
+swiftformat = "0.64"
+xcbeautify = "3"

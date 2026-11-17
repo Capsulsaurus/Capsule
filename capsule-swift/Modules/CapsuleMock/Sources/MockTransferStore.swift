@@ -16,7 +16,7 @@ import Foundation
 public actor MockTransferStore {
     nonisolated let store: MockLibraryStore
     nonisolated let configuration: MockConfiguration
-    private nonisolated let gate: MockGate
+    nonisolated private let gate: MockGate
 
     private var sessions: [UploadSession]
     private var policy: UploadPolicy

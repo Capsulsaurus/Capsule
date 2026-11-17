@@ -28,14 +28,7 @@ public struct LabelEditing: Sendable {
     }
 }
 
-private struct LabelEditingKey: EnvironmentKey {
-    static let defaultValue: LabelEditing? = nil
-}
-
 public extension EnvironmentValues {
     /// The label editor's ports, or `nil` where labels cannot be edited.
-    var labelEditing: LabelEditing? {
-        get { self[LabelEditingKey.self] }
-        set { self[LabelEditingKey.self] = newValue }
-    }
+    @Entry var labelEditing: LabelEditing?
 }

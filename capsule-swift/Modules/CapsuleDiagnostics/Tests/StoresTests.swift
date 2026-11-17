@@ -1,8 +1,7 @@
+@testable import CapsuleDiagnostics
 import CapsuleFoundation
 import Foundation
 import Testing
-
-@testable import CapsuleDiagnostics
 
 @Suite("BreadcrumbRing")
 struct BreadcrumbRingTests {

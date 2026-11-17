@@ -1,11 +1,10 @@
-import Foundation
-import Testing
-
 import AssetKit
 import CapsuleCatalog
 import CapsuleFoundation
 import CapsuleTestSupport
+import Foundation
 import ManagedStore
+import Testing
 
 /// Permanent deletion is the one operation whose *ordering* is a correctness
 /// property rather than a preference, so it gets its own suite.

@@ -1,10 +1,9 @@
-import CryptoKit
-import Foundation
-import Testing
-
 import CapsuleCatalog
 import CapsuleTestSupport
+import CryptoKit
+import Foundation
 import ManagedStore
+import Testing
 
 @Suite("ManagedLibraryLayout path computation")
 struct ManagedLibraryLayoutTests {

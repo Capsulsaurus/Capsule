@@ -1,9 +1,8 @@
-import Foundation
-import Testing
-
 import CapsuleDomain
 import CapsuleFoundation
 import CapsulePorts
+import Foundation
+import Testing
 
 // MARK: - Stub adapters
 
@@ -204,8 +203,8 @@ struct LibraryPortContractTests {
 
     @Test("swapping the implementation is a one-line change at the composition root")
     func implementationSwaps() async throws {
-        // Feature code depends only on `any LibraryPort`, so the mock and the
-        // eventual UniFFI adapter are interchangeable without touching a view.
+        /// Feature code depends only on `any LibraryPort`, so the mock and the
+        /// eventual UniFFI adapter are interchangeable without touching a view.
         func firstAssetID(from port: any LibraryPort) async throws -> AssetID? {
             try await port.assets(matching: .default, offset: 0, limit: 1).items.first?.id
         }

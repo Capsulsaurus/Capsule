@@ -1,8 +1,7 @@
 import CapsuleDomain
 import CapsuleMock
-import Testing
-
 @testable import FeatureImport
+import Testing
 
 /// The history list: what each past run says about itself, and the two things a
 /// user can do about one afterwards.

@@ -1,10 +1,9 @@
+@testable import CapsuleAlerts
 import CapsuleDomain
 import CapsuleMock
 import CapsulePorts
 import Foundation
 import Testing
-
-@testable import CapsuleAlerts
 
 /// The pre-arm lifecycle under a mocked clock (*Notifications — Validation*):
 /// arm on deadline-known, re-arm on the change that moves it, cancel when it

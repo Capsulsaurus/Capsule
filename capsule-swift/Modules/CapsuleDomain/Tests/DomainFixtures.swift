@@ -1,7 +1,6 @@
-import Foundation
-
 import CapsuleDomain
 import CapsuleFoundation
+import Foundation
 
 /// Shared fixtures for the domain suites.
 ///

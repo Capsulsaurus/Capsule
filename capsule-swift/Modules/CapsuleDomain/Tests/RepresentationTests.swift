@@ -1,7 +1,6 @@
+import CapsuleDomain
 import Foundation
 import Testing
-
-import CapsuleDomain
 
 /// The representation tiers, per-asset sync states, quarantine surfaces, and
 /// paging — parity rule 6.

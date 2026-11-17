@@ -77,7 +77,6 @@ public struct CustodyReceiptView: View {
 
     /// The destructive action exists **only** in the releasable verdict. Every
     /// other verdict offers re-verification and nothing else.
-    @ViewBuilder
     private var verdictActions: some View {
         Section {
             Button("app.custody.action.verify") {

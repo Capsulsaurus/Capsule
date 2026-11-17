@@ -143,325 +143,325 @@ private let moduleTargets: [Target] =
     // Foundation — value types, logging, utilities. No dependencies.
     module("CapsuleFoundation", testDependencies: [])
 
-    // Domain — the display/domain value types, shaped as structural mirrors of
-    // the uniffi records they will eventually be generated from. No I/O, no
-    // platform, no strings: this is the vocabulary every other module speaks.
-    + module(
-        "CapsuleDomain",
-        dependencies: [.target(name: "CapsuleFoundation")],
-        testDependencies: []
-    )
+        // Domain — the display/domain value types, shaped as structural mirrors of
+        // the uniffi records they will eventually be generated from. No I/O, no
+        // platform, no strings: this is the vocabulary every other module speaks.
+        + module(
+            "CapsuleDomain",
+            dependencies: [.target(name: "CapsuleFoundation")],
+            testDependencies: []
+        )
 
-    // Ports — the async protocol seams, one per capability. Feature modules
-    // import ONLY this for data, so swapping the mock adapters for the real
-    // uniffi ones is a change in the composition root and nowhere else.
-    + module(
-        "CapsulePorts",
-        dependencies: [
-            .target(name: "CapsuleFoundation"),
-            .target(name: "CapsuleDomain"),
-        ],
-        testDependencies: []
-    )
-
-    // Navigation — one `Route` vocabulary, a router with a stack per section,
-    // deep links, and the menu-command table. No SwiftUI views: the three shells
-    // bind this differently, so keeping it view-free is what lets them share it.
-    + module(
-        "CapsuleNavigation",
-        dependencies: [
-            .target(name: "CapsuleFoundation"),
-            .target(name: "CapsuleDomain"),
-        ],
-        testDependencies: []
-    )
-
-    // Mock — the in-memory implementation of every port, and the app's only
-    // data source while the Rust core is being rebuilt. Ships (rather than
-    // living in a test target) because the app itself runs on it.
-    + module(
-        "CapsuleMock",
-        dependencies: [
-            .target(name: "CapsuleFoundation"),
-            .target(name: "CapsuleDomain"),
-            .target(name: "CapsulePorts"),
-        ],
-        testDependencies: []
-    )
-
-    // Alerts — the client half of local alerts: the per-class arm / re-arm /
-    // cancel loop over `UNUserNotificationCenter`, permission at first use,
-    // and the bounded snooze. The predicate itself is a port; its tests run
-    // over the mock lane's in-memory adapters.
-    + module(
-        "CapsuleAlerts",
-        dependencies: [
-            .target(name: "CapsuleFoundation"),
-            .target(name: "CapsuleDomain"),
-            .target(name: "CapsulePorts"),
-        ],
-        testDependencies: [.target(name: "CapsuleMock")]
-    )
-
-    // Diagnostics — MetricKit crash/perf collection, consent, breadcrumbs,
-    // redacted bug-report bundles, and an opt-in self-hosted uploader.
-    + module(
-        "CapsuleDiagnostics",
-        dependencies: [.target(name: "CapsuleFoundation")],
-        testDependencies: [supportDependency]
-    )
-
-    // Catalog — the catalog contract, its Swift-native models, and the
-    // in-memory reference implementation. No Rust core: this half compiles
-    // and tests everywhere, which is what makes the mock lane possible.
-    + module(
-        "CapsuleCatalog",
-        dependencies: [.target(name: "CapsuleFoundation")],
-        testDependencies: [supportDependency]
-    )
-
-    // Catalog (FFI) — the Rust-backed half: the generated uniffi glue for
-    // both namespaces (the `capsule_core_ffi` catalog and `capsule-sdk`'s
-    // `capsule_sdk` user flows), the record conversions, the
-    // error mapping onto the FFI-free `CatalogError`, and the port adapters
-    // (labels, the transfer event stream, the alert policy) over the
-    // `capsule_sdk` objects. Present only when `TUIST_FFI=1`; nothing above it
-    // names a generated type.
-    //
-    // The Rust-backed `AlertPolicyPort` lives here because a uniffi
-    // namespace's glue compiles into exactly one module: a second module over
-    // `capsule_sdk.swift` would be a second copy of every generated type.
-    + (ffiEnabled
-        ? module(
-            "CapsuleCatalogFFI",
-            sources: [
-                "Modules/CapsuleCatalogFFI/Sources/**",
-                ".ffi/generated/capsule_core_ffi.swift",
-                ".ffi/generated/capsule_sdk.swift",
+        // Ports — the async protocol seams, one per capability. Feature modules
+        // import ONLY this for data, so swapping the mock adapters for the real
+        // uniffi ones is a change in the composition root and nowhere else.
+        + module(
+            "CapsulePorts",
+            dependencies: [
+                .target(name: "CapsuleFoundation"),
+                .target(name: "CapsuleDomain"),
             ],
+            testDependencies: []
+        )
+
+        // Navigation — one `Route` vocabulary, a router with a stack per section,
+        // deep links, and the menu-command table. No SwiftUI views: the three shells
+        // bind this differently, so keeping it view-free is what lets them share it.
+        + module(
+            "CapsuleNavigation",
+            dependencies: [
+                .target(name: "CapsuleFoundation"),
+                .target(name: "CapsuleDomain"),
+            ],
+            testDependencies: []
+        )
+
+        // Mock — the in-memory implementation of every port, and the app's only
+        // data source while the Rust core is being rebuilt. Ships (rather than
+        // living in a test target) because the app itself runs on it.
+        + module(
+            "CapsuleMock",
+            dependencies: [
+                .target(name: "CapsuleFoundation"),
+                .target(name: "CapsuleDomain"),
+                .target(name: "CapsulePorts"),
+            ],
+            testDependencies: []
+        )
+
+        // Alerts — the client half of local alerts: the per-class arm / re-arm /
+        // cancel loop over `UNUserNotificationCenter`, permission at first use,
+        // and the bounded snooze. The predicate itself is a port; its tests run
+        // over the mock lane's in-memory adapters.
+        + module(
+            "CapsuleAlerts",
+            dependencies: [
+                .target(name: "CapsuleFoundation"),
+                .target(name: "CapsuleDomain"),
+                .target(name: "CapsulePorts"),
+            ],
+            testDependencies: [.target(name: "CapsuleMock")]
+        )
+
+        // Diagnostics — MetricKit crash/perf collection, consent, breadcrumbs,
+        // redacted bug-report bundles, and an opt-in self-hosted uploader.
+        + module(
+            "CapsuleDiagnostics",
+            dependencies: [.target(name: "CapsuleFoundation")],
+            testDependencies: [supportDependency]
+        )
+
+        // Catalog — the catalog contract, its Swift-native models, and the
+        // in-memory reference implementation. No Rust core: this half compiles
+        // and tests everywhere, which is what makes the mock lane possible.
+        + module(
+            "CapsuleCatalog",
+            dependencies: [.target(name: "CapsuleFoundation")],
+            testDependencies: [supportDependency]
+        )
+
+        // Catalog (FFI) — the Rust-backed half: the generated uniffi glue for
+        // both namespaces (the `capsule_core_ffi` catalog and `capsule-sdk`'s
+        // `capsule_sdk` user flows), the record conversions, the
+        // error mapping onto the FFI-free `CatalogError`, and the port adapters
+        // (labels, the transfer event stream, the alert policy) over the
+        // `capsule_sdk` objects. Present only when `TUIST_FFI=1`; nothing above it
+        // names a generated type.
+        //
+        // The Rust-backed `AlertPolicyPort` lives here because a uniffi
+        // namespace's glue compiles into exactly one module: a second module over
+        // `capsule_sdk.swift` would be a second copy of every generated type.
+        + (ffiEnabled
+            ? module(
+                "CapsuleCatalogFFI",
+                sources: [
+                    "Modules/CapsuleCatalogFFI/Sources/**",
+                    ".ffi/generated/capsule_core_ffi.swift",
+                    ".ffi/generated/capsule_sdk.swift",
+                ],
+                dependencies: [
+                    .target(name: "CapsuleFoundation"),
+                    .target(name: "CapsuleCatalog"),
+                    .target(name: "CapsuleDomain"),
+                    .target(name: "CapsulePorts"),
+                    .xcframework(path: ".ffi/CapsuleCoreFFI.xcframework"),
+                ],
+                // The alert-policy tests build `NotifyInput`s and read `Alert`s.
+                testDependencies: [.target(name: "CapsuleDomain")]
+            )
+            : [])
+
+        // Managed store — Swift filesystem layer, hashing, import pipeline.
+        + module(
+            "ManagedStore",
             dependencies: [
                 .target(name: "CapsuleFoundation"),
                 .target(name: "CapsuleCatalog"),
+            ],
+            testDependencies: [supportDependency]
+        )
+
+        // Asset provider abstraction over PhotoKit + the managed store.
+        + module(
+            "AssetKit",
+            dependencies: [
+                .target(name: "CapsuleFoundation"),
+                .target(name: "ManagedStore"),
+                // The MockBridge adapters present the port-based world through the
+                // older provider protocols the existing screens consume.
                 .target(name: "CapsuleDomain"),
                 .target(name: "CapsulePorts"),
-                .xcframework(path: ".ffi/CapsuleCoreFFI.xcframework"),
             ],
-            // The alert-policy tests build `NotifyInput`s and read `Alert`s.
-            testDependencies: [.target(name: "CapsuleDomain")]
+            testDependencies: [supportDependency]
         )
-        : [])
 
-    // Managed store — Swift filesystem layer, hashing, import pipeline.
-    + module(
-        "ManagedStore",
-        dependencies: [
-            .target(name: "CapsuleFoundation"),
-            .target(name: "CapsuleCatalog"),
-        ],
-        testDependencies: [supportDependency]
-    )
+        // Test-only mocks and fixtures, linked only by unit-test targets.
+        + module(
+            "CapsuleTestSupport",
+            dependencies: [
+                .target(name: "CapsuleFoundation"),
+                .target(name: "CapsuleDiagnostics"),
+                .target(name: "CapsuleCatalog"),
+                .target(name: "ManagedStore"),
+                .target(name: "AssetKit"),
+            ]
+        )
 
-    // Asset provider abstraction over PhotoKit + the managed store.
-    + module(
-        "AssetKit",
-        dependencies: [
+        // Image decode / downsample / cache / prefetch pipeline.
+        + module("ImagePipeline", dependencies: [
             .target(name: "CapsuleFoundation"),
+            // The render ladder's records (`RenderLadder`, `Rendition`) the
+            // providers draw through.
+            .target(name: "CapsuleDomain"),
+            .target(name: "AssetKit"),
+            // `ContainerExif`, the one ImageIO EXIF parser the viewer shares.
             .target(name: "ManagedStore"),
-            // The MockBridge adapters present the port-based world through the
-            // older provider protocols the existing screens consume.
-            .target(name: "CapsuleDomain"),
-            .target(name: "CapsulePorts"),
-        ],
-        testDependencies: [supportDependency]
-    )
+        ])
 
-    // Test-only mocks and fixtures, linked only by unit-test targets.
-    + module(
-        "CapsuleTestSupport",
-        dependencies: [
-            .target(name: "CapsuleFoundation"),
-            .target(name: "CapsuleDiagnostics"),
-            .target(name: "CapsuleCatalog"),
-            .target(name: "ManagedStore"),
-            .target(name: "AssetKit"),
-        ]
-    )
+        // Design system + shared UI components: the virtualized timeline geometry,
+        // the shared photo grid, and `PlatformCollection/` — the one UIKit/AppKit
+        // island every grid in the app is built on.
+        //
+        // It depends on `CapsuleDomain` but deliberately **not** on `CapsulePorts`:
+        // the design system renders domain states — a seal, a cull flag, a sync
+        // tier — but must never be able to fetch one. `AssetWindowStore` is generic
+        // over a fetch closure for exactly that reason.
+        + module(
+            "CapsuleUI",
+            dependencies: [
+                .target(name: "CapsuleFoundation"),
+                .target(name: "CapsuleDomain"),
+                .target(name: "ImagePipeline"),
+                .target(name: "AssetKit"),
+            ],
+            testDependencies: []
+        )
 
-    // Image decode / downsample / cache / prefetch pipeline.
-    + module("ImagePipeline", dependencies: [
-        .target(name: "CapsuleFoundation"),
-        // The render ladder's records (`RenderLadder`, `Rendition`) the
-        // providers draw through.
-        .target(name: "CapsuleDomain"),
-        .target(name: "AssetKit"),
-        // `ContainerExif`, the one ImageIO EXIF parser the viewer shares.
-        .target(name: "ManagedStore"),
-    ])
+        // Feature modules.
+        + module(
+            "FeatureTimeline",
+            dependencies: [
+                .target(name: "CapsuleUI"),
+                .target(name: "AssetKit"),
+                .target(name: "ImagePipeline"),
+                .target(name: "FeatureViewer"),
+            ],
+            testDependencies: [supportDependency]
+        )
+        + module(
+            "FeatureViewer",
+            dependencies: [
+                .target(name: "CapsuleUI"),
+                .target(name: "AssetKit"),
+                .target(name: "ImagePipeline"),
+                // The label and region editor reads and writes through `LabelPort`.
+                .target(name: "CapsuleDomain"),
+                .target(name: "CapsulePorts"),
+            ],
+            testDependencies: [supportDependency, .target(name: "CapsuleMock")]
+        )
+        + module(
+            "FeatureAlbums",
+            dependencies: [
+                .target(name: "CapsuleUI"),
+                .target(name: "AssetKit"),
+                .target(name: "ImagePipeline"),
+                .target(name: "FeatureViewer"),
+                // Named because `AlbumsRootView` links a `Route`, which is the only
+                // vocabulary the shell's navigation stack accepts. A feature module
+                // takes this dependency when it names a route and not before.
+                .target(name: "CapsuleNavigation"),
+            ],
+            testDependencies: [supportDependency]
+        )
+        + module(
+            "FeatureSearch",
+            dependencies: [
+                .target(name: "CapsuleUI"),
+                .target(name: "AssetKit"),
+                .target(name: "ImagePipeline"),
+                .target(name: "FeatureViewer"),
+            ],
+            testDependencies: [supportDependency]
+        )
 
-    // Design system + shared UI components: the virtualized timeline geometry,
-    // the shared photo grid, and `PlatformCollection/` — the one UIKit/AppKit
-    // island every grid in the app is built on.
-    //
-    // It depends on `CapsuleDomain` but deliberately **not** on `CapsulePorts`:
-    // the design system renders domain states — a seal, a cull flag, a sync
-    // tier — but must never be able to fetch one. `AssetWindowStore` is generic
-    // over a fetch closure for exactly that reason.
-    + module(
-        "CapsuleUI",
-        dependencies: [
-            .target(name: "CapsuleFoundation"),
-            .target(name: "CapsuleDomain"),
-            .target(name: "ImagePipeline"),
-            .target(name: "AssetKit"),
-        ],
-        testDependencies: []
-    )
+        // Transfers, quota, storage reclamation, sync status, and the
+        // per-asset custody receipt.
+        + module(
+            "FeatureTransfer",
+            dependencies: [
+                .target(name: "CapsuleFoundation"),
+                .target(name: "CapsuleDomain"),
+                .target(name: "CapsulePorts"),
+                .target(name: "CapsuleUI"),
+                // SwiftUI previews are driven by real scenarios, so the mock is a
+                // build dependency of the screens, not only of their tests.
+                .target(name: "CapsuleMock"),
+            ],
+            testDependencies: []
+        )
 
-    // Feature modules.
-    + module(
-        "FeatureTimeline",
-        dependencies: [
-            .target(name: "CapsuleUI"),
-            .target(name: "AssetKit"),
-            .target(name: "ImagePipeline"),
-            .target(name: "FeatureViewer"),
-        ],
-        testDependencies: [supportDependency]
-    )
-    + module(
-        "FeatureViewer",
-        dependencies: [
-            .target(name: "CapsuleUI"),
-            .target(name: "AssetKit"),
-            .target(name: "ImagePipeline"),
-            // The label and region editor reads and writes through `LabelPort`.
-            .target(name: "CapsuleDomain"),
-            .target(name: "CapsulePorts"),
-        ],
-        testDependencies: [supportDependency, .target(name: "CapsuleMock")]
-    )
-    + module(
-        "FeatureAlbums",
-        dependencies: [
-            .target(name: "CapsuleUI"),
-            .target(name: "AssetKit"),
-            .target(name: "ImagePipeline"),
-            .target(name: "FeatureViewer"),
-            // Named because `AlbumsRootView` links a `Route`, which is the only
-            // vocabulary the shell's navigation stack accepts. A feature module
-            // takes this dependency when it names a route and not before.
-            .target(name: "CapsuleNavigation"),
-        ],
-        testDependencies: [supportDependency]
-    )
-    + module(
-        "FeatureSearch",
-        dependencies: [
-            .target(name: "CapsuleUI"),
-            .target(name: "AssetKit"),
-            .target(name: "ImagePipeline"),
-            .target(name: "FeatureViewer"),
-        ],
-        testDependencies: [supportDependency]
-    )
+        // Onboarding, sign-in, the first-device enrollment ceremony,
+        // recovery, and the device/session ledger.
+        + module(
+            "FeatureAuth",
+            dependencies: [
+                .target(name: "CapsuleFoundation"),
+                .target(name: "CapsuleDomain"),
+                .target(name: "CapsulePorts"),
+                .target(name: "CapsuleNavigation"),
+                .target(name: "CapsuleUI"),
+                // SwiftUI previews are driven by real scenarios, so the mock is a
+                // build dependency of the screens, not only of their tests.
+                .target(name: "CapsuleMock"),
+            ],
+            testDependencies: []
+        )
 
-    // Transfers, quota, storage reclamation, sync status, and the
-    // per-asset custody receipt.
-    + module(
-        "FeatureTransfer",
-        dependencies: [
-            .target(name: "CapsuleFoundation"),
-            .target(name: "CapsuleDomain"),
-            .target(name: "CapsulePorts"),
-            .target(name: "CapsuleUI"),
-            // SwiftUI previews are driven by real scenarios, so the mock is a
-            // build dependency of the screens, not only of their tests.
-            .target(name: "CapsuleMock"),
-        ],
-        testDependencies: []
-    )
+        // Share links, guest-drop inbox, LAN peering, federation, and
+        // moderation.
+        + module(
+            "FeatureSharing",
+            dependencies: [
+                .target(name: "CapsuleFoundation"),
+                .target(name: "CapsuleDomain"),
+                .target(name: "CapsulePorts"),
+                .target(name: "CapsuleNavigation"),
+                .target(name: "CapsuleUI"),
+                // SwiftUI previews are driven by real scenarios, so the mock is a
+                // build dependency of the screens, not only of their tests.
+                .target(name: "CapsuleMock"),
+            ],
+            testDependencies: []
+        )
 
-    // Onboarding, sign-in, the first-device enrollment ceremony,
-    // recovery, and the device/session ledger.
-    + module(
-        "FeatureAuth",
-        dependencies: [
-            .target(name: "CapsuleFoundation"),
-            .target(name: "CapsuleDomain"),
-            .target(name: "CapsulePorts"),
-            .target(name: "CapsuleNavigation"),
-            .target(name: "CapsuleUI"),
-            // SwiftUI previews are driven by real scenarios, so the mock is a
-            // build dependency of the screens, not only of their tests.
-            .target(name: "CapsuleMock"),
-        ],
-        testDependencies: []
-    )
+        // The eighteen-section settings tree — a grouped list on iOS,
+        // a tabbed Settings window on macOS.
+        + module(
+            "FeatureSettings",
+            dependencies: [
+                .target(name: "CapsuleFoundation"),
+                .target(name: "CapsuleDomain"),
+                .target(name: "CapsulePorts"),
+                .target(name: "CapsuleNavigation"),
+                .target(name: "CapsuleUI"),
+                // SwiftUI previews are driven by real scenarios, so the mock is a
+                // build dependency of the screens, not only of their tests.
+                .target(name: "CapsuleMock"),
+            ],
+            testDependencies: []
+        )
 
-    // Share links, guest-drop inbox, LAN peering, federation, and
-    // moderation.
-    + module(
-        "FeatureSharing",
-        dependencies: [
-            .target(name: "CapsuleFoundation"),
-            .target(name: "CapsuleDomain"),
-            .target(name: "CapsulePorts"),
-            .target(name: "CapsuleNavigation"),
-            .target(name: "CapsuleUI"),
-            // SwiftUI previews are driven by real scenarios, so the mock is a
-            // build dependency of the screens, not only of their tests.
-            .target(name: "CapsuleMock"),
-        ],
-        testDependencies: []
-    )
+        // The photo-import pipeline: source picker, scan, plan confirmation,
+        // execution, and history.
+        + module(
+            "FeatureImport",
+            dependencies: [
+                .target(name: "CapsuleFoundation"),
+                .target(name: "CapsuleDomain"),
+                .target(name: "CapsulePorts"),
+                .target(name: "CapsuleUI"),
+                // SwiftUI previews are driven by real scenarios, so the mock is a
+                // build dependency of the screens, not only of their tests.
+                .target(name: "CapsuleMock"),
+            ],
+            testDependencies: []
+        )
 
-    // The eighteen-section settings tree — a grouped list on iOS,
-    // a tabbed Settings window on macOS.
-    + module(
-        "FeatureSettings",
-        dependencies: [
-            .target(name: "CapsuleFoundation"),
-            .target(name: "CapsuleDomain"),
-            .target(name: "CapsulePorts"),
-            .target(name: "CapsuleNavigation"),
-            .target(name: "CapsuleUI"),
-            // SwiftUI previews are driven by real scenarios, so the mock is a
-            // build dependency of the screens, not only of their tests.
-            .target(name: "CapsuleMock"),
-        ],
-        testDependencies: []
-    )
-
-    // The photo-import pipeline: source picker, scan, plan confirmation,
-    // execution, and history.
-    + module(
-        "FeatureImport",
-        dependencies: [
-            .target(name: "CapsuleFoundation"),
-            .target(name: "CapsuleDomain"),
-            .target(name: "CapsulePorts"),
-            .target(name: "CapsuleUI"),
-            // SwiftUI previews are driven by real scenarios, so the mock is a
-            // build dependency of the screens, not only of their tests.
-            .target(name: "CapsuleMock"),
-        ],
-        testDependencies: []
-    )
-
-    // Collections home — albums, media types, places, utilities.
-    + module(
-        "FeatureCollections",
-        dependencies: [
-            .target(name: "CapsuleUI"),
-            // `HiddenView` sits behind the SR1 local-auth gate, whose seam is a
-            // port so the mocked app can satisfy it without the system sheet.
-            .target(name: "CapsulePorts"),
-            .target(name: "AssetKit"),
-            .target(name: "ImagePipeline"),
-            .target(name: "FeatureViewer"),
-            .target(name: "FeatureAlbums"),
-        ]
-    )
+        // Collections home — albums, media types, places, utilities.
+        + module(
+            "FeatureCollections",
+            dependencies: [
+                .target(name: "CapsuleUI"),
+                // `HiddenView` sits behind the SR1 local-auth gate, whose seam is a
+                // port so the mocked app can satisfy it without the system sheet.
+                .target(name: "CapsulePorts"),
+                .target(name: "AssetKit"),
+                .target(name: "ImagePipeline"),
+                .target(name: "FeatureViewer"),
+                .target(name: "FeatureAlbums"),
+            ]
+        )
 
 /// The thin app target — composition root only, shared by all three platforms.
 private let appTarget: Target = .target(

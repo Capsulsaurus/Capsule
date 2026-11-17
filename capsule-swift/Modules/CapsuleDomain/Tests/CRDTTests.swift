@@ -1,7 +1,6 @@
+import CapsuleDomain
 import Foundation
 import Testing
-
-import CapsuleDomain
 
 /// The CRDT value types: LWW with its superseded log, and the observed-remove
 /// set (*Metadata — Collaborative Metadata*, *Surfacing Concurrent Edits*).

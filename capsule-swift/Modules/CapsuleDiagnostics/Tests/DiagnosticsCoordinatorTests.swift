@@ -1,9 +1,8 @@
+@testable import CapsuleDiagnostics
 import CapsuleFoundation
 import CapsuleTestSupport
 import Foundation
 import Testing
-
-@testable import CapsuleDiagnostics
 
 @MainActor
 @Suite("DiagnosticsCoordinator consent gating")

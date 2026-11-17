@@ -19,8 +19,7 @@ import SwiftUI
 ///   `TimelineCollectionController+iOS.swift` and
 ///   `TimelineCollectionController+macOS.swift`, so only those files ever name a
 ///   UIKit or AppKit type.
-struct TimelineCollectionView<ItemContent, HeaderContent>
-    where ItemContent: View, HeaderContent: View {
+struct TimelineCollectionView<ItemContent: View, HeaderContent: View> {
     /// The day aggregate and the metrics to lay it out with.
     let geometry: TimelineGridGeometry
     /// Whether the collection tracks more than one selected index path.

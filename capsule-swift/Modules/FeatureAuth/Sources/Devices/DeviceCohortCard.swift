@@ -136,7 +136,6 @@ struct DeviceCohortCard: View {
         .authInnerCard()
     }
 
-    @ViewBuilder
     private var sessions: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.small) {
             Text("app.devices.session.header")

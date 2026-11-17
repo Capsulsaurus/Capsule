@@ -27,7 +27,7 @@ public final class SyncStatusModel {
 
     private let sync: any SyncPort
     private let clock: TransferClock
-    private nonisolated(unsafe) var observation: Task<Void, Never>?
+    nonisolated(unsafe) private var observation: Task<Void, Never>?
 
     public init(sync: any SyncPort, clock: TransferClock = .system) {
         self.sync = sync

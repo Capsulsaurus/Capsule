@@ -1,8 +1,7 @@
 import CapsuleDomain
 import CapsuleFoundation
-import Testing
-
 @testable import FeatureTransfer
+import Testing
 
 /// The board's fold over an upload: progress, the chunk in flight, scars,
 /// resume, adaptive chunk size, throughput and custody. The same cases the

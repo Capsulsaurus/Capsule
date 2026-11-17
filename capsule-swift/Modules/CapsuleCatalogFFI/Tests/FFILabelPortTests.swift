@@ -1,10 +1,9 @@
+@testable import CapsuleCatalogFFI
 import CapsuleDomain
 import CapsuleFoundation
 import CapsulePorts
 import Foundation
 import Testing
-
-@testable import CapsuleCatalogFFI
 
 /// A workspace double: records every call it receives, answers what it was
 /// given, and throws `failure` from every verb when one is set.

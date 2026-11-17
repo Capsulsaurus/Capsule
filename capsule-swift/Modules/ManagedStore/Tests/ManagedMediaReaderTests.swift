@@ -1,13 +1,11 @@
 import CapsuleCatalog
+import CapsuleTestSupport
 import CoreGraphics
 import Foundation
 import ImageIO
+@testable import ManagedStore
 import Testing
 import UniformTypeIdentifiers
-
-import CapsuleTestSupport
-
-@testable import ManagedStore
 
 @Suite("ManagedMediaReader")
 struct ManagedMediaReaderTests {

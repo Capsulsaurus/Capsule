@@ -1,9 +1,8 @@
-import Foundation
-import Testing
-
 import CapsuleDomain
 import CapsuleFoundation
 import CapsuleNavigation
+import Foundation
+import Testing
 
 /// Scene restoration round-trips the whole navigation stack through `Codable`.
 /// If a case does not survive that, the symptom is not a crash — it is every

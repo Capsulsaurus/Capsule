@@ -1,9 +1,8 @@
 import CapsuleDomain
 import CapsuleFoundation
+@testable import CapsuleMock
 import Foundation
 import Testing
-
-@testable import CapsuleMock
 
 // MARK: - Determinism
 

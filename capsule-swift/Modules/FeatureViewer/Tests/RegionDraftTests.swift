@@ -1,7 +1,6 @@
 import CapsuleDomain
-import Testing
-
 @testable import FeatureViewer
+import Testing
 
 /// Every edit keeps a draft inside the shape contract the core validates, so
 /// whatever the user drew is writable.

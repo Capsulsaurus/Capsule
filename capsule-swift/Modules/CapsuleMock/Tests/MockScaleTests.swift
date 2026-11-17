@@ -1,9 +1,8 @@
 import CapsuleDomain
 import CapsuleFoundation
+@testable import CapsuleMock
 import Foundation
 import Testing
-
-@testable import CapsuleMock
 
 // MARK: - Scale
 
@@ -53,7 +52,7 @@ struct MockScaleTests {
     /// The aggregate is O(days), so it stays cheap at ten years of photographs —
     /// and its total is exactly the library, with no drift to reconcile.
     @Test("Day counts over 250 000 assets are cheap and exact")
-    func hugeDayCountsAreCheapAndExact() async throws {
+    func hugeDayCountsAreCheapAndExact() {
         let environment = MockEnvironment(scenario: .hugeLibrary)
         let clock = ContinuousClock()
         var counts: [DayCount] = []
@@ -69,7 +68,7 @@ struct MockScaleTests {
     /// A page request returns **only the page**. This is the assertion that
     /// would fail against a mock that built an array and sliced it.
     @Test("A page request returns only the page")
-    func pagingReturnsOnlyTheWindow() async throws {
+    func pagingReturnsOnlyTheWindow() {
         let environment = MockEnvironment(scenario: .hugeLibrary)
         let clock = ContinuousClock()
         var page: Page<LibraryAsset>?
@@ -90,7 +89,7 @@ struct MockScaleTests {
     /// A deep offset must be a subscript, not a scan, for the unfiltered
     /// timeline — which is what the day boundary fast path buys.
     @Test("A deep offset costs the same as a shallow one")
-    func deepOffsetsAreNotAScan() async throws {
+    func deepOffsetsAreNotAScan() {
         let environment = MockEnvironment(scenario: .hugeLibrary)
         let engine = MockQueryEngine(
             library: environment.libraryStore.library,

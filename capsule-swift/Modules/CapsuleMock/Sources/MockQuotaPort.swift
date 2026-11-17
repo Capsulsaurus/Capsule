@@ -25,7 +25,7 @@ extension MockTransferStore: QuotaPort {
         return quota.used + additionalBytes <= quota.hardLimit
     }
 
-    public nonisolated func changes() -> AsyncStream<QuotaStatus> {
+    nonisolated public func changes() -> AsyncStream<QuotaStatus> {
         quotaChanges.subscribe()
     }
 

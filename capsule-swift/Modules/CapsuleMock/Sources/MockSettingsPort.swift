@@ -52,7 +52,7 @@ extension MockSystemStore: SettingsPort {
         await settingsChanges.send(currentSettings)
     }
 
-    public nonisolated func changes() -> AsyncStream<LibrarySettings> {
+    nonisolated public func changes() -> AsyncStream<LibrarySettings> {
         settingsChanges.subscribe()
     }
 }

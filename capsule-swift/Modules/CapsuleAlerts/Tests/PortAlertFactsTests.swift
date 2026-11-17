@@ -1,9 +1,8 @@
+@testable import CapsuleAlerts
 import CapsuleDomain
 import CapsuleMock
 import CapsulePorts
 import Testing
-
-@testable import CapsuleAlerts
 
 /// The client's own state, wired into the predicate's input from the ports
 /// that already hold it.

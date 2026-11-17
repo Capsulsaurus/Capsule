@@ -1,11 +1,10 @@
+@testable import Capsule
 import CapsuleDomain
 import CapsuleFoundation
 import CapsuleMock
 import CapsulePorts
 import Foundation
 import Testing
-
-@testable import Capsule
 
 /// Stack places as the pass reads them: projected from a library row in the
 /// mock lane, listed by the workspace in the FFI lane, and grouped the same

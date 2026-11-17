@@ -1,4 +1,5 @@
 import AssetKit
+@testable import Capsule
 import CapsuleDomain
 import CapsuleMock
 import CapsulePorts
@@ -6,8 +7,6 @@ import CoreGraphics
 import Foundation
 import ImagePipeline
 import Testing
-
-@testable import Capsule
 
 /// The managed store's pixels come out of the render ladder: the grid and the
 /// viewer draw the rung it names, a RAW's embedded preview first where one was

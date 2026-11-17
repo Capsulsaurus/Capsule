@@ -1,7 +1,6 @@
+@testable import AssetKit
 import Photos
 import Testing
-
-@testable import AssetKit
 
 @Suite("PhotoKit authorization mapping")
 struct PhotoKitMappingTests {

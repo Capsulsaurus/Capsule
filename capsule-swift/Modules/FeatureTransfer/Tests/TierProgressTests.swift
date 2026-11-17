@@ -1,9 +1,8 @@
-import Foundation
-import Testing
-
 import CapsuleDomain
 import CapsuleFoundation
 import FeatureTransfer
+import Foundation
+import Testing
 
 /// The staged-upload ladder as the header ring renders it
 /// (*Download and Synchronization — Upload Tiering*).
