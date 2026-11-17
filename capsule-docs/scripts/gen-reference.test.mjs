@@ -1770,75 +1770,75 @@ describe('readOpenApiDocument', () => {
 
     // A property table cannot express a union or an intersection, so a composed schema
     // would render as an empty or a half-true model.
-    it.each([
-        'oneOf',
-        'allOf',
-        'anyOf',
-    ])('refuses a schema composed with %s, naming the schema', (keyword) => {
-        const document = structuredClone(MINIMAL_OPENAPI);
-        document.components.schemas.TokenResponse = {
-            title: 'TokenResponse',
-            [keyword]: [
-                { $ref: '#/components/schemas/VersionResponse' },
-                { type: 'object' },
-            ],
-        };
-        writeOpenApi(document);
-        expect(() => readOpenApiDocument(root)).toThrow(/TokenResponse/);
-        expect(() => readOpenApiDocument(root)).toThrow(new RegExp(keyword));
-    });
+    it.each(['oneOf', 'allOf', 'anyOf'])(
+        'refuses a schema composed with %s, naming the schema',
+        (keyword) => {
+            const document = structuredClone(MINIMAL_OPENAPI);
+            document.components.schemas.TokenResponse = {
+                title: 'TokenResponse',
+                [keyword]: [
+                    { $ref: '#/components/schemas/VersionResponse' },
+                    { type: 'object' },
+                ],
+            };
+            writeOpenApi(document);
+            expect(() => readOpenApiDocument(root)).toThrow(/TokenResponse/);
+            expect(() => readOpenApiDocument(root)).toThrow(
+                new RegExp(keyword),
+            );
+        },
+    );
 
     // Checking only the root is the shape of the bug it prevents: a composition one level
     // down falls through `typeOf` to `object` and renders as a row claiming the field is a
     // plain object — a confident lie about a union.
-    it.each([
-        'properties.choice',
-        'items',
-        'additionalProperties',
-    ])('refuses a composition nested at %s, naming the schema and the path', (where) => {
-        const document = structuredClone(MINIMAL_OPENAPI);
-        const composed = {
-            oneOf: [{ type: 'string' }, { type: 'integer' }],
-        };
-        const target = { type: 'object', title: 'TokenResponse' };
-        if (where === 'properties.choice') {
-            target.properties = { choice: composed };
-        } else if (where === 'items') {
-            target.items = composed;
-        } else {
-            target.additionalProperties = composed;
-        }
-        document.components.schemas.TokenResponse = target;
-        writeOpenApi(document);
-        expect(() => readOpenApiDocument(root)).toThrow(/TokenResponse/);
-        expect(() => readOpenApiDocument(root)).toThrow(/oneOf/);
-    });
+    it.each(['properties.choice', 'items', 'additionalProperties'])(
+        'refuses a composition nested at %s, naming the schema and the path',
+        (where) => {
+            const document = structuredClone(MINIMAL_OPENAPI);
+            const composed = {
+                oneOf: [{ type: 'string' }, { type: 'integer' }],
+            };
+            const target = { type: 'object', title: 'TokenResponse' };
+            if (where === 'properties.choice') {
+                target.properties = { choice: composed };
+            } else if (where === 'items') {
+                target.items = composed;
+            } else {
+                target.additionalProperties = composed;
+            }
+            document.components.schemas.TokenResponse = target;
+            writeOpenApi(document);
+            expect(() => readOpenApiDocument(root)).toThrow(/TokenResponse/);
+            expect(() => readOpenApiDocument(root)).toThrow(/oneOf/);
+        },
+    );
 
     // OpenAPI 3.1 has no `nullable`, so every `Option<T>` over a struct is spelled as a
     // union with `null`. That is a composition by the letter and not by intent: one real
     // branch flattens to a property table perfectly well. `AuthEndpointsResponse.oidc` was
     // the first to reach the generator, and refusing it would have meant no REST reference
     // at all for a document the server emits correctly.
-    it.each([
-        'anyOf',
-        'oneOf',
-    ])('accepts an optional object spelled as %s with null', (keyword) => {
-        const document = structuredClone(MINIMAL_OPENAPI);
-        document.components.schemas.TokenResponse = {
-            title: 'TokenResponse',
-            type: 'object',
-            properties: {
-                maybe: {
-                    [keyword]: [
-                        { $ref: '#/components/schemas/VersionResponse' },
-                        { type: 'null' },
-                    ],
+    it.each(['anyOf', 'oneOf'])(
+        'accepts an optional object spelled as %s with null',
+        (keyword) => {
+            const document = structuredClone(MINIMAL_OPENAPI);
+            document.components.schemas.TokenResponse = {
+                title: 'TokenResponse',
+                type: 'object',
+                properties: {
+                    maybe: {
+                        [keyword]: [
+                            { $ref: '#/components/schemas/VersionResponse' },
+                            { type: 'null' },
+                        ],
+                    },
                 },
-            },
-        };
-        writeOpenApi(document);
-        expect(() => readOpenApiDocument(root)).not.toThrow();
-    });
+            };
+            writeOpenApi(document);
+            expect(() => readOpenApiDocument(root)).not.toThrow();
+        },
+    );
 
     // The narrowness is the point: dropping the null arm must not become "drop any arm".
     it('still refuses a union of two real branches beside null', () => {
