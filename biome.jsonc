@@ -1,6 +1,6 @@
 {
     "root": false,
-    "$schema": "https://biomejs.dev/schemas/2.5.6/schema.json",
+    "$schema": "https://biomejs.dev/schemas/2.6.8/schema.json",
     "assist": { "actions": { "source": { "organizeImports": "on" } } },
     "vcs": {
         "enabled": true,
@@ -26,6 +26,13 @@
     "css": {
         "parser": {
             "cssModules": true
+        }
+    },
+    // Biome 2.6 began formatting Markdown. markdownlint-cli2 (`lint-check-md`) owns Markdown
+    // style here, and two formatters on one file disagree (emphasis markers, for one).
+    "markdown": {
+        "formatter": {
+            "enabled": false
         }
     },
     "linter": {

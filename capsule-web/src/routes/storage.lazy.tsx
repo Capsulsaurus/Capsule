@@ -1,15 +1,20 @@
 import { createLazyFileRoute } from '@tanstack/react-router';
 import {
     createColumnHelper,
+    createSortedRowModel,
     flexRender,
-    getCoreRowModel,
-    getSortedRowModel,
+    rowSortingFeature,
     type SortingState,
-    useReactTable,
+    sortFn_alphanumeric,
+    sortFn_basic,
+    sortFn_datetime,
+    sortFn_text,
+    tableFeatures,
+    useTable,
 } from '@tanstack/react-table';
 import { filesize } from 'filesize';
 import { FileText, FileVideo, Image, RefreshCw, Trash2 } from 'lucide-react';
-import React, { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { FormattedMessage, useIntl } from 'react-intl';
 import {
     Dialog,
@@ -397,125 +402,158 @@ function Storage() {
     );
 }
 
+// The asset table's features: sorting, plus every sort function a column names or `'auto'`
+// picks. Table v9 resolves a function name only from this registry, so `alphanumeric` and
+// `text` stay registered for the string columns that rely on `'auto'`.
+const assetTableFeatures = tableFeatures({
+    rowSortingFeature,
+    sortedRowModel: createSortedRowModel(),
+    sortFns: {
+        alphanumeric: sortFn_alphanumeric,
+        basic: sortFn_basic,
+        datetime: sortFn_datetime,
+        text: sortFn_text,
+    },
+});
+
+const columnHelper = createColumnHelper<typeof assetTableFeatures, Asset>();
+
 // AssetList component
 function AssetList({ assets }: { assets: Asset[] }) {
     const intl = useIntl();
-    // Column helper for type safety
-    const columnHelper = createColumnHelper<Asset>();
 
-    // Define columns
-    const columns = [
-        columnHelper.accessor('thumbnail', {
-            header: '',
-            cell: (info) => (
-                <div className="flex items-center justify-center w-12 h-12">
-                    {info.getValue() ? (
-                        <div className="w-10 h-10 bg-blue-100 rounded overflow-hidden">
-                            <img
-                                src={info.getValue()}
-                                alt={intl.formatMessage(
-                                    { id: 'storage.thumbnail_alt' },
-                                    {
-                                        fileName: info.row.original.fileName,
-                                    },
-                                )}
-                                className="w-full h-full object-cover"
-                            />
+    // Stable across renders, as Table v9 requires: rebuilt only when the locale changes.
+    const columns = useMemo(
+        () =>
+            columnHelper.columns([
+                columnHelper.accessor('thumbnail', {
+                    header: '',
+                    cell: (info) => (
+                        <div className="flex items-center justify-center w-12 h-12">
+                            {info.getValue() ? (
+                                <div className="w-10 h-10 bg-blue-100 rounded overflow-hidden">
+                                    <img
+                                        src={info.getValue()}
+                                        alt={intl.formatMessage(
+                                            { id: 'storage.thumbnail_alt' },
+                                            {
+                                                fileName:
+                                                    info.row.original.fileName,
+                                            },
+                                        )}
+                                        className="w-full h-full object-cover"
+                                    />
+                                </div>
+                            ) : (
+                                <div className="w-10 h-10 bg-gray-100 rounded flex items-center justify-center">
+                                    {info.row.original.type ===
+                                    AssetType.Photo ? (
+                                        <Image
+                                            className="size-6 text-blue-500"
+                                            aria-label={intl.formatMessage(
+                                                {
+                                                    id: 'storage.image_file_alt',
+                                                },
+                                                {
+                                                    fileName:
+                                                        info.row.original
+                                                            .fileName,
+                                                },
+                                            )}
+                                        />
+                                    ) : info.row.original.type ===
+                                      AssetType.Video ? (
+                                        <FileVideo
+                                            className="size-6 text-red-500"
+                                            aria-label={intl.formatMessage(
+                                                {
+                                                    id: 'storage.video_file_alt',
+                                                },
+                                                {
+                                                    fileName:
+                                                        info.row.original
+                                                            .fileName,
+                                                },
+                                            )}
+                                        />
+                                    ) : info.row.original.type ===
+                                      AssetType.Sidecar ? (
+                                        <FileText
+                                            className="size-6 text-purple-500"
+                                            aria-label={intl.formatMessage(
+                                                {
+                                                    id: 'storage.sidecar_file_alt',
+                                                },
+                                                {
+                                                    fileName:
+                                                        info.row.original
+                                                            .fileName,
+                                                },
+                                            )}
+                                        />
+                                    ) : null}
+                                </div>
+                            )}
                         </div>
-                    ) : (
-                        <div className="w-10 h-10 bg-gray-100 rounded flex items-center justify-center">
-                            {info.row.original.type === AssetType.Photo ? (
-                                <Image
-                                    className="size-6 text-blue-500"
-                                    aria-label={intl.formatMessage(
-                                        { id: 'storage.image_file_alt' },
-                                        {
-                                            fileName:
-                                                info.row.original.fileName,
-                                        },
-                                    )}
-                                />
-                            ) : info.row.original.type === AssetType.Video ? (
-                                <FileVideo
-                                    className="size-6 text-red-500"
-                                    aria-label={intl.formatMessage(
-                                        { id: 'storage.video_file_alt' },
-                                        {
-                                            fileName:
-                                                info.row.original.fileName,
-                                        },
-                                    )}
-                                />
-                            ) : info.row.original.type === AssetType.Sidecar ? (
-                                <FileText
-                                    className="size-6 text-purple-500"
-                                    aria-label={intl.formatMessage(
-                                        { id: 'storage.sidecar_file_alt' },
-                                        {
-                                            fileName:
-                                                info.row.original.fileName,
-                                        },
-                                    )}
-                                />
-                            ) : null}
+                    ),
+                    enableSorting: false,
+                }),
+                columnHelper.accessor('fileName', {
+                    header: () => (
+                        <FormattedMessage id="storage.col_filename" />
+                    ),
+                    cell: (info) => (
+                        <div className="font-medium">{info.getValue()}</div>
+                    ),
+                }),
+                columnHelper.accessor('path', {
+                    header: () => <FormattedMessage id="storage.col_path" />,
+                    cell: (info) => (
+                        <div className="text-gray-500 text-sm">
+                            {info.getValue()}
                         </div>
-                    )}
-                </div>
-            ),
-            enableSorting: false,
-        }),
-        columnHelper.accessor('fileName', {
-            header: () => <FormattedMessage id="storage.col_filename" />,
-            cell: (info) => (
-                <div className="font-medium">{info.getValue()}</div>
-            ),
-        }),
-        columnHelper.accessor('path', {
-            header: () => <FormattedMessage id="storage.col_path" />,
-            cell: (info) => (
-                <div className="text-gray-500 text-sm">{info.getValue()}</div>
-            ),
-        }),
-        columnHelper.accessor('size', {
-            header: () => (
-                <div className="text-end">
-                    <FormattedMessage id="storage.col_size" />
-                </div>
-            ),
-            cell: (info) => (
-                <div className="text-end">
-                    {formatFileSize(info.getValue())}
-                </div>
-            ),
-            sortingFn: 'basic',
-        }),
-        columnHelper.accessor('date', {
-            header: () => (
-                <div className="text-end">
-                    <FormattedMessage id="storage.col_date" />
-                </div>
-            ),
-            cell: (info) => (
-                <div className="text-end">
-                    {intl.formatDate(info.getValue())}
-                </div>
-            ),
-            sortingFn: 'datetime',
-        }),
-    ];
+                    ),
+                }),
+                columnHelper.accessor('size', {
+                    header: () => (
+                        <div className="text-end">
+                            <FormattedMessage id="storage.col_size" />
+                        </div>
+                    ),
+                    cell: (info) => (
+                        <div className="text-end">
+                            {formatFileSize(info.getValue())}
+                        </div>
+                    ),
+                    sortFn: 'basic',
+                }),
+                columnHelper.accessor('date', {
+                    header: () => (
+                        <div className="text-end">
+                            <FormattedMessage id="storage.col_date" />
+                        </div>
+                    ),
+                    cell: (info) => (
+                        <div className="text-end">
+                            {intl.formatDate(info.getValue())}
+                        </div>
+                    ),
+                    sortFn: 'datetime',
+                }),
+            ]),
+        [intl],
+    );
 
-    // Fix the sorting state type
-    const [sorting, setSorting] = React.useState<SortingState>([]);
+    const [sorting, setSorting] = useState<SortingState>([]);
 
-    const table = useReactTable({
+    const table = useTable({
+        features: assetTableFeatures,
         data: assets,
         columns,
         state: {
             sorting,
         },
         onSortingChange: setSorting,
-        getCoreRowModel: getCoreRowModel(),
-        getSortedRowModel: getSortedRowModel(),
     });
 
     if (assets.length === 0) {
@@ -589,7 +627,7 @@ function AssetList({ assets }: { assets: Asset[] }) {
                 <tbody>
                     {table.getRowModel().rows.map((row) => (
                         <tr key={row.id} className="border-b hover:bg-gray-50">
-                            {row.getVisibleCells().map((cell) => (
+                            {row.getAllCells().map((cell) => (
                                 <td
                                     key={cell.id}
                                     className="px-4 py-3 text-sm"

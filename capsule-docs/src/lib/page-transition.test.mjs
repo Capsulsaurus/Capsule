@@ -21,15 +21,14 @@ describe('transitionTypes', () => {
         expect(transitionTypes(traverse(2, 3))).toEqual([]);
     });
 
-    it.each([
-        'push',
-        'replace',
-        'reload',
-    ])('leaves a %s navigation unmarked', (navigationType) => {
-        expect(transitionTypes({ ...traverse(3, 2), navigationType })).toEqual(
-            [],
-        );
-    });
+    it.each(['push', 'replace', 'reload'])(
+        'leaves a %s navigation unmarked',
+        (navigationType) => {
+            expect(
+                transitionTypes({ ...traverse(3, 2), navigationType }),
+            ).toEqual([]);
+        },
+    );
 
     it('leaves an arrival from another origin unmarked', () => {
         expect(transitionTypes(traverse(-1, 0))).toEqual([]);
