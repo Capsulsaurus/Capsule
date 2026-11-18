@@ -3142,7 +3142,227 @@
           "doc": "Smoke the **hardware-bound P-256 device encryption key** across the FFI seam:\nenroll a key-agreement key in `hardware` under `key_alias`, publish the hybrid public key,\nencapsulate a fresh shared secret to it **in software** (the sender side), then\n**decapsulate through the element's ECDH**. Returns `true` iff the two secrets match —\nproving the element's ECDH composes into the hybrid KEM without the private scalar leaving\nhardware. `ml_seed` (32 bytes) is the software-sealed ML-KEM-768 half.\n\nThe DEK is not yet wired into workspace creation, so this focused round-trip is the\ncomposition's on-device check — the DEK analogue of\n[`FfiWorkspace::create_with_p256_hardware_signer`]. Every step is one `capsule-core` call.",
           "members": []
         }
-      ]
+      ],
+      "platform": {
+        "source": "capsule-core-swift/Sources/CapsuleHardware",
+        "declarations": [
+          {
+            "kind": "class",
+            "name": "SecureEnclaveKeyAgreement",
+            "signature": "public final class SecureEnclaveKeyAgreement: FfiHardwareKeyAgreement, @unchecked Sendable",
+            "doc": "A Secure Enclave–backed ``FfiHardwareKeyAgreement`` (Apple, iOS / macOS) — the ECDH analogue of\n``SecureEnclaveSigner`` that backs the hardware-bound classical half of the device **encryption**\nkey. The private key is generated inside the Secure Enclave and never leaves it;\nthere is no API to read the private bytes, so non-exportability is enforced by the platform.\n\n## Algorithm\n\nThe Secure Enclave does **NIST P-256** key agreement (`SecureEnclave.P256.KeyAgreement`), so this\nreturns a 65-byte x9.63 (uncompressed SEC1) public key and, for `keyAgreement`, the **raw 32-byte\nECDH shared secret** (the point's x-coordinate — CryptoKit's `SharedSecret`, before any KDF). That\nis exactly what the Rust hybrid DEK consumes: the element's `pk_P` normalizes from SEC1 and the raw\nECDH secret folds into the KEM combiner, so this plugs into `p256HardwareDekRoundTrip` end to end.\n\nA production app persists `dataRepresentation` of each key (the encrypted SE blob) in the Keychain\nand reloads it; this reference keeps the handles in memory.",
+            "members": [
+              {
+                "kind": "init",
+                "name": "init",
+                "signature": "public init()",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "func",
+                "name": "enroll",
+                "signature": "public func enroll(keyAlias: String) throws -> Data",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "func",
+                "name": "publicKey",
+                "signature": "public func publicKey(keyAlias: String) throws -> Data",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "func",
+                "name": "keyAgreement",
+                "signature": "public func keyAgreement(keyAlias: String, peerPublic: Data) throws -> Data",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "func",
+                "name": "assertNonExportable",
+                "signature": "public func assertNonExportable(keyAlias: String) throws",
+                "doc": "",
+                "members": []
+              }
+            ]
+          },
+          {
+            "kind": "class",
+            "name": "SecureEnclaveSigner",
+            "signature": "public final class SecureEnclaveSigner: FfiHardwareSigner, @unchecked Sendable",
+            "doc": "A Secure Enclave–backed ``FfiHardwareSigner`` (Apple, iOS / macOS). The private key is generated\ninside the Secure Enclave and never leaves it — there is no API to read the private bytes, so\nnon-exportability is enforced by the platform.\n\n## Algorithm (the same one StrongBox and the TPM reference produce)\n\nThe Secure Enclave only does **NIST P-256**, not Ed25519, so this returns P-256 material: a\n65-byte x9.63 (uncompressed SEC1) public key and a **DER-encoded ECDSA** signature over `msg`\n(CryptoKit hashes with SHA-256 internally). That is exactly what `P256HybridSigningKey` consumes\non the Rust side — the element's public key normalizes from SEC1, and the DER signature verifies\nverbatim via `p256::ecdsa` — so this plugs into the P-256\n`FfiWorkspace.createWithP256HardwareSigner` path end to end. The Ed25519\n``SoftwareSigner`` drives the separate `createWithHardwareSigner` path.\n\nA production app persists `dataRepresentation` of each key (the encrypted SE blob) in the\nKeychain and reloads it; this reference keeps the handles in memory.",
+            "members": [
+              {
+                "kind": "init",
+                "name": "init",
+                "signature": "public init()",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "func",
+                "name": "enroll",
+                "signature": "public func enroll(keyAlias: String) throws -> Data",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "func",
+                "name": "classicalPublicKey",
+                "signature": "public func classicalPublicKey(keyAlias: String) throws -> Data",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "func",
+                "name": "signClassical",
+                "signature": "public func signClassical(keyAlias: String, msg: Data) throws -> Data",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "func",
+                "name": "assertNonExportable",
+                "signature": "public func assertNonExportable(keyAlias: String) throws",
+                "doc": "",
+                "members": []
+              }
+            ]
+          },
+          {
+            "kind": "class",
+            "name": "SoftwareP256KeyAgreement",
+            "signature": "public final class SoftwareP256KeyAgreement: FfiHardwareKeyAgreement, @unchecked Sendable",
+            "doc": "A software **P-256 ECDH** ``FfiHardwareKeyAgreement`` — the no-secure-element reference the real\nSecure Enclave replaces, and the always-runnable path for the hardware-bound device **encryption**\nkey's classical half (a CI VM has no Secure Enclave). It mirrors\n``SecureEnclaveKeyAgreement``'s wire contract exactly — a 65-byte x9.63 (uncompressed SEC1)\npublic key, and ECDH that returns the **raw 32-byte shared secret** (the point's x-coordinate,\nbefore any KDF) — so it plugs into `p256HardwareDekRoundTrip` end to end. The private key lives\nin process memory, derived deterministically (HKDF-SHA256, per `keyAlias`) from a 32-byte seed\nthe caller seals.\n\nIt offers no hardware non-exportability, which ``assertNonExportable(keyAlias:)`` reports\ntruthfully by throwing `.Exportable`.",
+            "members": [
+              {
+                "kind": "init",
+                "name": "init",
+                "signature": "public init(seed: Data)",
+                "doc": "Build an element from a 32-byte seed. Seal `seed` (e.g. in the Keychain) so the device key\nsurvives restarts.",
+                "members": []
+              },
+              {
+                "kind": "func",
+                "name": "enroll",
+                "signature": "public func enroll(keyAlias: String) throws -> Data",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "func",
+                "name": "publicKey",
+                "signature": "public func publicKey(keyAlias: String) throws -> Data",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "func",
+                "name": "keyAgreement",
+                "signature": "public func keyAgreement(keyAlias: String, peerPublic: Data) throws -> Data",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "func",
+                "name": "assertNonExportable",
+                "signature": "public func assertNonExportable(keyAlias: String) throws",
+                "doc": "",
+                "members": []
+              }
+            ]
+          },
+          {
+            "kind": "class",
+            "name": "SoftwareP256Signer",
+            "signature": "public final class SoftwareP256Signer: FfiHardwareSigner, @unchecked Sendable",
+            "doc": "A software **P-256** ``FfiHardwareSigner`` — the no-secure-element reference the real Secure\nEnclave replaces, and the always-runnable path for the P-256 hybrid composition (a CI VM has no\nSecure Enclave). It mirrors ``SecureEnclaveSigner``'s wire contract exactly — a 65-byte x9.63\n(uncompressed SEC1) public key and a **DER-encoded ECDSA** signature over `msg` (SHA-256 hashed\ninternally) — so it plugs into `FfiWorkspace.createWithP256HardwareSigner` end to end. The private key lives in process memory, derived deterministically (HKDF-SHA256, per\n`keyAlias`) from a 32-byte seed the caller seals.\n\nIt offers no hardware non-exportability, which ``assertNonExportable(keyAlias:)`` reports\ntruthfully by throwing `.Exportable`.",
+            "members": [
+              {
+                "kind": "init",
+                "name": "init",
+                "signature": "public init(seed: Data)",
+                "doc": "Build a signer from a 32-byte seed. Seal `seed` (e.g. in the Keychain) so the device key\nsurvives restarts.",
+                "members": []
+              },
+              {
+                "kind": "func",
+                "name": "enroll",
+                "signature": "public func enroll(keyAlias: String) throws -> Data",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "func",
+                "name": "classicalPublicKey",
+                "signature": "public func classicalPublicKey(keyAlias: String) throws -> Data",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "func",
+                "name": "signClassical",
+                "signature": "public func signClassical(keyAlias: String, msg: Data) throws -> Data",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "func",
+                "name": "assertNonExportable",
+                "signature": "public func assertNonExportable(keyAlias: String) throws",
+                "doc": "",
+                "members": []
+              }
+            ]
+          },
+          {
+            "kind": "class",
+            "name": "SoftwareSigner",
+            "signature": "public final class SoftwareSigner: FfiHardwareSigner, @unchecked Sendable",
+            "doc": "A software ``FfiHardwareSigner`` — the no-secure-element fallback, mirroring the Rust\n`SoftwareSigner`. The classical Ed25519 key lives in process memory, derived deterministically\n(HKDF-SHA512, per `keyAlias`) from a 32-byte seed the caller is responsible for sealing.\n\nBecause Curve25519 produces a genuine 32-byte Ed25519 public key and 64-byte signature, this\nbackend plugs **directly** into `FfiWorkspace.createWithHardwareSigner` — it is the one the\nsmoke test drives end to end. It offers no hardware non-exportability, which\n``assertNonExportable(keyAlias:)`` reports truthfully by throwing `.Exportable`.\n\nThe derivation matches the Rust reference (salt = `keyAlias`, info =\n`capsule/software-signer/ed25519/v1`), so the same seed yields the same device key in either\nlanguage.",
+            "members": [
+              {
+                "kind": "init",
+                "name": "init",
+                "signature": "public init(seed: Data)",
+                "doc": "Build a signer from a 32-byte seed. Seal `seed` (e.g. in the Keychain) so the device key\nsurvives restarts.",
+                "members": []
+              },
+              {
+                "kind": "func",
+                "name": "enroll",
+                "signature": "public func enroll(keyAlias: String) throws -> Data",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "func",
+                "name": "classicalPublicKey",
+                "signature": "public func classicalPublicKey(keyAlias: String) throws -> Data",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "func",
+                "name": "signClassical",
+                "signature": "public func signClassical(keyAlias: String, msg: Data) throws -> Data",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "func",
+                "name": "assertNonExportable",
+                "signature": "public func assertNonExportable(keyAlias: String) throws",
+                "doc": "",
+                "members": []
+              }
+            ]
+          }
+        ]
+      }
     },
     "kotlin": {
       "source": "uniffi/capsule_sdk/capsule_sdk.kt",
@@ -6283,7 +6503,141 @@
           "doc": "Smoke the **hardware-bound P-256 device encryption key** across the FFI seam:\nenroll a key-agreement key in `hardware` under `key_alias`, publish the hybrid public key,\nencapsulate a fresh shared secret to it **in software** (the sender side), then\n**decapsulate through the element's ECDH**. Returns `true` iff the two secrets match —\nproving the element's ECDH composes into the hybrid KEM without the private scalar leaving\nhardware. `ml_seed` (32 bytes) is the software-sealed ML-KEM-768 half.\n\nThe DEK is not yet wired into workspace creation, so this focused round-trip is the\ncomposition's on-device check — the DEK analogue of\n[`FfiWorkspace::create_with_p256_hardware_signer`]. Every step is one `capsule-core` call.",
           "members": []
         }
-      ]
+      ],
+      "platform": {
+        "source": "capsule-core-kotlin/src/main/kotlin/com/justin13888/capsule/hardware",
+        "declarations": [
+          {
+            "kind": "class",
+            "name": "SoftwareP256Signer",
+            "signature": "class SoftwareP256Signer(seed: ByteArray) : FfiHardwareSigner",
+            "doc": "Software **P-256** [FfiHardwareSigner] —the no-secure-element reference the real StrongBox\nreplaces, and the always-runnable path for the P-256 hybrid composition (a JVM/CI host has no\nStrongBox). It mirrors [StrongBoxSigner]'s wire contract exactly — a 65-byte **uncompressed\nSEC1** (`0x04‖x‖y`) public key and a **DER-encoded ECDSA** signature over `SHA-256(msg)` — so it\nplugs into `FfiWorkspace.createWithP256HardwareSigner` end to end, and mirrors the\nSwift `SoftwareP256Signer`.\n\nThe P-256 scalar is derived deterministically (HKDF-SHA256, per `keyAlias`, reduced mod n) from a\n32-byte seed the caller seals. It offers no hardware non-exportability, which [assertNonExportable]\nreports truthfully by throwing [FfiHardwareSignerException.Exportable]. BouncyCastle is used so the\nderivation and DER encoding are identical on the JVM (unit tests) and on Android.",
+            "members": [
+              {
+                "kind": "constructor",
+                "name": "SoftwareP256Signer",
+                "signature": "constructor(seed: ByteArray)",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "fun",
+                "name": "enroll",
+                "signature": "override fun enroll(keyAlias: String): ByteArray",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "fun",
+                "name": "classicalPublicKey",
+                "signature": "override fun classicalPublicKey(keyAlias: String): ByteArray",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "fun",
+                "name": "signClassical",
+                "signature": "override fun signClassical(keyAlias: String, msg: ByteArray): ByteArray",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "fun",
+                "name": "assertNonExportable",
+                "signature": "override fun assertNonExportable(keyAlias: String)",
+                "doc": "",
+                "members": []
+              }
+            ]
+          },
+          {
+            "kind": "class",
+            "name": "SoftwareSigner",
+            "signature": "class SoftwareSigner(seed: ByteArray) : FfiHardwareSigner",
+            "doc": "Software [FfiHardwareSigner] —the no-secure-element fallback, mirroring the Rust and Swift\n`SoftwareSigner`. The classical Ed25519 key lives in process memory, derived deterministically\n(HKDF-SHA512, per `keyAlias`) from a 32-byte seed the caller is responsible for sealing.\n\nBecause it produces a genuine 32-byte Ed25519 public key and 64-byte signature, this backend\nplugs **directly** into `FfiWorkspace.createWithHardwareSigner` — it is the one the JVM smoke\ntest drives end to end. It offers no hardware non-exportability, which [assertNonExportable]\nreports truthfully by throwing [FfiHardwareSignerException.Exportable].\n\nThe derivation matches the Rust/Swift references (salt = `keyAlias`, info =\n`capsule/software-signer/ed25519/v1`), so the same seed yields the same device key in every\nlanguage. BouncyCastle is used so deterministic-from-seed Ed25519 works identically on the JVM\n(unit tests) and on Android without relying on a particular JCA provider's Ed25519 support.",
+            "members": [
+              {
+                "kind": "constructor",
+                "name": "SoftwareSigner",
+                "signature": "constructor(seed: ByteArray)",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "fun",
+                "name": "enroll",
+                "signature": "override fun enroll(keyAlias: String): ByteArray",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "fun",
+                "name": "classicalPublicKey",
+                "signature": "override fun classicalPublicKey(keyAlias: String): ByteArray",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "fun",
+                "name": "signClassical",
+                "signature": "override fun signClassical(keyAlias: String, msg: ByteArray): ByteArray",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "fun",
+                "name": "assertNonExportable",
+                "signature": "override fun assertNonExportable(keyAlias: String)",
+                "doc": "",
+                "members": []
+              }
+            ]
+          },
+          {
+            "kind": "class",
+            "name": "StrongBoxSigner",
+            "signature": "class StrongBoxSigner(strongBoxBacked: Boolean = true) : FfiHardwareSigner",
+            "doc": "Android StrongBox–backed [FfiHardwareSigner].The private key is generated inside the\nAndroidKeyStore — StrongBox (a dedicated secure element) when [strongBoxBacked] is true, else\nthe TEE — and never leaves it.\n\n## Algorithm (the same one Secure Enclave and the TPM reference produce)\n\nThe AndroidKeyStore exposes **ECDSA over NIST P-256**, not Ed25519, so this returns P-256\nmaterial: a 65-byte **uncompressed SEC1** (`0x04‖x‖y`) public key — the same encoding Secure\nEnclave's x9.63 representation uses, which `P256HybridSigningKey` normalizes on the Rust side —\nand an ASN.1/DER ECDSA signature over `msg` that `p256::ecdsa` verifies verbatim. It therefore\nplugs into the P-256 `createWithP256HardwareSigner` path end to end; the Ed25519\n[SoftwareSigner] drives the separate `createWithHardwareSigner` path.\n\nRequires API 23+ (StrongBox: API 28+ on devices that ship a secure element).",
+            "members": [
+              {
+                "kind": "constructor",
+                "name": "StrongBoxSigner",
+                "signature": "constructor(strongBoxBacked: Boolean = true)",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "fun",
+                "name": "enroll",
+                "signature": "override fun enroll(keyAlias: String): ByteArray",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "fun",
+                "name": "classicalPublicKey",
+                "signature": "override fun classicalPublicKey(keyAlias: String): ByteArray",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "fun",
+                "name": "signClassical",
+                "signature": "override fun signClassical(keyAlias: String, msg: ByteArray): ByteArray",
+                "doc": "",
+                "members": []
+              },
+              {
+                "kind": "fun",
+                "name": "assertNonExportable",
+                "signature": "override fun assertNonExportable(keyAlias: String)",
+                "doc": "",
+                "members": []
+              }
+            ]
+          }
+        ]
+      }
     }
   }
 }
