@@ -1883,6 +1883,17 @@ export function readBindingsSurface(root) {
         );
     }
     for (const language of ['swift', 'kotlin']) {
+        const platform = dump.languages?.[language]?.platform;
+        if (
+            platform !== undefined &&
+            (typeof platform?.source !== 'string' ||
+                !Array.isArray(platform?.declarations))
+        ) {
+            throw new Error(
+                `${BINDINGS_SURFACE}: the ${language} platform adapters are not a ` +
+                    '`{ source, declarations }` object.',
+            );
+        }
         const declarations = dump.languages?.[language]?.declarations;
         if (!Array.isArray(declarations) || declarations.length === 0) {
             throw new Error(
@@ -1935,7 +1946,9 @@ function docLinks(text, anchors, resolve) {
     return text.replace(/\[`([^`\]]+)`\](?![([])/g, (_, name) => {
         const anchor =
             anchors.get(name) ??
-            (/^[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*$/.test(name)
+            (/^[A-Za-z_]\w*(?:(?:::|\.)[A-Za-z_]\w*)*(?:\([\w:]*\))?$/.test(
+                name,
+            )
                 ? resolve?.(name)
                 : null);
         return anchor ? `[\`${name}\`](#${anchor})` : `\`${name}\``;
@@ -2223,6 +2236,7 @@ export function resolveRustPath(path, targets, enclosing) {
  * @typedef {{
  *   anchors: ReadonlyMap<string, string>,
  *   resolve: RustPathResolver,
+ *   resolveIn: (owner: string) => RustPathResolver,
  *   types: (signature: string, self: string) => string,
  * }} PageLinks
  */
@@ -2385,7 +2399,10 @@ function kindChip(style, kind) {
  * @returns {string}
  */
 function renderMembers(declaration, style, level, links, source) {
-    const { anchors, resolve, types } = links;
+    const { anchors, types } = links;
+    // An inherited doc was written on the interface, so its `Self` is the interface.
+    const resolverOf = (member) =>
+        member.docOwner ? links.resolveIn(member.docOwner) : links.resolve;
     const known = new Set(style.topics.flatMap(([, kinds]) => kinds));
     for (const member of declaration.members) {
         if (!known.has(member.kind)) {
@@ -2416,7 +2433,12 @@ function renderMembers(declaration, style, level, links, source) {
                 if (used) sections.push(used);
                 if (member.doc) {
                     sections.push(
-                        docProse(member.doc, level + 1, anchors, resolve),
+                        docProse(
+                            member.doc,
+                            level + 1,
+                            anchors,
+                            resolverOf(member),
+                        ),
                     );
                 }
                 if (style.tool === 'typedoc') {
@@ -2444,7 +2466,9 @@ function renderMembers(declaration, style, level, links, source) {
             const used = types(member.signature, declaration.name);
             if (used) lines.push(used);
             if (member.doc) {
-                lines.push(docProse(member.doc, level, anchors, resolve));
+                lines.push(
+                    docProse(member.doc, level, anchors, resolverOf(member)),
+                );
             }
             return [lines[0], ...lines.slice(1).map(indentItem)].join('\n\n');
         });
@@ -2593,18 +2617,167 @@ function renderSymbolIndex(groups, style, linksFor) {
 }
 
 /**
+ * KDoc's `[Name]`/`[Type.member]` and DocC's ``` ``symbol(label:)`` ``` links, rewritten to
+ * rustdoc's ``[`…`]`` shorthand so [`docLinks`] resolves them like any other.
+ *
+ * Only prose is rewritten: fenced blocks and code spans are left whole, so `keys[keyAlias]`
+ * stays code. In prose, a bracket is left alone when it is a Markdown link (followed by `(`
+ * or `[`, or a reference label after `]`), a reference definition (`[label]:` opening a line),
+ * a task-list box (`- [x]`), or an index (`out[i]`, right after a name).
+ *
+ * @param {string} doc A hand-written adapter's doc comment.
+ * @returns {string}
+ */
+export function nativeDocLinks(doc) {
+    return doc
+        .split(/(^[ \t]*(?:```|~~~)[^\n]*\n[\s\S]*?^[ \t]*(?:```|~~~)[ \t]*$)/m)
+        .map((part, index) => (index % 2 ? part : nativeProseLinks(part)))
+        .join('');
+}
+
+/**
+ * [`nativeDocLinks`] over prose with no fenced block in it.
+ *
+ * @param {string} prose
+ * @returns {string}
+ */
+function nativeProseLinks(prose) {
+    // DocC's double-backtick symbol link first: it would otherwise read as a code span.
+    return prose
+        .replace(/``([^`\s]+)``/g, '[`$1`]')
+        .split(/(`+[^`]*?`+)/)
+        .map((part, index) =>
+            index % 2
+                ? part
+                : part.replace(
+                      /(?<![\w\]])(?<!^[ \t]*(?:[-*+]|\d+[.)])[ \t]+)\[([A-Za-z_][\w.]*)\](?![([])(:)?/gm,
+                      (whole, name, colon, offset, text) =>
+                          // `[label]: target` opening a line is a reference definition.
+                          colon && /(?:^|\n)[ \t]*$/.test(text.slice(0, offset))
+                              ? whole
+                              : `[\`${name}\`]${colon ?? ''}`,
+                  ),
+        )
+        .join('');
+}
+
+/**
+ * The supertypes a Kotlin or Swift class signature lists after its `:`, outside its
+ * constructor's parentheses and its generic parameters (whose bounds are not supertypes).
+ *
+ * @param {string} signature
+ * @returns {string[]}
+ */
+export function supertypesOf(signature) {
+    // Parentheses and generic brackets both hide colons that are not the supertype list's
+    // (`A<T: Equatable>`, `(seed: ByteArray)`); an arrow's `>` closes nothing.
+    let depth = 0;
+    let outside = '';
+    let previous = '';
+    for (const c of signature) {
+        if (c === '(' || c === '<') depth += 1;
+        if (depth === 0) outside += c;
+        if (c === ')' || (c === '>' && previous !== '-')) depth -= 1;
+        previous = c;
+    }
+    const colon = outside.indexOf(':');
+    if (colon < 0) return [];
+    return outside
+        .slice(colon + 1)
+        .split(',')
+        .map(
+            (supertype) =>
+                /^\s*(?:@\w+\s+)*([A-Za-z_]\w*)/.exec(supertype)?.[1],
+        )
+        .filter(Boolean);
+}
+
+/**
+ * Resolve a link written in a hand-written adapter's doc (KDoc or DocC) or a rustdoc path:
+ * `Type.member` is `Type::member`, a DocC argument list is dropped, and a bare name is first
+ * a member of `enclosing`, as KDoc reads it.
+ *
+ * @param {string} path
+ * @param {SdkLinkTargets} targets
+ * @param {string} enclosing
+ * @returns {string | null}
+ */
+function resolveNativePath(path, targets, enclosing) {
+    const bare = path.replace(/\([\w:]*\)$/, '');
+    if (!bare.includes('::') && !bare.includes('.')) {
+        const own = targets.members.get(enclosing)?.get(spellingKey(bare));
+        if (own) return own;
+    }
+    return resolveRustPath(bare.replaceAll('.', '::'), targets, enclosing);
+}
+
+/**
+ * The hand-written adapters, ready to render: their KDoc and DocC links in shorthand, and an
+ * undocumented override given the doc of the interface member it implements, as Dokka and
+ * DocC show it, with a line naming where it came from.
+ *
+ * @param {SurfaceDeclaration[]} adapters
+ * @param {SurfaceDeclaration[]} declarations The generated declarations they implement.
+ * @returns {Array<SurfaceDeclaration & { members: Array<SurfaceDeclaration & { docOwner?: string }> }>}
+ */
+function prepareAdapters(adapters, declarations) {
+    const byName = new Map(declarations.map((d) => [d.name, d]));
+    return adapters.map((adapter) => {
+        // In declaration order: the first supertype that declares the member documents it.
+        const supertypes = supertypesOf(adapter.signature)
+            .map((name) => byName.get(name))
+            .filter(Boolean);
+        return {
+            ...adapter,
+            doc: nativeDocLinks(adapter.doc),
+            members: adapter.members.map((member) => {
+                if (member.doc) {
+                    return { ...member, doc: nativeDocLinks(member.doc) };
+                }
+                for (const supertype of supertypes) {
+                    const implemented = supertype.members.find(
+                        (m) => spellingKey(m.name) === spellingKey(member.name),
+                    );
+                    if (implemented?.doc) {
+                        return {
+                            ...member,
+                            doc: `${implemented.doc}\n\nFrom [\`${supertype.name}.${implemented.name}\`].`,
+                            docOwner: supertype.name,
+                        };
+                    }
+                }
+                return member;
+            }),
+        };
+    });
+}
+
+/**
+ * The hand-written adapters a binding page documents after its generated declarations.
+ *
+ * @typedef {{ source: string, declarations: SurfaceDeclaration[] }} PlatformAdapters
+ */
+
+/** The section, and index label, the adapters are rendered under. */
+const PLATFORM_HEADING = 'Platform adapters';
+
+/**
  * The body of an SDK page: the symbol index, then one section per declaration group, in
- * [`SDK_STYLES`] order.
+ * [`SDK_STYLES`] order, then any hand-written platform adapters in a section of their own.
  *
  * @param {SurfaceDeclaration[]} declarations
  * @param {'swift' | 'kotlin' | 'ts'} language
  * @param {string} source The artifact, for error messages.
+ * @param {PlatformAdapters} [platform]
  * @returns {string}
  */
-export function renderDeclarations(declarations, language, source) {
+export function renderDeclarations(declarations, language, source, platform) {
     const style = SDK_STYLES[language];
     const known = new Set(style.sections.flatMap(([, kinds]) => kinds));
-    for (const declaration of declarations) {
+    const adapters = platform
+        ? prepareAdapters(platform.declarations, declarations)
+        : [];
+    for (const declaration of [...declarations, ...adapters]) {
         if (!known.has(declaration.kind)) {
             throw new Error(
                 `${source}: ${declaration.name} is a ${declaration.kind}, which no section of ` +
@@ -2612,13 +2785,26 @@ export function renderDeclarations(declarations, language, source) {
             );
         }
     }
-    const targets = sdkLinkTargets(declarations);
+    const everything = [...declarations, ...adapters];
+    const targets = sdkLinkTargets(everything);
+    const native = new Set(adapters.map((d) => d.name));
+    /** @type {(owner: string) => RustPathResolver} */
+    const resolveIn = (owner) =>
+        native.has(owner)
+            ? (path) => resolveNativePath(path, targets, owner)
+            : (path) => resolveRustPath(path, targets, owner);
     /** @type {(declaration: string) => PageLinks} */
     const linksFor = (declaration) => ({
         anchors: targets.anchors,
-        resolve: (path) => resolveRustPath(path, targets, declaration),
+        resolve: resolveIn(declaration),
+        resolveIn: (owner) => {
+            const inner = resolveIn(owner);
+            // The `From [Type.member]` line is native syntax inside a generated doc.
+            return (path) =>
+                inner(path) ?? resolveNativePath(path, targets, owner);
+        },
         types: (signature, self) =>
-            signatureTypes(signature, self, declarations, targets),
+            signatureTypes(signature, self, everything, targets),
     });
     const groups = style.sections
         .map(([heading, kinds]) => [
@@ -2626,17 +2812,31 @@ export function renderDeclarations(declarations, language, source) {
             declarations.filter((d) => kinds.includes(d.kind)),
         ])
         .filter(([, matching]) => matching.length > 0);
-    return [
-        renderSymbolIndex(groups, style, linksFor),
-        ...groups.map(([heading, matching]) =>
+    const sections = groups.map(([heading, matching]) =>
+        [
+            `## ${heading}`,
+            ...matching.map((d) =>
+                renderSymbol(d, style, linksFor(d.name), source),
+            ),
+        ].join('\n\n'),
+    );
+    if (adapters.length > 0) {
+        groups.push([PLATFORM_HEADING, adapters]);
+        sections.push(
             [
-                `## ${heading}`,
-                ...matching.map((d) =>
+                `## ${PLATFORM_HEADING}`,
+                `Hand-written in \`${platform.source}\`, not generated: the classes an app ` +
+                    'constructs and passes where the declarations above take a platform key ' +
+                    'store.',
+                ...adapters.map((d) =>
                     renderSymbol(d, style, linksFor(d.name), source),
                 ),
             ].join('\n\n'),
-        ),
-    ].join('\n\n');
+        );
+    }
+    return [renderSymbolIndex(groups, style, linksFor), ...sections].join(
+        '\n\n',
+    );
 }
 
 /**
@@ -2708,7 +2908,13 @@ export function renderBindingsPage(page, dump) {
         `Every declaration the \`${dump.namespace}\` namespace exports, as uniffi ${dump.uniffi} spells it in \`${surface.source}\`.`,
         ...(BINDINGS_NOTES[language] ?? []),
     ]);
-    return `${tidyBlankLines(`${head}\n\n${renderDeclarations(surface.declarations, language, BINDINGS_SURFACE)}`)}\n`;
+    const body = renderDeclarations(
+        surface.declarations,
+        language,
+        BINDINGS_SURFACE,
+        surface.platform,
+    );
+    return `${tidyBlankLines(`${head}\n\n${body}`)}\n`;
 }
 
 /**
