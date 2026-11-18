@@ -4,7 +4,7 @@ description: Server moderation policy — reports, suspensions, takedowns, block
 status: draft
 ---
 
-Capsule is end-to-end encrypted, so the server **cannot** scan content, and no server-side content or CSAM scanner will be built; opt-in AI/ML ([](/design/ai/)) runs on the client, over the user's own library. Moderation works on user reports, account signals and peer reputation. Endpoint shapes are in [](/reference/api/moderation/). Code: `capsule-server::moderation`.
+Capsule is end-to-end encrypted, so the server **cannot** scan content, and no server-side content or CSAM scanner will be built; opt-in AI/ML ([](/design/ai/)), including the sensitive-content flag ([](/design/ai/#sensitive-content)), runs on the client, over the user's own library. Moderation works on user reports, account signals and peer reputation. Endpoint shapes are in [](/reference/api/moderation/). Code: `capsule-server::moderation`.
 
 ## What Moderation Cannot Do (Structural)
 

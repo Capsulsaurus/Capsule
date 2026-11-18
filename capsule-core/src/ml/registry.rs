@@ -48,9 +48,9 @@ pub enum TaskOutput {
 }
 
 /// One inventory row: the canonical model for a [`TaskKind`] — a v1-committed slot from
-/// [AI/ML — v1-Committed Slots], carrying the model, its function, and its named fallback.
+/// [AI/ML — Pipeline Slots], carrying the model, its function, and its named fallback.
 ///
-/// [AI/ML — v1-Committed Slots]: https://docs/design/ai/#v1-committed-slots
+/// [AI/ML — Pipeline Slots]: https://docs/design/ai/#pipeline-slots
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelRow {
     /// The task this row serves.
@@ -94,11 +94,11 @@ pub struct Registry {
 }
 
 impl Registry {
-    /// The v1-committed inventory — the four launch slots of [AI/ML — v1-Committed Slots]:
+    /// The v1-committed inventory — the four launch slots of [AI/ML — Pipeline Slots]:
     /// MobileCLIP-B, YOLOv10, SCRFD, AdaFace, each with the contract's function and named
     /// fallback. This is the seam the vector index gates against and the regeneration loop walks.
     ///
-    /// [AI/ML — v1-Committed Slots]: https://docs/design/ai/#v1-committed-slots
+    /// [AI/ML — Pipeline Slots]: https://docs/design/ai/#pipeline-slots
     pub fn canonical() -> Self {
         let rows = vec![
             ModelRow {

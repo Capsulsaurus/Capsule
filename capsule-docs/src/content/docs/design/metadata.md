@@ -214,7 +214,7 @@ Album membership is not a CRDT: MLS commits ([](/design/cryptography/mls/)) alre
 
 User and AI tags are **structurally separate** OR-sets (`tags_user`, `tags_ai`), so an AI tag can never overwrite user intent.
 
-- Every `tags_ai` entry carries `model_id` and `model_version` ([](/design/ai/#embedding-provenance)). When the canonical model changes, old tags are stale; cross-model comparison is forbidden ([](/design/threat-model/validation/#client-side-validation-invariants)).
+- Every `tags_ai` entry carries `model_id` and `model_version` ([](/design/ai/#embedding-provenance)). When a new release completes its generation cutover ([](/design/ai/#generation-cutover)), old tags are stale; cross-model comparison is forbidden ([](/design/threat-model/validation/#client-side-validation-invariants)).
 - **Promote**: an explicit, signed user action, never automatic, copies the entry to `tags_user` with a fresh `add_id`.
 - **Dismiss**: an OR-set remove on `tags_ai` by the original `add_id`.
 

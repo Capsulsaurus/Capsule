@@ -109,7 +109,7 @@ Term { field: QueryField, op: Operator, operand: Operand }  // operand shape fix
 | presence | `gps`, `camera_id` | `exists` | `bool` |
 
 - **Closed.** An unknown `field`/`op` or a mistyped `operand` is a **structural rejection**, not a tolerated unknown. Extending the grammar needs a later `predicate_schema`, plus a sidecar-schema bump ([](/design/metadata/#schema-versioning-rules)) for a new sidecar field. A newer `predicate_schema` is preserved verbatim and never evaluated.
-- **AI terms.** `tags_ai`/`people_cluster` terms name their `(model_id, model_version)` slot, and a stale slot evaluates as excluded (AI staleness, [](/design/ai/#ai-output-containment)).
+- **AI terms.** `tags_ai`/`people_cluster` terms are evaluated against the current generation of the task that produces them, never a pinned release. AI outputs from a superseded generation evaluate as excluded (AI staleness, [](/design/ai/#generation-cutover)), so a weight release moves an album to the new generation at cutover instead of emptying it.
 - **Convergence.** The whole definition is one LWW register (a stamped `None` deletes it), so there is no partial-predicate merge. Evaluation is a pure function of `(definition, decryptable assets)` in sorted `asset_id` order.
 
 ## Asset Stacking
