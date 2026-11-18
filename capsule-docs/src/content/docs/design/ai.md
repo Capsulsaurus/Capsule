@@ -65,7 +65,7 @@ Each release record carries:
 - readiness: a known-answer input, its reference output, and a tolerance (for deterministic pipelines, the bound inside which a mismatching device may still run on a platform partition);
 - device floor: minimum RAM and the tier ([](#feature-map)).
 
-Corrections and withdrawals are **new records** (`supersede`, `yank`) and never edits. The client enforces append-only behaviour: a fetched registry must extend the cached one byte for byte, and one that drops or rewrites a record is refused. This also stops a rollback to an older registry. The registry is signed under a project release key, and its verification key is compiled into every client. The key, its custody and its rotation are **Planned** additions to [](/design/cryptography/primitives/), which owns the signature primitive. A client that sees a synced AI output whose tuple its snapshot lacks refreshes the registry first. If the tuple is still unknown it refuses the output and keeps the asset's other data.
+Corrections and withdrawals are **new records** (`supersede`, `yank`) and never edits. The client enforces append-only behaviour: a fetched registry must extend the cached one byte for byte, and one that drops or rewrites a record is refused. This also stops a rollback to an older registry. A delegated registry key signs release records. It is named by root-signed `delegate` records in the same log, which also carries root-signed `checkpoint` records for recovery from a fork. Every client compiles in the two root public keys. [](/design/cryptography/keys/#project-release-keys) owns custody, rotation, compromise and fork recovery. A client that sees a synced AI output whose tuple its snapshot lacks refreshes the registry first. If the tuple is still unknown it refuses the output and keeps the asset's other data.
 
 ### Distribution and Readiness
 
@@ -108,7 +108,7 @@ Face detection and clustering use the face rows of the [](#feature-map). Everyth
 
 ### Identity Refinement
 
-Known people are **user-scoped prototype sets**: per person, a set of user-confirmed face (and optionally re-ID) references with a match threshold. They are user input to the clustering view, not the view itself, which stays computed ([](/design/metadata/#grouping-convergence-requirement)). They sync as user metadata. Their field is a **Planned** addition to [](/design/metadata/#sidecar-schema-v1), and they store the confirmed crops' asset and region ids rather than vectors, so a new release re-embeds them. A model never learns on the device, because per-device weights would break cross-device comparability.
+Known people are **owner-scoped prototype sets**: per person, a set of user-confirmed face (and optionally re-ID) references with a match threshold. They are user input to the clustering view, not the view itself, which stays computed ([](/design/metadata/#grouping-convergence-requirement)). They sync as user metadata in the `people_prototypes` section of the library-settings document ([](/design/metadata/#the-library-settings-document)). It is keyed so that only the owner set reads it, never an album co-member. They store the confirmed crops as an asset id and a rectangle rather than as vectors, so a new release re-embeds them. A model never learns on the device, because per-device weights would break cross-device comparability.
 
 - **Feedback** (confirm, reject, merge, split) edits prototypes and thresholds, never weights.
 - **Pseudo-labels** from high-confidence matches are AI outputs in the AI namespace, never user labels.
@@ -119,10 +119,10 @@ Known people are **user-scoped prototype sets**: per person, a set of user-confi
 
 A classifier head over the semantic embedding produces a sensitivity flag, which clients use to **blur by default**. It runs on the provisioning user's client:
 
-- **when a drop arrives**, before it is reviewed, so the review surface ([](/design/web-upload/)) already blurs it, and a flagged drop raises a local alert to that user, who may be on another device or reviewing later;
+- **when a drop arrives**, before it is reviewed, so the review surface ([](/design/web-upload/)) already blurs it. A flagged drop raises the `drop_sensitive` local alert ([](/design/notifications/#alert-classes)) to that user, who may be on another device or reviewing later;
 - **at import.**
 
-On an adopted asset the flag is an AI-namespaced field. That field and the alert class are both **Planned**: they are additions to [](/design/metadata/#sidecar-schema-v1) and to the closed alert classes in [](/design/notifications/). The flag is advisory, never a block, and the server never sees it in plaintext.
+On an adopted asset the flag is the AI-namespaced `sensitivity_ai` sidecar field ([](/design/metadata/#sidecar-schema-v1)). A user who disagrees dismisses it, which writes `flagged: false` with the same `model_id` and `model_version`. Re-runs of that release leave a dismissal alone. A later generation evaluates the asset again. The flag is advisory, never a block, and the server never sees it in plaintext.
 
 ## Quality Assessment
 
@@ -156,7 +156,15 @@ Every stored embedding (local index, backup, or embedding-class `DerivativeManif
 
 One pipeline per task. A backbone is reused across features whenever quality allows, to bound disk and peak memory. Candidate weights are **candidates**: none is final until its registry record carries an evaluation and licences verified against [](/design/licensing/#model-weights-and-datasets). That rule covers the training data too, which is where most candidates are still unverified. A named licence below is the weight licence only.
 
-Tiers bound what a device downloads. **Core** is sized for the lowest-end supported device. **Optional** is opt-in per feature. **Large** is for desktops and high-RAM devices only. The provisional budgets (≈ 150 MB, ≈ 500 MB, a few GB) are planning figures, to be replaced by measured sizes once releases exist.
+Tiers bound what a device downloads. **Core** is sized for the lowest-end supported device. **Optional** is opt-in per feature. **Large** is for desktops and high-RAM devices only. Each tier has a **download ceiling**, counting the weight bytes of the current release of every pipeline in it:
+
+| Tier | Ceiling |
+| --- | --- |
+| Core | ≤ 150 MB in total |
+| Optional | ≤ 500 MB per feature |
+| Large | ≤ 4 GB per feature |
+
+The publishing gate refuses to sign a release record that would push its tier over its ceiling. Clients do not re-check ceilings. A pipeline counts against the tier in its record, and a shared backbone counts once, in the lowest tier that uses it. A ceiling changes only by a change to this table, recorded in an ADR.
 
 | Feature | Pipeline | Candidate weights | Tier | Status |
 | --- | --- | --- | --- | --- |
@@ -182,7 +190,7 @@ Tiers bound what a device downloads. **Core** is sized for the lowest-end suppor
 
 - **No expression model.** The semantic embedder over face crops answers expression queries well enough for search, at no disk cost.
 - **No content-based orientation model in v1.** EXIF orientation only. A rotation classifier is a post-v1 candidate if field data shows mis-rotated imports are common.
-- **No VLM chat or real-time ASR on Core-tier devices.** Their weights exceed the Core budget by an order of magnitude. Captions and transcripts are batch jobs on Optional devices and stored as AI outputs, so lower-tier devices still read them once synced.
+- **No VLM chat or real-time ASR on Core-tier devices.** Their weights exceed the Core ceiling by an order of magnitude. Captions and transcripts are batch jobs on Optional devices and stored as AI outputs, so lower-tier devices still read them once synced.
 - **No on-device fine-tuning** ([](#identity-refinement)).
 - **No dedicated scene or object classifier.** Zero-shot tags from the embedder cover them, and detection is opt-in.
 
@@ -211,8 +219,8 @@ Datasets are used for **evaluation**, and for **training** only where no accepta
 - **Planned:**
   - `capsule-core::ml::pipeline`, `capsule-core::ml::weights` and `capsule-sdk::ml`;
   - the ONNX Runtime runner behind `inference`;
-  - the release key, generation cutover, and the prototype and sensitivity sidecar fields;
-  - the sensitive-content alert class.
+  - release-key delegation ([](/design/cryptography/keys/#project-release-keys)), the tier-ceiling gate, and generation cutover;
+  - the `sensitivity_ai` sidecar field, the `people_prototypes` library-settings section, and the `drop_sensitive` alert class.
 
   Today `model_version` is a free string, not yet the monotonic release number.
 - **Blocked:** the face rows and everything that depends on them ([](#dense-tagging), expression search), until admissible weights exist.
@@ -222,6 +230,9 @@ Datasets are used for **evaluation**, and for **training** only where no accepta
 - **Registry (unit).** Each `(model_id, model_version)` maps to one registry record; unknown tuples are refused at insert.
 - **Registry append-only (unit).** A fetched registry that drops, reorders or rewrites a cached record, or fails its signature, is refused, and the cached one stays.
 - **Hash pin (unit).** An overridden URL serving different bytes is refused.
+- **Delegation (unit).** A record is accepted only under the delegation current at its log position ([](/design/cryptography/keys/#validation)).
+- **Tier ceilings (publishing gate).** A record that pushes its tier over its ceiling is refused before signing, and a shared backbone is counted once.
+- **Fork recovery (unit).** A divergent registry is refused without a covering `checkpoint` and superseding `delegate`, and is adopted with both.
 - **Readiness (smoke).** A release failing its known-answer check is never marked `ready`, and the previous release keeps serving.
 - **Generation cutover (unit).** Queries read only the old generation until cutover and only the new one after. Old rows are deleted only after cutover.
 - **Provenance round-trip (unit).** The tuple and `pipeline_version` survive insert and query.
