@@ -1,0 +1,111 @@
+---
+title: Support
+description: Where to ask a question, report a bug, suggest a feature or report a vulnerability in Capsule, and what to include so it can be acted on.
+status: draft
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+Capsule is built and supported in the open by volunteers. There is no paid or private support
+channel: every question, report and idea goes through the project's GitHub, where anyone can answer
+it and the answer helps the next person. A vulnerability is the one exception, and it is reported
+privately.
+
+Capsule has not had a release yet; what works today and what is next is in the
+[roadmap](https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md).
+
+## Before you ask
+
+Most answers already exist. A minute here usually saves a round trip.
+
+1. **Search the docs** with the search box at the top of every page, and read
+   [](/guides/troubleshooting/), which covers the common failures and how to collect logs.
+2. **Search the [open and closed issues](https://github.com/Capsulsaurus/Capsule/issues?q=is%3Aissue)**
+   and the [discussions](https://github.com/Capsulsaurus/Capsule/discussions). If someone has
+   already reported it, add a 👍 reaction, or a comment with new information, rather than opening
+   a duplicate.
+3. **Check the exact flags a command takes** in [](/reference/cli/).
+
+## Get help
+
+<CardGrid>
+  <Card title="Ask a question" icon="comment">
+    How do I…? Is this expected? Help setting something up? Ask in
+    [Discussions › Q&A](https://github.com/Capsulsaurus/Capsule/discussions/categories/q-a). Mark the
+    reply that solved it as the answer, so the next person finds it.
+  </Card>
+  <Card title="Report a bug" icon="warning">
+    Something broke or behaves differently from the docs? Open a
+    [bug report](https://github.com/Capsulsaurus/Capsule/issues/new?template=bug_report.yml). The
+    form asks for the version, platform, steps to reproduce and logs: a report with all of
+    them can be triaged without a back-and-forth.
+  </Card>
+  <Card title="Suggest a feature" icon="star">
+    Share ideas in
+    [Discussions › Ideas](https://github.com/Capsulsaurus/Capsule/discussions/categories/ideas),
+    where others can upvote and refine them. Maintainers turn an idea into an issue once it is
+    accepted, and the issue is where the work is tracked.
+  </Card>
+  <Card title="Report a vulnerability" icon="padlock">
+    **Never in a public issue.** Report it privately through a
+    [GitHub security advisory](https://github.com/Capsulsaurus/Capsule/security/advisories/new).
+    The [security policy](https://github.com/Capsulsaurus/Capsule/security/policy) says which
+    versions receive fixes.
+  </Card>
+</CardGrid>
+
+## Specific topics
+
+<CardGrid>
+  <Card title="Running a server" icon="setting">
+    Start with [](/guides/self-hosting/), then [](/guides/troubleshooting/). Still stuck? Ask in
+    [Q&A](https://github.com/Capsulsaurus/Capsule/discussions/categories/q-a) with the server's
+    version and its startup log.
+  </Card>
+  <Card title="Missing or damaged photos" icon="information">
+    Stop and don't delete anything. Read
+    [](/guides/troubleshooting/#check-a-librarys-integrity) and
+    [](/design/backup-recovery/#recovery-paths) before you try a fix. If data is lost or
+    corrupted, report it as a bug: protecting your data is the project's first priority.
+  </Card>
+  <Card title="Translations" icon="translate">
+    Report a wrong or missing string with a
+    [translation error](https://github.com/Capsulsaurus/Capsule/issues/new?template=translation-error.md),
+    or ask for a new language with a
+    [language request](https://github.com/Capsulsaurus/Capsule/issues/new?template=language-request.md).
+    How translations are made is in
+    [locales/README.md](https://github.com/Capsulsaurus/Capsule/blob/master/locales/README.md).
+  </Card>
+  <Card title="Moving from Google Photos" icon="external">
+    Follow [](/guides/google-photos-migration/), including what the importer cannot guarantee,
+    before you report an import problem.
+  </Card>
+</CardGrid>
+
+## Get involved
+
+<CardGrid>
+  <Card title="Contribute" icon="github">
+    Read the
+    [contributing guide](https://github.com/Capsulsaurus/Capsule/blob/master/CONTRIBUTING.md),
+    then pick an issue labelled
+    [good first issue](https://github.com/Capsulsaurus/Capsule/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
+    Answering questions in Discussions helps just as much.
+  </Card>
+  <Card title="Sponsor the project" icon="heart">
+    Capsule is free and open source. If it is useful to you,
+    [sponsoring its development on GitHub](https://github.com/sponsors/justin13888) helps keep it
+    going.
+  </Card>
+</CardGrid>
+
+## What to expect
+
+- **Volunteer time.** Questions are answered by the community and the maintainers as time allows.
+  There is no guaranteed response time.
+- **Complete reports move first.** A bug report with a version, the steps to reproduce and logs
+  can be confirmed and fixed. One without them waits for a reply before anyone can act on it.
+- **One topic per thread.** Two problems belong in two reports, so each can be tracked and closed
+  on its own.
+- **Public by default.** Everything except a vulnerability report is public, so redact passphrases,
+  recovery secrets, tokens, server addresses and personal file paths before you paste a log.
