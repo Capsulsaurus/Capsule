@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+#MISE description="Type-check the FFI for every Tier-1/Tier-2 cross target on a macOS or Linux host (no Xcode/NDK/MSVC; uses zig)"
+# Usage: mise run check-targets [--tier 1|2] [--apple] [--target TRIPLE]...
+#
+# The host-agnostic half of the cross-target story (see the "Cross-compilation" block in
+# mise.toml). `build-apple` / `build-android` / `build-windows` / `build-linux-cross` produce real
+# linked artifacts and so need each platform's native toolchain; this task runs `cargo check`
+# (no linking) for every target from a macOS or Linux host alike, so a `cfg(target_os = …)`
+# regression is caught locally instead of only on the CI runner that owns the platform.
+#
+# The only non-Rust part of a check is the C that build scripts compile (ring, rusqlite's bundled
+# SQLite). scripts/cross/zig-cc compiles it with `zig cc`, substituting a zig target that has
+# bundled libc headers (macOS headers stand in for iOS, musl for Android's bionic, mingw for
+# MSVC). Those objects are never linked, so the stand-in is sound for a check — and only for a
+# check. Rust itself is checked for the exact target triple.
+#
+# Never skips silently: every requested target is checked and reported, and any failure fails
+# the task.
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$root"
+
+# triple|tier|zig target|extra cargo check args (`;`-separated invocations)
+TARGETS=(
+    "aarch64-apple-ios|1|aarch64-macos|-p capsule-sdk --features ffi;-p capsule-core-ffi"
+    "aarch64-apple-ios-sim|1|aarch64-macos|-p capsule-sdk --features ffi;-p capsule-core-ffi"
+    "x86_64-apple-ios|1|x86_64-macos|-p capsule-sdk --features ffi;-p capsule-core-ffi"
+    "aarch64-apple-darwin|1|aarch64-macos|-p capsule-sdk --features ffi;-p capsule-core-ffi"
+    "x86_64-apple-darwin|1|x86_64-macos|-p capsule-sdk --features ffi;-p capsule-core-ffi"
+    "aarch64-linux-android|1|aarch64-linux-musl|-p capsule-sdk --features ffi"
+    "armv7-linux-androideabi|1|arm-linux-musleabihf|-p capsule-sdk --features ffi"
+    "x86_64-linux-android|1|x86_64-linux-musl|-p capsule-sdk --features ffi"
+    "i686-linux-android|1|x86-linux-musl|-p capsule-sdk --features ffi"
+    "x86_64-pc-windows-msvc|2|x86_64-windows-gnu|-p capsule-sdk --features ffi;-p capsule-library --tests"
+    "aarch64-unknown-linux-gnu|2|aarch64-linux-gnu|-p capsule-sdk --features ffi"
+)
+
+usage() {
+    echo "usage: mise run check-targets [--tier 1|2] [--apple] [--target TRIPLE]..." >&2
+    exit 2
+}
+
+tier=""
+apple=0
+wanted=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --tier) [ $# -ge 2 ] || usage; tier="$2"; shift 2 ;;
+        --apple) apple=1; shift ;;
+        --target) [ $# -ge 2 ] || usage; wanted+=("$2"); shift 2 ;;
+        -h | --help) usage ;;
+        *) echo "check-targets: unknown argument '$1'" >&2; usage ;;
+    esac
+done
+case "$tier" in "" | 1 | 2) ;; *) usage ;; esac
+
+# Resolve the selection. An unknown --target is an error, never an empty (passing) run.
+selected=()
+for w in "${wanted[@]+"${wanted[@]}"}"; do
+    found=0
+    for row in "${TARGETS[@]}"; do [ "${row%%|*}" = "$w" ] && found=1; done
+    [ "$found" = 1 ] || { echo "check-targets: '$w' is not a Tier-1/Tier-2 target (see mise.toml)" >&2; exit 2; }
+done
+for row in "${TARGETS[@]}"; do
+    IFS='|' read -r triple t _ _ <<<"$row"
+    [ -n "$tier" ] && [ "$t" != "$tier" ] && continue
+    [ "$apple" = 1 ] && [[ "$triple" != *-apple-* ]] && continue
+    if [ ${#wanted[@]} -gt 0 ]; then
+        hit=0
+        for w in "${wanted[@]}"; do [ "$w" = "$triple" ] && hit=1; done
+        [ "$hit" = 1 ] || continue
+    fi
+    selected+=("$row")
+done
+[ ${#selected[@]} -gt 0 ] || { echo "check-targets: the filters selected no targets" >&2; exit 2; }
+
+command -v zig >/dev/null 2>&1 || { echo "check-targets: zig not found; run 'mise install'" >&2; exit 1; }
+# Resolve the real zig binary. Build scripts run with their cwd in the cargo registry, outside
+# this repo, where a mise *shim* has no pinned version and fails — so the shims must not look
+# `zig` up on PATH themselves.
+CAPSULE_ZIG="$(zig env | sed -n 's/^ *\.zig_exe = "\(.*\)",$/\1/p')"
+[ -x "$CAPSULE_ZIG" ] || { echo "check-targets: could not resolve the zig executable from 'zig env'" >&2; exit 1; }
+export CAPSULE_ZIG
+echo ":: zig $("$CAPSULE_ZIG" version) ($CAPSULE_ZIG), $(rustc --version)"
+
+# Add only the missing std components (idempotent, but `rustup target add` is slow to no-op).
+installed="$(rustup target list --installed)"
+missing=()
+for row in "${selected[@]}"; do
+    triple="${row%%|*}"
+    grep -qx "$triple" <<<"$installed" || missing+=("$triple")
+done
+if [ ${#missing[@]} -gt 0 ]; then
+    echo ":: rustup target add ${missing[*]}"
+    rustup target add "${missing[@]}"
+fi
+
+# A dedicated target dir: the shimmed CC_<target> is a build-script input, so sharing target/
+# with the native build-* tasks would rebuild ring/SQLite every time the two alternate.
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$root/target}/check-targets"
+shim="$root/scripts/cross"
+
+# Off macOS there is no `xcrun`, which cc-rs calls to find the Apple SDK unless SDKROOT names an
+# existing directory. Any directory will do — the shim drops the -isysroot cc-rs derives from it.
+# On macOS, leave SDKROOT alone: rustc also reads it to link host build scripts.
+sdkroot_env=()
+[ "$(uname)" = "Darwin" ] || sdkroot_env=(SDKROOT="$shim/stub-include")
+
+pass=()
+fail=()
+for row in "${selected[@]}"; do
+    IFS='|' read -r triple t ztarget invocations <<<"$row"
+    var="${triple//-/_}"
+    ok=1
+    IFS=';' read -r -a invs <<<"$invocations"
+    for inv in "${invs[@]}"; do
+        echo ":: [tier $t] cargo check --target $triple $inv   (C via zig cc -target $ztarget)"
+        # $inv is intentionally word-split into cargo args.
+        # shellcheck disable=SC2086
+        if ! env "CC_$var=$shim/zig-cc" "AR_$var=$shim/zig-ar" \
+            CAPSULE_ZIG_TARGET="$ztarget" "${sdkroot_env[@]+"${sdkroot_env[@]}"}" \
+            cargo check --target "$triple" $inv; then
+            ok=0
+        fi
+    done
+    if [ "$ok" = 1 ]; then pass+=("$triple"); else fail+=("$triple"); fi
+done
+
+echo
+echo "check-targets summary (CARGO_TARGET_DIR=$CARGO_TARGET_DIR):"
+for p in "${pass[@]+"${pass[@]}"}"; do echo "  PASS  $p"; done
+for f in "${fail[@]+"${fail[@]}"}"; do echo "  FAIL  $f"; done
+[ ${#fail[@]} -eq 0 ]

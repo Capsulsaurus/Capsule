@@ -1,6 +1,9 @@
 # `cross` (cross-rs) configuration for the Tier-2, best-effort aarch64 Linux
-# target. Apple targets cannot use cross (they need macOS + Xcode) and Android
-# uses cargo-ndk — see the justfile `build-*` recipes. The default cross image
+# target (`mise run build-linux-cross`). Apple targets cannot use cross (linking
+# needs macOS + Xcode, whose SDK cross-rs cannot redistribute) and Android uses
+# cargo-ndk — see the `build-*` tasks in mise-tasks/. Every target, Apple
+# included, is type-checked on macOS or Linux by `mise run check-targets` (zig, no
+# Docker). The default cross image
 # already ships the gcc cross-toolchain that rusqlite's `bundled` SQLite (C) and
 # the RustCrypto stack need, so no extra packages are required; we only pin the
 # image tag for reproducibility.
