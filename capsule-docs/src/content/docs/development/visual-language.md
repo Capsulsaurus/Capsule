@@ -120,9 +120,9 @@ one is designed.
   covers it, the header's glass blurs it away, and it is not printed. It stays put while a page
   scrolls; a page transition carries it with the content, so it settles with the new page.
 - **Status badges.** Every authored page carries a review `status`
-  ([](/design/principles/#review-status)). The page title always shows
-  it. The sidebar shows it only for a page that is not `stable`, so the navigation lists exactly what
-  still awaits review.
+  ([](/design/principles/#review-status)), except a splash page such as the support page, which has no
+  sidebar and may carry none. The page title always shows it. The sidebar shows it only for a page
+  that is not `stable`, so the navigation lists exactly what still awaits review.
 - **Sidebar.** The same surface as the page, divided from it by a hairline; the current page is an
   accent-tinted pill. Where the table of contents appears beside it, the two columns are the same
   width and the content is centred between them, so the text has equal space on each side at every
@@ -131,8 +131,8 @@ one is designed.
   a one-line status, the differentiators with a link named for the doc behind each, the
   table-stakes tier, why Capsule is built this way, and where to start.
 - **Footer.** On every page, centred: links to the documentation, the blog (once it is live), the
-  roadmap, discussions and the source, then the copyright holder, the licence line and the commit
-  the site was built from, linked to that commit. On a page shorter than the window it rests on
+  roadmap, discussions, the support page and the source, then the copyright holder, the licence
+  line and the commit the site was built from, linked to that commit. On a page shorter than the window it rests on
   the window's bottom edge; on a longer one it follows the content.
 - **Generated reference.** A generated page says so under its title: the surface (REST API, CLI,
   an SDK), a dashed "Generated" tag and its source, and for REST a download of the OpenAPI

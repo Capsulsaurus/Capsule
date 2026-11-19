@@ -136,6 +136,7 @@ export default defineConfig({
                         { slug: 'guides/user-guide' },
                         { slug: 'guides/self-hosting' },
                         { slug: 'guides/google-photos-migration' },
+                        { slug: 'guides/troubleshooting' },
                     ],
                 },
                 {

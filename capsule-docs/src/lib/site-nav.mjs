@@ -55,6 +55,7 @@ export function footerLinks({ blogIsLive }) {
             external: true,
         },
         { label: 'Discussions', href: `${REPO}/discussions`, external: true },
+        { label: 'Support', href: '/support/' },
         { label: 'GitHub', href: REPO, external: true },
     ];
 }

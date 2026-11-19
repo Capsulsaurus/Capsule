@@ -49,11 +49,18 @@ describe('footerLinks', () => {
             'Blog',
             'Roadmap',
             'Discussions',
+            'Support',
             'GitHub',
         ]);
         expect(
             footerLinks({ blogIsLive: false }).map((link) => link.label),
-        ).toEqual(['Documentation', 'Roadmap', 'Discussions', 'GitHub']);
+        ).toEqual([
+            'Documentation',
+            'Roadmap',
+            'Discussions',
+            'Support',
+            'GitHub',
+        ]);
     });
 
     it('marks exactly the off-site links external', () => {
