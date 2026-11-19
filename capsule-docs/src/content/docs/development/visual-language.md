@@ -120,9 +120,9 @@ one is designed.
   covers it, the header's glass blurs it away, and it is not printed. It stays put while a page
   scrolls; a page transition carries it with the content, so it settles with the new page.
 - **Status badges.** Every authored page carries a review `status`
-  ([](/design/principles/#review-status)). The page title always shows
-  it. The sidebar shows it only for a page that is not `stable`, so the navigation lists exactly what
-  still awaits review.
+  ([](/design/principles/#review-status)), except a splash page such as the support page, which has no
+  sidebar and may carry none. The page title always shows it. The sidebar shows it only for a page
+  that is not `stable`, so the navigation lists exactly what still awaits review.
 - **Sidebar.** The same surface as the page, divided from it by a hairline; the current page is an
   accent-tinted pill. Where the table of contents appears beside it, the two columns are the same
   width and the content is centred between them, so the text has equal space on each side at every

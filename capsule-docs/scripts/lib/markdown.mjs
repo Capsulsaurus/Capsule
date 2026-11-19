@@ -87,6 +87,16 @@ export function frontmatterStatus(source) {
     return field?.[1];
 }
 
+/** The Starlight `template` in a page's YAML frontmatter, or undefined. */
+export function frontmatterTemplate(source) {
+    const block = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/.exec(source);
+    if (!block) return undefined;
+    const field = /^template:\s*['"]?([^'"\s#]+)['"]?\s*(#.*)?$/m.exec(
+        block[1],
+    );
+    return field?.[1];
+}
+
 /** Whether a page's YAML frontmatter has a top-level `generated:` block. */
 export function frontmatterGenerated(source) {
     const block = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/.exec(source);
