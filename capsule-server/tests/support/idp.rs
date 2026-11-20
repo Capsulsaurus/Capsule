@@ -191,13 +191,19 @@ impl PrivateCa {
             .signed_by(&leaf_key, &ca, &ca_key)
             .expect("a leaf signed by the CA");
 
-        let config = rustls::ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(
-                vec![leaf.der().clone(), ca.der().clone()],
-                rustls::pki_types::PrivateKeyDer::Pkcs8(leaf_key.serialize_der().into()),
-            )
-            .expect("a server config");
+        // The provider is named: reqwest's `rustls` enables aws-lc-rs beside this crate's `ring`,
+        // so rustls has no single process default to fall back on.
+        let config = rustls::ServerConfig::builder_with_provider(std::sync::Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .expect("protocol versions")
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![leaf.der().clone(), ca.der().clone()],
+            rustls::pki_types::PrivateKeyDer::Pkcs8(leaf_key.serialize_der().into()),
+        )
+        .expect("a server config");
         Self {
             ca_pem: pem_of(ca.der()),
             config: Arc::new(config),

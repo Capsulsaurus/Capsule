@@ -98,12 +98,28 @@ nanoid = "0.4.0"
 # The HTTP client. `capsule-sdk` is the sanctioned client network path and `capsule-server`'s
 # OIDC relying party is the one server egress: discovery, JWKS and the token
 # exchange against an identity provider, and the federation pull worker; both server clients run
-# with redirects off. rustls only, never native-tls or OpenSSL; `json` for the provider's
-# documents. The SDK enables `stream` and `multipart` on top.
-reqwest = { version = "0.12.28", default-features = false, features = [
+# with redirects off. rustls only, never native-tls or OpenSSL. `json` for the provider's
+# documents and `form` for the form-encoded token exchange, which 0.13 made opt-in. 0.13 because
+# spargen 0.7's generated runtime requires it.
+#
+# The crypto provider is chosen per artifact, so it is not named here: `rustls-no-provider` links
+# none, and each crate picks. Client builds (`capsule-sdk`, and through it the CLI and the
+# iOS/Android FFI) run on `ring`, which the SDK installs as the process default
+# (`capsule_sdk::net::ensure_crypto_provider`) — one small provider, shared with the HTTP/3 leg and
+# LAN peering. The server enables `rustls`, i.e. aws-lc-rs, which it already links through
+# `jsonwebtoken`. The SDK enables `stream` and `multipart` on top.
+reqwest = { version = "0.13.5", default-features = false, features = [
     "json",
-    "rustls-tls",
+    "form",
+    "rustls-no-provider",
 ] }
+# The trust anchors every reqwest client verifies against (`ClientBuilder::tls_certs_only`): the
+# bundled Mozilla root set, as DER certificates. reqwest 0.13's `rustls` would otherwise verify
+# against the OS store (rustls-platform-verifier); Capsule keeps the bundled set its clients
+# trusted under 0.12, which is also the set the SDK's HTTP/3 leg trusts (`webpki-roots`, the same
+# release of the same bundle), so the TCP and QUIC legs share one anchor set. Adopting the OS
+# store is a separate decision.
+webpki-root-certs = "1.0.12"
 ring = "0.17.14"
 # The one client-side SQLite stack: `capsule-library`'s catalog, the FFI's catalog access and the
 # CLI's `capsule.sqlite` (sync store and peering state). `bundled` compiles SQLite in, so every

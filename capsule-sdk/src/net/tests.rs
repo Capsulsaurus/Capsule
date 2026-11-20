@@ -773,3 +773,28 @@ async fn an_ipv4_mapped_socket_is_marked_through_ip_tos() {
         LOWER_EFFORT_TRAFFIC_CLASS
     );
 }
+
+/// **Every SDK client build has a crypto provider, and it is ring.** The SDK's reqwest links none
+/// of its own (`rustls-no-provider`) and panics building a client without a process default, so
+/// [`http_builder`] installs ring first. nextest runs each test in its own process, so here no
+/// earlier test can have installed one.
+#[test]
+fn building_an_sdk_client_installs_ring_as_the_process_provider() {
+    http_client().expect("an SDK client builds with no provider installed beforehand");
+    let provider =
+        rustls::crypto::CryptoProvider::get_default().expect("the build installed a provider");
+    // The key-exchange groups tell the providers apart: aws-lc-rs offers a post-quantum hybrid
+    // that ring does not.
+    let groups = |provider: &rustls::crypto::CryptoProvider| {
+        provider
+            .kx_groups
+            .iter()
+            .map(|group| group.name())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        groups(provider),
+        groups(&rustls::crypto::ring::default_provider()),
+        "the installed provider is ring's"
+    );
+}

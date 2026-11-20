@@ -502,20 +502,24 @@ impl HttpIdentityProvider {
     /// Timeouts on, redirects off: a token endpoint that redirects is sending the client secret
     /// somewhere the discovery document did not name. `roots` are the operator's additional
     /// trust anchors (`OIDC_CA_BUNDLE`) — a provider behind a private CA is the ordinary
-    /// enterprise case — added to, never replacing, the public roots.
+    /// enterprise case — added to, never replacing, the public roots. The public roots are the
+    /// bundled webpki set, not the host's store, as for every Capsule HTTP client.
     ///
     /// # Errors
     ///
     /// Whatever `reqwest` refuses to build with — in practice nothing.
     pub fn http_client(roots: &[reqwest::Certificate]) -> reqwest::Result<reqwest::Client> {
-        let mut builder = reqwest::Client::builder()
+        let public = webpki_root_certs::TLS_SERVER_ROOT_CERTS
+            .iter()
+            .map(|der| reqwest::Certificate::from_der(der))
+            .collect::<reqwest::Result<Vec<_>>>()?;
+        reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .redirect(reqwest::redirect::Policy::none())
-            .user_agent(concat!("capsule-server/", env!("CARGO_PKG_VERSION")));
-        for root in roots {
-            builder = builder.add_root_certificate(root.clone());
-        }
-        builder.build()
+            .user_agent(concat!("capsule-server/", env!("CARGO_PKG_VERSION")))
+            .tls_certs_only(public)
+            .tls_certs_merge(roots.iter().cloned())
+            .build()
     }
 
     /// A relying party for `settings`, fetching with `http` and judging time by `clock`.

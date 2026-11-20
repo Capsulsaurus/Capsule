@@ -3348,6 +3348,7 @@ async fn the_sessions_advertised_ranges_narrow_the_window() {
 /// The window is clamped into the protocol's bounds.
 #[test]
 fn the_client_window_is_clamped_into_the_protocol_bounds() {
+    crate::net::ensure_crypto_provider();
     let transport = UploadTransport::with_static_token(
         reqwest::Client::new(),
         "http://localhost",
@@ -4130,6 +4131,7 @@ fn the_session_state_only_moves_forward() {
 #[cfg(feature = "http3")]
 #[test]
 fn the_chunk_patch_is_marked_replayable_under_http3() {
+    crate::net::ensure_crypto_provider();
     let http = reqwest::Client::new();
     let client = UploadClient::new(UploadTransport::with_static_token(
         http.clone(),

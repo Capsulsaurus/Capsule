@@ -102,8 +102,7 @@ impl HomeServer {
             .collect()
     }
 
-    fn answer(&self, request: &reqwest::Request) -> Canned {
-        let path = request.url().path();
+    fn answer(&self, path: &str) -> Canned {
         if path == "/v1/sync" {
             return self
                 .pages
@@ -135,7 +134,9 @@ impl HomeServer {
 }
 
 impl rest::HttpBackend for HomeServer {
-    fn execute(&self, request: reqwest::Request) -> rest::ExecuteFuture<'_> {
+    fn execute(&self, request: http::Request<rest::HttpBody>) -> rest::ExecuteFuture<'_> {
+        let url = reqwest::Url::parse(&request.uri().to_string())
+            .expect("the runtime sends absolute URIs");
         let header = |name: &str| {
             request
                 .headers()
@@ -145,13 +146,13 @@ impl rest::HttpBackend for HomeServer {
         };
         self.seen.lock().expect("unpoisoned").push(Seen {
             method: request.method().to_string(),
-            url: request.url().clone(),
+            url: url.clone(),
             bearer: header("authorization")
                 .and_then(|value| value.strip_prefix("Bearer ").map(str::to_owned)),
             signature: header(REQUEST_SIGNATURE_HEADER),
         });
-        let canned = self.answer(&request);
-        let unsubscribing = (request.url().path() == "/v1/federation/capabilities/refresh")
+        let canned = self.answer(url.path());
+        let unsubscribing = (url.path() == "/v1/federation/capabilities/refresh")
             .then(|| {
                 self.unsubscribe_on_refresh
                     .lock()
@@ -168,14 +169,14 @@ impl rest::HttpBackend for HomeServer {
                         .expect("unsubscribed");
                 }
             }
-            let mut response = http::Response::new(canned.body);
+            let mut response = http::Response::new(rest::HttpBody::from(canned.body));
             *response.status_mut() =
                 reqwest::StatusCode::from_u16(canned.status).expect("a status");
             response.headers_mut().insert(
                 reqwest::header::CONTENT_TYPE,
                 reqwest::header::HeaderValue::from_static(canned.content_type),
             );
-            Ok(reqwest::Response::from(response))
+            Ok(response)
         })
     }
 }

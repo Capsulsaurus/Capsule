@@ -30,6 +30,7 @@
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use http_body_util::BodyExt as _;
 use reqwest::Url;
 use tracing::instrument;
 
@@ -87,12 +88,19 @@ pub fn origin_of(peer: &PeerId) -> Result<Url, String> {
 }
 
 /// The production HTTP client a pull runs over: rustls, no redirects, HTTPS only, bounded time.
+/// A peer is trusted on the bundled webpki roots, not the host's store, as every Capsule HTTP
+/// client is.
 ///
 /// # Errors
 ///
 /// Whatever reqwest reports when it cannot build a TLS stack.
 pub fn egress_client() -> Result<reqwest::Client, reqwest::Error> {
+    let public = webpki_root_certs::TLS_SERVER_ROOT_CERTS
+        .iter()
+        .map(|der| reqwest::Certificate::from_der(der))
+        .collect::<reqwest::Result<Vec<_>>>()?;
     let builder = reqwest::Client::builder()
+        .tls_certs_only(public)
         .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(CONNECT_TIMEOUT)
@@ -160,7 +168,7 @@ pub mod test_egress {
             builder = builder.resolve(host, *to);
         }
         for der in ROOTS.lock().unwrap_or_else(PoisonError::into_inner).iter() {
-            builder = builder.add_root_certificate(reqwest::Certificate::from_der(der)?);
+            builder = builder.tls_certs_merge([reqwest::Certificate::from_der(der)?]);
         }
         Ok(builder)
     }
@@ -244,16 +252,16 @@ impl PeerTransport {
     }
 
     /// Record `violation` and answer the status no operation declares.
-    fn refuse(&self, violation: Violation) -> reqwest::Response {
+    fn refuse(&self, violation: Violation) -> http::Response<rest::HttpBody> {
         tracing::warn!(%violation, origin = %self.origin, "the pull transport refused a response");
         self.state
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .violation = Some(violation);
-        let mut response = http::Response::new(Vec::<u8>::new());
+        let mut response = http::Response::new(rest::HttpBody::empty());
         *response.status_mut() = reqwest::StatusCode::from_u16(VIOLATION_STATUS)
             .unwrap_or(reqwest::StatusCode::BAD_GATEWAY);
-        reqwest::Response::from(response)
+        response
     }
 
     /// Whether `url` is on the pinned origin: same scheme, host and port.
@@ -265,38 +273,46 @@ impl PeerTransport {
 }
 
 impl rest::HttpBackend for PeerTransport {
-    fn execute(&self, request: reqwest::Request) -> rest::ExecuteFuture<'_> {
+    fn execute(&self, request: http::Request<rest::HttpBody>) -> rest::ExecuteFuture<'_> {
         Box::pin(async move {
-            if !self.on_origin(request.url()) {
+            // A URI that is not a URL names no origin, so it is not on the pinned one.
+            let on_origin =
+                Url::parse(&request.uri().to_string()).is_ok_and(|url| self.on_origin(&url));
+            if !on_origin {
                 return Ok(self.refuse(Violation::OffOrigin {
-                    url: request.url().to_string(),
+                    url: request.uri().to_string(),
                 }));
             }
             let limit = self.limit();
-            let mut response = self.inner.execute(request).await?;
-            if response
-                .content_length()
-                .is_some_and(|length| length > limit)
-            {
+            let response = self.inner.execute(request).await?;
+            if declared_length(response.headers()).is_some_and(|length| length > limit) {
                 return Ok(self.refuse(Violation::TooLarge { limit }));
             }
-            let status = response.status();
-            let version = response.version();
-            let headers = response.headers().clone();
-            let mut body = Vec::new();
-            while let Some(chunk) = response.chunk().await.map_err(rest::TransportError::new)? {
-                if (body.len() as u64).saturating_add(chunk.len() as u64) > limit {
+            let (parts, mut body) = response.into_parts();
+            let mut read = Vec::new();
+            while let Some(frame) = body.frame().await {
+                let Ok(chunk) = frame?.into_data() else {
+                    continue;
+                };
+                if (read.len() as u64).saturating_add(chunk.len() as u64) > limit {
                     return Ok(self.refuse(Violation::TooLarge { limit }));
                 }
-                body.extend_from_slice(&chunk);
+                read.extend_from_slice(&chunk);
             }
-            let mut rebuilt = http::Response::new(body);
-            *rebuilt.status_mut() = status;
-            *rebuilt.version_mut() = version;
-            *rebuilt.headers_mut() = headers;
-            Ok(reqwest::Response::from(rebuilt))
+            Ok(http::Response::from_parts(parts, read.into()))
         })
     }
+}
+
+/// The body length a response's `Content-Length` declares; `None` when it declares none, or
+/// one that is not a length, which the bound on the bytes actually read still covers.
+fn declared_length(headers: &http::HeaderMap) -> Option<u64> {
+    headers
+        .get(http::header::CONTENT_LENGTH)?
+        .to_str()
+        .ok()?
+        .parse()
+        .ok()
 }
 
 /// Why a call to a peer did not answer what was asked.
@@ -404,7 +420,7 @@ impl PeerClient {
             cursor: cursor
                 .filter(|cursor| !cursor.is_empty())
                 .map(str::to_owned),
-            page_size: Some(i64::from(page_size)),
+            page_size: Some(page_size),
             ..rest::SyncFeedParams::default()
         };
         self.transport.arm(limit);
@@ -579,19 +595,28 @@ impl PeerClient {
             rest::Error::Redirect(error) => {
                 RemoteError::Malformed(format!("the peer redirected: {error}"))
             }
-            rest::Error::RequestConstruction(error) => match connect_failure(&error) {
-                Some(reason) => {
-                    tracing::warn!(
-                        %reason,
-                        base = %self.base,
-                        "the peer could not be connected to"
-                    );
-                    RemoteError::Unreachable(reason)
-                }
-                None => RemoteError::Malformed(format!("the request could not be built: {error}")),
-            },
+            // None of a pull's calls follows a link, so a link cycle is the peer answering
+            // something the contract does not allow.
+            rest::Error::PaginationCycle { .. } => {
+                RemoteError::Malformed("the peer's links form a cycle".into())
+            }
+            // Not a connect failure: spargen files those under `Transport`, below. What is left
+            // is a request the generated code could not assemble, an answer hyper could not parse
+            // as HTTP, or a connection the peer dropped after accepting it but before any answer
+            // — all of it charged to the peer as input that failed validation.
+            rest::Error::RequestConstruction(error) => {
+                RemoteError::Malformed(format!("the request could not be built: {error}"))
+            }
+            // A connect failure (a refused port, a name that does not resolve, a certificate the
+            // handshake refused) is this class. None of them is the peer's input failing
+            // validation, so the pull backs off rather than charging the peer's error budget. The
+            // reason is the whole source chain, so the verifier's own words are what is logged
+            // and kept; nothing here relaxes verification, since the connection was never made.
+            // A connect that outlasts [`CONNECT_TIMEOUT`] is `Timeout` instead, also unreachable.
             rest::Error::Transport(error) | rest::Error::InterruptedBody(error) => {
-                RemoteError::Unreachable(error.to_string())
+                let reason = source_chain(&error);
+                tracing::warn!(%reason, base = %self.base, "the peer could not be reached");
+                RemoteError::Unreachable(reason)
             }
             rest::Error::Timeout(kind) => RemoteError::Unreachable(format!("timed out: {kind:?}")),
             rest::Error::Protocol(error) => RemoteError::Unreachable(error.to_string()),
@@ -599,33 +624,17 @@ impl PeerClient {
     }
 }
 
-/// The whole reason a connection to the peer failed, when `error` is a connect-time failure.
-///
-/// reqwest reports every failure to open a connection - a refused port, a name that does not
-/// resolve, a TLS handshake whose certificate does not verify - as its request class, and
-/// spargen sorts that class into [`rest::Error::RequestConstruction`]. None of them is the
-/// peer's input failing validation, so the pull backs off rather than charging the peer's error
-/// budget. Every other cause there (a response hyper could not parse, a request the generated
-/// code could not assemble) stays [`RemoteError::Malformed`]. A connect that outlasts
-/// [`CONNECT_TIMEOUT`] never arrives here: spargen checks for a timeout first and reports it as
-/// [`rest::Error::Timeout`], which is [`RemoteError::Unreachable`] without this function.
-///
-/// The reason is the whole source chain, so a certificate the handshake refused is logged with
-/// the verifier's own words. Nothing here relaxes verification: the connection was never made.
-fn connect_failure(error: &rest::RequestError) -> Option<String> {
-    let source = std::error::Error::source(error)?;
-    let reqwest = source.downcast_ref::<reqwest::Error>()?;
-    if !reqwest.is_connect() {
-        return None;
-    }
-    let mut reason = reqwest.to_string();
-    let mut next = std::error::Error::source(reqwest);
+/// `error` and every cause under it, joined with `: `, so the innermost reason (a certificate
+/// verifier's, a resolver's) survives into what is logged and kept.
+fn source_chain(error: &dyn std::error::Error) -> String {
+    let mut reason = error.to_string();
+    let mut next = error.source();
     while let Some(cause) = next {
         reason.push_str(": ");
         reason.push_str(&cause.to_string());
         next = cause.source();
     }
-    Some(reason)
+    reason
 }
 
 #[cfg(test)]
