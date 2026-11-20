@@ -34,6 +34,8 @@ import {
     renderCliPage,
     renderConventionsPage,
     renderWasmPage,
+    resolveRustPath,
+    sdkLinkTargets,
     tsSignature,
     WASM_SURFACE,
 } from './gen-reference.mjs';
@@ -794,7 +796,9 @@ describe('the SDK pages', () => {
             '```ts wrap\nexport function shareIsPassphraseProtected(wrapped_scope_b64: string): boolean;\n```',
         );
         expect(page).toContain('## Classes');
-        expect(page).toContain('#### `scopeKind`');
+        expect(page).toContain(
+            '#### <a id="sharescope-scopekind" class="sdk-anchor"></a>`scopeKind`',
+        );
         expect(page).not.toContain('private constructor');
         // rustdoc's shorthand link is unwrapped to its code span, not printed with brackets.
         expect(page).toContain('Calls `open_share` next.');
@@ -806,7 +810,7 @@ describe('the SDK pages', () => {
         const swiftPage = renderBindingsPage(swift, MINIMAL_BINDINGS);
         const kotlinPage = renderBindingsPage(kotlin, MINIMAL_BINDINGS);
         expect(swiftPage).toContain('```swift wrap\nopen class FfiWorkspace');
-        expect(swiftPage).toContain('#### `sealAsset`');
+        expect(swiftPage).toContain('class="sdk-anchor"></a>`sealAsset`');
         expect(swiftPage).not.toContain('```kotlin');
         expect(kotlinPage).toContain('```kotlin wrap\nfun `evaluateAlerts`');
         expect(kotlinPage).not.toContain('FfiWorkspace');
@@ -890,7 +894,9 @@ describe('the native SDK layouts', () => {
         expect(page).toContain('<p class="sdk-label">Declaration</p>');
         expect(page).toContain('<p class="sdk-label sdk-topics">Topics</p>');
         expect(page).toContain('<p class="sdk-label">Instance Methods</p>');
-        expect(page).toMatch(/^#### `sealAsset`$/m);
+        expect(page).toContain(
+            '#### <a id="ffiworkspace-sealasset" class="sdk-anchor"></a>`sealAsset`',
+        );
         // The abstract is the first sentence; the rest is the Overview.
         expect(page).toMatch(
             /<div class="sdk-abstract">\n\nA local workspace\.\n\n<\/div>/,
@@ -982,6 +988,346 @@ describe('the native SDK layouts', () => {
             ],
             returns: 'R',
         });
+    });
+});
+
+/** A dump shaped like the real one where rustdoc paths cross languages. */
+const LINKED_BINDINGS = {
+    schema: 1,
+    namespace: 'capsule_sdk',
+    uniffi: '0.31.1',
+    languages: {
+        swift: {
+            source: 'capsule_sdk.swift',
+            declarations: [
+                {
+                    kind: 'class',
+                    name: 'FfiWorkspace',
+                    signature: 'open class FfiWorkspace: FfiWorkspaceProtocol',
+                    doc: 'A workspace.',
+                    members: [
+                        {
+                            kind: 'static func',
+                            name: 'create',
+                            signature:
+                                'public static func create(tier: FfiDeviceTier) throws -> FfiWorkspace',
+                            doc: 'Create one.',
+                            members: [],
+                        },
+                        {
+                            kind: 'func',
+                            name: 'applySyncEntry',
+                            signature:
+                                'open func applySyncEntry(entry: FfiSyncEntry) throws',
+                            doc: 'As [`create`](Self::create), then see [`fetch`](crate::ffi::FfiSession::fetch_blob_to_path) and [`HistorySources`](crate::sync::HistorySources).',
+                            members: [],
+                        },
+                    ],
+                },
+                {
+                    kind: 'class',
+                    name: 'FfiSession',
+                    signature: 'open class FfiSession: FfiSessionProtocol',
+                    doc: '',
+                    members: [
+                        {
+                            kind: 'func',
+                            name: 'fetchBlobToPath',
+                            signature:
+                                'open func fetchBlobToPath(path: String) async throws',
+                            doc: '',
+                            members: [],
+                        },
+                    ],
+                },
+                {
+                    kind: 'enum',
+                    name: 'FfiDeviceTier',
+                    signature: 'public enum FfiDeviceTier',
+                    doc: '',
+                    members: [
+                        {
+                            kind: 'case',
+                            name: 'low',
+                            signature: 'case low',
+                            doc: 'See [`FfiError::Auth`].',
+                            members: [],
+                        },
+                    ],
+                },
+            ],
+        },
+        kotlin: {
+            source: 'uniffi/capsule_sdk/capsule_sdk.kt',
+            declarations: [
+                {
+                    kind: 'fun',
+                    name: 'syncedHistorySources',
+                    signature:
+                        'fun `syncedHistorySources`(`entry`: FfiSyncEntry): FfiSyncEntry',
+                    doc: '',
+                    members: [],
+                },
+                {
+                    kind: 'class',
+                    name: 'FfiWorkspace',
+                    signature: 'open class FfiWorkspace: FfiWorkspaceInterface',
+                    doc: 'Built by [`synced_history_sources`](crate::ffi::synced_history_sources).',
+                    members: [
+                        {
+                            kind: 'fun',
+                            name: 'create',
+                            signature:
+                                '@Throws(FfiException::class) fun create(tier: FfiDeviceTier): FfiWorkspace',
+                            doc: 'Create one; [`Self::open`] reopens it.',
+                            members: [],
+                        },
+                        {
+                            kind: 'fun',
+                            name: 'open',
+                            signature: 'fun open(): FfiWorkspace',
+                            doc: '',
+                            members: [],
+                        },
+                    ],
+                },
+                {
+                    kind: 'enum class',
+                    name: 'FfiDeviceTier',
+                    signature: 'enum class FfiDeviceTier',
+                    doc: '',
+                    members: [
+                        {
+                            kind: 'entry',
+                            name: 'LOW',
+                            signature: 'LOW',
+                            doc: '',
+                            members: [],
+                        },
+                    ],
+                },
+                {
+                    kind: 'sealed class',
+                    name: 'FfiException',
+                    signature: 'sealed class FfiException: kotlin.Exception()',
+                    doc: '',
+                    members: [
+                        {
+                            kind: 'variant',
+                            name: 'Auth',
+                            signature: 'class Auth(): FfiException()',
+                            doc: 'Rejected; compare [`FfiDeviceTier::Low`](Self::Auth).',
+                            members: [],
+                        },
+                    ],
+                },
+            ],
+        },
+    },
+};
+
+describe('rustdoc paths in SDK prose', () => {
+    const swift = SDK_PAGES.find((page) => page.slug === 'swift');
+    const kotlin = SDK_PAGES.find((page) => page.slug === 'kotlin');
+    const kotlinTargets = sdkLinkTargets(
+        LINKED_BINDINGS.languages.kotlin.declarations,
+    );
+
+    it('resolves Self, a crate path, a type path and a free function to anchors', () => {
+        expect(
+            resolveRustPath('Self::open', kotlinTargets, 'FfiWorkspace'),
+        ).toBe('ffiworkspace-open');
+        expect(
+            resolveRustPath('crate::ffi::FfiWorkspace::create', kotlinTargets),
+        ).toBe('ffiworkspace-create');
+        expect(resolveRustPath('FfiDeviceTier::Low', kotlinTargets)).toBe(
+            'ffidevicetier-low',
+        );
+        expect(
+            resolveRustPath(
+                'crate::ffi::synced_history_sources',
+                kotlinTargets,
+            ),
+        ).toBe('syncedhistorysources');
+        expect(resolveRustPath('FfiWorkspace', kotlinTargets)).toBe(
+            'ffiworkspace',
+        );
+    });
+
+    it('never links a path through another module to the export that shares its name', () => {
+        // `crate::fetch::render_step` is the internal function; the export of the same
+        // name lives in `crate::ffi`.
+        expect(
+            resolveRustPath(
+                'crate::fetch::synced_history_sources',
+                kotlinTargets,
+            ),
+        ).toBeNull();
+        expect(
+            resolveRustPath(
+                'crate::ffi::ladder::synced_history_sources',
+                kotlinTargets,
+            ),
+        ).toBe('syncedhistorysources');
+        expect(
+            resolveRustPath('super::synced_history_sources', kotlinTargets),
+        ).toBe('syncedhistorysources');
+    });
+
+    it('spells a Rust error type as the Kotlin exception uniffi renames it to', () => {
+        expect(resolveRustPath('FfiError::Auth', kotlinTargets)).toBe(
+            'ffiexception-auth',
+        );
+    });
+
+    it('resolves nothing the page does not document', () => {
+        expect(
+            resolveRustPath('crate::sync::HistorySources', kotlinTargets),
+        ).toBeNull();
+        expect(resolveRustPath('Self::open', kotlinTargets)).toBeNull();
+        expect(
+            resolveRustPath(
+                'crate::recovery::FfiWorkspace::open',
+                kotlinTargets,
+            ),
+        ).toBeNull();
+        expect(resolveRustPath('FfiMissing::open', kotlinTargets)).toBeNull();
+        expect(
+            resolveRustPath('FfiWorkspace::open::deeper', kotlinTargets),
+        ).toBeNull();
+        expect(
+            resolveRustPath('Self::missing', kotlinTargets, 'FfiWorkspace'),
+        ).toBeNull();
+    });
+
+    it('never publishes a rustdoc path as a link target', () => {
+        for (const page of [
+            renderBindingsPage(swift, LINKED_BINDINGS),
+            renderBindingsPage(kotlin, LINKED_BINDINGS),
+        ]) {
+            expect(page).not.toMatch(/\]\((?:Self|crate|super)::/);
+            expect(page).not.toMatch(/\]\(Ffi\w+::/);
+        }
+    });
+
+    it('links a rustdoc path to the member it names, in the reader’s spelling', () => {
+        const page = renderBindingsPage(swift, LINKED_BINDINGS);
+        expect(page).toContain('As [`create`](#ffiworkspace-create)');
+        expect(page).toContain('see [`fetch`](#ffisession-fetchblobtopath)');
+        // Not on the page: the words stay, the link goes.
+        expect(page).toContain('and `HistorySources`.');
+    });
+
+    it('resolves a rustdoc path written as shorthand', () => {
+        const page = renderBindingsPage(kotlin, LINKED_BINDINGS);
+        expect(page).toContain('[`Self::open`](#ffiworkspace-open) reopens it');
+        expect(page).toContain(
+            'Built by [`synced_history_sources`](#syncedhistorysources).',
+        );
+        // Swift documents no FfiError, so the shorthand unwraps.
+        expect(renderBindingsPage(swift, LINKED_BINDINGS)).toContain(
+            'See `FfiError::Auth`.',
+        );
+    });
+
+    it('drops a rustdoc path link on a REST page, whatever its first segment', () => {
+        const document = structuredClone(MINIMAL_OPENAPI);
+        document.paths['/v1/auth/login'].post.description =
+            'See [`a`](Self::a), [`b`](super::b), [`c`](crate::c) and [`d`](FfiWorkspace::d).';
+        const rendered = renderApiPage(
+            API_GROUPS.find((entry) => entry.slug === 'auth'),
+            bucketOperations(document).get('auth'),
+            document,
+        );
+        expect(rendered).toContain('See `a`, `b`, `c` and `d`.');
+    });
+});
+
+describe('SDK member permalinks and signature types', () => {
+    const swift = SDK_PAGES.find((page) => page.slug === 'swift');
+    const kotlin = SDK_PAGES.find((page) => page.slug === 'kotlin');
+
+    it('gives every member a stable anchor, linked from its name in a member list', () => {
+        const page = renderBindingsPage(kotlin, LINKED_BINDINGS);
+        expect(page).toContain(
+            '- <a id="ffiworkspace-create" class="sdk-anchor" href="#ffiworkspace-create">`create`</a>',
+        );
+        expect(page).toContain('id="ffidevicetier-low"');
+        expect(page).toContain('id="ffiexception-auth"');
+    });
+
+    it('anchors a member rendered as a heading inside a Markdown heading', () => {
+        // A Markdown heading keeps Starlight's permalink button and the untranslated code
+        // span; the anchor's `id` leads its tag, where headingAnchors reads it.
+        const page = renderBindingsPage(swift, LINKED_BINDINGS);
+        expect(page).toMatch(
+            /^#### <a id="ffiworkspace-create" class="sdk-anchor"><\/a>`create`$/m,
+        );
+        expect(headingAnchors(page).has('ffiworkspace-create')).toBe(true);
+        expect(headingAnchors(page).has('ffiworkspace-applysyncentry')).toBe(
+            true,
+        );
+    });
+
+    it('lists the documented types a signature names, linked, once each', () => {
+        const page = renderBindingsPage(kotlin, LINKED_BINDINGS);
+        // A member signature: every documented type it names, in order, its own type left
+        // out, since the reader is already in that type's section.
+        const create = page.slice(
+            page.indexOf('id="ffiworkspace-create"'),
+            page.indexOf('id="ffiworkspace-open"'),
+        );
+        expect(create).toContain(
+            'Types: [`FfiException`](#ffiexception), [`FfiDeviceTier`](#ffidevicetier)\n',
+        );
+        expect(create).not.toContain('[`FfiWorkspace`](#ffiworkspace)');
+        // A declaration does not list itself.
+        const tier = page.slice(
+            page.indexOf('### `FfiDeviceTier`'),
+            page.indexOf('id="ffidevicetier-low"'),
+        );
+        expect(tier).not.toContain('Types:');
+    });
+
+    it('names each type once, and never a function', () => {
+        const bindings = structuredClone(LINKED_BINDINGS);
+        bindings.languages.kotlin.declarations[1].members[1].signature =
+            'fun open(a: FfiDeviceTier, b: FfiDeviceTier, syncedHistorySources: FfiDeviceTier): FfiDeviceTier';
+        const page = renderBindingsPage(kotlin, bindings);
+        const open = page.slice(page.indexOf('id="ffiworkspace-open"'));
+        expect(open).toContain('Types: [`FfiDeviceTier`](#ffidevicetier)\n');
+        expect(open).not.toContain('(#syncedhistorysources)');
+    });
+
+    it('refuses two members that would share an anchor or a spelling', () => {
+        const overload = structuredClone(LINKED_BINDINGS);
+        const members = overload.languages.kotlin.declarations[1].members;
+        members.push({ ...members[0] });
+        expect(() => renderBindingsPage(kotlin, overload)).toThrow(
+            /share the anchor #ffiworkspace-create/,
+        );
+        const alike = structuredClone(LINKED_BINDINGS);
+        alike.languages.kotlin.declarations[1].members.push({
+            ...members[0],
+            name: 'o_pen',
+        });
+        expect(() => renderBindingsPage(kotlin, alike)).toThrow(
+            /spelled alike/,
+        );
+    });
+
+    it('says Java callers are untested, and why the page is not Dokka', () => {
+        const page = renderBindingsPage(kotlin, MINIMAL_BINDINGS);
+        expect(page).toContain('calling them from Java is untested');
+        expect(page).toContain('[](/design/developer-docs/#why-not-dokka)');
+        expect(renderBindingsPage(swift, MINIMAL_BINDINGS)).not.toContain(
+            'Java',
+        );
+    });
+
+    it('lists no types for a signature that names none on the page', () => {
+        const page = renderBindingsPage(kotlin, MINIMAL_BINDINGS);
+        expect(page).not.toContain('Types:');
     });
 });
 

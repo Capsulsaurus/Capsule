@@ -84,6 +84,26 @@ The server is key-free: writes are sealed on the client and the sync feed return
 envelopes, so a try-it panel would teach that the API accepts plaintext. Executable examples live
 where sealing happens: SDK doctests and CLI transcripts.
 
+## Why Not Dokka
+
+The Kotlin page is laid out after Dokka (summary tables, member rows that link to
+themselves, the documented types a signature names) but rendered by the generator, for four
+reasons:
+
+- **Toolchain.** Dokka reads the sources against a resolved Gradle classpath. The bindings are
+  gitignored uniffi output, so the docs build would need Gradle, a JDK, cargo and uniffi, which
+  breaks the first rule.
+- **Chrome.** Its HTML is a site of its own, outside search, the link validator, the theme and
+  the version switcher. Its own templates can be overridden, but it stays a second site. Its
+  Markdown and Javadoc outputs are still alpha.
+- **Noise.** It documents every public declaration in the generated file, uniffi's converters
+  and buffers included, and `@suppress` cannot be added to a file nobody writes.
+- **No gain in prose.** uniffi copies Rust doc comments verbatim, so Dokka would publish the
+  same rustdoc paths (`Self::open`, `crate::ffi::…`). The generator resolves them to entries
+  on the page instead.
+
+The toolchain and chrome reasons hold for DocC and the Swift page too.
+
 ## Deferred
 
 - Per-endpoint lifecycle metadata (stability, permission, changelog) as spec vendor extensions.
