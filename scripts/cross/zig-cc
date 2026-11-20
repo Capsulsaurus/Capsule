@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# C compiler shim for `mise run check-targets`: `zig cc` stands in for each target's native
+# C toolchain so the C that build scripts compile (ring's C + pre-generated asm, rusqlite's
+# bundled SQLite) builds on a macOS or Linux host — no Xcode, Android NDK or MSVC.
+#
+# `check-targets` exports CAPSULE_ZIG_TARGET (a zig target triple) and points cc-rs's
+# `CC_<rust-target>` at this script. We drop the flags cc-rs derives for the *real* toolchain
+# — target triple, Apple sysroot/arch/min-version — and substitute zig's own target, because zig
+# bundles libc headers for macOS, Linux (glibc/musl) and Windows (mingw) but not for iOS or
+# Android. The resulting objects are never linked: `cargo check` only needs build scripts to
+# succeed so rustc can type-check the target's `cfg` paths. Never use this shim for `cargo build`.
+# Caveat: when the checked target equals the host (aarch64-unknown-linux-gnu on an arm64 Linux
+# box, aarch64-apple-darwin on Apple silicon), cargo also uses CC_<target> for C compiled by
+# *build-dependencies*, and that IS linked into build scripts. Today no build-dependency compiles
+# C, and on those triples zig targets the real platform anyway, so the objects are sound.
+#
+# Usage (direct, for debugging): CAPSULE_ZIG_TARGET=aarch64-macos scripts/cross/zig-cc -c x.c
+set -euo pipefail
+
+: "${CAPSULE_ZIG_TARGET:?zig-cc: CAPSULE_ZIG_TARGET must be set (check-targets sets it)}"
+
+args=()
+skip_next=0
+for a in "$@"; do
+    if [ "$skip_next" = 1 ]; then
+        skip_next=0
+        continue
+    fi
+    case "$a" in
+        # Flags whose value is the next argument.
+        -target | -isysroot | -arch) skip_next=1 ;;
+        # Single-token target / Apple deployment flags from cc-rs.
+        --target=* | -mios-version-min=* | -mios-simulator-version-min=* | \
+            -miphoneos-version-min=* | -miphonesimulator-version-min=* | \
+            -mmacosx-version-min=* | -mmacos-version-min=* | -m*-version-min=*) ;;
+        # cc-rs's Android/MSVC-flavoured bits zig rejects.
+        -fembed-bitcode) ;;
+        *) args+=("$a") ;;
+    esac
+done
+
+case "$CAPSULE_ZIG_TARGET" in
+    # Apple system headers zig omits (os/log.h for the `oslog` crate) get check-only stubs.
+    *-macos*) args+=(-isystem "$(cd "$(dirname "$0")" && pwd)/stub-include") ;;
+    # musl stands in for Android's bionic, whose <stdint.h> pulls in <sys/types.h> and so the BSD
+    # `u_int*_t` names sqlite-vec uses; musl only declares them there.
+    # C sources only: in ring's pre-generated assembly (.S) the C typedefs are a syntax error.
+    *-musl*)
+        is_asm=0
+        for a in "${args[@]}"; do
+            case "$a" in *.S | *.s | *.asm) is_asm=1 ;; esac
+        done
+        [ "$is_asm" = 1 ] || args+=(-include sys/types.h)
+        ;;
+esac
+
+# CAPSULE_ZIG is the resolved zig binary (check-targets sets it): cc-rs runs this from the cargo
+# registry, outside the repo, where a mise `zig` shim on PATH has no version and fails.
+exec "${CAPSULE_ZIG:-zig}" cc -target "$CAPSULE_ZIG_TARGET" "${args[@]}"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
 #MISE description="Cross-build the capsule-sdk FFI for aarch64-unknown-linux-gnu (needs cross)"
 set -euo pipefail
-if ! command -v cross >/dev/null 2>&1; then echo "build-linux-cross: cross not installed; run 'cargo install cross'" >&2; exit 1; fi
+if ! command -v cross >/dev/null 2>&1; then echo "build-linux-cross: cross not installed; run 'mise install'" >&2; exit 1; fi
 cross build -p capsule-sdk --features ffi --target aarch64-unknown-linux-gnu
