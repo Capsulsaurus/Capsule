@@ -114,6 +114,13 @@ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 Set `TRUSTED_PROXY_HEADER=forwarded` only if your proxy appends its own element to `Forwarded`
 and does not write `X-Forwarded-For`.
 
+A session lasts `SESSION_TTL_DAYS` (default 180) without an access-token issuance, and never
+longer than `SESSION_HARD_CAP_DAYS` (default 365) from sign-in. The server refuses to start if
+either is zero or negative, or if the cap is shorter than the window. See
+[session expiry](/design/authentication/#session-expiry-and-revocation). To make your identity
+provider the only way to sign in, set `PASSWORD_AUTH_DISABLED=true`; `serve` then refuses to start
+without a configured provider (`OIDC_ISSUER` and `OIDC_CLIENT_ID`, as in `.env.example`).
+
 ## Migrate, then start
 
 `serve` never migrates and refuses a database schema older than the binary. Run migrations first,
