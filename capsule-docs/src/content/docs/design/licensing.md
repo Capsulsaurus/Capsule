@@ -78,6 +78,29 @@ likeliest route for copyleft, so its toolchain is decided before any of it is wr
 
 Lifting either rule requires editing this doc and `deny.toml` first.
 
+## Model Weights and Datasets
+
+ML weights are data that clients fetch at runtime ([](/design/ai/#distribution-and-readiness)).
+They are never linked, bundled into an app-store binary or server image, or listed in `NOTICE`.
+Their licences are still gated, because a released weight is something Capsule publishes and a user
+runs. Each release's weight licence and training-data licences are recorded in its registry record
+([](/design/ai/#weight-registry)), and this section decides which ones are admissible.
+
+- **Permitted:** the inbound permitted list above, plus open-data licences that require only
+  attribution (e.g. `CC-BY-4.0`, `CDLA-Permissive-2.0`, `ODC-By-1.0`).
+- **Forbidden:** non-commercial (`*-NC-*`, research-only), no-derivatives, and use-restricted model
+  licences, for both weights and the datasets they were trained on. This applies to every released
+  lineage, whether or not a given build is commercial, because the app-store grant
+  ([](#outbound)) must stay available.
+- **Hard copyleft** (`GPL-*`, `AGPL-*`, `CC-BY-SA-*`, `ODbL-1.0` and the like) is forbidden unless the
+  closest permitted alternative is **much worse** on the release's own evaluation. Such an exception
+  is recorded in the registry record with that comparison, and it is re-examined at every later
+  release of the lineage.
+- **Training in-project** on permitted data is the remedy when nothing admissible exists. The
+  weights it produces are released under a permitted licence.
+- No weight or dataset counts as chosen until its registry record carries a verified licence and an
+  evaluation. A candidate named in a design doc is not admitted by being named.
+
 ## Enforcement and Known Gaps
 
 `deny.toml`, run by `mise run license-check` in `check-rust` and CI, is the only gate that fails a
@@ -89,3 +112,5 @@ build. `NOTICE` ships with every release artifact. Chain of title is
   contributions.
 - **No AGPL §13 source link** in `capsule-web`; self-hosters carry that obligation.
 - **No SBOM.** `NOTICE`'s third-party section is maintained by hand.
+- **Weight and dataset licences are checked by review only.** No gate reads the weight registry
+  yet.

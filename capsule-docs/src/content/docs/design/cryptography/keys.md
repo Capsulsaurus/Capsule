@@ -39,7 +39,7 @@ Each album has one server-side key escrow. Rules, with the KDF choice in [](/des
 
 ## Key Generation
 
-All keys are generated client-side from the OS CSPRNG ([](/design/cryptography/primitives/#randomness)). Every asymmetric key is hybrid classical + PQ, and both halves must verify.
+All keys are generated client-side from the OS CSPRNG ([](/design/cryptography/primitives/#randomness)). Every asymmetric key is hybrid classical + PQ, and both halves must verify. The exception is the project's release keys, which no user holds ([](#project-release-keys)).
 
 ### User Identity Keys (User IKs)
 
@@ -188,6 +188,30 @@ The hierarchy wraps downward and is never inverted: wrapping AMKs under disposab
 
 Ciphertext already exfiltrated under old AMKs stays readable to the attacker. Forward writes are clean.
 
+## Project Release Keys
+
+The weight registry ([](/design/ai/#weight-registry)) is the only artefact Capsule signs as a project rather than as a user. These keys are generated offline by the maintainer, not by a client. A two-level hierarchy means a routine key change never needs a client release. Both levels are hybrid Ed25519 + ML-DSA-65, because a registry record is long-lived evidence ([](/design/cryptography/primitives/#signature-scheme)).
+
+| Key | Held by | Signs | Rotated by |
+| --- | --- | --- | --- |
+| **Release root** (active and successor) | The maintainer, offline on hardware tokens, with sealed offline backups | `delegate` and `checkpoint` records only | A `delegate` signed by the successor, then a client release |
+| **Registry key** | The maintainer, on a hardware token used to publish. Never a CI secret | Release records (`release`, `supersede`, `yank`) | A new `delegate` |
+
+Validity is decided by **log position**, never by a clock: a record's `released_at` is self-asserted, and a timestamp is never used for authorization ([](/design/threat-model/schema-rules/#timestamp-grammar)). Every record's signature covers its `seq` and the hash of the record before it. A record therefore cannot be replayed at another position or into another log.
+
+- **Compiled-in trust.** Every client compiles in two root public keys: the **active** root and a **pre-committed successor**. Both private halves are generated at one offline ceremony. The successor can retire the active root, so it is the stronger key. Its token and backup are therefore held apart from the active root's, and it is never used until a rotation or compromise.
+- **Delegation.** A root-signed `delegate` record names one registry key and `max_seq`, the last log position it may sign. A release record at position `n` verifies only under the most recent `delegate` before `n`, and only if `n ≤ max_seq`. So a stolen registry key can sign at most up to `max_seq`. The maintainer publishes a fresh `delegate` before a delegation is exhausted.
+- **Registry-key rotation.** A new `delegate` needs no client release. Records the old key signed before it stay valid, because their position fixes which delegation covered them. A later record signed by the old key is refused.
+- **Root rotation.** The successor signs a `delegate`. Every client already trusts the successor, so from that position on every client refuses the old root, updated or not. A client that has seen the retiring `delegate` records the retirement locally. The retirement is **sticky**: no fetched log, fork or `checkpoint` reverses it. A client release then compiles in the successor as active, together with a newly generated successor. Delegations the old root signed earlier stay valid.
+- **Root compromise.** If the active root is compromised, the same procedure runs at once, and it takes effect with no client release. If the successor is compromised, its holder can retire the active root, and only a client release that replaces both keys recovers. This is the cost of a pre-committed successor.
+- **Registry-key compromise.** The root signs a superseding `delegate`. Records the compromised key published before that are withdrawn with `yank` records, never by rewriting the log.
+- **Fork recovery.** A compromised key can serve some clients a signed fork that diverges from the canonical log. Those clients would otherwise refuse the canonical log forever, because a fetch must extend the cached copy. A root-signed `checkpoint` record names a log position and its hash. A client accepts a fetched log that diverges from its cache only if all three hold:
+  - a `checkpoint` in the fetched log covers the common prefix;
+  - a later `delegate` in the fetched log supersedes the key that signed every cached record past the divergence;
+  - neither record is signed by a root the client no longer trusts.
+
+  Fork recovery never discards a root-signed record, so the divergence must lie after every root-signed record in the cache. Otherwise the fetched log is refused. The client discards the forked suffix and its AI outputs, and regenerates them through [](/design/ai/#generation-cutover). Without both root-signed records, a divergent log is refused as a rollback.
+
 ## Failure Modes
 
 Paths are the numbered [](/design/backup-recovery/#recovery-paths). Rejected manifests and distribution lag are the `verify_asset` outcomes above ([](#write-authorization)). Master-key loss is in [](/design/backup-recovery/#failure-modes).
@@ -202,6 +226,9 @@ Paths are the numbered [](/design/backup-recovery/#recovery-paths). Rejected man
 | AMK / write-tier compromise | — | Epoch bump; an old epoch cannot read or sign future ones |
 | Server compromise | Server never trusted | Authorization from MLS history; data is end-to-end encrypted |
 | One half of a hybrid primitive broken | Hybrid construction | The other half holds |
+| Registry key compromise | `max_seq` bounds what it can sign | Superseding `delegate` + `yank`; `checkpoint` recovers forked clients ([](#project-release-keys)) |
+| Active release root compromise | — | Successor-signed `delegate` retires it with no client release ([](#project-release-keys)) |
+| Successor root compromise | Separate custody | Client release replacing both roots ([](#project-release-keys)) |
 
 ## Validation
 
@@ -213,3 +240,10 @@ Paths are the numbered [](/design/backup-recovery/#recovery-paths). Rejected man
 - **`verify_asset` negatives:** reader-signed, removed-writer, wrong-epoch, forged chain, replay, suite-downgrade, half-valid hybrid `write_sig` ([](/design/cryptography/provenance/)).
 - **`verify_asset` pending:** an unheld AMK in range is pending, delivering it accepts, and a version beyond the ceiling is terminal-reject.
 - **Directory monotonicity:** `N-1` is refused and surfaced; `N+1` is accepted and pinned.
+- **Release-key delegation:**
+  - a record at or below its delegation's `max_seq` verifies, and one above it is refused;
+  - once a successor-signed `delegate` exists, an old-root signature after it is refused, and one before it stays valid;
+  - a `delegate` signed by neither compiled-in root is refused;
+  - a divergent log is accepted only with a covering `checkpoint` and a superseding `delegate`, and is refused as a rollback otherwise;
+  - a fork that would discard a cached root-signed record, or that is signed by a locally retired root, is refused;
+  - a record replayed at a different `seq` or after a different prior hash fails its signature.

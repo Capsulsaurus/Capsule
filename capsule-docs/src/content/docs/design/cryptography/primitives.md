@@ -59,7 +59,7 @@ Fixed by the [](#mls-ciphersuite). MLS messages only, never user data.
 
 ### Signature Scheme
 
-- **Hybrid Ed25519 + ML-DSA-65, both halves MUST verify:** long-lived identity and evidence, i.e. user IK, device keys, manifests, write-tier keys, custody receipts and storage attestations ([](/design/transfer/durability/#custody-receipts)).
+- **Hybrid Ed25519 + ML-DSA-65, both halves MUST verify:** long-lived identity and evidence, i.e. user IK, device keys, manifests, write-tier keys, custody receipts and storage attestations ([](/design/transfer/durability/#custody-receipts)), and the weight registry's root and delegated signatures ([](/design/cryptography/keys/#project-release-keys)).
 - **Ed25519 only:** short-lived operational signatures, i.e. server–server federation, federation capabilities ([](/design/federation/#federation-capabilities)), access-token JWTs ([](/design/authentication/#access-token)).
 - **Ed25519, ciphersuite-pinned:** the MLS LeafNode. The ML-DSA half lives at the identity layer ([](/design/cryptography/mls/)).
 

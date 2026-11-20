@@ -31,6 +31,7 @@ SidecarV1 {
   caption_lww:           Option<{ value: String, ts: RFC3339, by: device_id }>,  // value ≤ 4096 bytes
   superseded_captions:   Vec<{ value: String, written_by: device_id, ts: RFC3339 }>,  // ≤ 16
   rating_lww:            Option<{ value: u8, ts: RFC3339, by: device_id }>,
+  sensitivity_ai:        Lww<Option<{ flagged: bool, model_id: String, model_version: String }>>,  // AI-only; wire-absent when never written
 
   // organization (semantics owned by Asset Organization); LWW, wire-absent when never written
   stack_membership:      Lww<Option<StackMembership>>,  // leave = a stamped None
@@ -61,7 +62,7 @@ Region {
 }
 ```
 
-`tags_user` holds the asset's user **labels** and `regions` its labelled image regions. [](/design/organization/#labels) specifies both, with the stack and album label records. `regions` was added without a `sidecar_schema` bump: older readers keep it verbatim as an unknown key.
+`tags_user` holds the asset's user **labels** and `regions` its labelled image regions. [](/design/organization/#labels) specifies both, with the stack and album label records. `regions` was added without a `sidecar_schema` bump: older readers keep it verbatim as an unknown key. `sensitivity_ai` follows the same rule. It holds the sensitive-content flag ([](/design/ai/#sensitive-content)). The AI writes it. A user can only dismiss it, which writes `flagged: false` under the same `model_id` and `model_version`. It merges as an LWW register like the fields under [](#collaborative-metadata).
 
 ### As-Imported and User Values
 
@@ -149,6 +150,7 @@ When an asset crosses a trust boundary (a share link for a non-member, an extern
 | GPS coordinates (`gps` and every `gps_user` value, superseded ones included when the history is retained) | Rounded to 2 decimal places (≈1 km) | Full precision |
 | Personal contact tags (faces matched to a known person) | Stripped with `regions`, the only field that names a face | Retained |
 | Image regions and their labels (`regions`) | Stripped | Retained |
+| Sensitive-content flag (`sensitivity_ai`) | Stripped; the recipient's client may flag it again | Retained |
 
 - Keys the exporting reader does not know (`_unknown`) are always dropped, under every opt-in: a key a newer schema added may itself be a boundary-crossing field.
 - A copy with anything stripped is unsigned, because the library signature covered what was removed.
@@ -185,9 +187,13 @@ LibrarySettingsV1 {
   scope_overrides:          Map<scope_id,   Lww<Option<album_id>>>,             // Organization — Scope Grammar
   source_kind_defaults:     Map<SourceKind, Lww<Option<album_id>>>,             // Organization — Scope Grammar
   aggregated_album_covers:  Map<group_id,   Lww<Option<asset_id>>>,             // per-viewer; Federation
+  people:                   Map<person_id,    Lww<Option<{ threshold: f32 }>>>,  // AI — Identity Refinement
+  people_prototypes:        Map<prototype_id, Lww<Option<PrototypeRef>>>,         // AI — Identity Refinement
   _unknown:                 Map,
 }
 ```
+
+`PrototypeRef = { person_id, asset_id, crop: Rect }`, with `Rect` as in `Region`. Each confirmation is its own key, so concurrent confirmations from two devices both survive. A ref whose `person_id` is absent or tombstoned in `people` is ignored. Merging two people writes new refs under the surviving `person_id` and tombstones the old refs. A ref stores the confirmed crop by asset id and rectangle, never as a vector, so a new weight release re-embeds it ([](/design/ai/#identity-refinement)). `person_id` and `prototype_id` are UUIDv7. Both sections are additive keys within `settings_schema` 1: older readers keep them verbatim in `_unknown`, the same unknown-key rule the sidecar applies.
 
 This page owns the envelope, keying, versioning and merge. [](/design/organization/#smart-album-definition-schema), [](/design/organization/#scope-grammar-local-source--album-mapping) and [](/design/federation/#membership-and-rendering) own the section value schemas. An absent or `None` cover falls back to the newest constituent asset.
 
@@ -204,7 +210,7 @@ This page owns the envelope, keying, versioning and merge. [](/design/organizati
 | --- | --- | --- |
 | Tags (`tags_user` / `tags_ai`) | OR-set | Add/remove keyed by `add_id`; commutative, associative, idempotent |
 | Regions (`regions`) | Map of LWW registers, each holding an OR-set of labels | Merged as a semilattice: a delete is final, live writes keep the later shape and the union of labels |
-| Caption / rating / `capture_timestamp_user` / `gps_user` / `stack_membership` / `cull` / `hidden` | LWW register | Total order on `(ts, device_id)`; replay is a no-op |
+| Caption / rating / `capture_timestamp_user` / `gps_user` / `stack_membership` / `cull` / `hidden` / `sensitivity_ai` | LWW register | Total order on `(ts, device_id)`; replay is a no-op |
 | Smart albums, people clusters, aggregated federated albums ([](/design/federation/)) | Computed views | Nothing stored; membership is a deterministic function of inputs ([](/design/organization/#system--smart-albums-views), [](/design/ai/#ai-output-containment)) |
 | Container-album membership | Single home + ordered lifecycle ops | One container per asset; a replayed move no-ops ([](/design/organization/#container-albums)); concurrency ordered by MLS commits |
 
@@ -214,7 +220,7 @@ Album membership is not a CRDT: MLS commits ([](/design/cryptography/mls/)) alre
 
 User and AI tags are **structurally separate** OR-sets (`tags_user`, `tags_ai`), so an AI tag can never overwrite user intent.
 
-- Every `tags_ai` entry carries `model_id` and `model_version` ([](/design/ai/#embedding-provenance)). When the canonical model changes, old tags are stale; cross-model comparison is forbidden ([](/design/threat-model/validation/#client-side-validation-invariants)).
+- Every `tags_ai` entry carries `model_id` and `model_version` ([](/design/ai/#embedding-provenance)). When a new release completes its generation cutover ([](/design/ai/#generation-cutover)), old tags are stale; cross-model comparison is forbidden ([](/design/threat-model/validation/#client-side-validation-invariants)).
 - **Promote**: an explicit, signed user action, never automatic, copies the entry to `tags_user` with a fresh `add_id`.
 - **Dismiss**: an OR-set remove on `tags_ai` by the original `add_id`.
 
@@ -242,6 +248,7 @@ Each MUST above is a unit test, and the canonical-CBOR known-answer vectors are 
 - A capture-time or location edit keeps the as-imported value through a re-import, a reopen and an index rebuild.
 - Each privacy-table row strips by default and leaves the local sidecar unchanged.
 - A WGS-84 sidecar encodes byte-identically to the pre-`datum` vector.
+- A sidecar with no `sensitivity_ai` written encodes byte-identically to the pre-field vector, and a library-settings document with neither `people` nor `people_prototypes` encodes byte-identically to its own pre-field vector.
 - A one-byte local mutation fails the local–server equivalence check.
 - A sidecar round-trips between schema v1 and v2 readers.
 
