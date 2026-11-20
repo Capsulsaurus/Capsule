@@ -49,6 +49,7 @@ describe('footerLinks', () => {
             'Blog',
             'Roadmap',
             'Discussions',
+            'Downloads',
             'Support',
             'GitHub',
         ]);
@@ -58,6 +59,7 @@ describe('footerLinks', () => {
             'Documentation',
             'Roadmap',
             'Discussions',
+            'Downloads',
             'Support',
             'GitHub',
         ]);
