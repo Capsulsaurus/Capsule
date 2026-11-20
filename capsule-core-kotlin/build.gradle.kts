@@ -37,7 +37,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
     implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
 
-    testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
+    testImplementation("org.junit.jupiter:junit-jupiter:6.1.3")
 
     androidTestImplementation("net.java.dev.jna:jna:5.14.0@aar")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
