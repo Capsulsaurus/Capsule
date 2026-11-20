@@ -1,7 +1,6 @@
 import CapsuleDomain
-import Testing
-
 @testable import FeatureImport
+import Testing
 
 /// The running-import screen: the stage ladder, the sparse row state that keeps
 /// a hundred-thousand-item run affordable, and the retry path.

@@ -94,7 +94,7 @@ extension MockSharingStore: DropPort {
         await dropChanges.send(())
     }
 
-    public nonisolated func changes() -> AsyncStream<Void> {
+    nonisolated public func changes() -> AsyncStream<Void> {
         dropChanges.subscribe()
     }
 }

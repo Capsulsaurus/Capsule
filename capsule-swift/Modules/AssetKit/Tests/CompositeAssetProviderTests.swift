@@ -1,9 +1,8 @@
-import Foundation
-import Testing
-
 import AssetKit
 import CapsuleFoundation
 import CapsuleTestSupport
+import Foundation
+import Testing
 
 @Suite("CompositeAssetProvider")
 struct CompositeAssetProviderTests {

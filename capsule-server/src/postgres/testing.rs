@@ -26,62 +26,19 @@
 //! namespacing, no truncation between cases, and no case that passes because a previous one
 //! left the database in a convenient state.
 
+use capsule_test_postgres::{CLI, DATABASE, PostgresContainer, Request, USERNS_MODE};
 use sea_orm::DatabaseConnection;
 use server_migration::MigratorTrait as _;
-use testcontainers::ContainerAsync;
-use testcontainers::runners::AsyncRunner as _;
-use testcontainers_modules::postgres::Postgres;
 
 /// The environment variable that admits the container-backed cases.
-pub(crate) const GATE: &str = "CAPSULE_TEST_POSTGRES";
-
-/// The image tag every run pins.
-///
-/// **`18`, and glibc rather than alpine**, which is a decision with two halves.
-///
-/// The major is the one a deployment runs: `capsule-server/compose.yaml` and `.env.example` ship
-/// PostgreSQL 18, and design/filesystem/server.md records it. A harness that tested a different
-/// major would be proving the adapters work against something nobody deploys.
-///
-/// The libc is load-bearing for one case. musl collates `en_US.utf8` byte-for-byte, so on an
-/// alpine image `index/conformance.rs`'s `the_row_walk_orders_by_the_identifiers_own_bytes`
-/// cannot tell a query that pins `COLLATE "C"` from one that inherits the database's collation —
-/// it passes either way, which is worse than failing. glibc orders
-/// `walkord-a-b, walkord-ab, walkord-a-c` where bytes order
-/// `walkord-a-b, walkord-a-c, walkord-ab`, so on this image the case is an assertion. Bump the
-/// tag deliberately, and keep it glibc.
-const POSTGRES_TAG: &str = "18";
-
-/// Where the container keeps its cluster.
-///
-/// Off the image's declared `VOLUME` deliberately. The data of a container that lives for one
-/// test is throwaway by definition, so an anonymous volume buys nothing and costs two things: a
-/// volume to create and reap per test, and — on a rootless runtime, where the volume is created
-/// with an ownership the container's own user cannot `chmod` — an `initdb` that fails before
-/// Postgres ever listens.
-const PGDATA: &str = "/tmp/pgdata";
-
-/// The user-namespace mode to run the container under, when the host needs one.
-///
-/// Unset on an ordinary Docker host and on CI, which is why this is an environment variable
-/// rather than a constant: `keep-id` is podman's spelling and Docker rejects it.
-///
-/// It exists because of a real and non-obvious host shape. Under **rootless podman**, a
-/// container process that is not the container's root maps to a host *subuid*, and that subuid
-/// has to traverse the image store to reach anything — so on a machine whose home directory is
-/// not world-traversable (`drwxrws---`), the official Postgres image dies at
-/// `gosu postgres /usr/local/bin/docker-entrypoint.sh` with a bare "permission denied" that
-/// names the entrypoint and says nothing about why. `--userns=keep-id` maps every container uid
-/// onto the invoking user, which both fixes the traversal and makes the entrypoint skip its
-/// drop-privileges branch entirely.
-const USERNS_MODE: &str = "CAPSULE_TEST_CONTAINER_USERNS";
+pub(crate) const GATE: &str = capsule_test_postgres::GATE;
 
 /// A running Postgres with the server's schema applied.
 ///
 /// Holds the container: dropping this stops and removes it, so a case cannot leak one.
 #[derive(Debug)]
 pub(crate) struct TestDatabase {
-    _container: ContainerAsync<Postgres>,
+    _container: PostgresContainer,
     connection: DatabaseConnection,
     url: String,
 }
@@ -133,31 +90,20 @@ pub(crate) async fn start(case: &str) -> Option<TestDatabase> {
     if !enabled() {
         eprintln!(
             "skipping {case}: the Postgres conformance tier is unavailable. Set {GATE}=1 with a \
-             reachable container runtime — for rootless podman, `systemctl --user start \
-             podman.socket`, `export DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock` \
-             and `export {USERNS_MODE}=keep-id`."
+             container CLI on PATH (`docker`, or name another in {CLI}); for rootless podman, \
+             `export {CLI}=podman` and `export {USERNS_MODE}=keep-id`."
         );
         return None;
     }
 
-    let mut request = testcontainers::ImageExt::with_tag(Postgres::default(), POSTGRES_TAG);
-    request = testcontainers::ImageExt::with_env_var(request, "PGDATA", PGDATA);
-    if let Ok(userns) = std::env::var(USERNS_MODE) {
-        request = testcontainers::ImageExt::with_userns_mode(request, &userns);
-    }
-    let container = request.start().await.unwrap_or_else(|error| {
-        panic!("{GATE}=1 was set but a Postgres container could not be started: {error}")
-    });
-    let host = container
-        .get_host()
+    // The image, its tag and where it keeps its cluster, and why each is what it is, live in
+    // `capsule_test_postgres`, which every container tier shares.
+    let container = capsule_test_postgres::start(&Request::from_env())
         .await
-        .unwrap_or_else(|error| panic!("the container has no reachable host: {error}"));
-    let port = container
-        .get_host_port_ipv4(5432)
-        .await
-        .unwrap_or_else(|error| panic!("the container published no port: {error}"));
-    // The module's own defaults; there is no secret here to keep out of a source file.
-    let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
+        .unwrap_or_else(|error| {
+            panic!("{GATE}=1 was set but a Postgres container could not be started: {error}")
+        });
+    let url = container.url(DATABASE);
 
     let connection = super::connect(&url)
         .await

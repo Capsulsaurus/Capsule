@@ -197,8 +197,7 @@ final class PlacesMapViewModel {
         // guard covers both "nothing is geotagged" and "the read failed". They
         // land in the same place — an empty map under the empty state — which
         // is the honest rendering of each.
-        guard let region = try? await places.boundingRegion() else { return }
-        guard let found = try? await places.clusters(in: region, granularity: Self.granularity) else {
+        guard let region = try? await places.boundingRegion(), let found = try? await places.clusters(in: region, granularity: Self.granularity) else {
             return
         }
         clusters = found.map(PhotoCluster.init)

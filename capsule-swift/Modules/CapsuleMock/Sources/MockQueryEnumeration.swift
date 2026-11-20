@@ -26,8 +26,7 @@ extension MockQueryEngine {
     func liveExtras() -> [Extra] {
         var extras: [Extra] = []
         for (identifier, patch) in overlay.patches {
-            guard !patch.isPurged, let ref = MockAssetRef.decode(identifier), library.contains(ref) else { continue }
-            guard isLiveByPatch(ref: ref, patch: patch) else { continue }
+            guard !patch.isPurged, let ref = MockAssetRef.decode(identifier), library.contains(ref), isLiveByPatch(ref: ref, patch: patch) else { continue }
             let instant = library.captureInstant(for: ref)
             extras.append(Extra(dayIndex: instant.dayIndex, seconds: instant.utcSeconds, ref: ref))
         }
@@ -126,8 +125,7 @@ extension MockQueryEngine {
     ) -> Bool {
         let identifier = ref.identifier(seed: library.profile.seed)
         let patch = overlay.patch(for: identifier)
-        guard patch?.isPurged != true else { return true }
-        guard matchesFacets(query, facets: library.facets(for: ref), patch: patch) else { return true }
+        guard patch?.isPurged != true, matchesFacets(query, facets: library.facets(for: ref), patch: patch) else { return true }
         return body(dayIndex, ref)
     }
 
@@ -150,8 +148,7 @@ extension MockQueryEngine {
             entries.append(makeExtra(ref))
         }
         for (identifier, patch) in overlay.patches {
-            guard !patch.isPurged, let ref = MockAssetRef.decode(identifier), library.contains(ref) else { continue }
-            guard ref.kind != derivedKind, patchPlacesInAside(query, patch: patch) else { continue }
+            guard !patch.isPurged, let ref = MockAssetRef.decode(identifier), library.contains(ref), ref.kind != derivedKind, patchPlacesInAside(query, patch: patch) else { continue }
             entries.append(makeExtra(ref))
         }
         return entries

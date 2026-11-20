@@ -21,9 +21,9 @@ public enum PlatformEnvironment {
     /// read `\.horizontalSizeClass` instead.
     public static var isTouchFirst: Bool {
         #if os(iOS)
-            return true
+            true
         #else
-            return false
+            false
         #endif
     }
 
@@ -31,9 +31,9 @@ public enum PlatformEnvironment {
     /// have somewhere to live.
     public static var hasMenuBar: Bool {
         #if os(macOS)
-            return true
+            true
         #else
-            return false
+            false
         #endif
     }
 
@@ -44,9 +44,9 @@ public enum PlatformEnvironment {
     @MainActor
     public static var supportsMultipleWindows: Bool {
         #if os(macOS)
-            return true
+            true
         #else
-            return UIDevice.current.userInterfaceIdiom == .pad
+            UIDevice.current.userInterfaceIdiom == .pad
         #endif
     }
 
@@ -60,9 +60,9 @@ public enum PlatformEnvironment {
     /// implying a guarantee the platform does not make.
     public static var libraryIsSandboxPrivate: Bool {
         #if os(macOS)
-            return false
+            false
         #else
-            return true
+            true
         #endif
     }
 
@@ -70,9 +70,9 @@ public enum PlatformEnvironment {
     /// enum the device-cohort hash is domain-separated by.
     public static var platformTag: String {
         #if os(macOS)
-            return "macos"
+            "macos"
         #else
-            return "ios"
+            "ios"
         #endif
     }
 
@@ -86,9 +86,9 @@ public enum PlatformEnvironment {
     /// does so more precisely.
     public static var systemName: String {
         #if os(macOS)
-            return "macOS"
+            "macOS"
         #else
-            return "iOS"
+            "iOS"
         #endif
     }
 

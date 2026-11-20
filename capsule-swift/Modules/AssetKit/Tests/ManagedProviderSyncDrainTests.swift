@@ -1,10 +1,9 @@
-import Foundation
-import Testing
-
 import AssetKit
 import CapsuleCatalog
 import CapsuleTestSupport
+import Foundation
 import ManagedStore
+import Testing
 
 /// A sync that drains the feed and lists newly indexed assets releases held
 /// purges, deletes and restores, so it runs the walk a launch runs; one that

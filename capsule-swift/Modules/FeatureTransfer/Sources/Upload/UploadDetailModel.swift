@@ -33,7 +33,7 @@ public final class UploadDetailModel {
     private let sync: any SyncPort
     private let clock: TransferClock
     private var throughput = ThroughputBook()
-    private nonisolated(unsafe) var observation: Task<Void, Never>?
+    nonisolated(unsafe) private var observation: Task<Void, Never>?
 
     public init(
         assetID: AssetID,

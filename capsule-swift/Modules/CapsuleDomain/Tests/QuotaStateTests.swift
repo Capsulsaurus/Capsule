@@ -1,7 +1,6 @@
+import CapsuleDomain
 import Foundation
 import Testing
-
-import CapsuleDomain
 
 /// The five quota states and the transitions between them (*Quota — Threshold
 /// Model*).

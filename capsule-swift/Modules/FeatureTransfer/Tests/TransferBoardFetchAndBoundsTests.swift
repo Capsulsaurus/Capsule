@@ -1,8 +1,7 @@
 import CapsuleDomain
 import CapsuleFoundation
-import Testing
-
 @testable import FeatureTransfer
+import Testing
 
 /// The board's fold over a ranged fetch, the chunk strip's geometry, and the
 /// bounds that keep the board small over a long sync whether or not its

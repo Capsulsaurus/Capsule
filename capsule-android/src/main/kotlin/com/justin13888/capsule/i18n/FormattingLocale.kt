@@ -39,7 +39,15 @@ object FormattingLocale {
         if (system.country.isEmpty()) {
             return withExtensions(language, system)
         }
-        val paired = withExtensions(Locale.Builder().setLocale(language).setRegion(system.country).build(), system)
+        val paired =
+            withExtensions(
+                Locale
+                    .Builder()
+                    .setLocale(language)
+                    .setRegion(system.country)
+                    .build(),
+                system,
+            )
         return if (hasData(paired)) paired else system
     }
 

@@ -1,11 +1,10 @@
+@testable import Capsule
 import CapsuleDomain
 import CapsuleFoundation
 import CapsuleNavigation
 import CapsulePorts
 import Foundation
 import Testing
-
-@testable import Capsule
 
 /// The cull pass's rules, as values: every verb a key, a button or a VoiceOver
 /// action reaches goes through ``CullingPass``, so these are the culling

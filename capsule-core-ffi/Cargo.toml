@@ -25,7 +25,7 @@ capsule-sdk = { path = "../capsule-sdk", features = ["ffi"] }
 rusqlite = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-uniffi = { version = "0.31", features = ["cli"] }
+uniffi = { version = "0.32", features = ["cli"] }
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
 # Low-level `os_log` bindings only (`default-features = false` drops oslog's own `log`

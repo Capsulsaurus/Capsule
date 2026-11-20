@@ -44,7 +44,7 @@ public final class DevicesAndSessionsViewModel {
 
     private let devicePort: any DevicePort
     private let now: @Sendable () -> CapsuleTimestamp
-    private nonisolated(unsafe) var observation: Task<Void, Never>?
+    nonisolated(unsafe) private var observation: Task<Void, Never>?
 
     public init(
         devices: any DevicePort,

@@ -282,8 +282,7 @@ struct CullingView: View {
         CapsuleLog.interface.debug("culling: \(String(describing: verb), privacy: .public)")
         switch verb {
         case .pick, .neutral, .reject:
-            guard let flag = verb.flag else { return }
-            guard let verdict = pass.verdict(flag) else { return }
+            guard let flag = verb.flag, let verdict = pass.verdict(flag) else { return }
             writes.submit { await write(verdict) }
         case .next: _ = pass.next()
         case .previous: _ = pass.previous()

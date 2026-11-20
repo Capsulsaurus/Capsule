@@ -241,9 +241,7 @@ public final class ImportPlanConfirmModel {
     /// on there being no conflicts, which would make a conflict a dead end
     /// instead of a decision.
     public var canConfirm: Bool {
-        guard let plan, phase.isReady else { return false }
-        guard plan.importCount > 0 else { return false }
-        guard !plan.violatesStagedStreamingExclusion else { return false }
+        guard let plan, phase.isReady, plan.importCount > 0, !plan.violatesStagedStreamingExclusion else { return false }
         return plan.conflictsAreResolved && outlook.permitsImport
     }
 

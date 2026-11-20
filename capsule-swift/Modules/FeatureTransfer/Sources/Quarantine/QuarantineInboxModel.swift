@@ -48,7 +48,7 @@ public final class QuarantineInboxModel {
     private let quarantine: any QuarantinePort
     private let library: any LibraryPort
     private let sync: any SyncPort
-    private nonisolated(unsafe) var observation: Task<Void, Never>?
+    nonisolated(unsafe) private var observation: Task<Void, Never>?
 
     public init(quarantine: any QuarantinePort, library: any LibraryPort, sync: any SyncPort) {
         self.quarantine = quarantine

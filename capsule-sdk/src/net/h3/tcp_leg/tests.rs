@@ -35,7 +35,7 @@ fn request(method: http::Method, url: &str, body: Bytes) -> http::Request<Bytes>
 async fn the_dial_connects_to_a_listening_origin() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let leg = ReqwestLeg::new(reqwest::Client::new());
+    let leg = ReqwestLeg::new(bare_client());
     let origin = Origin::from_uri(&format!("http://127.0.0.1:{port}/").parse().unwrap()).unwrap();
     leg.dial(&origin).await.unwrap();
 }
@@ -43,7 +43,7 @@ async fn the_dial_connects_to_a_listening_origin() {
 #[tokio::test]
 async fn the_dial_fails_where_nothing_listens() {
     let port = closed_port().await;
-    let leg = ReqwestLeg::new(reqwest::Client::new());
+    let leg = ReqwestLeg::new(bare_client());
     let origin = Origin::from_uri(&format!("http://127.0.0.1:{port}/").parse().unwrap()).unwrap();
     assert!(leg.dial(&origin).await.is_err());
 }
@@ -66,7 +66,7 @@ async fn an_exchange_rides_the_context_client_and_reads_the_whole_response() {
             .json_body("{\"ok\":true}"),
     )
     .await;
-    let leg = ReqwestLeg::new(reqwest::Client::new());
+    let leg = ReqwestLeg::new(bare_client());
     let context = LegContext::new(crate::net::http_client().unwrap());
     let mut request = request(
         http::Method::GET,
@@ -98,7 +98,7 @@ async fn an_exchange_rides_the_context_client_and_reads_the_whole_response() {
 #[tokio::test]
 async fn a_paced_exchange_sends_the_whole_body_and_reports_progress() {
     let (server, seen) = recording(MockResponse::new(204, "No Content")).await;
-    let leg = ReqwestLeg::new(reqwest::Client::new());
+    let leg = ReqwestLeg::new(bare_client());
     let progress = ExchangeProgress::waiting();
     let body = Bytes::from(vec![7u8; 3 * crate::net::PACED_PIECE + 5]);
     let mut request = request(
@@ -126,8 +126,8 @@ async fn a_paced_exchange_sends_the_whole_body_and_reports_progress() {
 #[tokio::test]
 async fn a_failed_exchange_records_its_reqwest_error_in_the_context() {
     let port = closed_port().await;
-    let leg = ReqwestLeg::new(reqwest::Client::new());
-    let context = LegContext::new(reqwest::Client::new());
+    let leg = ReqwestLeg::new(bare_client());
+    let context = LegContext::new(bare_client());
     let mut request = request(
         http::Method::GET,
         &format!("http://127.0.0.1:{port}/"),
@@ -152,8 +152,8 @@ async fn a_failed_exchange_records_its_reqwest_error_in_the_context() {
 #[tokio::test]
 async fn an_exchange_is_cut_under_its_bounds_without_recording_a_failure() {
     let (server, _seen) = recording(MockResponse::hold_open()).await;
-    let leg = ReqwestLeg::new(reqwest::Client::new());
-    let context = LegContext::new(reqwest::Client::new());
+    let leg = ReqwestLeg::new(bare_client());
+    let context = LegContext::new(bare_client());
     let mut request = request(
         http::Method::GET,
         &format!("{}/held", server.base_url()),
@@ -189,4 +189,11 @@ async fn an_exchange_without_a_context_rides_the_leg_client() {
             .header(crate::net::negotiation::PROTOCOL_HEADER)
             .is_some()
     );
+}
+
+/// A plain reqwest client (no SDK handshake), after the process crypto provider the SDK's own
+/// builders install.
+fn bare_client() -> reqwest::Client {
+    crate::net::ensure_crypto_provider();
+    reqwest::Client::new()
 }

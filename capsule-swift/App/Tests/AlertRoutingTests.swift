@@ -1,10 +1,9 @@
+@testable import Capsule
 import CapsuleDomain
 import CapsuleMock
 import CapsuleNavigation
 import Foundation
 import Testing
-
-@testable import Capsule
 
 /// Where a tapped alert lands. The re-wrap is the one that must never share a
 /// destination with the routine check: the class set is closed, so the

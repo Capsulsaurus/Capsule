@@ -1,7 +1,6 @@
+import CapsuleDomain
 import Foundation
 import Testing
-
-import CapsuleDomain
 
 /// Parity rule 1: closed enums cross the FFI as strings, an unrecognised value
 /// round-trips **verbatim**, and writing one is a structural rejection.

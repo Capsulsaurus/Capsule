@@ -27,7 +27,7 @@ public actor ChangeBroadcaster<Element: Sendable> {
     /// turn as the subscription can be missed — which is correct for a
     /// notification whose contract is "re-read the window you care about", and
     /// is why ``LibraryChange`` is not a diff.
-    public nonisolated func subscribe() -> AsyncStream<Element> {
+    nonisolated public func subscribe() -> AsyncStream<Element> {
         AsyncStream(bufferingPolicy: .bufferingNewest(64)) { continuation in
             Task { await register(continuation) }
         }

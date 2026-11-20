@@ -33,8 +33,8 @@ jobs:
       kotlin: ${{ steps.filter.outputs.kotlin }}
       swift: ${{ steps.filter.outputs.swift }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
@@ -58,6 +58,7 @@ jobs:
               - 'capsule-sdk/**'
               - 'capsule-core-ffi/**'
               - 'capsule-wasm/**'
+              - 'capsule-test-postgres/**'
               - 'ptpip-rs/**'
               - 'xtask/**'
               # `check-rust` reads the catalogs directly: `i18n-check` and
@@ -200,11 +201,11 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Set up convco (via mise)
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
         with:
           # The fully-qualified backend name matching the mise.toml pin — the bare
           # short name stopped resolving in the mise 2026.7.0 registry.
@@ -218,7 +219,7 @@ jobs:
     if: ${{ needs.changes.outputs.rust == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust toolchain
         run: |
           rustup toolchain install
@@ -249,7 +250,7 @@ jobs:
         with:
           tool: cargo-deny
       - name: Set up mise (task runner)
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
         with:
           install: false
       - name: Check (fmt + clippy + build)
@@ -269,7 +270,7 @@ jobs:
     name: Rust (dependency advisories)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust toolchain
         run: rustup toolchain install
       - name: Install cargo-deny
@@ -277,7 +278,7 @@ jobs:
         with:
           tool: cargo-deny
       - name: Set up mise (task runner)
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
         with:
           install: false
       - name: Check advisories, bans and sources
@@ -314,7 +315,7 @@ jobs:
             /opt/hostedtoolcache/CodeQL /usr/share/swift
           sudo docker image prune --all --force
           df -h /
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust toolchain
         run: rustup toolchain install
       - name: Cache cargo
@@ -328,7 +329,7 @@ jobs:
         with:
           tool: nextest
       - name: Set up mise (task runner)
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
         with:
           install: false
       # After the restored cargo cache and the apt packages, so it is the space the build has.
@@ -360,7 +361,7 @@ jobs:
   # ever run in CI, and a broken adapter reported green. The task admits the tier and fails on
   # any skip line, so a runner that lost its container runtime
   # fails here instead of passing vacuously. Each case starts its own container through
-  # testcontainers on the runner's Docker socket; no `services:` block, because a shared
+  # `capsule-test-postgres`, which drives the runner's `docker` CLI; no `services:` block, because a shared
   # service would break the one-container-per-case isolation the suites rely on.
   rust-containers:
     name: Rust (container tiers)
@@ -368,7 +369,7 @@ jobs:
     if: ${{ needs.changes.outputs.rust == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust toolchain
         run: rustup toolchain install
       - name: Cache cargo
@@ -382,7 +383,7 @@ jobs:
         with:
           tool: nextest
       - name: Set up mise (task runner)
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
         with:
           install: false
       - name: Test (Postgres containers)
@@ -405,7 +406,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust toolchain
         run: rustup toolchain install
       - name: Cache cargo
@@ -434,14 +435,14 @@ jobs:
           fi
       - name: Upload the processes' logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kill-anywhere-logs
           path: target/kill-anywhere-logs/
 
   # `capsule auth login --oidc` against a real identity provider (#640). The round trip in
   # capsule-cli/tests/oidc_dex.rs skips unless CAPSULE_TEST_DEX=1, so `rust-test` passes it
-  # vacuously; this job is where it runs. It brings up compose.yaml's own dex service (v2.44.0,
+  # vacuously; this job is where it runs. It brings up compose.yaml's own dex service (v2.46.1,
   # its inline config, so CI and a developer's machine sign in to the same provider), starts
   # the in-memory server the test file's header names with the three OIDC variables, and fails
   # on a skip line just as `test-rust-containers` does. Every wait is bounded: compose's
@@ -452,7 +453,7 @@ jobs:
     if: ${{ needs.changes.outputs.rust == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust toolchain
         run: rustup toolchain install
       - name: Cache cargo
@@ -539,7 +540,7 @@ jobs:
             targets: aarch64-unknown-linux-gnu
             tier2: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust toolchain
         run: |
           rustup toolchain install
@@ -568,7 +569,7 @@ jobs:
         with:
           key: cross-${{ matrix.name }}
       - name: Set up mise (task runner)
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
         with:
           install: false
       - name: Build target
@@ -580,13 +581,13 @@ jobs:
     if: ${{ needs.changes.outputs.web == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.4.3" # pinned: a newer bun rewrites bun.lock and fails --frozen-lockfile
       - name: Cache bun install
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.bun/install/cache
           key: bun-web-${{ runner.os }}-${{ hashFiles('capsule-web/bun.lock') }}
@@ -613,7 +614,7 @@ jobs:
       # After the rustup step, never before: cargo-built mise tools race the
       # toolchain bootstrap (see the note at the top of build-ios.yml).
       - name: Set up mise (task runner)
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
         with:
           install_args: "cargo:wasm-bindgen-cli"
       - name: Check (format + lint + test + build)
@@ -625,13 +626,13 @@ jobs:
     if: ${{ needs.changes.outputs.docs == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.4.3" # pinned: a newer bun rewrites bun.lock and fails --frozen-lockfile
       - name: Cache bun install
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.bun/install/cache
           key: bun-docs-${{ runner.os }}-${{ hashFiles('capsule-docs/bun.lock') }}
@@ -640,7 +641,7 @@ jobs:
         working-directory: capsule-docs
         run: bun install --frozen-lockfile
       - name: Set up mise (task runner)
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
         with:
           install: false
       - name: Check (format + lint + test + build)
@@ -654,13 +655,13 @@ jobs:
     if: ${{ needs.changes.outputs.docs-truth == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.4.3" # pinned: a newer bun rewrites bun.lock and fails --frozen-lockfile
       - name: Set up mise (task runner)
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
         with:
           install: false
       - name: Check (every file, route, and anchor the docs name)
@@ -672,13 +673,13 @@ jobs:
     if: ${{ needs.changes.outputs.markdown == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.4.3" # pinned: a newer bun rewrites bun.lock and fails --frozen-lockfile
       - name: Set up mise (task runner)
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
         with:
           install: false
       - name: Check (markdown lint)
@@ -694,23 +695,23 @@ jobs:
     if: ${{ false && needs.changes.outputs.kotlin == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Gradle 8.11.1 supports JDK 21 (not the JDK 26 used on some dev machines).
       - name: Set up JDK
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
       # The :android module applies the Android Gradle Plugin, so Gradle needs the SDK
-      # (compileSdk 36) just to configure — even for the ktlint/detekt tasks.
+      # (compileSdk 37) just to configure — even for the ktlint/detekt tasks.
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
       - name: Install Android platform
-        run: sdkmanager "platforms;android-36"
+        run: sdkmanager "platforms;android-37.0"
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
       - name: Set up mise (task runner)
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
         with:
           install: false
       - name: Check (ktlint + detekt)
@@ -729,13 +730,13 @@ jobs:
     if: ${{ false && needs.changes.outputs.swift == 'true' }}
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: latest-stable
       - name: Set up mise (task runner)
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
         with:
           working_directory: capsule-swift
           install_args: tuist swiftlint swiftformat xcbeautify

@@ -5,16 +5,16 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 // Run it with `mise run bench-apps android <device>`; it needs a device, so no CI gate on a pull
 // request builds or runs it beyond compilation.
 //
-// The plugins come without versions: AGP and the Kotlin Gradle plugin are already on the build
-// classpath through the root project's `apply false` aliases.
+// The plugin comes without a version: AGP and the Kotlin Gradle plugin are already on the build
+// classpath through the root project's `apply false` aliases. AGP 9 compiles Kotlin itself, so
+// no Kotlin Android plugin is applied.
 plugins {
     id("com.android.test")
-    id("org.jetbrains.kotlin.android")
 }
 
 android {
     namespace = "com.justin13888.capsule.benchmark"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         // FrameTimingMetric reads frame timelines, which the platform only exposes from API 31.

@@ -128,7 +128,7 @@ extension MockFederationStore: FederationPort {
         await federationChanges.send(())
     }
 
-    public nonisolated func changes() -> AsyncStream<Void> {
+    nonisolated public func changes() -> AsyncStream<Void> {
         federationChanges.subscribe()
     }
 }

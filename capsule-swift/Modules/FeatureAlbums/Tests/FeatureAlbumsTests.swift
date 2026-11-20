@@ -1,10 +1,9 @@
-import Foundation
-import Testing
-
 import AssetKit
 import CapsuleFoundation
 import CapsuleTestSupport
 import FeatureAlbums
+import Foundation
+import Testing
 
 @Suite("AlbumsViewModel")
 @MainActor

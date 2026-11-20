@@ -55,7 +55,10 @@ class CullingModelTest {
 
             assertEquals(CullingPhase.READY, model.state.value.phase)
             assertNull(model.state.value.asset)
-            assertTrue(model.state.value.accepted.isEmpty())
+            assertTrue(
+                model.state.value.accepted
+                    .isEmpty(),
+            )
         }
 
     @Test

@@ -1,9 +1,8 @@
-import Foundation
-import Testing
-
 import CapsuleDomain
 import CapsuleMock
 import FeatureTransfer
+import Foundation
+import Testing
 
 /// The five quota states and what each one permits
 /// (*Quota — Thresholds and States*).

@@ -37,8 +37,7 @@ extension MockIntelligenceStore: SearchPort {
         let ceiling = min(library.assetCount, Self.searchExaminationLimit)
         for index in 0 ..< ceiling {
             let ref = MockAssetRef(kind: .live, index: index)
-            guard !engine.isSuppressed(liveIndex: index) else { continue }
-            guard let matched = match(needle: needle, scope: scope, library: library, ref: ref) else { continue }
+            guard !engine.isSuppressed(liveIndex: index), let matched = match(needle: needle, scope: scope, library: library, ref: ref) else { continue }
             hits.append(SearchResult(
                 asset: engine.resolve(ref),
                 matchedScope: matched.scope,

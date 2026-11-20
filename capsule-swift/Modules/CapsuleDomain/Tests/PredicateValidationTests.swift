@@ -1,7 +1,6 @@
+import CapsuleDomain
 import Foundation
 import Testing
-
-import CapsuleDomain
 
 /// The closed predicate grammar's structural rejections and its documented
 /// bounds (*Asset Organization — Validation*).
@@ -186,8 +185,7 @@ struct PredicateValidationTests {
             for operatorKind in field.validOperators {
                 let shape = QueryGrammar.requiredOperandShape(
                     field: field,
-                    // swiftlint:disable:next force_unwrapping
-                    fieldClass: field.typeClass!,
+                    fieldClass: try #require(field.typeClass),
                     operatorKind: operatorKind
                 )
                 #expect(shape != nil, "\(field.rawValue) \(operatorKind.rawValue) has no operand shape")

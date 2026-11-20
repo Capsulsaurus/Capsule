@@ -2,7 +2,7 @@
 //!
 //! `mise-tasks/gen-bindings` generates the Swift and Kotlin sources into the gitignored
 //! `target/`, so the bun-only documentation build cannot read them (`design/developer-docs.md`:
-//! artifacts cross the boundary, not toolchains). uniffi 0.31 offers no stable machine-readable
+//! artifacts cross the boundary, not toolchains). uniffi 0.32 offers no stable machine-readable
 //! description of a namespace either: its one dump, `print_repr`, is Rust `Debug` of an IR with
 //! no serde support. So this task reads the generated sources themselves and writes the
 //! declarations a caller compiles against to the committed `capsule-sdk/bindings-surface.json`,
@@ -563,7 +563,7 @@ fn members_matching(
         .collect()
 }
 
-/// The public top-level types uniffi 0.31's own runtime declares, by name, in either language.
+/// The public top-level types uniffi 0.32's own runtime declares, by name, in either language.
 ///
 /// Listed by name rather than matched by pattern so that a uniffi bump which adds one fails
 /// [`is_export`] loudly instead of either dropping it or publishing it.
@@ -609,6 +609,18 @@ fn find<'a>(
     types.iter().find(|(_, _, declared)| declared == name)
 }
 
+/// `source` with a top-level access modifier that sits alone on its line joined to the
+/// declaration under it.
+///
+/// uniffi 0.32's Swift error template writes `public` and `enum FfiError: …` on two lines,
+/// where every other declaration, and 0.31's errors, keep them on one. The scanner reads a
+/// declaration from its first line, so the two are put back together before it runs.
+pub(crate) fn join_split_modifiers(source: &str) -> std::borrow::Cow<'_, str> {
+    static SPLIT: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?m)^(public|open)[ \t]*\r?\n").expect("valid regex"));
+    SPLIT.replace_all(source, "$1 ")
+}
+
 /// The Swift surface.
 pub(crate) fn scan_swift(source: &str) -> Result<Vec<Declaration>> {
     static TYPE: LazyLock<Regex> = LazyLock::new(|| {
@@ -629,7 +641,8 @@ pub(crate) fn scan_swift(source: &str) -> Result<Vec<Declaration>> {
     static CASE: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"^\s*case `?(\w+)`?").expect("valid regex"));
 
-    let lines = lex(source)?;
+    let source = join_split_modifiers(source);
+    let lines = lex(&source)?;
     let types: Vec<(usize, String, String)> = top_level(&lines, &TYPE);
     let mut declarations = Vec::new();
     for (i, line) in lines.iter().enumerate() {

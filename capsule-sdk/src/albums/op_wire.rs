@@ -37,14 +37,14 @@ pub fn op_envelope(core: &ManifestCore) -> ManifestEnvelope {
             .unwrap_or_default()
     };
     ManifestEnvelope {
-        crypto_suite_id: i64::from(core.crypto_suite_id),
+        crypto_suite_id: core.crypto_suite_id,
         protocol_version: core.protocol_version.clone(),
         album_id: Some(core.album_id.to_string()),
         file_id: core.file_id.to_string(),
-        amk_version: i64::from(core.amk_version.0),
+        amk_version: core.amk_version.0,
         ciphertext_hash: core.ciphertext_hash.to_hex(),
-        plaintext_size: i64::try_from(core.plaintext_size).unwrap_or(i64::MAX),
-        chunk_size: i64::from(core.chunk_size),
+        plaintext_size: core.plaintext_size,
+        chunk_size: core.chunk_size,
         key_mode: wire(serde_json::to_value(core.key_mode)),
         metadata_blob_hash: core.metadata_blob_hash.map(|h| h.to_hex()),
         original_blob_hash: None,

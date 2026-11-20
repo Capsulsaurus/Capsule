@@ -20,8 +20,8 @@
 
 use ml_kem::kem::Decapsulate;
 use ml_kem::{B32, DecapsulationKey, EncapsulationKey, Key, KeyExport, MlKem768, Seed};
-use sha3::digest::{ExtendableOutput, Update, XofReader};
-use sha3::{Digest, Sha3_256, Shake256};
+use sha3::{Digest, Sha3_256};
+use shake::{ExtendableOutput, Shake256, Update, XofReader};
 use x25519_dalek::{X25519_BASEPOINT_BYTES, x25519};
 
 use crate::crypto::{CryptoError, rng};

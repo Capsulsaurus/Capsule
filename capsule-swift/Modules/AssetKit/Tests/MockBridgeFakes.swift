@@ -1,9 +1,8 @@
-import Foundation
-
 import AssetKit
 import CapsuleDomain
 import CapsuleFoundation
 import CapsulePorts
+import Foundation
 
 // MARK: - StreamHub
 

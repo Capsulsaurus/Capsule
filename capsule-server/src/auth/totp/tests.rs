@@ -22,6 +22,7 @@ fn code_at(codes: &TotpCodes, secret: &TotpSecret, step: u64) -> String {
         .authenticator(secret, "")
         .expect("a usable secret")
         .generate(step * STEP_SECONDS)
+        .to_string()
 }
 
 #[test]
@@ -131,6 +132,31 @@ fn a_secret_that_is_not_base32_is_a_server_fault_and_not_a_refusal() {
     let codes = codes();
     let broken = TotpSecret::new("not base32 at all!!");
     assert!(codes.verify(&broken, "123456", at(58_000_300)).is_err());
+}
+
+#[test]
+fn a_stored_secret_verifies_the_rfc_6238_sha1_vectors() {
+    // RFC 6238 Appendix B's SHA-1 secret, the ASCII bytes "12345678901234567890", in the
+    // unpadded base32 a stored enrollment holds. Pinned against the RFC rather than against
+    // `code_at`, so a totp-rs release that changed how a stored secret decodes or how a code
+    // is truncated fails here instead of locking every enrolled account out. The RFC's
+    // eight-digit codes are 94287082 and 07081804; six digits keep the last six.
+    let codes = codes();
+    let secret = TotpSecret::new("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ");
+    let instant = |second| Timestamp::from_second(second).expect("a representable instant");
+
+    assert_eq!(
+        codes
+            .verify(&secret, "287082", instant(59))
+            .expect("usable"),
+        Some(1)
+    );
+    assert_eq!(
+        codes
+            .verify(&secret, "081804", instant(1_111_111_109))
+            .expect("usable"),
+        Some(37_037_036)
+    );
 }
 
 #[test]

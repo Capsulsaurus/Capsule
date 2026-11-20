@@ -1,7 +1,6 @@
+import CapsuleDomain
 import Foundation
 import Testing
-
-import CapsuleDomain
 
 /// The error-code catalog and the client recovery matrix
 /// (*Upload Protocol — Error Taxonomy*, *Validation*).

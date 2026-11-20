@@ -1,9 +1,8 @@
-import Foundation
-import Testing
-
 import CapsuleDomain
 import FeatureTransfer
+import Foundation
 import SwiftUI
+import Testing
 
 /// The normative recovery matrix (*Upload Protocol — Error Taxonomy*).
 ///

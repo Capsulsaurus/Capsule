@@ -297,8 +297,8 @@ pub struct H3Config {
 }
 
 impl Default for H3Config {
-    /// The webpki roots (the ones `reqwest`'s `rustls-tls` trusts), default [`Windows`] and
-    /// [`RequestBounds`], and [`DIAL_CONNECT_TIMEOUT`].
+    /// The webpki roots (the set [`crate::net::trust_roots`] hands every reqwest client), default
+    /// [`Windows`] and [`RequestBounds`], and [`DIAL_CONNECT_TIMEOUT`].
     fn default() -> Self {
         Self {
             roots: Arc::new(rustls::RootCertStore {

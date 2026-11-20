@@ -1,6 +1,5 @@
-import Foundation
-
 @testable import CapsuleCatalogFFI
+import Foundation
 
 /// The doubles and builders the ``FFISyncDriver`` suites share. A namespace
 /// rather than file-scope declarations, so the suites nested in it can sit in

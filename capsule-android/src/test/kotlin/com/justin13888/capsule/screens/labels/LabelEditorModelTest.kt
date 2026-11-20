@@ -68,7 +68,10 @@ class LabelEditorModelTest {
             val model = LabelEditorModel(LabelSubject.Asset(asset), port())
             model.load()
             model.startDrawing(RegionDraft.Kind.CIRCLE)
-            model.updateDraft(model.state.value.draft!!.moved(0.1, 0.0))
+            model.updateDraft(
+                model.state.value.draft!!
+                    .moved(0.1, 0.0),
+            )
             model.finishDrawing(listOf("face"))
             val state = model.state.value
             assertNull(state.draft)
@@ -78,7 +81,12 @@ class LabelEditorModelTest {
             assertEquals(listOf("face"), state.labels)
             model.addLabel("Alice")
             assertEquals(listOf("Alice", "face"), model.state.value.labels)
-            assertEquals(listOf("Alice", "face"), model.state.value.regions.single().labels)
+            assertEquals(
+                listOf("Alice", "face"),
+                model.state.value.regions
+                    .single()
+                    .labels,
+            )
         }
 
     @Test
@@ -105,7 +113,11 @@ class LabelEditorModelTest {
             val model = LabelEditorModel(LabelSubject.Asset(asset), store)
             model.load()
             model.deleteSelectedRegion()
-            assertEquals(listOf(second.id), model.state.value.regions.map { it.id })
+            assertEquals(
+                listOf(second.id),
+                model.state.value.regions
+                    .map { it.id },
+            )
             assertEquals(second.id, model.state.value.selectedRegionId)
             assertEquals(listOf("b"), model.state.value.labels)
         }
@@ -207,7 +219,11 @@ class LabelEditorModelTest {
             write.join()
             assertEquals(first.id, model.state.value.selectedRegionId)
             assertEquals(listOf("a", "x"), model.state.value.labels)
-            assertEquals(listOf(listOf("a", "x"), listOf("b")), model.state.value.regions.map { it.labels })
+            assertEquals(
+                listOf(listOf("a", "x"), listOf("b")),
+                model.state.value.regions
+                    .map { it.labels },
+            )
             model.selectRegion(second.id)
             assertEquals(listOf("b"), model.state.value.labels)
         }

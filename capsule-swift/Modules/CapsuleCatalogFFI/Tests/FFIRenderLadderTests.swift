@@ -1,9 +1,8 @@
+@testable import CapsuleCatalogFFI
 import CapsuleDomain
 import CapsulePorts
 import Foundation
 import Testing
-
-@testable import CapsuleCatalogFFI
 
 /// The Apple client's render ladder is `render_step`, reached over the FFI:
 /// these run the real export, not a double.

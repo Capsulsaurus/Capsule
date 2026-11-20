@@ -30,7 +30,7 @@ public actor HiddenStore {
     }
 
     /// A stream that fires whenever the hidden set changes.
-    public nonisolated func changes() -> AsyncStream<Void> {
+    nonisolated public func changes() -> AsyncStream<Void> {
         AsyncStream { continuation in
             let token = UUID()
             Task { await self.register(continuation, token: token) }

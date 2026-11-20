@@ -11,6 +11,8 @@ struct Canned {
     status: u16,
     content_type: &'static str,
     body: Vec<u8>,
+    /// A `Content-Length` to declare, which need not match `body`: none is sent when `None`.
+    declared_length: Option<u64>,
 }
 
 impl Canned {
@@ -23,6 +25,7 @@ impl Canned {
                 "application/problem+json"
             },
             body: body.to_string().into_bytes(),
+            declared_length: None,
         }
     }
 }
@@ -31,7 +34,8 @@ impl Canned {
 #[derive(Debug)]
 struct Scripted {
     answer: Canned,
-    seen: Mutex<Vec<reqwest::Request>>,
+    /// Each request's head; no canned answer depends on a request body.
+    seen: Mutex<Vec<http::request::Parts>>,
 }
 
 impl Scripted {
@@ -50,14 +54,14 @@ impl Scripted {
             .map(|request| {
                 let header = |name: &str| {
                     request
-                        .headers()
+                        .headers
                         .get(name)
                         .and_then(|value| value.to_str().ok())
                         .map(str::to_owned)
                 };
                 (
-                    request.method().to_string(),
-                    request.url().to_string(),
+                    request.method.to_string(),
+                    request.uri.to_string(),
                     header("authorization"),
                     header(REQUEST_SIGNATURE_HEADER),
                 )
@@ -67,18 +71,25 @@ impl Scripted {
 }
 
 impl rest::HttpBackend for Scripted {
-    fn execute(&self, request: reqwest::Request) -> rest::ExecuteFuture<'_> {
-        self.seen.lock().expect("unpoisoned").push(request);
+    fn execute(&self, request: http::Request<rest::HttpBody>) -> rest::ExecuteFuture<'_> {
+        let (head, _body) = request.into_parts();
+        self.seen.lock().expect("unpoisoned").push(head);
         let answer = self.answer.clone();
         Box::pin(async move {
-            let mut response = http::Response::new(answer.body);
+            let mut response = http::Response::new(rest::HttpBody::from(answer.body));
             *response.status_mut() =
                 reqwest::StatusCode::from_u16(answer.status).expect("a status");
             response.headers_mut().insert(
                 reqwest::header::CONTENT_TYPE,
                 reqwest::header::HeaderValue::from_static(answer.content_type),
             );
-            Ok(reqwest::Response::from(response))
+            if let Some(length) = answer.declared_length {
+                response.headers_mut().insert(
+                    reqwest::header::CONTENT_LENGTH,
+                    reqwest::header::HeaderValue::from(length),
+                );
+            }
+            Ok(response)
         })
     }
 }
@@ -179,6 +190,27 @@ async fn a_body_past_the_bound_is_malformed() {
     );
 }
 
+/// A body whose declared length is past the bound is refused before a byte of it is read: the
+/// two bytes that follow would pass the streamed bound, so only the declaration can refuse it.
+#[tokio::test]
+async fn a_declared_length_past_the_bound_is_malformed_unread() {
+    let peer = Scripted::new(Canned {
+        status: 200,
+        content_type: "application/json",
+        body: b"{}".to_vec(),
+        declared_length: Some(4096),
+    });
+    let client = client_over(&peer, signer());
+    let error = client
+        .sync_page(TOKEN, &album(), None, 10, 8)
+        .await
+        .expect_err("declared over the bound");
+    assert!(
+        matches!(&error, RemoteError::Malformed(detail) if detail.contains("larger than the 8 bytes")),
+        "{error:?}"
+    );
+}
+
 #[tokio::test]
 async fn a_body_that_does_not_decode_is_malformed() {
     let peer = Scripted::new(Canned::json(200, &serde_json::json!({ "entries": "no" })));
@@ -196,6 +228,7 @@ async fn a_redirect_is_malformed_and_never_followed() {
         status: 302,
         content_type: "text/plain",
         body: Vec::new(),
+        declared_length: None,
     });
     let client = client_over(&peer, signer());
     let error = client
@@ -249,6 +282,7 @@ async fn a_blob_is_fetched_by_its_signed_path() {
         status: 200,
         content_type: "application/octet-stream",
         body: b"ciphertext".to_vec(),
+        declared_length: None,
     });
     let signer = signer();
     let client = client_over(&peer, signer.clone());
@@ -299,6 +333,7 @@ async fn a_blob_past_the_bound_is_malformed() {
         status: 200,
         content_type: "application/octet-stream",
         body: vec![0; 65],
+        declared_length: None,
     });
     let client = client_over(&peer, signer());
     let error = client
@@ -373,7 +408,9 @@ async fn a_request_off_the_origin_is_never_executed() {
         "http://home.test/v1/sync",
         "https://home.test:8443/v1/sync",
     ] {
-        let request = reqwest::Request::new(reqwest::Method::GET, Url::parse(url).expect("a URL"));
+        let request = http::Request::get(url)
+            .body(rest::HttpBody::empty())
+            .expect("a request");
         let response = rest::HttpBackend::execute(&transport, request)
             .await
             .expect("answered locally");
@@ -484,20 +521,10 @@ async fn an_untrusted_certificate_is_unreachable_and_never_accepted() {
     assert!(refused.is_some(), "the front completed a handshake");
 }
 
-#[test]
-fn a_request_that_could_not_be_built_is_not_a_connect_failure() {
-    let rest::Error::<std::convert::Infallible>::RequestConstruction(error) =
-        rest::Error::request_message("no such parameter")
-    else {
-        panic!("a request-construction error");
-    };
-    assert_eq!(connect_failure(&error), None);
-}
-
 /// A reqwest failure that is not a connect failure is the peer's malformed answer, not an
 /// unreachable peer: a front the client trusts completes the handshake and then speaks
-/// something that is not HTTP. Widening `connect_failure` to every reqwest request error would
-/// turn this into `Unreachable`.
+/// something that is not HTTP. Reading every request-class failure as unreachable would turn
+/// this into `Unreachable`, and the peer's error budget would never be charged for it.
 #[tokio::test]
 async fn an_unparseable_answer_over_a_trusted_handshake_is_malformed() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -517,10 +544,12 @@ async fn an_unparseable_answer_over_a_trusted_handshake_is_malformed() {
             .expect("the garbage is written");
         let _ = tls.shutdown().await;
     });
+    // Trusted as production's egress client trusts a peer: only the roots it is handed, here
+    // the front's own certificate, and never the host's store.
     let http = reqwest::Client::builder()
         .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
-        .add_root_certificate(reqwest::Certificate::from_der(&der).expect("a certificate"))
+        .tls_certs_only([reqwest::Certificate::from_der(&der).expect("a certificate")])
         .build()
         .expect("a rustls client");
     let origin = Url::parse(&format!("https://127.0.0.1:{port}/")).expect("an origin");

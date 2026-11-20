@@ -1,9 +1,8 @@
-import Foundation
-import Testing
-
 import CapsuleDomain
 import CapsuleFoundation
 import CapsuleNavigation
+import Foundation
+import Testing
 
 /// Parsing is the app's most exposed surface: any app on the device can hand it
 /// a URL. It has to be total.

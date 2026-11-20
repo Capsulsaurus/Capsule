@@ -13,23 +13,23 @@
 [tools]
 # hk: git-hook runner (replaces lefthook). The version here MUST match the
 # `amends` URL in hk.pkl, or pkl reports a schema mismatch. Bump both together.
-hk = "1.48.0"
+hk = "2.13.0"
 # convco / cargo-nextest aren't in the mise registry by a short name. The `cargo`
 # backend fetches a prebuilt binary via cargo-binstall when possible and otherwise
 # builds from source, working uniformly on every OS in CI and locally.
-"cargo:convco" = "0.6.4"
+"cargo:convco" = "0.7.2"
 "cargo:cargo-nextest" = "0.9"
 # wasm-bindgen CLI post-processes the `capsule-wasm` cdylib into the browser JS glue the web
 # share viewer + the `share-open` bun KAT load (`build-wasm`). Pinned to EXACTLY the
 # `wasm-bindgen` crate version in `capsule-wasm/Cargo.toml` — the two must match or wasm-bindgen
 # aborts. Bump both together. Chosen over wasm-pack so the gate stays fully offline (no runtime
 # fetch of a version-matched wasm-bindgen) once the toolchain is installed.
-"cargo:wasm-bindgen-cli" = "0.2.100"
+"cargo:wasm-bindgen-cli" = "0.2.130"
 # cargo-deny enforces the dependency-licence allowlist in deny.toml (the policy it
 # implements is capsule-docs/.../design/licensing.md) offline, as `license-check`, and
 # the RustSec advisories, bans and sources online, as `deny-check` (CI only: the
 # advisories check fetches the RustSec database, so it stays out of `check-rust`).
-"cargo:cargo-deny" = "0.19.8"
+"cargo:cargo-deny" = "0.21.0"
 # The testing plan's slow tiers: `mise run fuzz` drives cargo-fuzz over `capsule-core/fuzz`, and
 # `mise run mutants` drives cargo-mutants over the CRDT, transfer and provenance code. CI runs
 # both from `.github/workflows/scheduled-tests.yml`, installing these same versions.
@@ -226,8 +226,9 @@ run = [
 # both by being named like the others.
 #
 # The task admits the tier itself, so it means the same thing locally and in CI: each case
-# starts its own container through testcontainers (Docker's socket on CI; locally, `DOCKER_HOST`
-# at the podman socket and `CAPSULE_TEST_CONTAINER_USERNS=keep-id` for rootless podman).
+# starts its own container through `capsule-test-postgres` and the container CLI (`docker` on CI;
+# locally, `CAPSULE_TEST_CONTAINER_CLI=podman` and `CAPSULE_TEST_CONTAINER_USERNS=keep-id` for
+# rootless podman).
 #
 # A gated case that cannot reach its tier prints a `skipping <case>:` / `skipped:` line and
 # passes, which is exactly how these suites reported green in CI while never running. So the
@@ -248,7 +249,7 @@ cargo nextest run -p capsule-server -p capsule-e2e \
   --no-tests=fail --success-output final 2>&1 | tee "$log"
 if grep -nE 'skipping [^:]+: |skipped: ' "$log" >&2; then
   echo "test-rust-containers: the cases above skipped instead of running against a container." >&2
-  echo "A skipped container tier is a failure here; check the container runtime (DOCKER_HOST)." >&2
+  echo "A skipped container tier is a failure here; check the container CLI (CAPSULE_TEST_CONTAINER_CLI)." >&2
   exit 1
 fi
 '''
@@ -468,7 +469,7 @@ description = "Print README translatable blocks as a translation-data scaffold"
 run = "cargo run -q -p xtask -- translate-readme --extract"
 
 # ── FFI: uniffi bindings for Kotlin/Swift ────────────────────────────────────
-# Two uniffi namespaces on one pinned uniffi (0.31.1), and an
+# Two uniffi namespaces on one pinned uniffi (0.32.2), and an
 # app links both as one library (ADR-0005): `capsule_sdk`, behind capsule-sdk's `ffi`
 # feature (the `FfiCapsuleClient`/`FfiSession` user flows, the `FfiWorkspace`
 # verbs and the hardware-signer seams), and `capsule_core_ffi`, the catalog crate that is

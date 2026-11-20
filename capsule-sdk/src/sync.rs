@@ -676,7 +676,7 @@ impl SyncConsumer {
                 .as_text()
                 .filter(|value| !value.is_empty())
                 .map(str::to_owned),
-            page_size: Some(i64::from(page_size)),
+            page_size: Some(page_size),
             // The suite and the sidecar schema are validated when present and a feed pull has
             // no use for either; the suite already rides the transport's default headers.
             ..rest::SyncFeedParams::default()
@@ -819,7 +819,7 @@ fn decode_entry(entry: rest::types::SyncEntry) -> Result<FeedEntry, SyncError> {
         .collect::<Result<Vec<_>, _>>()?;
     Ok(FeedEntry {
         album_id: entry.album_id.into_bytes(),
-        sync_seq: u64::try_from(entry.sync_seq).unwrap_or(u64::MAX),
+        sync_seq: entry.sync_seq,
         protocol_version: entry.protocol_version,
         kind,
         asset_id: entry.asset_id.into_bytes(),
@@ -845,7 +845,7 @@ fn decode_blobs(blobs: Vec<rest::types::SyncBlobRef>) -> BlobManifest {
         let reference = BlobRef {
             ciphertext_hash: blob.hash,
             role: role_str(&blob.role).to_owned(),
-            size: u64::try_from(blob.size).unwrap_or(u64::MAX),
+            size: blob.size,
         };
         if matches!(blob.role, rest::types::WireBlobRole::Original) {
             manifest.original = Some(reference);

@@ -1,7 +1,6 @@
+@testable import CapsuleFoundation
 import Foundation
 import Testing
-
-@testable import CapsuleFoundation
 
 @Suite("CapsuleFoundation value types")
 struct CapsuleFoundationTests {

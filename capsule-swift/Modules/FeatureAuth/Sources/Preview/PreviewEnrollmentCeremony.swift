@@ -59,7 +59,7 @@ public actor PreviewEnrollmentCeremony: FirstDeviceEnrollmentPort {
         behaviour.availability
     }
 
-    public nonisolated func run(allowingSoftwareKeys: Bool) -> AsyncStream<EnrollmentStageEvent> {
+    nonisolated public func run(allowingSoftwareKeys: Bool) -> AsyncStream<EnrollmentStageEvent> {
         AsyncStream { continuation in
             Task {
                 await self.resume()

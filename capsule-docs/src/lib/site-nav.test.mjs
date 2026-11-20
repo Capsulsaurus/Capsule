@@ -76,11 +76,12 @@ describe('internal links', () => {
         ...footerLinks({ blogIsLive: true }),
     ].filter((link) => !link.external);
 
-    it.each(
-        internal.map((link) => [link.label, link.href]),
-    )('%s (%s) is a trailing-slash route', (_, href) => {
-        expect(href).toMatch(/^\/([a-z-]+\/)+$/);
-    });
+    it.each(internal.map((link) => [link.label, link.href]))(
+        '%s (%s) is a trailing-slash route',
+        (_, href) => {
+            expect(href).toMatch(/^\/([a-z-]+\/)+$/);
+        },
+    );
 
     // The blog index is a plugin route with no authored page; every other
     // internal link must resolve to one, since the link validator does not

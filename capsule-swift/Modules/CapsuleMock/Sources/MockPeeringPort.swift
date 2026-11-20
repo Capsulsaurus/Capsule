@@ -101,7 +101,7 @@ extension MockFederationStore: PeeringPort {
         await peeringChanges.send(peers)
     }
 
-    public nonisolated func changes() -> AsyncStream<[LocalPeer]> {
+    nonisolated public func changes() -> AsyncStream<[LocalPeer]> {
         peeringChanges.subscribe()
     }
 }

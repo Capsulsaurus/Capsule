@@ -31,6 +31,9 @@
 //! `mise run test-rust-containers` selects it.
 
 #![cfg(unix)]
+// `push` awaits the CLI's whole push pipeline, a future nested deeper than rustc's default
+// query depth lets it lay out in this crate.
+#![recursion_limit = "256"]
 
 mod postgres_conformance {
     use std::collections::{BTreeMap, BTreeSet};
@@ -57,79 +60,55 @@ mod postgres_conformance {
     use capsule_server::index::{AssetIndex as _, AssetRow};
     use capsule_server::ledger::rebuild::{RebuildReport, rebuild};
     use capsule_server::scrub::{Depth, scrub};
+    use capsule_test_postgres::{GATE, PostgresContainer, Request};
     use server_migration::MigratorTrait as _;
-    use testcontainers::core::{CmdWaitFor, ExecCommand};
-    use testcontainers::runners::AsyncRunner as _;
-    use testcontainers::{ContainerAsync, ImageExt as _};
-    use testcontainers_modules::postgres::Postgres;
     use uuid::Uuid;
 
-    /// The tag `capsule-server/compose.yaml` runs, as the server's own harnesses pin it.
-    const POSTGRES_TAG: &str = "18";
-    /// The rootless-podman user-namespace mode, when the host needs one
-    /// (`capsule_server::postgres::testing`).
-    const USERNS_MODE: &str = "CAPSULE_TEST_CONTAINER_USERNS";
     /// Where the dump sits inside a container: written there by `pg_dump` on host A, copied
     /// in there for `pg_restore` on host B.
     const DUMP_PATH: &str = "/tmp/capsule.dump";
-    /// The testcontainers module's own superuser and database.
-    const PG_USER: &str = "postgres";
+    /// The image's own superuser.
+    const PG_USER: &str = capsule_test_postgres::USER;
     /// The database the server runs on.
-    const PG_DATABASE: &str = "postgres";
+    const PG_DATABASE: &str = capsule_test_postgres::DATABASE;
     /// The database the index-rebuild drill rebuilds into, beside host B's restored one.
     const REBUILT_DATABASE: &str = "rebuilt";
 
     /// Whether the Postgres container tier is admitted.
     fn admitted(case: &str) -> bool {
-        if std::env::var("CAPSULE_TEST_POSTGRES").ok().as_deref() == Some("1") {
+        if std::env::var(GATE).ok().as_deref() == Some("1") {
             return true;
         }
         eprintln!(
-            "skipping {case}: the backup drill needs CAPSULE_TEST_POSTGRES=1 with a reachable \
-             container runtime"
+            "skipping {case}: the backup drill needs {GATE}=1 with a reachable container runtime"
         );
         false
     }
 
-    fn userns() -> Option<String> {
-        std::env::var(USERNS_MODE)
-            .ok()
-            .filter(|mode| !mode.is_empty())
-    }
-
     /// One host's external service: its Postgres.
     struct Host {
-        postgres: ContainerAsync<Postgres>,
+        postgres: PostgresContainer,
         backends: DurableBackends,
     }
 
     impl Host {
         /// An empty Postgres. `dump`, when given, is copied into the container at [`DUMP_PATH`]
-        /// before it starts, for a restore.
+        /// once it is ready, for a restore.
         async fn start(dump: Option<Vec<u8>>) -> Self {
-            let mut postgres = Postgres::default()
-                .with_tag(POSTGRES_TAG)
-                // Off the image's declared volume, for the reason `postgres::testing` gives.
-                .with_env_var("PGDATA", "/tmp/pgdata");
-            if let Some(mode) = userns() {
-                postgres = postgres.with_userns_mode(&mode);
-            }
-            if let Some(dump) = dump {
-                postgres = postgres.with_copy_to(DUMP_PATH, dump);
-            }
-            let postgres = postgres
-                .start()
+            let postgres = capsule_test_postgres::start(&Request::from_env())
                 .await
-                .expect("the Postgres container starts");
-            let host = postgres.get_host().await.expect("a host");
-            let port = postgres.get_host_port_ipv4(5432).await.expect("a port");
-            let database_url = format!("postgres://{PG_USER}:postgres@{host}:{port}");
+                .unwrap_or_else(|error| panic!("the Postgres container starts: {error}"));
+            if let Some(dump) = dump {
+                postgres
+                    .copy_in(DUMP_PATH, dump)
+                    .await
+                    .unwrap_or_else(|error| panic!("the dump copies in: {error}"));
+            }
+            let database_url = postgres.url(PG_DATABASE);
 
             Self {
                 postgres,
-                backends: DurableBackends {
-                    database_url: format!("{database_url}/{PG_DATABASE}"),
-                },
+                backends: DurableBackends { database_url },
             }
         }
 
@@ -146,24 +125,17 @@ mod postgres_conformance {
         /// Run `command` inside the Postgres container, returning its stdout; panics with its
         /// stderr when it exits non-zero.
         async fn psql_exec(&self, command: &[&str]) -> Vec<u8> {
-            let mut result = self
+            let output = self
                 .postgres
-                .exec(
-                    ExecCommand::new(command.iter().copied())
-                        .with_cmd_ready_condition(CmdWaitFor::exit()),
-                )
+                .exec(command)
                 .await
                 .unwrap_or_else(|error| panic!("{command:?} could not run: {error}"));
-            let stdout = result.stdout_to_vec().await.expect("stdout reads");
-            let stderr = result.stderr_to_vec().await.expect("stderr reads");
-            let code = result.exit_code().await.expect("the exit code reads");
-            assert_eq!(
-                code,
-                Some(0),
+            assert!(
+                output.status.success(),
                 "{command:?} failed: {}",
-                String::from_utf8_lossy(&stderr)
+                String::from_utf8_lossy(&output.stderr)
             );
-            stdout
+            output.stdout
         }
 
         /// Apply the server's schema to `database`: what `capsule-server-migration up` does.
@@ -349,11 +321,8 @@ mod postgres_conformance {
                 DUMP_PATH,
             ])
             .await;
-        let dump: Vec<u8> = host_a
-            .postgres
-            .copy_file_from(DUMP_PATH, Vec::new())
-            .await
-            .expect("the dump copies out of the container");
+        // Out of the container over `exec`'s stdout, which carries the bytes untouched.
+        let dump: Vec<u8> = host_a.psql_exec(&["cat", DUMP_PATH]).await;
         assert!(!dump.is_empty(), "pg_dump wrote a dump");
 
         // Written after the dump and before the blob copy: the row is in no backup of the

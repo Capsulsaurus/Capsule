@@ -56,7 +56,7 @@ extension MockLibraryStore: LibraryPort {
         )
     }
 
-    public nonisolated func changes() -> AsyncStream<LibraryChange> {
+    nonisolated public func changes() -> AsyncStream<LibraryChange> {
         libraryChanges.subscribe()
     }
 }

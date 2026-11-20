@@ -63,7 +63,6 @@ public struct ModerationView: View {
 
     // MARK: Sections
 
-    @ViewBuilder
     private var blocksSection: some View {
         Section {
             if model.blocks.isEmpty {
@@ -101,7 +100,6 @@ public struct ModerationView: View {
         }
     }
 
-    @ViewBuilder
     private var reportsSection: some View {
         Section {
             if model.reports.isEmpty {

@@ -113,6 +113,9 @@ impl MockServer {
     where
         F: Fn(&MockRequest) -> MockResponse + Send + Sync + 'static,
     {
+        // Tests build bare `reqwest::Client`s against the mock, which need the process crypto
+        // provider the SDK's own builders install (`net::ensure_crypto_provider`).
+        crate::net::ensure_crypto_provider();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         crate::net::negotiation::forget_addr(listener.local_addr().unwrap());
         let addr = listener.local_addr().unwrap();

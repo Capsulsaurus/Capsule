@@ -161,7 +161,6 @@ struct QuotaStateBanner: View {
         }
     }
 
-    @ViewBuilder
     private var buttons: some View {
         ForEach(remediations) { remediation in
             Button {

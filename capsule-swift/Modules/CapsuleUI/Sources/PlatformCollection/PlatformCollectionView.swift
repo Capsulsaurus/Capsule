@@ -42,9 +42,7 @@ public struct PlatformCollectionSection<SectionID: Hashable & Sendable, Item: Ha
 ///   `PlatformCollectionController+iOS.swift` and
 ///   `PlatformCollectionController+macOS.swift`, so only those files ever name
 ///   a UIKit or AppKit type.
-public struct PlatformCollectionView<SectionID, Item, ItemContent, HeaderContent>
-    where SectionID: Hashable & Sendable, Item: Hashable & Sendable,
-    ItemContent: View, HeaderContent: View {
+public struct PlatformCollectionView<SectionID: Hashable & Sendable, Item: Hashable & Sendable, ItemContent: View, HeaderContent: View> {
     let sections: [PlatformCollectionSection<SectionID, Item>]
     let layout: PlatformCollectionLayout
     let scrollToSectionID: SectionID?

@@ -1,10 +1,9 @@
 import AssetKit
 import CapsuleFoundation
+@testable import FeatureViewer
 import Foundation
 import ImagePipeline
 import Testing
-
-@testable import FeatureViewer
 
 @Suite("Info panel formatting")
 struct AssetInfoFormattingTests {

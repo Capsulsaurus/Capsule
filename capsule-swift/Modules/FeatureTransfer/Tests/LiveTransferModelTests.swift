@@ -1,10 +1,9 @@
 import CapsuleDomain
 import CapsuleFoundation
 import CapsuleMock
+@testable import FeatureTransfer
 import Synchronization
 import Testing
-
-@testable import FeatureTransfer
 
 /// A clock that only moves when the model sleeps on it, and records each
 /// sleep, so pacing is asserted without waiting.
@@ -90,7 +89,7 @@ struct LiveTransferModelTests {
     }
 
     @Test("Ticking ages the board only while watching")
-    func ticking() async {
+    func ticking() {
         let stepped = SteppedClock()
         let model = LiveTransferModel(port: MockTransferEventFeed(script: []), clock: stepped.clock)
         stepped.advance(by: .seconds(5))

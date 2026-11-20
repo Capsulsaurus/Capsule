@@ -26,7 +26,7 @@ jobs:
       release: ${{ steps.d.outputs.release }}
       version: ${{ steps.d.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: d
@@ -74,7 +74,7 @@ jobs:
             os: windows-latest
             optional: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust toolchain
         run: |
           rustup toolchain install
@@ -130,7 +130,7 @@ jobs:
           7z a "${dist}.zip" "$dist" >/dev/null
           echo "ASSET=${dist}.zip" >> "$GITHUB_ENV"
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: capsule-${{ matrix.target }}
           path: ${{ env.ASSET }}
@@ -142,15 +142,15 @@ jobs:
     if: ${{ needs.detect.outputs.release == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Set up convco (via mise)
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
         with:
           install_args: convco
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -181,7 +181,7 @@ jobs:
     if: ${{ needs.detect.outputs.release == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Push docs/vX.Y

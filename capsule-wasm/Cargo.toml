@@ -18,10 +18,10 @@ crate-type = ["cdylib", "rlib"]
 # wasm32 — exactly the sealing-build posture. Feature unification with the rest of the
 # workspace (which pulls `native`) is harmless: `sharing` compiles under both.
 capsule-core = { path = "../capsule-core", default-features = false }
-# The browser boundary. Pinned `=0.2.100` to the `wasm-bindgen` CLI the `build-wasm` mise task
+# The browser boundary. Pinned `=0.2.130` to the `wasm-bindgen` CLI the `build-wasm` mise task
 # drives — wasm-bindgen requires the runtime crate and the CLI to match exactly. Not
 # wasm-pack, which breaks the offline gate.
-wasm-bindgen = "=0.2.100"
+wasm-bindgen = "=0.2.130"
 base64 = { workspace = true }
 hex = { workspace = true }
 uuid = { workspace = true }

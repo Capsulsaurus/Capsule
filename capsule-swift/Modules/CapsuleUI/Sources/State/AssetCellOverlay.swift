@@ -60,7 +60,6 @@ public struct AssetCellOverlay: View {
 
     // MARK: Corners
 
-    @ViewBuilder
     private func corner(
         _ alignment: Alignment,
         @ViewBuilder content: () -> some View
@@ -82,7 +81,6 @@ public struct AssetCellOverlay: View {
         }
     }
 
-    @ViewBuilder
     private var statusBadges: some View {
         HStack(spacing: CapsuleTheme.Spacing.xxSmall) {
             if asset.isUserHidden {

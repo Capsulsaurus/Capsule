@@ -1,9 +1,8 @@
-import Foundation
-import Testing
-
 import CapsuleDomain
 import CapsuleFoundation
 import CapsuleNavigation
+import Foundation
+import Testing
 
 /// The behaviour a tab bar and a sidebar are judged on: your place is where you
 /// left it.

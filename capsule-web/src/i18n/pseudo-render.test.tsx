@@ -238,6 +238,11 @@ function isPhysical(token: string): boolean {
     );
 }
 
+/** A screen with a string that bypasses the catalog, which the en-XA sweep must catch. */
+function Hardcoded() {
+    return <p>Upload complete</p>;
+}
+
 describe('expanded pseudo-locale (en-XA)', () => {
     for (const [path, Screen] of SCREENS) {
         test(`every visible string on ${path} (${Screen.name}) is catalogued`, async () => {
@@ -249,9 +254,6 @@ describe('expanded pseudo-locale (en-XA)', () => {
     }
 
     test('a hardcoded string on a screen is caught', async () => {
-        function Hardcoded() {
-            return <p>Upload complete</p>;
-        }
         const html = await render('en-XA', '/photos', Hardcoded);
         expect(visibleText(html).filter(isUnmarkedEnXa)).toEqual([
             'Upload complete',

@@ -48,7 +48,7 @@ extension MockIdentityStore: AuthPort {
         await authChanges.send(currentState)
     }
 
-    public nonisolated func changes() -> AsyncStream<AuthState> {
+    nonisolated public func changes() -> AsyncStream<AuthState> {
         authChanges.subscribe()
     }
 
@@ -159,7 +159,7 @@ extension MockIdentityStore: DevicePort {
         return cohort
     }
 
-    public nonisolated func changes() -> AsyncStream<Void> {
+    nonisolated public func changes() -> AsyncStream<Void> {
         directoryChanges.subscribe()
     }
 }

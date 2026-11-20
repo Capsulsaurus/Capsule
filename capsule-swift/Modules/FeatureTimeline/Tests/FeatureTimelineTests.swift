@@ -1,9 +1,8 @@
-import Foundation
-import Testing
-
 import AssetKit
 import CapsuleTestSupport
 import FeatureTimeline
+import Foundation
+import Testing
 
 @Suite("TimelineSectioning day grouping")
 struct TimelineSectioningTests {
@@ -81,7 +80,7 @@ struct TimelineAggregationTests {
         let dec2023: Asset
     }
 
-    // 2024-07-15, 2024-07-01, 2024-06-20, 2023-12-25 (UTC), newest first.
+    /// 2024-07-15, 2024-07-01, 2024-06-20, 2023-12-25 (UTC), newest first.
     private func makeFixture() -> Fixture {
         let julyA = Fixtures.asset(captureDate: Date(timeIntervalSince1970: 1721001600))
         let julyB = Fixtures.asset(captureDate: Date(timeIntervalSince1970: 1719792000))

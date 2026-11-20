@@ -48,8 +48,7 @@
     /// A generic `NSObject` subclass cannot vend `@objc` entry points, so every
     /// data-source, delegate, and gesture callback arrives through the
     /// non-generic ``TimelineCollectionBridge``.
-    final class TimelineCollectionController<ItemContent, HeaderContent>: UIViewController
-        where ItemContent: View, HeaderContent: View {
+    final class TimelineCollectionController<ItemContent: View, HeaderContent: View>: UIViewController {
         var itemContent: (Int) -> ItemContent
         var headerContent: (Int) -> HeaderContent
         var onSelect: ((Int) -> Void)?
@@ -75,29 +74,27 @@
             return view
         }()
 
-        private lazy var cellRegistration = UICollectionView
-            .CellRegistration<UICollectionViewCell, Int> { [weak self] cell, _, globalIndex in
-                guard let self else { return }
-                // `UIHostingConfiguration` is what keeps everything above the
-                // reuse boundary in plain SwiftUI: reuse, sizing, and teardown
-                // stay UIKit's job, while the pixels are the same view the Mac
-                // renders. Margins are zeroed — a photo tile is edge-to-edge.
-                cell.contentConfiguration = UIHostingConfiguration {
-                    itemContent(globalIndex)
-                }
-                .margins(.all, 0)
+        private lazy var cellRegistration = UICollectionView.CellRegistration<UICollectionViewCell, Int> { [weak self] cell, _, globalIndex in
+            guard let self else { return }
+            // `UIHostingConfiguration` is what keeps everything above the
+            // reuse boundary in plain SwiftUI: reuse, sizing, and teardown
+            // stay UIKit's job, while the pixels are the same view the Mac
+            // renders. Margins are zeroed — a photo tile is edge-to-edge.
+            cell.contentConfiguration = UIHostingConfiguration {
+                itemContent(globalIndex)
             }
+            .margins(.all, 0)
+        }
 
-        private lazy var headerRegistration = UICollectionView
-            .SupplementaryRegistration<UICollectionViewCell>(
-                elementKind: UICollectionView.elementKindSectionHeader
-            ) { [weak self] view, _, indexPath in
-                guard let self else { return }
-                view.contentConfiguration = UIHostingConfiguration {
-                    headerContent(indexPath.section)
-                }
-                .margins(.all, 0)
+        private lazy var headerRegistration = UICollectionView.SupplementaryRegistration<UICollectionViewCell>(
+            elementKind: UICollectionView.elementKindSectionHeader
+        ) { [weak self] view, _, indexPath in
+            guard let self else { return }
+            view.contentConfiguration = UIHostingConfiguration {
+                headerContent(indexPath.section)
             }
+            .margins(.all, 0)
+        }
 
         init(
             geometry: TimelineGridGeometry,

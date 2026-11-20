@@ -92,7 +92,7 @@ public actor ManagedProvider: AssetProvider, TrashProvider, AssetOwning {
         return try await catalog.asset(id: uuid).map(Asset.init(catalogAsset:))
     }
 
-    public nonisolated func changes() -> AsyncStream<AssetChange> {
+    nonisolated public func changes() -> AsyncStream<AssetChange> {
         AsyncStream { continuation in
             let token = UUID()
             Task { await self.register(continuation, token: token) }

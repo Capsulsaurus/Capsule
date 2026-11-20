@@ -448,8 +448,7 @@ async fn read_activity(
 ) -> Result<Vec<ActivityEntry>, RemoteError> {
     let client = AuthenticatedClient::new(api_root, session)
         .map_err(|error| RemoteError::Activity(error.to_string()))?;
-    let params =
-        limit.map(|limit| capsule_sdk::rest::ListActivityParams::default().limit(i64::from(limit)));
+    let params = limit.map(|limit| capsule_sdk::rest::ListActivityParams::default().limit(limit));
     let response = client
         .list_activity(capsule_core::crypto::primitives::PROTOCOL_VERSION, params)
         .await

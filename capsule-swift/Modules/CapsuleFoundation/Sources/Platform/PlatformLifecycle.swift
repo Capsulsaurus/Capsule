@@ -15,9 +15,9 @@ public enum PlatformLifecycle {
     /// release what it can. `nil` on platforms with no such notification.
     public static var memoryWarningNotification: Notification.Name? {
         #if canImport(UIKit) && !os(macOS)
-            return UIApplication.didReceiveMemoryWarningNotification
+            UIApplication.didReceiveMemoryWarningNotification
         #else
-            return nil
+            nil
         #endif
     }
 }

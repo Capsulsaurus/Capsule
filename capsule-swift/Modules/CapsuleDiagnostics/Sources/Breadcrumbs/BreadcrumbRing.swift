@@ -53,7 +53,7 @@ public actor BreadcrumbRing {
 extension BreadcrumbRing: DiagnosticsSink {
     /// Records asynchronously: the sink contract is synchronous, so we hop onto
     /// the actor without blocking the caller.
-    public nonisolated func record(_ event: DiagnosticEvent, at time: Date) {
+    nonisolated public func record(_ event: DiagnosticEvent, at time: Date) {
         Task { await append(event, at: time) }
     }
 }

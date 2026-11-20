@@ -162,7 +162,7 @@ public enum TimelineSectioning {
             }
         }
 
-        let sections: [PhotoGridSection] = order.compactMap { key in
+        return order.compactMap { key in
             guard let entry = representatives[key] else { return nil }
             return PhotoGridSection(
                 id: key,
@@ -170,7 +170,6 @@ public enum TimelineSectioning {
                 assets: [entry.asset]
             )
         }
-        return sections
     }
 
     /// A stable id for a period — `yyyy-MM` for months, `yyyy` for years.

@@ -6,6 +6,6 @@ status: 2
 --- stdout ---
 
 --- stderr ---
-error: invalid value 'yesterday' for '<TIME>': failed to parse year in date: failed to parse four digit integer as year: invalid digit, expected 0-9 but got y
+error: invalid value 'yesterday' for '<TIME>': failed to parse four digit integer as year: invalid digit, expected 0-9 but got y
 
 For more information, try '--help'.

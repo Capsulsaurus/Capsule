@@ -199,8 +199,7 @@ public actor MockGate {
         if behaviour.latencyNanoseconds > 0 {
             try? await Task.sleep(nanoseconds: behaviour.latencyNanoseconds)
         }
-        guard let interval = behaviour.failEveryNthCall, interval > 0 else { return }
-        guard callCount.isMultiple(of: interval) else { return }
+        guard let interval = behaviour.failEveryNthCall, interval > 0, callCount.isMultiple(of: interval) else { return }
         throw CapsuleError(
             code: behaviour.failureCode,
             detail: "CapsuleMock: injected failure on gated call \(callCount)"

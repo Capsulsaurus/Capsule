@@ -115,7 +115,7 @@ private func makeStore(
 @Suite("AssetWindowStore")
 struct AssetWindowStoreTests {
     @Test("knows the collection's size before fetching anything")
-    func sizeIsKnownUpFront() async throws {
+    func sizeIsKnownUpFront() async {
         let source = ControlledPageSource()
         let store = makeStore(totalCount: 250000, source: source)
 
@@ -126,7 +126,7 @@ struct AssetWindowStoreTests {
     }
 
     @Test("an unloaded index answers nil rather than faulting")
-    func unloadedIndexIsNil() async throws {
+    func unloadedIndexIsNil() {
         let source = ControlledPageSource()
         let store = makeStore(totalCount: 10000, source: source)
 
@@ -139,7 +139,7 @@ struct AssetWindowStoreTests {
     }
 
     @Test("fetches the visible range and its margin, and nothing else")
-    func fetchesVisiblePlusMargin() async throws {
+    func fetchesVisiblePlusMargin() async {
         let source = ControlledPageSource()
         let configuration = AssetWindowStore<Int>.Configuration(
             pageSize: 100,
@@ -181,7 +181,7 @@ struct AssetWindowStoreTests {
     }
 
     @Test("never holds more than the configured page cap, however far it scrolls")
-    func residencyIsCapped() async throws {
+    func residencyIsCapped() async {
         let source = ControlledPageSource()
         let configuration = AssetWindowStore<Int>.Configuration(
             pageSize: 100,
@@ -201,7 +201,7 @@ struct AssetWindowStoreTests {
     }
 
     @Test("does not evict a page the viewport still needs")
-    func requiredPagesSurviveEviction() async throws {
+    func requiredPagesSurviveEviction() async {
         let source = ControlledPageSource()
         // A cap smaller than the window the margin demands: pure LRU would drop
         // pages that are about to be read again on the next frame.
@@ -242,7 +242,7 @@ struct AssetWindowStoreTests {
     }
 
     @Test("a short page is not requested again")
-    func shortPageIsNotRefetched() async throws {
+    func shortPageIsNotRefetched() async {
         // The store is told 500 rows; the source only has 250. That mismatch is
         // ordinary — the aggregate and the rows are two reads.
         let source = ControlledPageSource(availableRows: 250)
@@ -269,7 +269,7 @@ struct AssetWindowStoreTests {
     }
 
     @Test("surfaces a fetch failure without poisoning the store")
-    func failureIsSurfacedAndRecoverable() async throws {
+    func failureIsSurfacedAndRecoverable() async {
         let source = ControlledPageSource()
         await source.failNext(FetchFailure())
         let store = makeStore(totalCount: 1000, source: source)
@@ -287,7 +287,7 @@ struct AssetWindowStoreTests {
     }
 
     @Test("a stationary viewport does not refetch a failed page on its own")
-    func stationaryViewportDoesNotStorm() async throws {
+    func stationaryViewportDoesNotStorm() async {
         let source = ControlledPageSource()
         await source.failNext(FetchFailure())
         let store = makeStore(totalCount: 1000, source: source)
@@ -306,7 +306,7 @@ struct AssetWindowStoreTests {
     }
 
     @Test("retryFailedPages refetches without moving the viewport")
-    func explicitRetryRecoversInPlace() async throws {
+    func explicitRetryRecoversInPlace() async {
         let source = ControlledPageSource()
         await source.failNext(FetchFailure())
         let store = makeStore(totalCount: 1000, source: source)
@@ -323,7 +323,7 @@ struct AssetWindowStoreTests {
     }
 
     @Test("invalidating drops resident rows and refetches what is on screen")
-    func invalidateRefetches() async throws {
+    func invalidateRefetches() async {
         let source = ControlledPageSource()
         let store = makeStore(totalCount: 1000, source: source)
 
@@ -338,7 +338,7 @@ struct AssetWindowStoreTests {
     }
 
     @Test("resetting to a new size clears rows addressed by the old one")
-    func resetClearsRows() async throws {
+    func resetClearsRows() async {
         let source = ControlledPageSource()
         let store = makeStore(totalCount: 1000, source: source)
 
@@ -353,7 +353,7 @@ struct AssetWindowStoreTests {
     }
 
     @Test("changing the page size invalidates, because page indices move")
-    func pageSizeChangeInvalidates() async throws {
+    func pageSizeChangeInvalidates() async {
         let source = ControlledPageSource()
         let store = makeStore(
             totalCount: 1000,

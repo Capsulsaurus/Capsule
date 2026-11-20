@@ -98,7 +98,7 @@ public final class QuotaStatusModel {
     private let storage: any StoragePort
     private let sync: any SyncPort
     private let clock: TransferClock
-    private nonisolated(unsafe) var observation: Task<Void, Never>?
+    nonisolated(unsafe) private var observation: Task<Void, Never>?
 
     public init(
         quota: any QuotaPort,
