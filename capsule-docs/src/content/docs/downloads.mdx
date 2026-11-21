@@ -1,0 +1,68 @@
+---
+title: Downloads
+description: Where to get Capsule's apps, its command line and its server, for every platform it is distributed on.
+template: splash
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+import DownloadButton from '../../components/DownloadButton.astro';
+import DownloadButtons from '../../components/DownloadButtons.astro';
+import {
+  ALL_RELEASES,
+  APPS,
+  RELEASES,
+  SERVER_IMAGE,
+  SERVER_IMAGE_DOCS,
+} from '../../lib/downloads.mjs';
+
+Every Capsule download is listed here, by where it is published. No release has been published
+yet, so today you build from source ([](/development/local-development/)) and follow
+[](/guides/getting-started/). A channel marked **Coming soon** is not out yet.
+
+## Apps
+
+<CardGrid>
+  <Card title="iPhone, iPad, Mac and Android" icon="phone">
+    The mobile clients are being stabilized and refined before they go to beta testers. They will
+    be published to the app stores.
+
+    <DownloadButtons>
+      {APPS.map((channel) => <DownloadButton channel={channel} />)}
+    </DownloadButtons>
+  </Card>
+</CardGrid>
+
+## Command line and server
+
+<CardGrid>
+  <Card title="GitHub Releases" icon="github">
+    Each Linux and macOS archive holds the `capsule` command line, the `capsule-server` binary
+    with its `.env.example`, the README, licence, notice and changelog. On those platforms the
+    command line links the system's `libdav1d`, so install it first. The Windows archive holds the
+    command line only, and is built on a best-effort basis, so a release may ship without it.
+
+    <DownloadButtons>
+      {RELEASES.map((channel) => <DownloadButton channel={channel} />)}
+    </DownloadButtons>
+    <DownloadButtons>
+      <DownloadButton channel={ALL_RELEASES} variant="minimal" />
+    </DownloadButtons>
+  </Card>
+</CardGrid>
+
+## Server container image
+
+<CardGrid>
+  <Card title="Container image" icon="setting">
+    A container image of the server is planned. Until it is published, build and run the server
+    as [](/guides/self-hosting/) describes.
+
+    <DownloadButtons>
+      <DownloadButton channel={SERVER_IMAGE} />
+      <DownloadButton channel={SERVER_IMAGE_DOCS} variant="minimal" />
+    </DownloadButtons>
+  </Card>
+</CardGrid>
+
+Something missing or broken? See [](/support/).
+

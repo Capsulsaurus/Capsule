@@ -1,0 +1,61 @@
+---
+// One download channel from src/lib/downloads.mjs. An available channel is a
+// Starlight link button; a planned one is an inert "Coming soon" placeholder
+// with no link and no control role, so nobody lands on a store page that does
+// not exist yet.
+import { Icon, LinkButton } from '@astrojs/starlight/components';
+import type { Channel } from '../lib/downloads.mjs';
+
+interface Props {
+    channel: Channel;
+    variant?: 'primary' | 'secondary' | 'minimal';
+}
+
+const { channel, variant = 'secondary' } = Astro.props;
+const external = channel.external
+    ? { target: '_blank', rel: 'noopener noreferrer' }
+    : {};
+---
+
+{
+  channel.status === 'available' && channel.href ? (
+    <LinkButton
+      href={channel.href}
+      variant={variant}
+      icon={channel.icon}
+      iconPlacement="start"
+      {...external}
+    >
+      {channel.label}
+      {channel.external && <Icon name="external" size="0.875em" />}
+    </LinkButton>
+  ) : (
+    <span class="placeholder not-content">
+      {channel.icon && <Icon name={channel.icon} size="1.5rem" />}
+      {channel.label}
+      <span class="soon">Coming soon</span>
+    </span>
+  )
+}
+
+<style>
+  .placeholder {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5em;
+    padding: 0.4375rem 1.125rem;
+    border: 1px dashed var(--sl-color-hairline);
+    border-radius: var(--capsule-radius-pill);
+    color: var(--sl-color-gray-3);
+    font-size: var(--sl-text-sm);
+    line-height: 1.1875;
+  }
+
+  .soon {
+    padding: 0.0625rem 0.5rem;
+    border-radius: var(--capsule-radius-pill);
+    background: var(--sl-color-gray-6);
+    color: var(--sl-color-gray-2);
+    font-size: var(--sl-text-xs);
+  }
+</style>
