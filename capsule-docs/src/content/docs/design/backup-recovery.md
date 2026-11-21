@@ -122,8 +122,9 @@ Failure Modes table is tested for its detection and its recovery:
 | 5 | Filesystem rebuild: CBOR sidecars are canonical, the DB is a cache (idempotent `rebuild_index()`) | DB corruption, index bugs |
 | 6 | Content-addressed copies on devices or federated peers ([](/design/federation/); ciphertext, not keys) | Single-server data loss |
 | 7 | Trash ([](/design/organization/#recycling)): signed soft `delete` with a retention window before purge | Erroneous deletes |
+| 8 | Trusted-contact recovery ([](#opt-in-trusted-contact-recovery)): contacts plus a server-held half released after an owner-vetoable notice period | The owner can no longer act: lost secret and every device, incapacity, death |
 
-**Account types.** Registered accounts have all seven. Delegated/sponsored accounts ([](/design/authentication/#account-types)) recover only through the sponsor's master key ([](/design/cryptography/keys/#delegatedsponsored-accounts)). Non-registered share-link accounts ([](/design/share-links/)) have no collection to recover.
+**Account types.** Registered accounts have paths 1 to 7, and path 8 once enrolled. Delegated/sponsored accounts ([](/design/authentication/#account-types)) recover only through the sponsor's master key ([](/design/cryptography/keys/#delegatedsponsored-accounts)). Non-registered share-link accounts ([](/design/share-links/)) have no collection to recover.
 
 Per-topic failure modes, each naming the path it recovers by: [](/design/cryptography/keys/#failure-modes), [](/design/cryptography/encryption/#failure-modes), [](/design/cryptography/provenance/#failure-modes), [](/design/mls-resilience/#failure-modes), [](/design/metadata/#failure-modes) and [](#failure-modes) below.
 
@@ -145,6 +146,17 @@ The user-invoked mechanisms among the recovery paths ([](#recovery-paths)).
 #### Share Wire Format
 
 A share is `x ‖ y`: one nonzero byte `x`, then one GF(256) byte per seed byte (33 bytes for a 32-byte seed), byte-wise Shamir over polynomial `0x11d` with uniformly random coefficients from a CSPRNG. Malformed, zero-`x` or duplicate-`x` shares are a typed error, never a panic. Shares issued by the retired `sharks` crate (RUSTSEC-2024-0398, ~0.18 bits leaked per share) use the same encoding and stay recoverable; guided re-wrap ([](#on-repeated-failure-guided-re-wrap)) re-issues them.
+
+### Opt-in: Trusted-Contact Recovery
+
+The user names one or more registered users who can recover the account when the user cannot, after a notice period the user can stop.
+
+- **What is escrowed.** A client draws a random key `K_tc` and seals the recovery seed under it. `K_tc` is split 2-of-2: the **server half** is stored with the sealed seed, and the **contact half** is split `m`-of-`n` by Shamir across the contacts ([](#share-wire-format)), each share sealed to that contact's identity key ([](/design/cryptography/keys/#device-keys)). The server alone, or any set of contacts alone, learns nothing. It is a wrap of the same seed, so the single-root invariant ([](#single-root-invariant)) holds.
+- **Claim.** A contact starts a claim with a signed request. The server records it and starts the **notice period** the owner chose at enrollment: 7, 14 or 30 days.
+- **Veto.** Every owner device raises a local alert on its next sync ([](/design/notifications/#alert-classes)), and any owner device, or the recovery secret, may block the claim with a signed refusal. A blocked claim ends; the contact may claim again later.
+- **Release.** After an unblocked notice period, the server releases the server half and the sealed seed to the claiming contact, who combines them with `m` contact shares and recovers the master key on a new device, as path 1 does with a passphrase.
+- **Printed cards.** A user without contacts may print the contact shares as cards; a holder of `m` cards claims the same way, under the same notice period.
+- **Revocation.** Removing a contact, or a rotation of the recovery secret ([](#on-repeated-failure-guided-re-wrap)), re-issues `K_tc` and every share; the old server half is deleted, so old shares are inert.
 
 ## Recovery Verification Cadence
 
@@ -207,6 +219,8 @@ Commit reconciles each manifest against the live `latest_provenance_hash` and **
 | Escrow overwritten through a leaked session | Signed writes ([](#master-key-escrow)) refuse it | None needed |
 | Master-key escrow replaced by a compromised device | The time lock, announced on every device | Cancel with the current recovery key |
 | Album slot replaced by a compromised device | Generation compare at the next verification check | Re-escrow from a device holding the album ([](#album-key-escrow)) |
+| A contact claims while the owner is fine | The notice period and its local alert on every device | Block the claim |
+| A contact's identity key is compromised | Fewer than `m` shares, or the notice period | Block, then revoke and re-issue |
 | Only backup exported by a since-revoked device | Directory-history lookup; each asset verified by its provenance ([](#container-format)) | Restores; the report names the exporter as revoked |
 
 ## Known Gaps
@@ -215,6 +229,7 @@ Commit reconciles each manifest against the live `latest_provenance_hash` and **
 - Restore reads the whole artifact into memory before verifying it, so it does not yet stream.
 - Escrow writes are gated by an access token alone, with no signature, generation or time lock.
 - There is no `capsule backup` command; only `capsule demo` exports an artifact.
+- Trusted-contact recovery is not implemented: no enrollment, claim, veto or release route exists.
 
 ## Validation
 

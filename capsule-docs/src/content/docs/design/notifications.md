@@ -37,6 +37,7 @@ A closed enum. Thresholds belong to the trigger owner, and parameters are plain 
 | `quota_soft` / `quota_grace_expiring` | [](/design/quota/#thresholds-and-states) | `grace` (`counting`/`expired`), second only | No |
 | `quarantine_pending` | [](/design/threat-model/scenarios/#quarantine-surfaces) | `count` | No |
 | `drop_pending` | [](/design/web-upload/#drop-and-adoption-lifecycle) | `count` | No |
+| `recovery_claim` | [](/design/backup-recovery/#opt-in-trusted-contact-recovery) | `days_left` | No |
 | `album_activity` | [](/design/cryptography/mls/#comments-and-reactions) | `count`, `kind` (`comment`/`reaction`) | No |
 
 ### The Pre-Arm Rule

@@ -132,6 +132,8 @@ Every budget the server enforces is declared once, in `capsule-server/src/counte
 | OIDC completion | `POST /v1/auth/oidc/callback` | source | 30 / min | shared |
 | | `POST /v1/auth/oidc/device/poll` | ceremony | one provider call per enforced interval (≥ 5 s) | ceremony record |
 | Enrollment issue | `POST /v1/auth/devices/enroll` | account | 10 / h | shared |
+| Trusted-contact claim (planned) | claim start | claiming account | 3 / 24 h | shared |
+| | | target account | 5 open claims at once; a blocked claim cannot be restarted by the same contact for 7 days | shared |
 | Enrollment redemption | `POST /v1/auth/devices/enroll/redeem` | source | 10 / min, charged first | shared |
 | | | the 8-digit fallback spelling, deployment-wide | 30 / min, which is the entropy argument for offering it ([](/design/device-enrollment/#cross-device-add)) | shared |
 | | | malformed codes, deployment-wide | 60 / min | shared |
