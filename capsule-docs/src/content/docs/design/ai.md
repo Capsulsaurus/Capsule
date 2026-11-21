@@ -43,6 +43,15 @@ Semantic embeddings are reused for zero-shot tagging; there is no separate class
 
 Face detection and clustering use the **Face Detection** and **Face Recognition** inventory rows ([](#models-and-algorithms)).
 
+## Text Recognition
+
+Text in an image (signs, receipts, documents, screenshots) is recognised on device. It is the first post-v1 task to ship.
+
+- **Runner.** The platform recogniser first (Apple Vision, ML Kit on Android), each with its own inventory row; an offline model gives the CLI and desktop the same output.
+- **AI output.** Recognised text is never a caption or a label. It carries `(model_id, model_version)` ([](#ai-output-containment)) and travels as a model-tagged derivative under the rule in [](#synced-embeddings).
+- **Search.** The text is indexed into the full-text index ([](/design/search/#indexed-axes)), so free text finds it offline.
+- **Rules.** Its arrival is a trigger for import rules ([](/design/organization/#import-rules)).
+
 ## Quality Assessment
 
 Post-v1, with its sidecar fields reserved under [](#ai-output-containment). Fixed now:
@@ -95,7 +104,7 @@ One row per task. A backbone is reused across tasks whenever quality allows, to 
 
 ### Candidate Tasks (post-v1)
 
-Each gains a full inventory row when it ships: VLM tagging/OCR/captioning (Florence-2, Qwen2.5-VL, BLIP-2); person re-ID (OSNet); scene and landmark classification (ViT-L, DINOv2); ASR (Distil-Whisper-large); quality (NIMA, blur/exposure/noise); near-duplicates (pHash + embeddings); video shot boundaries (TransNet v2); NSFW classification.
+Each gains a full inventory row when it ships: VLM tagging/captioning (Florence-2, Qwen2.5-VL, BLIP-2); person re-ID (OSNet); scene and landmark classification (ViT-L, DINOv2); ASR (Distil-Whisper-large); quality (NIMA, blur/exposure/noise); near-duplicates (pHash + embeddings); video shot boundaries (TransNet v2); NSFW classification.
 
 ### Key Algorithmic Implementations
 
@@ -104,6 +113,8 @@ Each gains a full inventory row when it ships: VLM tagging/OCR/captioning (Flore
 - **Vector search.** `sqlite-vec` `vec0` tables with inner-product distance over normalised embeddings and a brute-force SIMD scan. At millions of rows, escalate to its ANN index or a partitioned scan.
 
 ## Known Gaps
+
+- Text recognition has no runner, no derivative role and no index.
 
 - Synced embeddings ([](#synced-embeddings)) are not implemented: the index is filled only by local inference, and no device publishes or fetches an `embedding`-role derivative.
 

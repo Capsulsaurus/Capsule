@@ -39,6 +39,7 @@ SidecarV1 {
   regions:               Map<UUIDv7, Lww<Option<Region>>>,  // labelled image regions; delete = a stamped None
   cull:                  Lww<CullFlag>,                 // pick | neutral | reject
   hidden:                Lww<bool>,
+  edits:                 Lww<Option<EditRecipe>>,  // non-destructive edit (Edit Recipe); wire-absent when never written
 
   // identifiers (Privacy on Export applies)
   camera_id:             Option<{ model: String, serial: String }>,  // EXIF Model and BodySerialNumber; serial "" when absent
@@ -86,7 +87,7 @@ Region {
 }
 ```
 
-`tags_user` holds the asset's user **labels** and `regions` its labelled image regions. [](/design/organization/#labels) specifies both, with the stack and album label records. `regions` was added without a `sidecar_schema` bump: older readers keep it verbatim as an unknown key. `media_subtype`, `original_filename`, `capture_settings` and `video` are additive top-level keys under the same rule. They are top-level rather than nested in an existing value because an older reader drops an unknown key nested inside a known one and would re-sign without it.
+`tags_user` holds the asset's user **labels** and `regions` its labelled image regions. [](/design/organization/#labels) specifies both, with the stack and album label records. `regions` was added without a `sidecar_schema` bump: older readers keep it verbatim as an unknown key. `media_subtype`, `original_filename`, `capture_settings`, `video` and `edits` are additive top-level keys under the same rule. They are top-level rather than nested in an existing value because an older reader drops an unknown key nested inside a known one and would re-sign without it.
 
 ### Original File Name
 
@@ -127,6 +128,35 @@ Capture time and location each have two fields: the value the import recorded an
 - The **effective** value is the user's register if ever written, else the as-imported field. The timeline, search and every client view use it.
 - The `media/{YYYY}/{YYYY-MM}` shard is fixed at import from `capture_timestamp`; a correction does not move the bundle.
 - Re-deriving the as-imported value from the original (the capture-time repair for libraries imported before EXIF dates were read) rewrites `capture_timestamp` only and never touches the user's register.
+
+### Batch Time Corrections
+
+A camera with a wrong clock or time zone is fixed for a whole selection in one operation:
+
+- **Shift** adds a signed duration to each asset's effective capture time.
+- **Set zone** keeps each asset's local wall-clock time and gives it a new UTC offset or IANA zone.
+
+Both write `capture_timestamp_user` per asset and never touch `capture_timestamp`. The batch is staged and committed atomically ([](/design/threat-model/validation/#atomicity-invariants)) and previewed before and after per asset; undo is one more batch that writes the prior effective values back.
+
+### Edit Recipe
+
+An edit never rewrites the original. `edits` holds a recipe the client applies when it renders:
+
+```rust
+EditRecipe {
+  recipe_version:       u16,              // FIELD 0. Currently 1.
+  crop:                 Option<Rect>,     // [0, 1] of the original's display-oriented frame
+  rotate_quarter_turns: u8,               // 0–3, clockwise, applied after the original's own orientation
+  mirror:               bool,             // horizontal, applied last
+  _unknown:             Map,
+}
+```
+
+- **The original is untouched.** `hash`, the original blob and its manifest never change, so an edit needs no `replace` ([](/design/authorization/#the-closed-action-set)) and a restore is still byte-exact.
+- **Derivatives follow the recipe.** A recipe change re-renders the thumbnail and preview tiers on the client as a `derivative-replace`, and their provenance names the recipe's hash ([](/design/cryptography/provenance/#derivative-provenance)).
+- **Reset** is a stamped `None`.
+- **Unknown versions.** A reader that does not know `recipe_version` keeps the register verbatim, renders the unedited original and says so. It never applies part of a recipe.
+- **Export** offers the edited rendering or the original ([](/design/export/)).
 
 ### Schema Versioning Rules
 
@@ -293,6 +323,11 @@ GPS is stored in the datum the source supplied (`gps.datum`, [](#closed-enum-val
 | CBOR non-determinism | [](#canonical-cbor-encoding) | Byte-identical re-encode |
 | Old client strips unknown sidecar fields | Signature covers all bytes; writes above the client's max `sidecar_schema` refused | Quarantine |
 
+## Known Gaps
+
+- A capture whose EXIF has a local time and no offset cannot be stored faithfully: `capture_timestamp` is an RFC 3339 instant, so import falls back to the import clock (`capsule-library/src/lifecycle/import.rs`, `folded_capture`). The sidecar needs a floating form before the format freeze.
+- `edits` and the batch time corrections are not implemented.
+
 ## Validation
 
 Each MUST above is a unit test, and the canonical-CBOR known-answer vectors are a **blocking cross-language gate**. Notable cases:
@@ -310,6 +345,8 @@ Each MUST above is a unit test, and the canonical-CBOR known-answer vectors are 
 - `capture_settings` round-trips each EXIF fixture's rationals exactly; a zero denominator, an over-long or NUL-padded string, and a lens serial are each handled as specified.
 - A one-byte local mutation fails the local–server equivalence check.
 - A sidecar round-trips between schema v1 and v2 readers.
+- A sidecar with no `edits` encodes byte-identically to the pre-field vector; a recipe with an unknown `recipe_version` renders the unedited original and is preserved verbatim.
+- A batch time shift or zone change writes only `capture_timestamp_user`, commits atomically, and its undo restores every prior effective value.
 
 ## Related
 
