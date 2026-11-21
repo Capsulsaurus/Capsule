@@ -38,6 +38,7 @@ Every primitive, construction, format or component identity is **declared in exa
 | MLS resilience | [](/design/mls-resilience/) |
 | Device enrollment | [](/design/device-enrollment/) |
 | ML model identities, embedding provenance | [](/design/ai/) |
+| Face clustering, people corrections | [](/design/people/) |
 | LQIP, thumbnail/preview formats | [](/design/thumbnails/) |
 | Server filesystem, required services | [](/design/filesystem/server/) |
 | Client filesystem, local index | [](/design/filesystem/client/) |

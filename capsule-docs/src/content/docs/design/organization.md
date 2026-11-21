@@ -118,7 +118,7 @@ Every field reads the asset's **effective** value: the user's register if writte
 - **Text folding is pinned.** `text`, `camera` and `lens` compare after NFC normalization, Unicode default case folding and diacritic removal, using the tables of the Unicode version that `predicate_schema` names (Unicode 16.0 for schema 1). A newer Unicode version is a new `predicate_schema`, so two devices never fold differently.
 - **Spatial terms are exact and pinned.** `within` and `near` evaluate on the location normalized to WGS-84 ([](/design/places/#the-location-index)), with geodesic distance on the WGS-84 ellipsoid, computed with the pure-Rust `libm` on every target. A GCJ-02 location is normalized approximately and so can sit just inside or outside a boundary, but it does so the same way on every device.
 - **`hidden` is gated.** A definition with a `hidden is true` term is evaluated only in a context that passed the Hidden view's fresh-local-auth gate ([](#hidden-assets)). Elsewhere it matches nothing.
-- **AI terms.** `tags_ai`/`people_cluster` terms name their `(model_id, model_version)` slot, and a stale slot evaluates as excluded (AI staleness, [](/design/ai/#ai-output-containment)).
+- **AI terms.** `tags_ai` terms name their `(model_id, model_version)` slot, and a stale slot evaluates as excluded (AI staleness, [](/design/ai/#ai-output-containment)). A `people_cluster` term names a `person_id`, which survives model bumps ([](/design/people/#search-and-smart-albums)).
 - **Convergence.** The whole definition is one LWW register (a stamped `None` deletes it), so there is no partial-predicate merge. Evaluation is a pure function of `(definition, decryptable assets)` in sorted `asset_id` order.
 
 ## Asset Stacking

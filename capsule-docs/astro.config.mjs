@@ -235,6 +235,7 @@ export default defineConfig({
                                 { slug: 'design/organization' },
                                 { slug: 'design/search' },
                                 { slug: 'design/places' },
+                                { slug: 'design/people' },
                                 { slug: 'design/clients' },
                                 { slug: 'design/platform-integrations' },
                                 { slug: 'design/local-gallery' },

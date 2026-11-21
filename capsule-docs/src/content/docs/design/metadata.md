@@ -244,11 +244,12 @@ LibrarySettingsV1 {
   scope_overrides:          Map<scope_id,   Lww<Option<album_id>>>,             // Organization — Scope Grammar
   source_kind_defaults:     Map<SourceKind, Lww<Option<album_id>>>,             // Organization — Scope Grammar
   aggregated_album_covers:  Map<group_id,   Lww<Option<asset_id>>>,             // per-viewer; Federation
+  people:                   PeopleSection,                                       // People — Corrections
   _unknown:                 Map,
 }
 ```
 
-This page owns the envelope, keying, versioning and merge. [](/design/organization/#smart-album-definition-schema), [](/design/organization/#scope-grammar-local-source--album-mapping) and [](/design/federation/#membership-and-rendering) own the section value schemas. An absent or `None` cover falls back to the newest constituent asset.
+This page owns the envelope, keying, versioning and merge. [](/design/organization/#smart-album-definition-schema), [](/design/organization/#scope-grammar-local-source--album-mapping), [](/design/federation/#membership-and-rendering) and [](/design/people/#corrections) own the section value schemas. An absent or `None` cover falls back to the newest constituent asset.
 
 - **Shape.** Every section is a keyed map of LWW registers over `Option<value>`; a stamped `None` is a tombstone. The document has no `signature` field: each mutation is a signed operation.
 - **Keying.** Readable by the owner's devices and owner-set members and by **no** album co-member, so it is keyed under the OGK, not an AMK. `settings_doc_id` is an identifier, not a key, derived from the account master key ([](/design/cryptography/keys/#key-chain)) under a dedicated label. Operations use the metadata-blob wire format ([](/design/cryptography/encryption/#metadata-blob-wire-format)) with key `HKDF-SHA512(ikm = OGK_v{n}, salt = settings_doc_id || nonce, info = "library-settings/v1", length = 32)` and a server-visible big-endian `u32` `ogk_version` before the nonce. A fresh nonce per write re-rolls key and nonce; a reused nonce is refused. Rewrites use the current epoch, and removed owner-set members derive no future epoch.
@@ -264,7 +265,8 @@ This page owns the envelope, keying, versioning and merge. [](/design/organizati
 | Tags (`tags_user` / `tags_ai`) | OR-set | Add/remove keyed by `add_id`; commutative, associative, idempotent |
 | Regions (`regions`) | Map of LWW registers, each holding an OR-set of labels | Merged as a semilattice: a delete is final, live writes keep the later shape and the union of labels |
 | Caption / rating / `capture_timestamp_user` / `gps_user` / `stack_membership` / `cull` / `hidden` | LWW register | Total order by provenance-chain position; replay is a no-op |
-| Smart albums, people clusters, aggregated federated albums ([](/design/federation/)) | Computed views | Nothing stored; membership is a deterministic function of inputs ([](/design/organization/#system--smart-albums-views), [](/design/ai/#ai-output-containment)) |
+| Smart albums, unnamed people clusters, aggregated federated albums ([](/design/federation/)) | Computed views | Nothing stored; membership is a deterministic function of inputs ([](/design/organization/#system--smart-albums-views), [](/design/ai/#ai-output-containment)) |
+| People corrections (names, merges, assignments) | LWW maps in the library-settings document | People are a pure function of faces plus corrections, so devices that hold the same corrections show the same people ([](/design/people/)) |
 | Container-album membership | Single home + ordered lifecycle ops | One container per asset; a replayed move no-ops ([](/design/organization/#container-albums)); concurrency ordered by MLS commits |
 
 Album membership is not a CRDT: MLS commits ([](/design/cryptography/mls/)) already give a total order.

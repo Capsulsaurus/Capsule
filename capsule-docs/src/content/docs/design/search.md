@@ -148,7 +148,7 @@ Each axis reads the **effective** value: the user's register if written, else th
 | --- | --- | --- |
 | Labels, at every level | `tags_user`, live region labels, stack and album records ([](/design/organization/#labels)) | vocabulary + `asset_tags` |
 | AI tags | `tags_ai`, current generation only ([](/design/ai/#ai-output-containment)) | vocabulary |
-| People | named people ([](/design/ai/)); before people clusters ship, region labels are how a person is named | vocabulary |
+| People | named people ([](/design/people/)); before people clusters ship, region labels are how a person is named | vocabulary |
 | Place names | the place-name cache ([](/design/places/#place-names)) | vocabulary |
 | Captions | `caption_lww` | caption FTS |
 | Album | container album and its name | vocabulary + `album_id` |
@@ -321,7 +321,7 @@ immediately.
 
 - No Rust search exists; the Swift screen filters in memory and Android has no search.
 - Camera and lens are not indexed until import fills `camera_id` and `capture_settings`.
-- People are searchable only as region labels until people clusters ship ([](/design/ai/)).
+- People are searchable only as region labels until people clusters ship ([](/design/people/)).
 - Semantic ranking waits on the first real model runner.
 - The budgets are unmeasured targets.
 
