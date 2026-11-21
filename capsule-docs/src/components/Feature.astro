@@ -4,6 +4,7 @@
 // specifies it. Lay several out with FeatureGrid.astro.
 import { Icon } from '@astrojs/starlight/components';
 import type { StarlightIcon } from '@astrojs/starlight/types';
+import { localizePath } from '../lib/locales.mjs';
 
 interface Props {
     icon: StarlightIcon;
@@ -20,13 +21,16 @@ const { icon, title, href, linkLabel } = Astro.props;
 if (!linkLabel?.trim()) {
     throw new Error(`Feature "${title}" needs a linkLabel naming ${href}`);
 }
+// On a locale's front page the link stays in that locale: Starlight serves the
+// doc there, in English with its fallback notice until it is translated.
+const target = localizePath(href, Astro.locals.starlightRoute.locale);
 ---
 
 <article class="feature">
   <span class="feature-icon" aria-hidden="true"><Icon name={icon} size="1.25rem" /></span>
   <h3>{title}</h3>
   <div class="feature-body"><slot /></div>
-  <a class="feature-link" href={href}>{linkLabel}<span aria-hidden="true"> →</span></a>
+  <a class="feature-link" href={target}>{linkLabel}<span aria-hidden="true"> →</span></a>
 </article>
 
 <style>
