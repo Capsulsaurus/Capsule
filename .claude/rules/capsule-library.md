@@ -24,6 +24,7 @@ Follow, by module (`capsule-library/src/…`):
 | `account` | [Keys](../../capsule-docs/src/content/docs/design/cryptography/keys.md) |
 | `lifecycle/` | [Authorization](../../capsule-docs/src/content/docs/design/authorization.md) (closed action set), plus per action: `import` → [Import pipeline](../../capsule-docs/src/content/docs/design/import/pipeline.md); `derivatives` → [Thumbnails](../../capsule-docs/src/content/docs/design/thumbnails.md); `metadata` → [Metadata](../../capsule-docs/src/content/docs/design/metadata.md); `organize`, `album` → [Organization](../../capsule-docs/src/content/docs/design/organization.md); `sync_apply` → [Sync](../../capsule-docs/src/content/docs/design/sync.md); `backup` → [Backup and recovery](../../capsule-docs/src/content/docs/design/backup-recovery.md); `enrollment` → [Device enrollment](../../capsule-docs/src/content/docs/design/device-enrollment.md); `drops` → [Web upload](../../capsule-docs/src/content/docs/design/web-upload.md); `provenance` → [Provenance](../../capsule-docs/src/content/docs/design/cryptography/provenance.md); `upload` → [Upload](../../capsule-docs/src/content/docs/design/transfer/upload.md); `sharing` → [Share links](../../capsule-docs/src/content/docs/design/share-links.md) |
 | `db/` (embeddings, model inventory) | [AI](../../capsule-docs/src/content/docs/design/ai.md) |
+| `export` (planned) | [Export](../../capsule-docs/src/content/docs/design/export.md) |
 
 Keep current:
 

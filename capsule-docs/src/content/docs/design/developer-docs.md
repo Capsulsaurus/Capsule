@@ -4,7 +4,7 @@ description: How Capsule's developer surfaces become published reference pages
 status: draft
 ---
 
-Capsule publishes one docs site, built from `capsule-docs/` with [Starlight](https://github.com/withastro/starlight).
+Capsule publishes one docs site, built from `capsule-docs/` with Starlight.
 This doc owns how each developer surface becomes a page on it. Which surfaces exist is
 [](/design/api-surfaces/#surfaces); the rules server code follows are [](/development/api-practices/).
 A stale reference page is worse than a missing one, because it is confidently wrong, so none is

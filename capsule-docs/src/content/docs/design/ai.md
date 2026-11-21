@@ -24,6 +24,17 @@ This blocks the "AI silently overwrites user data" damage class ([](/design/thre
 
 Image and text query are embedded and compared by distance, and [](#embedding-provenance) governs cross-device comparability. The real weight-loading runner is post-v1, with weights downloaded at runtime behind the default-off `inference` feature. v1 ships the execution path, registry, index and staleness rules against a fixture runner.
 
+### Semantic Search
+
+Semantic search is how a text query reaches this index. The query's free text is embedded with the **Semantic Search** embedder ([](#models-and-algorithms)), and its nearest neighbours are taken from the current canonical version of the device's platform partition, so stale and other-partition vectors are excluded structurally. [](/design/search/#semantic-search) owns how the result merges with lexical search.
+
+- **On device, no network.** The query embedding and the scan run locally. A device without the embedder's weights runs lexical search only and says so; it never sends a query anywhere to be embedded.
+- **A ranking, never a stored fact.** Similarity is not bit-exact across platform partitions and changes with each model version, so it is never written to a sidecar, never a smart-album term, and never compared across `(model_id, model_version)` tuples ([](#embedding-provenance)).
+- **Filtered before it is ranked.** Structured search terms narrow the candidate set first. When the narrowed set is small, the scan ranks exactly that set rather than taking a global top-*k* and filtering afterwards, which could return nothing.
+- **Explained.** A hit that only semantic search produced is marked as a semantic match in the result.
+
+**Status.** `semantic_search` in `capsule-core::ml` embeds the query, refuses a non-canonical runner and queries the vector index. It is exercised end to end in `capsule-library/tests/model_regen_e2e.rs`, but only against the fixture runner, which hashes its input and so answers nothing meaningful. Real semantic search therefore needs the first real runner. No app or CLI path calls it yet.
+
 ### Image Categorization & Tagging
 
 Semantic embeddings are reused for zero-shot tagging; there is no separate classifier.

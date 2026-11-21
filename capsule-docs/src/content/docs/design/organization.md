@@ -24,8 +24,8 @@ A container album is the **sharing and access-control boundary** and *is* an MLS
 
 Every owner has a nameless, otherwise ordinary **default album** from first-device enrollment ([](/design/device-enrollment/#first-device-enrollment)) onward, so an import always has a container to land in.
 
-- **Derived id.** Its album id is derived deterministically from the account master key (an identifier, not a key; [](/design/cryptography/keys/#key-chain)), so any of the owner's devices can locate it, including after recovery.
-- **Designation is a server-side pointer.** The current default is a non-secret `default_album_id` on the owner record ([](/design/filesystem/server/#ownership-partitioning-and-quota)), defaulting to the derived album. It is not security-bearing, since writes still need album write capability (invariant 6 of [](/design/threat-model/validation/#server-side-validation-invariants)).
+- **Stored id.** Its album id is derived once, at account creation, from the account's first master key (an identifier, not a key), and stored from then on: sealed beside the identity key, so any of the owner's devices, a recovering one included, reads it rather than computing it ([](/design/cryptography/keys/#key-chain)). Nothing re-derives it: after a master-key rotation the derivation would name a different, empty album.
+- **Designation is a server-side pointer.** The current default is a non-secret `default_album_id` on the owner record ([](/design/filesystem/server/#ownership-partitioning-and-quota)), defaulting to the stored default album. It is not security-bearing, since writes still need album write capability (invariant 6 of [](/design/threat-model/validation/#server-side-validation-invariants)).
 - **Always a container.** `resolve_default_album(context)` never returns a view. The import planner ([](/design/import/pipeline/#plan--confirm)) uses it when the user picks no album.
 - **Undeletable while designated.** The user must repoint first.
 
@@ -51,11 +51,11 @@ Scope {
 | Desktop | folder / watched dir | canonicalized path (symlinks resolved) | |
 | Any | removable volume | volume UUID + relative path | stable across mount points |
 
-- **Resolution order** (first match wins): explicit user pick → `scope_id` override row → per-`SourceKind` default row → `default_album_id` pointer → derived default album. The planner records which rule fired.
+- **Resolution order** (first match wins): explicit user pick → `scope_id` override row → per-`SourceKind` default row → `default_album_id` pointer → the stored default album id ([](#the-default-album)). The planner records which rule fired.
 - **Rows** (`scope_overrides`, `source_kind_defaults`) live in the library-settings document ([](/design/metadata/#the-library-settings-document)), E2E-encrypted, LWW per key.
 - **Unmapped sources ask once**, and the answer becomes the scope's override row. Automated imports never invent destinations.
 
-v1 ships only explicit pick → pointer → derived album; the override and default rows are deferred with the library-settings document.
+v1 ships only explicit pick → pointer → stored default album; the override and default rows are deferred with the library-settings document.
 
 ### Album Order and Recency
 
@@ -74,20 +74,21 @@ Views are computed client-side from the local index ([](/design/filesystem/clien
 
 - **System albums** are **All** (every visible asset; [](#the-default-album) says why one is needed) and Trash ([](#recycling)).
 - **Smart albums** are user-defined predicates over sidecar and AI fields. Membership is **computed, never stored**, so editing a definition or asset moves and re-encrypts nothing. Definitions are carried in the library-settings document ([](/design/metadata/#the-library-settings-document)); this doc owns their shape.
+- **A saved search is a smart album.** The search grammar compiles into this predicate tree ([](/design/search/#compiling-to-a-predicate)), so saving a search stores the predicate the live search ran, and opening a smart album in search shows it as the same chips.
 
 #### Smart-Album Definition Schema
 
-**Deferred post-v1** with the library-settings document; System views ship in v1. Normative as written.
+**Deferred post-v1** with the library-settings document; System views ship in v1. Normative as written. Today only the `tags_user` `contains` term is evaluated (`capsule-core::sidecar::smart_album`).
 
 The grammar is closed, versioned and declarative: definitions sync to every device, so they must evaluate identically and carry no code, regex or unbounded input.
 
 ```rust
 SmartAlbumDefinition {
   smart_album_id:   UUIDv7,
-  predicate_schema: u16,              // a later value gates evaluation on older clients
+  predicate_schema: u16,              // currently 1; a later value gates evaluation on older clients
   display_name:     Lww<String>,      // ≤ 256 bytes
   predicate:        Predicate,
-  sort:             Option<SortSpec>, // closed key set; default (capture_timestamp, desc)
+  sort:             Option<SortSpec>, // closed key set; default (capture_time, desc)
 }
 
 Predicate =                           // depth ≤ 8, ≤ 64 terms total
@@ -99,16 +100,24 @@ Predicate =                           // depth ≤ 8, ≤ 64 terms total
 Term { field: QueryField, op: Operator, operand: Operand }  // operand shape fixed by (field, op)
 ```
 
+Every field reads the asset's **effective** value: the user's register if written, else the as-imported field ([](/design/metadata/#as-imported-and-user-values)).
+
 | Class | Fields | Valid operators | Operand |
 | --- | --- | --- | --- |
-| temporal | `capture_timestamp`, `import_timestamp` | `before`, `after`, `in_range` | RFC 3339 (half-open `[start, end)` for `in_range`) |
-| enum | `content_type`, `media_kind` (image\|video), `gps.datum` | `eq`, `in` | value(s) from the field's closed enum |
-| numeric | `rating`, `dimensions.width`, `dimensions.height` | `eq`, `gte`, `lte`, `in_range` | `u32` (`[lo, hi]` for `in_range`) |
+| temporal | `capture_time`, `import_time` | `before`, `after`, `in_range` | RFC 3339 full-date or date-time (half-open `[start, end)` for `in_range`). Without an offset it compares the capture's local wall-clock time; with one, the instant |
+| enum | `content_type`, `media_kind` (`photo`\|`video`\|`live`), `media_subtype` ([](/design/metadata/#closed-enum-value-sets)), `gps.datum` | `eq`, `in` | value(s) from the field's closed enum; `content_type` also accepts the named set `raw` |
+| numeric | `rating`, `dimensions.width`, `dimensions.height`, `capture_settings.iso`, `capture_settings.focal_length_35mm` | `eq`, `gte`, `lte`, `in_range` | `u32` (`[lo, hi]` for `in_range`) |
 | trinary/bool | `cull`, `hidden` | `is` | `pick`\|`neutral`\|`reject`; `true`\|`false` |
-| set | `tags_user`, `tags_ai`, `stack_type`, `people_cluster`, `album_id` | `contains`, `contains_any`, `contains_all` | ≤ 64 members, each ≤ 256 bytes |
-| presence | `gps`, `camera_id` | `exists` | `bool` |
+| set | `tags_user`, `tags_ai`, `stack_type`, `people_cluster`, `album_id`, `device_id` | `contains`, `contains_any`, `contains_all` | ≤ 64 members, each ≤ 256 bytes |
+| text | `text` (caption and labels at every level), `camera` (`capture_settings.camera_make`, `camera_id.model`), `lens` (`capture_settings.lens_make`, `capture_settings.lens_model`) | `matches` (substring), `eq` (whole value) | 1–256 bytes |
+| spatial | `gps` | `within`, `near` | `within`: south, west, north, east in WGS-84 degrees (west > east crosses the antimeridian); `near`: a WGS-84 point and a radius of 1 m–20,000 km |
+| presence | `gps`, `caption`, `tags_user`, `camera_id`, `capture_settings` | `exists` | `bool` |
 
 - **Closed.** An unknown `field`/`op` or a mistyped `operand` is a **structural rejection**, not a tolerated unknown. Extending the grammar needs a later `predicate_schema`, plus a sidecar-schema bump ([](/design/metadata/#schema-versioning-rules)) for a new sidecar field. A newer `predicate_schema` is preserved verbatim and never evaluated.
+- **No local state.** A term names only synced data. Search resolves names, places and fuzzy matches before saving ([](/design/search/#compiling-to-a-predicate)), so no term refers to a place-name cache, a suggester or an embedding, and semantic similarity is never a term.
+- **Text folding is pinned.** `text`, `camera` and `lens` compare after NFC normalization, Unicode default case folding and diacritic removal, using the tables of the Unicode version that `predicate_schema` names (Unicode 16.0 for schema 1). A newer Unicode version is a new `predicate_schema`, so two devices never fold differently.
+- **Spatial terms are exact and pinned.** `within` and `near` evaluate on the location normalized to WGS-84 ([](/design/places/#the-location-index)), with geodesic distance on the WGS-84 ellipsoid, computed with the pure-Rust `libm` on every target. A GCJ-02 location is normalized approximately and so can sit just inside or outside a boundary, but it does so the same way on every device.
+- **`hidden` is gated.** A definition with a `hidden is true` term is evaluated only in a context that passed the Hidden view's fresh-local-auth gate ([](#hidden-assets)). Elsewhere it matches nothing.
 - **AI terms.** `tags_ai`/`people_cluster` terms name their `(model_id, model_version)` slot, and a stale slot evaluates as excluded (AI staleness, [](/design/ai/#ai-output-containment)).
 - **Convergence.** The whole definition is one LWW register (a stamped `None` deletes it), so there is no partial-predicate merge. Evaluation is a pure function of `(definition, decryptable assets)` in sorted `asset_id` order.
 
@@ -153,7 +162,7 @@ Users attach free-form **labels** at four levels. Every level stores labels as a
 - **A region** is a circle `{cx, cy, r}` or rectangle `{x, y, w, h}` in coordinates normalized to `[0, 1]` over the original's **display orientation** (after EXIF orientation), so it survives every derivative size. A circle's centre is a fraction of width and height and its radius `r` a fraction of the shorter side, `min(width, height)`, so a circle is round on any aspect ratio. A circle or rectangle lies wholly inside the image. Each region has a UUIDv7 and its own labels OR-set, and deleting a region is a stamped `None` in its LWW register.
 - **Stack and album records.** `StackDocV1` (keyed by `stack_id`) and `AlbumDocV1` (keyed by `album_id`) are signed, versioned documents sealed under the album's current AMK, following the sidecar's rules: version first, unknown keys preserved under the signature, CRDT fields only. `AlbumDocV1` also carries the album's name (LWW), so a restored or newly joined device sees it; the name follows the label rule at creation and at every rename. On the device the records are plaintext at rest like sidecars ([](/design/filesystem/client/#desktop-library-layout)). Every member of a stack belongs to the same container album, and moving one member out removes it from the stack.
 - **Privacy.** Region labels can name people, so regions are stripped by default on export and from share links ([](/design/share-links/)), and kept only when the user opts in for that export ([](/design/metadata/#privacy-on-export)). Asset, stack and album labels follow the same rule as captions.
-- **Search.** Smart-album `contains` predicates over `tags_user` match a label at any level attached to the asset: its own, its live regions', its stack's and its album's. A deleted region's labels never match, and a stack's labels match only while the asset is a current member of that stack.
+- **Search.** Smart-album `contains` predicates over `tags_user`, and the `text` term, match a label at any level attached to the asset: its own, its live regions', its stack's and its album's. A deleted region's labels never match, and a stack's labels match only while the asset is a current member of that stack.
 - **Merge.** Asset, stack and album labels merge as OR-sets. A region's register merges as a semilattice: deleting a region is final (its tombstone absorbs any concurrent or later edit, and a region id is never reused), and two live writes keep the later shape and the union of their labels. Album names merge by LWW.
 - **Restore.** A backup artifact carries each album's and stack's record sealed under its AMK, so a restored device recovers album names and labels rather than showing `Recovered album`.
 

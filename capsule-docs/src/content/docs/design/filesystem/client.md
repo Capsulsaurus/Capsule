@@ -33,6 +33,8 @@ Clients hold keys, so a client stores plaintext. Depending on the sync scope ([]
 
 Android and iOS use the app's private sandbox with the same logical model. Rebuildable derivatives MUST NOT go in OS-managed cache locations: the OS evicts indiscriminately, and an expensive-to-regenerate thumbnail is not disposable.
 
+The library root is **excluded from the OS's own cloud backup and device transfer**, on every platform and API level, by the mechanisms in [](/design/platform-integrations/#the-plaintext-boundary). It holds plaintext originals and sidecars; recovery is Capsule's own ([](/design/backup-recovery/)).
+
 ## Local Index Staleness
 
 SQLite may lag the filesystem: a bundle is durable before its index rows commit. Opening the workspace re-indexes any bundle with no row from its sidecar ([](/design/filesystem/maintenance/#atomic-writes-and-crash-recovery)). The client checks a file exists before acting on its row and rebuilds from sidecars on structural inconsistency ([](/design/filesystem/maintenance/)).
@@ -72,7 +74,7 @@ The client surfaces the largest consumers and lets the user delete selectively, 
 - **Init/open round-trip (unit).** Directories and `version`/`config` present; re-open is idempotent.
 - **Date bucketing (unit).** Asset lands in `media/{YYYY}/{YYYY-MM}/`; unexplained drift triggers repair.
 - **Lock contention (smoke).** A second process is refused with a structured error.
-- **Sandbox placement (smoke, per platform).** Library in app-private storage; survives cold start.
+- **Sandbox placement (smoke, per platform).** Library in app-private storage; survives cold start; the root carries the platform's exclude-from-backup marking.
 - **Index rebuild (smoke).** Drop `library.sqlite`; rebuild; every query over sidecar facts matches. Index-only state (cache bookkeeping, upload guards, importer-formed stack placement) is not expected back.
 - **Eviction (unit).** LRU order, tier order at equal recency, recency promotion, pin exemption; no canonical file touched; metadata tier never reclaimed.
 - **Connection-class budget (unit).** Each class yields its budget and bulk deferral; a class change mid-session re-plans without evicting pinned or device-owned originals.

@@ -11,7 +11,7 @@ Every primitive and key-handling routine lives in `capsule-core::crypto`. All cl
 | [](/design/cryptography/primitives/) | Inventory of every hash, KDF, AEAD, signature, KEM, ciphersuite and version id |
 | [](/design/cryptography/keys/) | Key hierarchy, account types, device directory, write authorization, rotation |
 | [](/design/cryptography/mls/) | Group membership, history delivery, FS/PCS |
-| [](/design/cryptography/encryption/) | Asset and metadata AEAD, wire formats |
+| [](/design/cryptography/encryption/) | Asset and metadata AEAD, the blob header and key commitment, wire formats, classifying a blob that will not open |
 | [](/design/cryptography/provenance/) | Signed manifests, append-only chains, derivative provenance |
 
 ## Invariants

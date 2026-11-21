@@ -47,17 +47,23 @@ Every primitive, construction, format or component identity is **declared in exa
 | CRDTs, identifiers, geolocation, sidecar schema | [](/design/metadata/) |
 | Import pipeline | [](/design/import/pipeline/) |
 | Upload protocol | [](/design/transfer/upload/) |
-| Download, sync feed, auto-sync | [](/design/transfer/download/) |
+| Download, transfer scheduler | [](/design/transfer/download/) |
+| Sync feed, auto-sync | [](/design/sync/) |
 | Storage durability, verify-before-destroy | [](/design/transfer/durability/) |
 | Tethered camera import | [](/design/import/camera-import/) |
+| Plaintext export, archive format | [](/design/export/) |
 | Connection and retry classes, transport security | [](/design/networking/) |
 | Offline-first requirements | [](/design/local-gallery/) |
 | Federation trust, capability tokens | [](/design/federation/) |
 | LAN discovery, peer channel | [](/design/peering/) |
 | Album protocol version pinning | [](/design/versioning/) |
 | Stacking, trash retention | [](/design/organization/) |
+| Search grammar, search index | [](/design/search/) |
+| Places, map clustering, geocoding | [](/design/places/) |
 | Lifecycle action set | [](/design/authorization/) |
+| Rate limits, freshness gates, server-side membership | [](/design/authorization/) |
 | Damage scenarios, client classes | [](/design/threat-model/) |
+| Risk register | [](/design/threat-model/risks/) |
 | Refuse-by-default validation invariants | [](/design/threat-model/validation/) |
 | Schema evolution, deprecation | [](/design/threat-model/schema-rules/) |
 | Outbound licence, dependency-licence policy | [](/design/licensing/) |
@@ -66,10 +72,13 @@ Every primitive, construction, format or component identity is **declared in exa
 | Moderation, reporting, blocklists | [](/design/moderation/) |
 | Quota accounting + enforcement | [](/design/quota/) |
 | Client validation duties, sandboxed decoder | [](/design/clients/) |
+| OS integrations (intents, shortcuts, system pickers) | [](/design/platform-integrations/) |
 | Alerts, delivery, wake tier | [](/design/notifications/) |
 | Catalogs, locale resolution, error codes | [](/design/i18n/) |
 | API surface ↔ transport map | [](/design/api-surfaces/) |
 | Developer-reference generation | [](/design/developer-docs/) |
+| Performance metrics, benchmarks | [](/development/performance/) |
+| Supply-chain policy | [](/development/supply-chain/) |
 
 ## Doc Structure
 

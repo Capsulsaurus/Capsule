@@ -87,4 +87,4 @@ The pipeline decides which assets to **start**: recently modified files first, t
 - `ImportPlan` — the planner's deterministic output, each added entry carrying its `album_id`; `streaming_recommended` is attached at confirmation.
 - `available_bytes()` — library-volume free space.
 - `execute(plan, cancel_token)` — honours cancellation at every file boundary and returns per-file status; in streaming mode it drives the import → upload → verify → release window.
-- A progress event stream (queued / processing / encrypting / uploading / done / failed), `capsule-library::import::progress`.
+- A progress event stream (queued / processing / encrypting / uploading / done / failed), `capsule-library::import::progress`. The typed per-stage events and the diagnostics snapshot built on it are owned by [](/development/performance/#typed-stage-events-and-the-diagnostics-snapshot).
