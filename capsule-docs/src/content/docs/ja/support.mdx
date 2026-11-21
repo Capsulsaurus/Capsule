@@ -1,0 +1,81 @@
+---
+title: サポート
+description: Capsuleについて質問する、バグを報告する、機能を提案する、脆弱性を報告する場所と、対応してもらうために含めるべき情報。
+template: splash
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+Capsuleはボランティアによってオープンに開発・サポートされています。有償や非公開のサポート窓口はありません。質問、報告、アイデアはすべてプロジェクトのGitHubを通じて受け付けており、誰でも回答でき、その回答は次に同じ問題に出会う人の助けにもなります。唯一の例外は脆弱性で、これは非公開で報告します。
+
+Capsuleはまだリリースされていません。現在動作するものと次に予定されているものは[ロードマップ](https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md)にあります。
+
+<a id="before-you-ask"></a>
+
+## 質問する前に
+
+ほとんどの答えはすでに存在します。ここで1分かけるだけで、たいていはやり取りを1往復減らせます。
+
+1. **ドキュメントを検索してください**。各ページ上部の検索ボックスを使い、[](/guides/troubleshooting/)を読んでください。よくある障害とログの集め方を説明しています。
+2. **[オープンおよびクローズ済みのissue](https://github.com/Capsulsaurus/Capsule/issues?q=is%3Aissue)** と[Discussions](https://github.com/Capsulsaurus/Capsule/discussions)を検索してください。すでに誰かが報告している場合は、重複したものを新たに作るのではなく、👍のリアクションを付けるか、新しい情報があればコメントしてください。
+3. **コマンドが受け付けるフラグを正確に確認してください**。[](/reference/cli/)に記載されています。
+
+<a id="get-help"></a>
+
+## 助けを求める
+
+<CardGrid>
+  <Card title="質問する" icon="comment">
+    どうすればいい？これは想定どおりの動作？セットアップで困っている？そんなときは[Discussions › Q&A](https://github.com/Capsulsaurus/Capsule/discussions/categories/q-a)で質問してください。解決につながった返信を回答としてマークすると、次の人が見つけやすくなります。
+  </Card>
+  <Card title="バグを報告する" icon="warning">
+    何かが壊れている、またはドキュメントと違う動作をしている場合は、[バグ報告](https://github.com/Capsulsaurus/Capsule/issues/new?template=bug_report.yml)を作成してください。フォームではバージョン、プラットフォーム、再現手順、ログを尋ねます。これらがすべて揃った報告は、やり取りなしでトリアージできます。
+  </Card>
+  <Card title="機能を提案する" icon="star">
+    アイデアは[Discussions › Ideas](https://github.com/Capsulsaurus/Capsule/discussions/categories/ideas)で共有してください。ほかの人が賛成票を投じたり、内容を磨いたりできます。アイデアが採用されるとメンテナーがissueにし、作業はそのissueで管理されます。
+  </Card>
+  <Card title="脆弱性を報告する" icon="padlock">
+    **公開のissueには絶対に書かないでください**。[GitHubのセキュリティアドバイザリ](https://github.com/Capsulsaurus/Capsule/security/advisories/new)から非公開で報告してください。どのバージョンに修正が提供されるかは[セキュリティポリシー](https://github.com/Capsulsaurus/Capsule/security/policy)に記載されています。
+  </Card>
+</CardGrid>
+
+<a id="specific-topics"></a>
+
+## トピック別
+
+<CardGrid>
+  <Card title="サーバーの運用" icon="setting">
+    まず[](/guides/self-hosting/)、次に[](/guides/troubleshooting/)を読んでください。それでも解決しない場合は、サーバーのバージョンと起動時のログを添えて[Q&A](https://github.com/Capsulsaurus/Capsule/discussions/categories/q-a)で質問してください。
+  </Card>
+  <Card title="写真の欠落や破損" icon="information">
+    いったん手を止め、何も削除しないでください。修復を試みる前に、[](/guides/troubleshooting/#check-a-librarys-integrity)と[](/design/backup-recovery/#recovery-paths)を読んでください。データが失われたり破損したりした場合は、バグとして報告してください。データを守ることはプロジェクトの最優先事項です。
+  </Card>
+  <Card title="翻訳" icon="translate">
+    誤った文字列や欠けている文字列は[翻訳エラー](https://github.com/Capsulsaurus/Capsule/issues/new?template=translation-error.md)で報告し、新しい言語は[言語リクエスト](https://github.com/Capsulsaurus/Capsule/issues/new?template=language-request.md)で依頼してください。翻訳の作り方は[locales/README.md](https://github.com/Capsulsaurus/Capsule/blob/master/locales/README.md)にあります。
+  </Card>
+  <Card title="Googleフォトからの移行" icon="external">
+    取り込みの問題を報告する前に、インポーターが保証できないことも含めて[](/guides/google-photos-migration/)の手順に従ってください。
+  </Card>
+</CardGrid>
+
+<a id="get-involved"></a>
+
+## 参加する
+
+<CardGrid>
+  <Card title="コントリビュートする" icon="github">
+    [コントリビューションガイド](https://github.com/Capsulsaurus/Capsule/blob/master/CONTRIBUTING.md)を読んでから、[good first issue](https://github.com/Capsulsaurus/Capsule/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)ラベルの付いたissueを選んでください。Discussionsで質問に答えることも、同じくらい助けになります。
+  </Card>
+  <Card title="プロジェクトを支援する" icon="heart">
+    Capsuleは無料のオープンソースです。役に立っているなら、[GitHubで開発をスポンサーする](https://github.com/sponsors/justin13888)ことが、プロジェクトの継続につながります。
+  </Card>
+</CardGrid>
+
+<a id="what-to-expect"></a>
+
+## 期待できること
+
+- **ボランティアの時間で対応します**。質問には、コミュニティとメンテナーが時間の許す範囲で回答します。回答までの時間は保証されません。
+- **情報の揃った報告から対応されます**。バージョン、再現手順、ログが揃ったバグ報告は、確認して修正できます。それらがない報告は、誰かが対応できるようになるまで返信を待つことになります。
+- **1つのスレッドには1つのトピックを**。2つの問題は2つの報告に分けてください。そうすれば、それぞれを個別に追跡してクローズできます。
+- **原則として公開されます**。脆弱性の報告を除き、すべての内容は公開されます。ログを貼り付ける前に、パスフレーズ、リカバリーシークレット、トークン、サーバーのアドレス、個人的なファイルパスを伏せてください。

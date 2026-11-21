@@ -1,0 +1,93 @@
+---
+title: Capsule
+description: 一生分の写真を自分のデバイス上で整理し、すべての写真をエンドツーエンドで暗号化し、サーバーをまたいだ共有を前提に設計された、オープンソースの写真ライブラリ。
+status: draft
+template: splash
+hero:
+  title: 一生分の写真を、整理されたままプライベートに
+  tagline: Capsuleは、ライブラリ全体を自分のデバイス上で整理し、すべての写真を鍵を一切持たないサーバー上でエンドツーエンド暗号化したまま保管します。サーバーをまたいだ共有を前提に設計されています。
+  image:
+    # Raw HTML rather than `file`: Starlight's hero sizes `file` images to a
+    # 400x400 square, which crops a portrait screenshot.
+    html: |
+      <img class="hero-shot hero-shot-light" src="/images/hero-light.webp" width="800" height="1538" alt="iPhone上のCapsule。ライブラリのタイムラインを表示している" />
+      <img class="hero-shot hero-shot-dark" src="/images/hero-dark.webp" width="800" height="1538" alt="iPhone上のCapsule。ライブラリのタイムラインを表示している" />
+  actions:
+    - text: はじめる
+      link: /guides/getting-started/
+      icon: right-arrow
+    - text: 設計ドキュメントを読む
+      link: /design/
+      variant: secondary
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+import Feature from '../../../components/Feature.astro';
+import FeatureGrid from '../../../components/FeatureGrid.astro';
+import StatusStrip from '../../../components/StatusStrip.astro';
+
+<StatusStrip
+  text="モバイルクライアントは、ベータテスターへの配布に向けて安定化と改良を進めています。"
+  href="https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md"
+  linkLabel="ロードマップ"
+/>
+
+<a id="what-sets-capsule-apart"></a>
+
+## Capsuleならではの特長
+
+<FeatureGrid>
+  <Feature icon="random" title="どんな規模でも整理された状態に" href="/features/smart-albums/" linkLabel="スマートアルバム">
+    検索、スマートアルバム、自動タグ付けは、完全なローカルインデックスを使ってデバイス上で動作するよう設計されています。そのため、数百万枚の写真があるライブラリでも、誰かが手作業で整理しなくても快適に見て回れます。
+  </Feature>
+  <Feature icon="padlock" title="鍵を持たないサーバー" href="/design/cryptography/" linkLabel="暗号の設計">
+    サーバーが保存するのは暗号文だけで、鍵を持つことは一切ありません。写真もキャプションもアルバムのタイトルも読めませんが、受け付けたアップロードのすべてに対して保管受領証に署名します。
+  </Feature>
+  <Feature icon="server" title="サーバーをまたいだ共有" href="/design/federation/" linkLabel="フェデレーションの設計">
+    信頼の根拠はサーバーではなく暗号にあります。そのため、異なるCapsuleサーバーのユーザー同士が、間に中央のサービスを挟むことなくアルバムを共有できるよう設計されています。
+  </Feature>
+  <Feature icon="laptop" title="オフラインでもライブラリ全体を" href="/features/offline-library/" linkLabel="オフラインライブラリ">
+    どのネイティブアプリも、これまでに残したすべての写真の完全なインデックスを保持するよう設計されています。そのため、接続がなくてもすべてを閲覧・検索・整理できます。
+  </Feature>
+  <Feature icon="approve-check-circle" title="検証できる履歴" href="/design/cryptography/provenance/" linkLabel="来歴の設計">
+    すべてのアセットには、署名付きで追記のみの来歴チェーンが付いています。そのため、どの人がどのデバイスで取り込み、編集したのかは、信頼に頼るのではなく検証されます。
+  </Feature>
+  <Feature icon="database" title="設計段階から復旧可能" href="/design/backup-recovery/" linkLabel="バックアップと復旧">
+    各アセットには署名付きのメタデータサイドカーが対になっています。そのため、データベースがなくてもライブラリは読める状態を保ち、部分的な破損からも再構築できます。
+  </Feature>
+</FeatureGrid>
+
+<a id="everything-you-would-expect"></a>
+
+## 期待どおりの機能をすべて
+
+オリジナルはフル画質のまま保存され、バイト単位で正確に復元できます。RAWと動画は第一級のフォーマットとして扱われます。ネイティブアプリは各プラットフォーム固有のコントロールで作られています。CLIとTUIはアプリでできることをすべて実行できます。詳しくは[](/reference/cli/)をご覧ください。
+
+<a id="why-it-is-built-this-way"></a>
+
+## この設計を選んだ理由
+
+ほとんどの写真サービスでは、サーバーがライブラリを読むことで得られる機能と、サーバーが読めないことで得られるプライバシーのどちらかを選ばなければなりません。Capsuleはプライバシーを選び、デバイスだけが復号できるデータをもとに、それらの機能をデバイス上で作り直しています。
+
+この選択には代償があり、設計ドキュメントはそれを隠さずに明記しています。鍵を持たないサーバーが何を伝えられ、何を伝えられないのか（[](/design/notifications/)）、鍵を失ったときに何が起きるのか（[](/design/backup-recovery/#recovery-paths)）、そして不具合のあるクライアントや悪意のあるクライアントが何をできないようになっているのか（[](/design/threat-model/)）です。
+
+<a id="get-started"></a>
+
+## はじめる
+
+<CardGrid>
+  <Card title="サーバーをホストする" icon="server">
+    自分のハードウェアでCapsuleを動かします。[](/guides/self-hosting/)
+  </Card>
+  <Card title="Capsuleを使う" icon="open-book">
+    ライブラリの取り込み、整理、閲覧。[](/guides/user-guide/)
+  </Card>
+  <Card title="ライブラリを持ち込む" icon="cloud-download">
+    GoogleフォトのTakeoutを、メタデータごと取り込みます。
+    [](/guides/google-photos-migration/)
+  </Card>
+  <Card title="Capsuleの開発に参加する" icon="code-branch">
+    すべてのコードがオープンソースで、開発もオープンに行われています。
+    [](/development/local-development/)
+  </Card>
+</CardGrid>

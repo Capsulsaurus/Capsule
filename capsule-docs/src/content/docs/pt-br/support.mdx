@@ -1,0 +1,123 @@
+---
+title: Suporte
+description: Onde fazer uma pergunta, relatar um bug, sugerir um recurso ou reportar uma vulnerabilidade no Capsule, e o que incluir para que seja possível agir.
+template: splash
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+O Capsule é desenvolvido e mantido de forma aberta por voluntários. Não existe canal de suporte pago
+ou privado: toda pergunta, relato e ideia passa pelo GitHub do projeto, onde qualquer pessoa pode
+responder e a resposta ajuda a próxima pessoa. Uma vulnerabilidade é a única exceção, e é reportada
+de forma privada.
+
+O Capsule ainda não teve nenhuma versão lançada; o que funciona hoje e o que vem a seguir está no
+[roadmap](https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md).
+
+<a id="before-you-ask"></a>
+
+## Antes de perguntar
+
+A maioria das respostas já existe. Um minuto aqui costuma poupar uma ida e volta.
+
+1. **Pesquise na documentação** com a caixa de pesquisa no topo de cada página, e leia
+   [](/guides/troubleshooting/), que cobre as falhas mais comuns e como coletar logs.
+2. **Pesquise nas [issues abertas e fechadas](https://github.com/Capsulsaurus/Capsule/issues?q=is%3Aissue)**
+   e nas [discussões](https://github.com/Capsulsaurus/Capsule/discussions). Se alguém já relatou o
+   problema, adicione uma reação 👍, ou um comentário com informações novas, em vez de abrir uma
+   duplicata.
+3. **Confira as opções exatas que um comando aceita** em [](/reference/cli/).
+
+<a id="get-help"></a>
+
+## Obtenha ajuda
+
+<CardGrid>
+  <Card title="Faça uma pergunta" icon="comment">
+    Como faço…? Isso é esperado? Precisa de ajuda para configurar algo? Pergunte em
+    [Discussions › Q&A](https://github.com/Capsulsaurus/Capsule/discussions/categories/q-a). Marque
+    como resposta aquela que resolveu, para que a próxima pessoa a encontre.
+  </Card>
+  <Card title="Relate um bug" icon="warning">
+    Algo quebrou ou se comporta de forma diferente da documentação? Abra um
+    [relato de bug](https://github.com/Capsulsaurus/Capsule/issues/new?template=bug_report.yml). O
+    formulário pede a versão, a plataforma, os passos para reproduzir e os logs: um relato com todos
+    eles pode ser triado sem idas e vindas.
+  </Card>
+  <Card title="Sugira um recurso" icon="star">
+    Compartilhe ideias em
+    [Discussions › Ideas](https://github.com/Capsulsaurus/Capsule/discussions/categories/ideas),
+    onde outras pessoas podem votar e refiná-las. Os mantenedores transformam uma ideia em issue
+    depois que ela é aceita, e é na issue que o trabalho é acompanhado.
+  </Card>
+  <Card title="Reporte uma vulnerabilidade" icon="padlock">
+    **Nunca em uma issue pública.** Reporte de forma privada por meio de um
+    [aviso de segurança do GitHub](https://github.com/Capsulsaurus/Capsule/security/advisories/new).
+    A [política de segurança](https://github.com/Capsulsaurus/Capsule/security/policy) informa quais
+    versões recebem correções.
+  </Card>
+</CardGrid>
+
+<a id="specific-topics"></a>
+
+## Tópicos específicos
+
+<CardGrid>
+  <Card title="Rodar um servidor" icon="setting">
+    Comece por [](/guides/self-hosting/) e depois [](/guides/troubleshooting/). Ainda travado?
+    Pergunte em [Q&A](https://github.com/Capsulsaurus/Capsule/discussions/categories/q-a) informando
+    a versão do servidor e o log de inicialização.
+  </Card>
+  <Card title="Fotos ausentes ou danificadas" icon="information">
+    Pare e não exclua nada. Leia
+    [](/guides/troubleshooting/#check-a-librarys-integrity) e
+    [](/design/backup-recovery/#recovery-paths) antes de tentar uma correção. Se houver perda ou
+    corrupção de dados, relate como bug: proteger os seus dados é a primeira prioridade do projeto.
+  </Card>
+  <Card title="Traduções" icon="translate">
+    Relate um texto errado ou ausente com um
+    [erro de tradução](https://github.com/Capsulsaurus/Capsule/issues/new?template=translation-error.md),
+    ou peça um novo idioma com uma
+    [solicitação de idioma](https://github.com/Capsulsaurus/Capsule/issues/new?template=language-request.md).
+    Como as traduções são feitas está em
+    [locales/README.md](https://github.com/Capsulsaurus/Capsule/blob/master/locales/README.md).
+  </Card>
+  <Card title="Vindo do Google Fotos" icon="external">
+    Siga [](/guides/google-photos-migration/), incluindo o que o importador não consegue garantir,
+    antes de relatar um problema de importação.
+  </Card>
+</CardGrid>
+
+<a id="get-involved"></a>
+
+## Participe
+
+<CardGrid>
+  <Card title="Contribua" icon="github">
+    Leia o
+    [guia de contribuição](https://github.com/Capsulsaurus/Capsule/blob/master/CONTRIBUTING.md)
+    e depois escolha uma issue com a etiqueta
+    [good first issue](https://github.com/Capsulsaurus/Capsule/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
+    Responder perguntas em Discussions ajuda tanto quanto.
+  </Card>
+  <Card title="Patrocine o projeto" icon="heart">
+    O Capsule é gratuito e de código aberto. Se ele for útil para você,
+    [patrocinar o desenvolvimento no GitHub](https://github.com/sponsors/justin13888) ajuda a
+    mantê-lo em andamento.
+  </Card>
+</CardGrid>
+
+<a id="what-to-expect"></a>
+
+## O que esperar
+
+- **Tempo voluntário.** As perguntas são respondidas pela comunidade e pelos mantenedores conforme
+  o tempo permite. Não há prazo de resposta garantido.
+- **Relatos completos andam primeiro.** Um relato de bug com a versão, os passos para reproduzir e
+  os logs pode ser confirmado e corrigido. Um sem essas informações aguarda uma resposta antes que
+  alguém possa agir.
+- **Um assunto por tópico.** Dois problemas pedem dois relatos, para que cada um possa ser
+  acompanhado e encerrado separadamente.
+- **Público por padrão.** Tudo, exceto um relato de vulnerabilidade, é público, então remova frases
+  secretas, segredos de recuperação, tokens, endereços de servidor e caminhos de arquivos pessoais
+  antes de colar um log.

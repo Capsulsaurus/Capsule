@@ -1,0 +1,123 @@
+---
+title: Soporte
+description: Dónde hacer una pregunta, informar de un error, sugerir una función o comunicar una vulnerabilidad en Capsule, y qué incluir para que se pueda actuar.
+template: splash
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+Capsule se desarrolla y se mantiene de forma abierta gracias a voluntarios. No hay ningún canal de
+soporte de pago ni privado: cada pregunta, informe e idea pasa por el GitHub del proyecto, donde
+cualquiera puede responderla y la respuesta ayuda a la siguiente persona. Una vulnerabilidad es la
+única excepción, y se comunica de forma privada.
+
+Capsule aún no ha tenido ninguna versión publicada; lo que funciona hoy y lo que viene después está en
+la [hoja de ruta](https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md).
+
+<a id="before-you-ask"></a>
+
+## Antes de preguntar
+
+La mayoría de las respuestas ya existen. Un minuto aquí suele ahorrar una ida y vuelta.
+
+1. **Busque en la documentación** con el cuadro de búsqueda de la parte superior de cada página, y
+   lea [](/guides/troubleshooting/), que cubre los fallos habituales y cómo recopilar los registros.
+2. **Busque en las [incidencias abiertas y cerradas](https://github.com/Capsulsaurus/Capsule/issues?q=is%3Aissue)**
+   y en las [discusiones](https://github.com/Capsulsaurus/Capsule/discussions). Si alguien ya lo ha
+   comunicado, añada una reacción 👍, o un comentario con información nueva, en lugar de abrir un
+   duplicado.
+3. **Compruebe las opciones exactas que admite un comando** en [](/reference/cli/).
+
+<a id="get-help"></a>
+
+## Obtenga ayuda
+
+<CardGrid>
+  <Card title="Haga una pregunta" icon="comment">
+    ¿Cómo hago…? ¿Es esto lo esperado? ¿Necesita ayuda para configurar algo? Pregunte en
+    [Discussions › Q&A](https://github.com/Capsulsaurus/Capsule/discussions/categories/q-a). Marque
+    como respuesta la que lo resolvió, para que la siguiente persona la encuentre.
+  </Card>
+  <Card title="Informe de un error" icon="warning">
+    ¿Algo se ha roto o se comporta de forma distinta a lo que dice la documentación? Abra un
+    [informe de error](https://github.com/Capsulsaurus/Capsule/issues/new?template=bug_report.yml). El
+    formulario pide la versión, la plataforma, los pasos para reproducirlo y los registros: un informe
+    que los incluya todos se puede clasificar sin idas y vueltas.
+  </Card>
+  <Card title="Sugiera una función" icon="star">
+    Comparta sus ideas en
+    [Discussions › Ideas](https://github.com/Capsulsaurus/Capsule/discussions/categories/ideas),
+    donde otras personas pueden votarlas y mejorarlas. Los mantenedores convierten una idea en una
+    incidencia una vez aceptada, y es en la incidencia donde se sigue el trabajo.
+  </Card>
+  <Card title="Comunique una vulnerabilidad" icon="padlock">
+    **Nunca en una incidencia pública.** Comuníquela de forma privada mediante un
+    [aviso de seguridad de GitHub](https://github.com/Capsulsaurus/Capsule/security/advisories/new).
+    La [política de seguridad](https://github.com/Capsulsaurus/Capsule/security/policy) indica qué
+    versiones reciben correcciones.
+  </Card>
+</CardGrid>
+
+<a id="specific-topics"></a>
+
+## Temas concretos
+
+<CardGrid>
+  <Card title="Ejecutar un servidor" icon="setting">
+    Empiece por [](/guides/self-hosting/) y luego [](/guides/troubleshooting/). ¿Sigue atascado?
+    Pregunte en [Q&A](https://github.com/Capsulsaurus/Capsule/discussions/categories/q-a) indicando
+    la versión del servidor y su registro de arranque.
+  </Card>
+  <Card title="Fotos que faltan o están dañadas" icon="information">
+    Deténgase y no elimine nada. Lea
+    [](/guides/troubleshooting/#check-a-librarys-integrity) y
+    [](/design/backup-recovery/#recovery-paths) antes de intentar una solución. Si se han perdido o
+    dañado datos, infórmelo como un error: proteger sus datos es la primera prioridad del proyecto.
+  </Card>
+  <Card title="Traducciones" icon="translate">
+    Informe de un texto incorrecto o que falta con un
+    [error de traducción](https://github.com/Capsulsaurus/Capsule/issues/new?template=translation-error.md),
+    o solicite un nuevo idioma con una
+    [solicitud de idioma](https://github.com/Capsulsaurus/Capsule/issues/new?template=language-request.md).
+    Cómo se hacen las traducciones se explica en
+    [locales/README.md](https://github.com/Capsulsaurus/Capsule/blob/master/locales/README.md).
+  </Card>
+  <Card title="Migrar desde Google Fotos" icon="external">
+    Siga [](/guides/google-photos-migration/), incluido lo que el importador no puede garantizar,
+    antes de informar de un problema de importación.
+  </Card>
+</CardGrid>
+
+<a id="get-involved"></a>
+
+## Participe
+
+<CardGrid>
+  <Card title="Contribuya" icon="github">
+    Lea la
+    [guía de contribución](https://github.com/Capsulsaurus/Capsule/blob/master/CONTRIBUTING.md)
+    y luego elija una incidencia con la etiqueta
+    [good first issue](https://github.com/Capsulsaurus/Capsule/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
+    Responder preguntas en Discussions ayuda igual.
+  </Card>
+  <Card title="Patrocine el proyecto" icon="heart">
+    Capsule es gratuito y de código abierto. Si le resulta útil,
+    [patrocinar su desarrollo en GitHub](https://github.com/sponsors/justin13888) ayuda a que siga
+    adelante.
+  </Card>
+</CardGrid>
+
+<a id="what-to-expect"></a>
+
+## Qué esperar
+
+- **Tiempo de voluntarios.** La comunidad y los mantenedores responden a las preguntas cuando el
+  tiempo lo permite. No hay un tiempo de respuesta garantizado.
+- **Los informes completos avanzan primero.** Un informe de error con la versión, los pasos para
+  reproducirlo y los registros se puede confirmar y corregir. Uno sin ellos espera una respuesta
+  antes de que nadie pueda actuar.
+- **Un tema por hilo.** Dos problemas van en dos informes, para que cada uno se pueda seguir y cerrar
+  por separado.
+- **Público por defecto.** Todo, excepto un informe de vulnerabilidad, es público, así que elimine
+  frases de contraseña, secretos de recuperación, tokens, direcciones de servidor y rutas de archivos
+  personales antes de pegar un registro.
