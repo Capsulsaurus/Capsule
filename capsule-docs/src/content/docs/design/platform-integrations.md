@@ -160,7 +160,18 @@ Revisit only if Android opens eligibility and an on-demand, per-pick model becom
 - **v1, foreground catch-up.** With "Back up camera" on, the app holds full `READ_MEDIA_IMAGES` and `READ_MEDIA_VIDEO`. Android 14's partial "Select photos" grant cannot see new captures ([Android Developers](https://developer.android.com/about/versions/14/changes/partial-photo-video-access)). On each foreground the app queries MediaStore for items added since its last recorded generation (`MediaStore.getGeneration`, API 30; by date added on API 26–29, the app's floor) and imports them. This matches the foreground-only v1 in [](/design/clients/#platform-limitations) and [](/design/sync/#background-execution).
 - **Later, detection.** A `ContentObserver` fires only while the process lives, so it is not the durable mechanism. WorkManager's content-URI trigger on the MediaStore collections is ([Android Developers](https://developer.android.com/reference/androidx/work/Constraints.Builder)). It fires once, so the worker re-enqueues itself after each run.
 - **Later, upload.** A user-started backup runs as a user-initiated data transfer job on Android 14 and later. Automatic backup runs under WorkManager. That is Google's own split for the two cases ([Android Developers](https://developer.android.com/develop/background-work/background-tasks/data-transfer-options)). A `dataSync` foreground service is capped at six hours a day on Android 15 ([Android Developers](https://developer.android.com/develop/background-work/services/fgs/timeout)).
+- **Later, reliability.** OEM battery managers stop scheduled work on many devices. When backup has not run on schedule, the app says so and links the device's own battery setting for Capsule; it never asks for an exemption it does not need.
 - **Play policy.** Broad photo access is reserved for apps whose core function needs it, declared on a form, and backup apps are not named as qualifying ([Play Console Help](https://support.google.com/googleplay/android-developer/answer/14115180)). Capsule declares itself a gallery app, which it is.
+
+## Shared Backup Rules
+
+On both platforms:
+
+- **Selection.** The user includes or excludes device albums; an exclusion beats an inclusion, because one photo sits in several albums.
+- **Hash cache.** Every captured file's plaintext hash is cached against the platform's identifier for it (the `PHAsset` local identifier, plus the iCloud cloud identifier where PhotoKit provides one ([Apple Developer](https://developer.apple.com/documentation/photokit/phphotolibrary/cloudidentifiermappings(forlocalidentifiers:))); the MediaStore id and generation on Android). After a reinstall the cache is rebuilt from the cloud identifiers and the library index, so a backed-up library is not read again to be hashed. An entry is written only after the import that hashed it commits.
+- **Background windows.** Inside an OS background window, sync and upload run in parallel, and sealing, which costs CPU, is scheduled before the window's deadline so a window never ends with half-sealed work it must redo.
+- **Backup mode.** For a large backlog the app offers a foreground backup mode that keeps the device awake with the screen dimmed until the backlog drains or the user leaves it.
+- **Remote trash, opt-in.** With the setting on, an asset moved to Capsule's trash from another device moves the device's own copy to the OS trash, and a restore puts it back. It is off by default.
 
 ## Release Summary
 
@@ -173,7 +184,7 @@ Revisit only if Android opens eligibility and an on-demand, per-pick model becom
 ## Implementation Status
 
 - **Implemented:** the `capsule://` scheme and its parser (`capsule-swift/Project.swift:480-499`), `ShareLink` exports, MetricKit and signposts on Apple, and JankStats on Android.
-- **Planned:** every App Intent, App Shortcut, Spotlight index, widget, share extension and share target above; the layout changes; capture catch-up; OS-backup exclusion. Today the Apple project builds one app target and no extension (`capsule-swift/Project.swift:470`), and the Android manifest has neither `fullBackupContent` nor `dataExtractionRules` while setting `allowBackup="true"` (`capsule-android/src/main/AndroidManifest.xml:11`).
+- **Planned:** the shared backup rules ([](#shared-backup-rules)); every App Intent, App Shortcut, Spotlight index, widget, share extension and share target above; the layout changes; capture catch-up; OS-backup exclusion. Today the Apple project builds one app target and no extension (`capsule-swift/Project.swift:470`), and the Android manifest has neither `fullBackupContent` nor `dataExtractionRules` while setting `allowBackup="true"` (`capsule-android/src/main/AndroidManifest.xml:11`).
 
 ## Open Questions
 

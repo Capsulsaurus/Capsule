@@ -27,7 +27,10 @@ Manually, when the user picks files or directories (flat or DCIM-style), or auto
 
 ### Scan & Extract
 
-Files are walked and their metadata ([](/design/metadata/)) extracted, and an unsupported format is rejected here, before confirmation. The server independently enforces a closed `content_type` set at session creation, and received bytes are decoded only in the sandboxed decoder ([](/design/clients/#sandboxed-decoder)).
+Files are walked and their metadata ([](/design/metadata/)) extracted, and an unsupported format is rejected here, before confirmation.
+
+- **Motion photos.** A still carrying an embedded clip (the `MotionPhoto`/`MicroVideo` XMP container, or a trailing video after the image's end marker) is imported byte-exact as one original. Its clip is also extracted, as a second asset whose bytes are a pure slice of the original, and the two are stacked as a Live Photo ([](/design/organization/#stack-types)). Detection comes from Rawshift through `capsule-core::media`.
+- **Edited copies.** An edited file the platform links to its original, or a `-edited`/`_edited` sibling with the same capture time, is stacked over the original ([](/design/organization/#stack-types)). The server independently enforces a closed `content_type` set at session creation, and received bytes are decoded only in the sandboxed decoder ([](/design/clients/#sandboxed-decoder)).
 
 ### Plan & Confirm
 

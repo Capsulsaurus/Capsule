@@ -69,6 +69,17 @@ The base budget is a user setting (default 2 GiB, `capsule cache budget --set`);
 
 The client surfaces the largest consumers and lets the user delete selectively, pinned content included. It never touches canonical `media/` files, and releasing a device-owned original is gated as above.
 
+**Free Up Space** releases device copies of photos the server already holds, in bulk:
+
+- **Filters.** Captured before a cutoff date; keep chosen device albums, with messaging-app albums kept by default; keep favourites; photos, videos or both.
+- **Review.** A screen lists every candidate and the total bytes it reclaims before anything happens. Candidates that fail the verify-before-destroy gate ([](/design/transfer/durability/#verify-before-destroy)) are listed as kept, with the reason, never released.
+- **Release through the OS.** A copy in the system photo library goes to the OS trash ([PHAssetChangeRequest](https://developer.apple.com/documentation/photokit/phassetchangerequest) deletion on iOS, [`MediaStore.createTrashRequest`](https://developer.android.com/reference/android/provider/MediaStore) on Android 11+), so the OS's own recovery window still applies. A copy in the Capsule library becomes a server-only asset as above.
+- **Never by surprise.** Free Up Space runs only when the user confirms the review; no schedule or rule starts it.
+
+## Known Gaps
+
+- Free Up Space is not implemented: there are no filters, no review screen and no OS-trash hand-off.
+
 ## Validation
 
 - **Init/open round-trip (unit).** Directories and `version`/`config` present; re-open is idempotent.
