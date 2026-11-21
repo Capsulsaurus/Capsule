@@ -40,7 +40,7 @@ jobs:
       - name: Install nasm and libdav1d
         run: sudo apt-get update && sudo apt-get install -y nasm libdav1d-dev
       - name: Set up mise (task runner)
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
         with:
           install: false
       - name: Render the published rustdoc
