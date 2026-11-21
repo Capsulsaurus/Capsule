@@ -26,7 +26,7 @@ Follow, by module (`capsule-core/src/…`):
 | `drop/` | [Web upload](../../capsule-docs/src/content/docs/design/web-upload.md) |
 | `federation/` | [Federation](../../capsule-docs/src/content/docs/design/federation.md) |
 | `backup/` | [Backup and recovery](../../capsule-docs/src/content/docs/design/backup-recovery.md) |
-| `ml/` | [AI](../../capsule-docs/src/content/docs/design/ai.md) |
+| `ml/` | [AI](../../capsule-docs/src/content/docs/design/ai.md), [People](../../capsule-docs/src/content/docs/design/people.md) |
 | `notify/` | [Notifications](../../capsule-docs/src/content/docs/design/notifications.md); `notify/class.rs` also [Threat scenarios](../../capsule-docs/src/content/docs/design/threat-model/scenarios.md) |
 | `cohort` | [Authentication](../../capsule-docs/src/content/docs/design/authentication.md) |
 | `enrollment` | [Device enrollment](../../capsule-docs/src/content/docs/design/device-enrollment.md) |

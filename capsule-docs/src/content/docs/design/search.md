@@ -148,9 +148,10 @@ Each axis reads the **effective** value: the user's register if written, else th
 | --- | --- | --- |
 | Labels, at every level | `tags_user`, live region labels, stack and album records ([](/design/organization/#labels)) | vocabulary + `asset_tags` |
 | AI tags | `tags_ai`, current generation only ([](/design/ai/#ai-output-containment)) | vocabulary |
-| People | named people ([](/design/ai/)); before people clusters ship, region labels are how a person is named | vocabulary |
+| People | named people ([](/design/people/)); before people clusters ship, region labels are how a person is named | vocabulary |
 | Place names | the place-name cache ([](/design/places/#place-names)) | vocabulary |
 | Captions | `caption_lww` | caption FTS |
+| Recognised text | the text-recognition output of the current model ([](/design/ai/#text-recognition)) | text FTS |
 | Album | container album and its name | vocabulary + `album_id` |
 | Camera and lens | `camera_id.model`, `capture_settings` ([](/design/metadata/#capture-settings)) | vocabulary |
 | Dates | effective capture time, import time | B-tree |
@@ -239,7 +240,7 @@ suggester's best candidate is offered and never applied silently.
 ### Free Text
 
 A bare word or phrase matches, in the live search, any vocabulary name containing it (labels,
-people, places, albums, cameras, lenses) and any caption containing it, after folding. Names match
+people, places, albums, cameras, lenses) any caption containing it and any recognised text containing it, after folding. Names match
 by trigram substring, or by the capped scan for a one- or two-character word
 ([](#full-text-fts5-trigram)); a word with no substring hit expands through the suggester's fuzzy match,
 and the result header says so ("Showing results for *beach*").
@@ -321,8 +322,9 @@ immediately.
 
 - No Rust search exists; the Swift screen filters in memory and Android has no search.
 - Camera and lens are not indexed until import fills `camera_id` and `capture_settings`.
-- People are searchable only as region labels until people clusters ship ([](/design/ai/)).
+- People are searchable only as region labels until people clusters ship ([](/design/people/)).
 - Semantic ranking waits on the first real model runner.
+- Recognised text is not indexed; text recognition does not exist yet.
 - The budgets are unmeasured targets.
 
 ## Validation

@@ -57,6 +57,16 @@ Video derivatives (first-frame still, H.264 preview) are the planned `capsule-co
 - **First frame.** The extracted frame becomes a `DecodedImage`, so the thumbnail tier, the pixel budget and the LQIP are the still path's, unchanged.
 - **Until `rawshift-video` ships.** A video sniffs to no still format and its import reports `DeferredNoCodec`, never a missing asset. The original is stored, signed and verified like any other file.
 
+### Seekable Video Renditions
+
+An original video is one sealed blob, so playing from the middle would mean fetching and decrypting everything before it. A **rendition** makes playback and seeking fetch only what is shown, without the server ever seeing a frame.
+
+- **Shape.** The client transcodes the video to fragmented MP4 at the preview resolution and cuts it at keyframes into segments of about 4 seconds. Each segment is sealed as its own blob, and a **segment index** (each segment's start time, duration and content address) is sealed as one more. The index is the rendition's entry point and is named by a `preview`-role `DerivativeManifest` ([](#derivative-provenance)).
+- **Playback.** The player fetches the index, then the segments around the playhead. A seek fetches the segment that holds the target time and its successor, never the original.
+- **Produced on the client.** The server cannot transcode ciphertext, so the uploading device, or any later device with the album's write tier, produces the rendition through `rawshift-video` as above. Recent short clips get one automatically at import; others on first play or on request.
+- **Derived data.** A rendition is a derivative: it is counted in quota like one ([](/design/quota/#accounting-model)), may be dropped and rebuilt, and never replaces the original.
+- **What the server learns.** Segment count and sizes, which reveal a video's length and rough bitrate. A video's length is already implied by its original's size, so a rendition adds no new class of fact.
+
 ### Embedded Previews
 
 Camera RAW files usually carry a camera-rendered JPEG, anywhere from thumbnail size to near full resolution depending on camera and format. Rawshift extracts it without developing the image (`RawFile::thumbnail()`) for every RAW format the build decodes, so a device holding the original can show a large view at once, before any derivative is encoded. The extracted JPEG is whichever one the format designates, not always the largest in the file, and its size decides which rung it can fill.
@@ -85,6 +95,10 @@ Derivatives are regenerable but not unowned: adding or replacing one is a signed
 
 - A receiver MUST NOT schedule regeneration for a tier the sidecar's `dimensions` show the original already satisfies; the `original` sentinel is local and never shipped.
 - A derivative whose manifest fails verification is discarded (not quarantined) and regenerated from the original, appending a new `derivative-replace` record.
+
+## Known Gaps
+
+- Seekable video renditions are not implemented; they wait on `capsule-core::media::video`.
 
 ## Validation
 

@@ -93,6 +93,7 @@ export function footerLinks({ blogIsLive, locale }) {
             external: true,
         },
         { label: 'Discussions', href: `${REPO}/discussions`, external: true },
+        { label: 'Downloads', href: '/downloads/' },
         { label: 'Support', href: '/support/' },
         { label: 'GitHub', href: REPO, external: true },
     ].map((link) => localizeLink(link, locale));

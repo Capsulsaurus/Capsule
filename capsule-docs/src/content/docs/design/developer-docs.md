@@ -61,6 +61,10 @@ maintained by hand.
 - `/reference/cli/`: `capsule(1)`.
 - `/reference/sdk/`: the Rust page (hand-written, linking into rustdoc), then the generated Swift,
   Kotlin and browser pages.
+- `/llms.txt`: the [llms.txt](https://llmstxt.org) entry point for LLM agents, linking plain-text
+  bundles of the same pages: `/llms-full.txt`, `/llms-small.txt`, and one `/_llms-txt/<set>.txt`
+  per topic set curated in `capsule-docs/src/lib/llms-sets.mjs`. Generated from the pages at
+  build time, latest only.
 
 ## Hosting and Versions
 

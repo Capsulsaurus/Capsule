@@ -118,7 +118,7 @@ Every field reads the asset's **effective** value: the user's register if writte
 - **Text folding is pinned.** `text`, `camera` and `lens` compare after NFC normalization, Unicode default case folding and diacritic removal, using the tables of the Unicode version that `predicate_schema` names (Unicode 16.0 for schema 1). A newer Unicode version is a new `predicate_schema`, so two devices never fold differently.
 - **Spatial terms are exact and pinned.** `within` and `near` evaluate on the location normalized to WGS-84 ([](/design/places/#the-location-index)), with geodesic distance on the WGS-84 ellipsoid, computed with the pure-Rust `libm` on every target. A GCJ-02 location is normalized approximately and so can sit just inside or outside a boundary, but it does so the same way on every device.
 - **`hidden` is gated.** A definition with a `hidden is true` term is evaluated only in a context that passed the Hidden view's fresh-local-auth gate ([](#hidden-assets)). Elsewhere it matches nothing.
-- **AI terms.** `tags_ai`/`people_cluster` terms name their `(model_id, model_version)` slot, and a stale slot evaluates as excluded (AI staleness, [](/design/ai/#ai-output-containment)).
+- **AI terms.** `tags_ai` terms name their `(model_id, model_version)` slot, and a stale slot evaluates as excluded (AI staleness, [](/design/ai/#ai-output-containment)). A `people_cluster` term names a `person_id`, which survives model bumps ([](/design/people/#search-and-smart-albums)).
 - **Convergence.** The whole definition is one LWW register (a stamped `None` deletes it), so there is no partial-predicate merge. Evaluation is a pure function of `(definition, decryptable assets)` in sorted `asset_id` order.
 
 ## Asset Stacking
@@ -142,9 +142,31 @@ A new stack type requires a later-dated `protocol_version`; the Rust enum is nor
 
 ### Stack Types
 
-- **Photography & mobile:** RAW + JPEG pair; burst (best photo in front); Live Photo (still + short clip); portrait/depth (image + depth map); smart selection (AI-grouped near-duplicates).
+- **Photography & mobile:** RAW + JPEG pair; burst (best photo in front); Live Photo (still + short clip, including an Android motion photo's extracted clip, [](/design/import/pipeline/)); portrait/depth (image + depth map); smart selection (AI-grouped near-duplicates, [](#near-duplicate-review)); edited copy (an original + an edited file another app saved beside it), which needs a later-dated `protocol_version`.
 - **Technical & creative:** exposure bracketing (HDR); focus stack; pixel shift; panorama.
 - **Video & audio:** proxy/optimized (master + proxy); chaptered video (e.g. `GOPR001.mp4`, `GOPR002.mp4`); dual-system audio (video + external WAV/AIFF).
+
+**Planned auto-detection.** Live Photos (by the platform's pairing identifier, or a motion photo's embedded clip) and edited copies (the platform's edit relationship, else a `-edited`/`_edited` sibling with the same capture time) are stacked at import, under the same metadata-only rule.
+
+## Near-Duplicate Review
+
+Near-duplicates (re-saves, resized copies, near-identical frames) are found from the synced semantic embeddings ([](/design/ai/#synced-embeddings)) and resolved in one review that never loses metadata.
+
+- **Grouping.** Assets of one library within the model's near-duplicate distance form a group. Members of one stack are never grouped against each other. Grouping is a pure function of `(embeddings, model_id, model_version)`.
+- **Keeper suggestion.** The largest original, then the most set user fields, then the earliest import. The user may pick another.
+- **Resolve.** Either stack the group (`smart selection`, keeper as `primary`), or keep one and trash the rest. Trashed copies follow the retention window ([](#retention-window)); the review never purges.
+- **Merge into the keeper.** Before anything is trashed, the keeper receives, in one atomic batch:
+
+| Field | Merge |
+| --- | --- |
+| Container album | Unchanged; the others' albums gain nothing, because a trashed copy's album keeps its own entry until purge |
+| `tags_user`, labels | Union |
+| `rating_lww` | Maximum |
+| `caption_lww` | The keeper's caption; every other distinct caption is appended to `superseded_captions` |
+| `gps_user` | Set only when every member's effective location agrees within 10 m |
+| `capture_timestamp_user` | Unchanged |
+| `hidden` | `true` if any member is hidden |
+| `cull` | Pick if any member is a pick |
 
 ## Labels
 
@@ -181,6 +203,18 @@ Culling is a high-volume, repetitive pass, so every native client's culling surf
 - **Keyboard first.** With a hardware keyboard attached, the whole pass works without a pointer: one key each for pick, neutral and reject, next and previous asset, expand and collapse a stack, and the reject sweep. A verdict advances to the next asset. Bindings are discoverable in the platform's usual way: the menu bar on macOS, the hold-⌘ shortcut overlay on iPadOS, an in-app shortcut list on iPhone, the keyboard shortcuts helper on Android.
 - **Accessible.** Each verdict is also an accessibility action on the focused asset (VoiceOver and TalkBack custom actions), with no gesture as its only path. The asset's current flag and its position in the pass are announced. Flag state is never shown by colour alone.
 - **Audited before it ships.** A culling surface passes each platform's full automated accessibility audit with no exclusions: `performAccessibilityAudit(for: .all)` on Apple platforms and the Compose UI accessibility checks on Android.
+
+## Import Rules
+
+A rule organizes assets automatically: a **trigger**, a **filter** and one or more **actions**. Rules run on a client; the server never evaluates one.
+
+- **Triggers.** An asset is imported; its embeddings become available ([](/design/ai/#synced-embeddings)); its recognised text becomes available ([](/design/ai/#text-recognition)).
+- **Filter.** A smart-album predicate ([](#smart-album-definition-schema)), evaluated on the triggering asset.
+- **Actions.** Add a label, move to a container album, hide, set a cull flag. Each action is the ordinary signed operation the user could have performed, written by the device that ran the rule.
+- **Never destructive.** No action deletes, trashes or replaces bytes. A run that would act on more than 500 assets pauses and asks.
+- **Preview.** Creating or editing a rule shows what it would do to the existing library as a dry run, and applies to existing assets only when the user confirms.
+- **Once per asset.** A rule acts on an asset once, recorded per `(rule_id, asset_id)` in the local index. Its actions are idempotent, so two devices running the same rule converge on the same state.
+- **Storage.** Rules are a section of the library-settings document ([](/design/metadata/#the-library-settings-document)), one LWW register per `rule_id`.
 
 ## Hidden Assets
 
@@ -246,6 +280,11 @@ stateDiagram-v2
 - A `trash-restore` the server accepts at or after `retention_until`, by the same trusted clock, is refused `409 error.upload.retention_elapsed` and writes nothing, whether or not the purge has run.
 - A purged asset cannot be restored. A restore that reaches the asset after its purge committed is refused the same way, even if the server accepted it just before the window closed. No restore ever meets a purged row, and a refused one leaves the asset in the trash until the purge.
 
+## Known Gaps
+
+- Auto-detection covers only RAW+JPEG; Live Photo, motion-photo and edited-copy detection are not implemented, and the edited-copy stack type does not exist.
+- Near-duplicate review and import rules are not implemented; both wait on synced embeddings, and rules on the library-settings document.
+
 ## Validation
 
-Each rule above is a unit or smoke test. Notably, under a mocked clock purge is refused before `retention_until` and `trash-restore` at or after it, and smart-album evaluation is byte-identical across platforms.
+Each rule above is a unit or smoke test. Notably, under a mocked clock purge is refused before `retention_until` and `trash-restore` at or after it, and smart-album evaluation is byte-identical across platforms. A near-duplicate resolution applies the merge table before any trash and never purges. An import rule never deletes, pauses past its cap, and acts once per asset however many devices run it.

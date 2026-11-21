@@ -53,9 +53,35 @@ Key management owns the AMK ([](/design/cryptography/keys/#album-master-keys-amk
 - **`history_policy` is fixed per album, not per add.** It is set at creation: `Full` (every AMK since v1, the default for shared albums) or `Capped(n)` (only recent epochs; older assets show placeholders). A user's readable range therefore never depends on who added them. Changing the policy requires an album upgrade ceremony ([](/design/versioning/#album-upgrade-ceremony)).
 - **Epoch ceiling on join.** The joiner takes the highest `amk_version` attested by the Welcome's commit chain as its monotonic ceiling and rejects any manifest claiming a higher epoch, so it never trusts the server's counter ([](/design/cryptography/keys/#write-authorization)).
 
+## Comments and Reactions
+
+Members of an album may comment on an asset or on the album and react to an asset. Each is end-to-end encrypted, authenticated by MLS and invisible to the server.
+
+```rust
+AlbumActivity {
+  activity_id: UUIDv7,
+  target:      Album | Asset(asset_id),
+  kind:        Comment { text: String /* ≤ 4096 bytes */ } | Reaction { emoji: String /* one grapheme */ },
+  replaces:    Option<activity_id>,   // an edit, by the original author only
+  removes:     Option<activity_id>,   // a delete, by the author or the album owner
+  _unknown:    Map,
+}
+```
+
+- **Sent as an MLS application message** of the current epoch, so the sender is authenticated by the group and only current members can read it. Any member, reader or writer, may send one.
+- **Kept as a sealed record.** The sender also posts the same record sealed under the epoch's AMK, in the metadata-blob format ([](/design/cryptography/encryption/#metadata-blob-wire-format)), so a new device or a joiner reads past activity within the album's `history_policy` ([](#history-delivery-for-new-joiners)), and a removed member reads none from later epochs.
+- **Order.** Activity is ordered by epoch, then by the sender's sequence within it, then by `activity_id`. Edits and deletes are later records, so replay is idempotent.
+- **Moderation.** The owner may remove any comment; a removal hides it on every member's device. Reporting to the server operator follows [](/design/moderation/).
+- **Alerts are local.** A member's device raises a local alert after it syncs new activity ([](/design/notifications/#alert-classes)); no server composes or relays one.
+- **Not on share links.** A share-link viewer has no group membership and can neither read nor write activity.
+
 ## Forward Secrecy & Post-Compromise Security
 
 At-rest ciphertext persists, so true forward secrecy does not apply to it. Each epoch bump guarantees that compromising the current epoch reveals nothing about past epochs and that removed members cannot read future epochs. Forward secrecy for data in transit comes from TLS 1.3 ([](/design/networking/#transport-security)). Lost commits, divergence and re-keying are in [](/design/mls-resilience/).
+
+## Known Gaps
+
+- Album activity is not implemented: no `AlbumActivity` message, record or alert exists.
 
 ## Validation
 

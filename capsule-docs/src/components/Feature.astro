@@ -23,7 +23,15 @@ if (!linkLabel?.trim()) {
 }
 // On a locale's front page the link stays in that locale: Starlight serves the
 // doc there, in English with its fallback notice until it is translated.
-const target = localizePath(href, Astro.locals.starlightRoute.locale);
+// starlight-llms-txt renders pages outside a Starlight route, where reading
+// starlightRoute throws; its bundles are English, so the root locale applies.
+let locale: string | undefined;
+try {
+    locale = Astro.locals.starlightRoute.locale;
+} catch {
+    locale = undefined;
+}
+const target = localizePath(href, locale);
 ---
 
 <article class="feature">
