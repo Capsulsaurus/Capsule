@@ -298,7 +298,7 @@ and does not write `X-Forwarded-For`.
 A session lasts `SESSION_TTL_DAYS` (default 180) without an access-token issuance, and never
 longer than `SESSION_HARD_CAP_DAYS` (default 365) from sign-in. The server refuses to start if
 either is zero or negative, or if the cap is shorter than the window. See
-[session expiry](/design/authentication/#session-expiry-and-revocation). To make your identity
+[](/design/authentication/#session-expiry-and-revocation). To make your identity
 provider the only way to sign in, set `PASSWORD_AUTH_DISABLED=true`; `serve` then refuses to start
 without a configured provider (`OIDC_ISSUER` and `OIDC_CLIENT_ID`, as in `.env.example`).
 
