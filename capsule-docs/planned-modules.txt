@@ -18,3 +18,4 @@ capsule-library::search	The stateful half of local search: SQLite FTS5 trigram t
 capsule-core::places	Pure places maths: Web Mercator cell ids, the cluster pyramid arithmetic and datum handling. Contract: design/places.md. Lands with the location-index issue filed from the architecture-overhaul PR (follows #987/#988).
 capsule-library::places	The location index, cluster pyramid and per-cell place-name cache in the catalog. Contract: design/places.md. Lands with the location-index issue filed from the architecture-overhaul PR (follows #987/#988).
 capsule-library::export	Plaintext export: plan/run/resume, ZIP (zip writer) and tar outputs, sidecars and the checksums manifest, behind FFI and wasm sinks. Contract: design/export.md. Lands with the export-core issue filed from the architecture-overhaul PR.
+capsule-library::memories	On-device memory generators (On This Day, trips, people, birthdays) over the catalog. Contract: design/memories.md. Lands with #1290.

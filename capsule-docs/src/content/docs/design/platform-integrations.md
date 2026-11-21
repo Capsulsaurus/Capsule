@@ -112,7 +112,7 @@ Spotlight indexing is **opt-in and off by default**. An index of captions, place
 A widget runs in an extension and its rendered views are archived and drawn by the system, including on the Lock Screen, so photo content in a widget crosses the boundary.
 
 - **v1: a status widget.** Sealed, pending and in-custody counts and the last sync time. No pixels, names or places.
-- **Later: a photo widget** (a featured photo or memory), opt-in by adding it, with its content marked privacy-sensitive so it is redacted while the device is locked. The extension needs the album keys through a shared keychain access group, which widens the key's exposure to a second process and is decided in [](/design/cryptography/keys/) before it ships.
+- **Later: a photo widget** (a featured photo or a memory, [](/design/memories/)), opt-in by adding it, with its content marked privacy-sensitive so it is redacted while the device is locked. The extension needs the album keys through a shared keychain access group, which widens the key's exposure to a second process and is decided in [](/design/cryptography/keys/) before it ships.
 
 ### Share Extension
 

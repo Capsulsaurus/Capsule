@@ -39,6 +39,7 @@ Every primitive, construction, format or component identity is **declared in exa
 | Device enrollment | [](/design/device-enrollment/) |
 | ML model identities, embedding provenance | [](/design/ai/) |
 | Face clustering, people corrections | [](/design/people/) |
+| Memory generators, memory state | [](/design/memories/) |
 | LQIP, thumbnail/preview formats | [](/design/thumbnails/) |
 | Server filesystem, required services | [](/design/filesystem/server/) |
 | Client filesystem, local index | [](/design/filesystem/client/) |

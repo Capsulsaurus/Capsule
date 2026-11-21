@@ -245,11 +245,12 @@ LibrarySettingsV1 {
   source_kind_defaults:     Map<SourceKind, Lww<Option<album_id>>>,             // Organization — Scope Grammar
   aggregated_album_covers:  Map<group_id,   Lww<Option<asset_id>>>,             // per-viewer; Federation
   people:                   PeopleSection,                                       // People — Corrections
+  memories:                 Map<memory_id,  Lww<Option<MemoryState>>>,          // Memories — Synced State
   _unknown:                 Map,
 }
 ```
 
-This page owns the envelope, keying, versioning and merge. [](/design/organization/#smart-album-definition-schema), [](/design/organization/#scope-grammar-local-source--album-mapping), [](/design/federation/#membership-and-rendering) and [](/design/people/#corrections) own the section value schemas. An absent or `None` cover falls back to the newest constituent asset.
+This page owns the envelope, keying, versioning and merge. [](/design/organization/#smart-album-definition-schema), [](/design/organization/#scope-grammar-local-source--album-mapping), [](/design/federation/#membership-and-rendering), [](/design/people/#corrections) and [](/design/memories/#synced-state) own the section value schemas. An absent or `None` cover falls back to the newest constituent asset.
 
 - **Shape.** Every section is a keyed map of LWW registers over `Option<value>`; a stamped `None` is a tombstone. The document has no `signature` field: each mutation is a signed operation.
 - **Keying.** Readable by the owner's devices and owner-set members and by **no** album co-member, so it is keyed under the OGK, not an AMK. `settings_doc_id` is an identifier, not a key, derived from the account master key ([](/design/cryptography/keys/#key-chain)) under a dedicated label. Operations use the metadata-blob wire format ([](/design/cryptography/encryption/#metadata-blob-wire-format)) with key `HKDF-SHA512(ikm = OGK_v{n}, salt = settings_doc_id || nonce, info = "library-settings/v1", length = 32)` and a server-visible big-endian `u32` `ogk_version` before the nonce. A fresh nonce per write re-rolls key and nonce; a reused nonce is refused. Rewrites use the current epoch, and removed owner-set members derive no future epoch.
