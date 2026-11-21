@@ -104,10 +104,14 @@ one is designed.
   it, so text scrolling under it fades uniformly rather than showing through at the edges. The bar
   is laid out by the window's width alone, so it is identical on every page, the front page
   included, and a navigation in a browser with view transitions keeps it in place, the mobile menu
-  button with it. The row of section links needs a wide window (72rem, where the table of contents
-  also appears); narrower, it folds into one pill beside the wordmark, named for the current
-  section ("Sections" outside one) and drawn like the version switcher, that opens the same links
-  as a list. It is part of the bar, so every page has it, splash pages included. A pill rather than
+  button with it. The section links take the widest of three forms that fits the free space
+  between the wordmark and the search field: the row as designed, the same row with tighter
+  spacing, or one pill beside the wordmark, named for the current section ("Sections" outside one)
+  and drawn like the version switcher, that opens the same links as a list. They change form only
+  when they would otherwise meet a neighbour, never at a fixed window width, and grow back only
+  with room to spare, so a window resting on a boundary does not flicker. Every change after the
+  page opens animates, unless the reader asks for reduced motion: the links narrow, then fold away into the pill as it slides to the
+  wordmark, and back. The pill is part of the bar, so every page has it, splash pages included. A pill rather than
   a scrolling strip of tabs: it fits the bar's single row at any width, and a strip would need a
   second row under the glass or hide sections off its edge. Below 50rem the switcher, GitHub
   button and theme toggle move into the menu, or on a splash page, which has no menu, into the
@@ -202,6 +206,9 @@ one is designed.
   (`src/lib/blog-posts.test.mjs` proves the contract check itself).
 - `src/lib/site-nav.test.mjs` proves the header and footer links, their order, the Blog link's
   dependence on the blog being live, and that every internal link resolves to a page.
+- `src/lib/nav-fit.test.mjs` proves which form the section links take for a given free space,
+  the margin before they grow back, and that the header script sets the form before the first
+  frame and enables animation only after it.
 - `src/lib/version-menu.test.mjs` proves what the version switcher lists, where its keyboard focus
   moves and which side of the button it opens on.
 - `src/lib/theme-cycle.test.mjs` proves the toggle's cycle and that it stores what Starlight reads;
