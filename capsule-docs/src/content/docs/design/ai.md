@@ -26,10 +26,10 @@ Image and text query are embedded and compared by distance, and [](#embedding-pr
 
 ### Semantic Search
 
-Semantic search is how a text query reaches this index. The query's free text is embedded with the **Semantic Search** embedder ([](#models-and-algorithms)), and its nearest neighbours are taken from the current canonical version of the device's platform partition, so stale and other-partition vectors are excluded structurally. [](/design/search/#semantic-search) owns how the result merges with lexical search.
+Semantic search is how a text query reaches this index. The query's free text is embedded with the **Semantic Search** embedder ([](#models-and-algorithms)), and its nearest neighbours are taken from the canonical vectors of the current model version ([](#synced-embeddings)), so stale and unpublished local vectors are excluded structurally. [](/design/search/#semantic-search) owns how the result merges with lexical search.
 
 - **On device, no network.** The query embedding and the scan run locally. A device without the embedder's weights runs lexical search only and says so; it never sends a query anywhere to be embedded.
-- **A ranking, never a stored fact.** Similarity is not bit-exact across platform partitions and changes with each model version, so it is never written to a sidecar, never a smart-album term, and never compared across `(model_id, model_version)` tuples ([](#embedding-provenance)).
+- **A ranking, never a stored fact.** Similarity depends on the querying device's text encoder and changes with each model version, so it is never written to a sidecar, never a smart-album term, and never compared across `(model_id, model_version)` tuples ([](#embedding-provenance)).
 - **Filtered before it is ranked.** Structured search terms narrow the candidate set first. When the narrowed set is small, the scan ranks exactly that set rather than taking a global top-*k* and filtering afterwards, which could return nothing.
 - **Explained.** A hit that only semantic search produced is marked as a semantic match in the result.
 
@@ -58,7 +58,7 @@ Execution mode is chosen per device from available RAM: **horizontal** (model-by
 
 ## Database Indexing and View Generation
 
-Embeddings live in local **SQLite + `sqlite-vec`** and are **derived state**. A lost index is rebuilt by re-running inference over originals, the same path a model bump takes.
+Embeddings live in local **SQLite + `sqlite-vec`** and are **derived state**. A lost index is refilled from the synced embedding derivatives ([](#synced-embeddings)) and, for assets that have none, by re-running inference over originals, the same path a model bump takes.
 
 ## Embedding Provenance
 
@@ -67,7 +67,18 @@ Every stored embedding (local index, backup, or embedding-class `DerivativeManif
 - The index MUST **refuse inserts** from a `(model_id, model_version)` unknown to the inventory. Known-but-superseded versions are admitted stale-flagged (the regeneration queue) and excluded from queries.
 - A model swap bumps `model_version`. Regeneration replaces entries per asset, deleting old ones only after new ones persist, never truncate-and-rebuild ([](/design/threat-model/validation/#client-side-validation-invariants)).
 
-**E2EE constraint.** Comparable embeddings need byte-identical inference across devices, so each device pins a deterministic execution path (fixed operators, deterministic kernels, quantized weights) and passes a known-answer check. Model size is bounded by the lowest-end supported device. A device that cannot reach bit-exactness tags its embeddings with a `platform` discriminator, and they are **never merged** into another platform's index: the worst case is duplicated regeneration, never wrong results (row #14 of [](/design/threat-model/scenarios/#damage-scenario--invariant-map)).
+**One canonical vector per asset.** Image embeddings are computed once and shared ([](#synced-embeddings)), so devices compare the *same* stored vector rather than needing byte-identical inference. Only the text-query encoder runs on every device, and its output is only ever compared against image vectors of the same `(model_id, model_version)`. Each device still pins a deterministic execution path (fixed operators, deterministic kernels, quantized weights) and must pass the model's known-answer check before it may **publish** a vector. A device that fails the check never publishes; its locally computed vectors carry a `platform` discriminator and are **never merged** into the canonical index: the worst case is duplicated regeneration, never wrong results (row #14 of [](/design/threat-model/scenarios/#damage-scenario--invariant-map)).
+
+### Synced Embeddings
+
+An image embedding is stored as an `embedding`-role derivative ([](/design/cryptography/provenance/#derivative-provenance)) carrying its `(model_id, model_version)`, sealed and chained like every other derivative. It is the asset's canonical vector for that model.
+
+- **Fetch before compute.** The indexing queue first fetches the asset's embedding derivative for the current model. It runs inference only when none exists, or when the existing one names a model the device does not know.
+- **Publish once.** A device that computes a vector, passes the known-answer check and holds the album's write tier publishes it as the first link of the `(asset_id, embedding)` chain. A device that finds a chain head already present for the same `(model_id, model_version)` discards its own vector and adopts the head; it never publishes a competing link. A model bump is a `derivative-replace` naming the new tuple, so both tuples never mix ([](#embedding-provenance)).
+- **Shared with readers.** Album co-members open the derivative with the album key like any thumbnail, so a reader-tier member never re-indexes an album it can see but cannot write.
+- **Faces ride the same rule.** Face boxes and face embeddings ([](#dense-tagging)) are published as derivatives of the same model-tagged form once their role is added to the closed role set, which is a `protocol_version` change ([](/design/threat-model/schema-rules/)).
+- **Quota.** Embedding derivatives count as derivative bytes against the asset holder ([](/design/quota/#accounting-model)).
+- **Leaks nothing new.** The server sees one more sealed blob per asset per model, of a size fixed by the model; a vector's contents are never visible to it.
 
 ## Models and Algorithms
 
@@ -92,6 +103,10 @@ Each gains a full inventory row when it ships: VLM tagging/OCR/captioning (Flore
 - **Re-ID pseudo-labelling.** A high-confidence face match labels the person box it overlaps (IoU > 0.7), and that body embedding (OSNet) then labels the same person facing away within the event by cosine similarity.
 - **Vector search.** `sqlite-vec` `vec0` tables with inner-product distance over normalised embeddings and a brute-force SIMD scan. At millions of rows, escalate to its ANN index or a partitioned scan.
 
+## Known Gaps
+
+- Synced embeddings ([](#synced-embeddings)) are not implemented: the index is filled only by local inference, and no device publishes or fetches an `embedding`-role derivative.
+
 ## Validation
 
 - **Registry (unit).** Each `model_id` maps to one inventory row; unknown tuples are refused at insert.
@@ -99,6 +114,7 @@ Each gains a full inventory row when it ships: VLM tagging/OCR/captioning (Flore
 - **Provenance round-trip (unit).** The tuple survives insert and query.
 - **Namespace separation (unit).** Promotion creates a user-scoped entry with a fresh `add_id`; the AI entry stays separate.
 - **Inference parity (smoke, per platform).** Same fixture → byte-identical vectors, or the platform partition engages.
+- **Synced embeddings (unit).** A present chain head for the current tuple suppresses inference; a device failing the known-answer check never publishes; a second device's vector for the same tuple is discarded, never chained; an unknown tuple triggers local inference.
 - **Algorithms (smoke).** Expected keyframes and Re-ID labels.
 - **Thermal / batching (smoke).** Pause past threshold, resume after cooldown, no OOM on a low-memory testbed.
 

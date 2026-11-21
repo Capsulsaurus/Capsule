@@ -10,7 +10,8 @@ Quota is charged to `upload_user_id` (the authenticated uploader), not `owner_id
 
 `quota_used(user)` is the sum of the ciphertext sizes of every blob attributed to that user: originals, derivatives, metadata blobs and provenance blobs.
 
-- **Attribution is global by content address.** A blob counts against only the first uploader; a later identical upload is a merge ([](/design/transfer/upload/#deduplication-and-merge)) and charges nothing.
+- **Attribution is global by content address.** A blob counts against only the first uploader; a later identical upload is a merge ([](/design/transfer/upload/#deduplication-and-merge)) and charges nothing. The address is over ciphertext ([](/design/cryptography/encryption/#content-address)) and every file key is fresh, so two users' copies of the same photo never share an address: a merge is the same sealed bytes arriving again (a retry, a re-announce, a federated pull), never evidence that two people hold the same plaintext.
+- **Derivatives count.** Thumbnails, previews and model-tagged derivatives such as synced embeddings ([](/design/ai/#synced-embeddings)) are charged like any blob.
 - **Trash counts at full size** until the retention window ([](/design/organization/#retention-window)) expires and the asset is hard-purged.
 - **Credit belongs to the GC sweep, not the purge.** A purge drops one asset's references. The bytes are credited back, to whoever the ledger says was charged, only when the collector ([](/design/filesystem/server/#deletion-and-garbage-collection)) releases a zero-reference blob. Refunding at purge time would refund bytes still stored for another holder.
 - **Federated-received blobs count against the receiver**, deduped by content hash, as described in [](#federated-blobs).
