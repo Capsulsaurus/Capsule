@@ -37,6 +37,7 @@ A closed enum. Thresholds belong to the trigger owner, and parameters are plain 
 | `quota_soft` / `quota_grace_expiring` | [](/design/quota/#thresholds-and-states) | `grace` (`counting`/`expired`), second only | No |
 | `quarantine_pending` | [](/design/threat-model/scenarios/#quarantine-surfaces) | `count` | No |
 | `drop_pending` | [](/design/web-upload/#drop-and-adoption-lifecycle) | `count` | No |
+| `album_activity` | [](/design/cryptography/mls/#comments-and-reactions) | `count`, `kind` (`comment`/`reaction`) | No |
 
 ### The Pre-Arm Rule
 
@@ -107,7 +108,7 @@ So no **APNs** or **FCM** (bound to the published app), and no project relay.
 
 ## Non-Goals
 
-Server-composed or rich notifications; APNs, FCM or relays; comment and reaction alerts; email; presence.
+Server-composed or rich notifications; APNs, FCM or relays; comment and reaction alerts composed or relayed by a server (a device raises `album_activity` only after it has synced the activity itself); email; presence.
 
 ## Validation
 

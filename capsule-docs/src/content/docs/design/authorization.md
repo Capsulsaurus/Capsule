@@ -57,6 +57,16 @@ The server cannot read the MLS group. It holds the owner's **signed roster** (`P
 
 The roster is a transport control, not confidentiality. Removing a writer reclaims nothing: their uploads stay, still billed to them and deletable only by the owner or a current writer ([](/design/quota/#scope-decisions)).
 
+## Partner Sharing
+
+A **partner grant** shares a user's albums with another user as a standing rule rather than album by album: every album the owner creates from then on is shared with the partner, and the owner may add existing albums in one step.
+
+- **A signed record.** The grant names the partner, the role (`reader` or `writer`) and the scope (future albums, plus optionally a listed set of existing ones). It is signed by an owner device and kept in the owner's library-settings document ([](/design/metadata/#the-library-settings-document)), so the server never learns who is a partner.
+- **The owner's devices carry it out.** Adding a member is an owner commit ([](/design/cryptography/mls/#add-user-bob-to-album)) that needs the album's keys, which the server does not hold. On album creation, and on every sync, an owner device adds the partner to each album the grant covers that lacks them. An album created while no owner device is online is shared at the next owner sync; the app says "shared when your devices next sync", never that it is shared already.
+- **Revocation** removes the partner from every album the grant added them to, each an ordinary `Remove` that advances the epoch ([](/design/cryptography/mls/#remove-user-charlie)). Albums the owner shared with the partner by hand are left alone.
+- **In the partner's timeline.** Whether a partner's albums appear in the partner's own timeline, or only under Shared, is a per-viewer setting in the partner's library settings.
+- **Federated.** A partner on another server is added like any federated member ([](/design/federation/)).
+
 ## The Server Executes But Never Authorizes
 
 The server carries out deletes and replaces but never permits them. Without keys, it still enforces the structural envelope ([](/design/threat-model/validation/#server-side-validation-invariants)) before persisting.
@@ -156,6 +166,7 @@ Every other route is authenticated and bounded by its own structural caps (body 
 - The deep-verify budget counts requests, 4 an hour per account (`DEEP_VERIFY`, `capsule-server/src/counter/budgets.rs:148`), not bytes re-read.
 - Share serving has no byte budget ([](/design/share-links/#known-gaps)).
 - Sign-in still charges a per-account lockout budget ([](/design/authentication/#known-gaps)).
+- Partner grants are not implemented; they wait on the library-settings document and on owner devices reconciling album membership.
 
 ## Validation
 
