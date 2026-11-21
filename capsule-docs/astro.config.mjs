@@ -7,11 +7,18 @@ import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'astro/config';
 import starlightBlog from 'starlight-blog';
 import starlightLinksValidator from 'starlight-links-validator';
+import starlightLlmsTxt from 'starlight-llms-txt';
 import { referenceSidebar } from './scripts/reference-groups.mjs';
 import baseLinks from './src/lib/base-links.mjs';
 import { BLOG_AUTHORS, hasPublishedPost } from './src/lib/blog-posts.mjs';
 import { resolveBuildCommit } from './src/lib/build-commit.mjs';
 import { versionFromBranch } from './src/lib/docs-version.mjs';
+import {
+    LLMS_DETAILS,
+    LLMS_PROMOTE,
+    LLMS_SETS,
+    LLMS_SMALL_EXCLUDE,
+} from './src/lib/llms-sets.mjs';
 import { starlightLocales } from './src/lib/locales.mjs';
 import markdownCacheKey from './src/lib/markdown-cache-key.mjs';
 import { sidebarTranslations } from './src/lib/nav-labels.mjs';
@@ -292,6 +299,29 @@ export default defineConfig({
                               postCount: 10,
                               recentPostCount: 5,
                               authors: BLOG_AUTHORS,
+                          }),
+                      ]
+                    : []),
+                // `/llms.txt` and its plain-text bundles, so an LLM agent reads
+                // the docs without crawling HTML. Sets: src/lib/llms-sets.mjs.
+                // Only on the latest build: agents look for /llms.txt at the
+                // site root, and base-links.mjs rebases only HTML, so a release
+                // build's bundles would link into the latest docs.
+                ...(docsVersion.version === null
+                    ? [
+                          starlightLlmsTxt({
+                              projectName: 'Capsule',
+                              details: LLMS_DETAILS,
+                              customSets: LLMS_SETS,
+                              exclude: LLMS_SMALL_EXCLUDE,
+                              promote: LLMS_PROMOTE,
+                              // One setting for llms-small and the topic sets:
+                              // keep line breaks so headings, lists and tables
+                              // stay parseable.
+                              minify: { whitespace: false },
+                              // Heading anchors would read "Section titled …"
+                              // after every heading.
+                              customSelectors: { all: ['.sl-anchor-link'] },
                           }),
                       ]
                     : []),

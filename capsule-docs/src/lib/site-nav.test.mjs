@@ -51,6 +51,7 @@ describe('footerLinks', () => {
             'Blog',
             'Roadmap',
             'Discussions',
+            'Downloads',
             'Support',
             'GitHub',
         ]);
@@ -60,6 +61,7 @@ describe('footerLinks', () => {
             'Documentation',
             'Roadmap',
             'Discussions',
+            'Downloads',
             'Support',
             'GitHub',
         ]);
@@ -190,6 +192,7 @@ describe("on a locale's routes", () => {
             ['التوثيق', '/ar/guides/getting-started/'],
             ['خارطة الطريق', `${REPO}/blob/master/ROADMAP.md`],
             ['النقاشات', `${REPO}/discussions`],
+            ['التنزيلات', '/ar/downloads/'],
             ['الدعم', '/ar/support/'],
             ['GitHub', REPO],
         ]);

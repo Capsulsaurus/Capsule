@@ -138,8 +138,8 @@ one is designed.
   a one-line status, the differentiators with a link named for the doc behind each, the
   table-stakes tier, why Capsule is built this way, and where to start.
 - **Footer.** On every page, centred: links to the documentation, the blog (once it is live), the
-  roadmap, discussions, the support page and the source, then the copyright holder, the licence
-  line and the commit the site was built from, linked to that commit. On a page shorter than the window it rests on
+  roadmap, discussions, the downloads page, the support page and the source, then the copyright
+  holder, the licence line and the commit the site was built from, linked to that commit. On a page shorter than the window it rests on
   the window's bottom edge; on a longer one it follows the content.
 - **Generated reference.** A generated page says so under its title: the surface (REST API, CLI,
   an SDK), a dashed "Generated" tag and its source, and for REST a download of the OpenAPI

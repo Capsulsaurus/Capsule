@@ -31,6 +31,7 @@ describe('NAV_LABELS', () => {
             'Documentation',
             'Roadmap',
             'Discussions',
+            'Downloads',
             'Support',
         ]) {
             expect(NAV_LABELS).toHaveProperty(label);
