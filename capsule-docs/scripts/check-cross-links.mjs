@@ -21,7 +21,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, normalize, resolve, sep } from 'node:path';
 import { headingAnchors, linkTargets } from './lib/markdown.mjs';
-import { contentFileForRoute as routeFile } from './lib/routes.mjs';
+import { servingFileForRoute as routeFile } from './lib/routes.mjs';
 import { walkFiles } from './lib/walk.mjs';
 
 /** Where the Starlight content collection lives, relative to the repo root. */
@@ -56,7 +56,9 @@ function siteOrigin(root) {
 
 /**
  * The repo-relative content file serving a site route (`/design/thumbnails/`),
- * or null when nothing serves it.
+ * or null when nothing serves it. A locale's route (`/ja/design/`) is served
+ * by its translation or, failing one, the English page Starlight falls back
+ * to.
  *
  * @param {string} root
  * @param {string} route Pathname, with or without surrounding slashes.

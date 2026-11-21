@@ -1,0 +1,111 @@
+---
+title: Capsule
+description: एक ओपन-सोर्स फ़ोटो लाइब्रेरी जो जीवन भर की फ़ोटो को आपके अपने डिवाइस पर व्यवस्थित करती है, हर फ़ोटो को एंड-टू-एंड एन्क्रिप्टेड रखती है, और सर्वरों के पार शेयर करने के लिए बनी है।
+status: draft
+template: splash
+hero:
+  title: जीवन भर की फ़ोटो, व्यवस्थित और निजी
+  tagline: Capsule आपकी पूरी लाइब्रेरी को आपके अपने डिवाइस पर व्यवस्थित करता है, हर फ़ोटो को ऐसे सर्वर पर एंड-टू-एंड एन्क्रिप्टेड रखता है जिसके पास कभी कोई कुंजी नहीं होती, और सर्वरों के पार शेयर करने के लिए बना है।
+  image:
+    # Raw HTML rather than `file`: Starlight's hero sizes `file` images to a
+    # 400x400 square, which crops a portrait screenshot.
+    html: |
+      <img class="hero-shot hero-shot-light" src="/images/hero-light.webp" width="800" height="1538" alt="iPhone पर Capsule, लाइब्रेरी टाइमलाइन दिखाते हुए" />
+      <img class="hero-shot hero-shot-dark" src="/images/hero-dark.webp" width="800" height="1538" alt="iPhone पर Capsule, लाइब्रेरी टाइमलाइन दिखाते हुए" />
+  actions:
+    - text: शुरू करें
+      link: /guides/getting-started/
+      icon: right-arrow
+    - text: डिज़ाइन पढ़ें
+      link: /design/
+      variant: secondary
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+import Feature from '../../../components/Feature.astro';
+import FeatureGrid from '../../../components/FeatureGrid.astro';
+import StatusStrip from '../../../components/StatusStrip.astro';
+
+<StatusStrip
+  text="बीटा टेस्टरों तक पहुँचाने से पहले मोबाइल क्लाइंट को स्थिर और बेहतर बनाया जा रहा है।"
+  href="https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md"
+  linkLabel="रोडमैप"
+/>
+
+<a id="what-sets-capsule-apart"></a>
+
+## Capsule को क्या अलग बनाता है
+
+<FeatureGrid>
+  <Feature icon="random" title="किसी भी पैमाने पर व्यवस्थित" href="/features/smart-albums/" linkLabel="स्मार्ट एल्बम">
+    खोज, स्मार्ट एल्बम और अपने-आप टैगिंग आपके डिवाइस पर, एक पूरे लोकल इंडेक्स के ऊपर
+    चलने के लिए बनाए गए हैं, ताकि लाखों फ़ोटो वाली लाइब्रेरी में भी आसानी से घूमा जा सके
+    और किसी को उसे हाथ से छाँटना न पड़े।
+  </Feature>
+  <Feature icon="padlock" title="बिना कुंजियों वाला सर्वर" href="/design/cryptography/" linkLabel="क्रिप्टोग्राफ़ी डिज़ाइन">
+    सर्वर सिफ़रटेक्स्ट संग्रहीत करता है और उसके पास कभी कोई कुंजी नहीं होती। वह न कोई फ़ोटो,
+    न कैप्शन और न ही एल्बम का शीर्षक पढ़ सकता है, फिर भी वह स्वीकार किए गए हर अपलोड के लिए
+    एक हस्ताक्षरित कस्टडी रसीद देता है।
+  </Feature>
+  <Feature icon="server" title="सर्वरों के पार शेयरिंग" href="/design/federation/" linkLabel="फ़ेडरेशन डिज़ाइन">
+    भरोसा सर्वर में नहीं, क्रिप्टोग्राफ़ी में रहता है, इसलिए अलग-अलग Capsule सर्वरों पर
+    मौजूद लोग बीच में किसी केंद्रीय सेवा के बिना एक-दूसरे के साथ एल्बम शेयर कर सकें, ऐसा
+    इसका लक्ष्य है।
+  </Feature>
+  <Feature icon="laptop" title="आपकी पूरी लाइब्रेरी, ऑफ़लाइन" href="/features/offline-library/" linkLabel="ऑफ़लाइन लाइब्रेरी">
+    हर नेटिव ऐप आपकी सहेजी गई हर फ़ोटो का पूरा इंडेक्स रखने के लिए बना है, ताकि बिना
+    कनेक्शन के भी सब कुछ ब्राउज़ किया जा सके, खोजा जा सके और व्यवस्थित किया जा सके।
+  </Feature>
+  <Feature icon="approve-check-circle" title="सत्यापन योग्य इतिहास" href="/design/cryptography/provenance/" linkLabel="प्रोवेनेंस डिज़ाइन">
+    हर एसेट के साथ एक हस्ताक्षरित, केवल-जोड़ने-योग्य (append-only) प्रोवेनेंस शृंखला होती
+    है, इसलिए किस व्यक्ति और किस डिवाइस ने उसे इम्पोर्ट या संपादित किया, यह भरोसे पर नहीं
+    माना जाता बल्कि सत्यापित किया जाता है।
+  </Feature>
+  <Feature icon="database" title="बनावट से ही पुनर्प्राप्त करने योग्य" href="/design/backup-recovery/" linkLabel="बैकअप और रिकवरी">
+    हर एसेट के साथ एक हस्ताक्षरित मेटाडेटा साइडकार होता है, इसलिए लाइब्रेरी डेटाबेस के
+    बिना भी पढ़ी जा सकती है और आंशिक नुकसान के बाद फिर से बनाई जा सकती है।
+  </Feature>
+</FeatureGrid>
+
+<a id="everything-you-would-expect"></a>
+
+## वह सब जिसकी आप उम्मीद करते हैं
+
+मूल फ़ाइलें पूरी गुणवत्ता में सुरक्षित, और बाइट-दर-बाइट पुनर्स्थापित करने योग्य। RAW और
+वीडियो प्रथम-श्रेणी फ़ॉर्मैट के रूप में। हर प्लेटफ़ॉर्म के अपने कंट्रोल से बने नेटिव ऐप्स।
+एक CLI और TUI जो वह सब कर सकते हैं जो ऐप्स कर सकते हैं; देखें [](/reference/cli/)।
+
+<a id="why-it-is-built-this-way"></a>
+
+## इसे इस तरह क्यों बनाया गया है
+
+ज़्यादातर फ़ोटो सेवाएँ आपको उन सुविधाओं के बीच चुनने पर मजबूर करती हैं जो सर्वर आपकी
+लाइब्रेरी पढ़कर देता है, और उस निजता के बीच जो तब मिलती है जब सर्वर उसे पढ़ ही न सके।
+Capsule निजता चुनता है और उन सुविधाओं को आपके डिवाइस पर, ऐसे डेटा के ऊपर फिर से बनाता है
+जिसे केवल वही डिक्रिप्ट कर सकते हैं।
+
+इस चुनाव की कीमत है, और डिज़ाइन दस्तावेज़ उसे छिपाने के बजाय साफ़-साफ़ बताते हैं: बिना
+कुंजी वाला सर्वर आपको क्या बता सकता है और क्या नहीं ([](/design/notifications/)), कुंजी खो
+जाने पर क्या होता है ([](/design/backup-recovery/#recovery-paths)), और किसी दोषपूर्ण या
+शत्रुतापूर्ण क्लाइंट को क्या करने से रोका जाता है ([](/design/threat-model/))।
+
+<a id="get-started"></a>
+
+## शुरू करें
+
+<CardGrid>
+  <Card title="सर्वर होस्ट करें" icon="server">
+    Capsule को अपने हार्डवेयर पर चलाएँ। [](/guides/self-hosting/)
+  </Card>
+  <Card title="Capsule इस्तेमाल करें" icon="open-book">
+    अपनी लाइब्रेरी इम्पोर्ट करें, व्यवस्थित करें और ब्राउज़ करें। [](/guides/user-guide/)
+  </Card>
+  <Card title="अपनी लाइब्रेरी लाएँ" icon="cloud-download">
+    Google Photos Takeout को उसके मेटाडेटा सहित इम्पोर्ट करें।
+    [](/guides/google-photos-migration/)
+  </Card>
+  <Card title="Capsule बनाएँ" icon="code-branch">
+    हर पंक्ति ओपन सोर्स है और खुले में विकसित की जाती है।
+    [](/development/local-development/)
+  </Card>
+</CardGrid>

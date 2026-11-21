@@ -28,12 +28,16 @@
     "target": "- **सर्वरों के पार शेयरिंग।** अलग-अलग सर्वरों पर मौजूद लोग एक-दूसरे के साथ एल्बम शेयर करते हैं, ठीक वैसे ही जैसे अलग-अलग प्रदाताओं के बीच ईमेल काम करता है। किसी को आपके सर्वर से जुड़ने की ज़रूरत नहीं, और बीच में कोई कंपनी नहीं बैठी होती।"
   },
   {
-    "source": "- **Your whole library, even offline.** Every app keeps an index of everything you have ever kept, so you can browse, search and organize all of it on a plane, at the border, or far from any signal.",
-    "target": "- **आपकी पूरी लाइब्रेरी, ऑफ़लाइन भी।** हर ऐप उन सभी चीज़ों का इंडेक्स रखता है जो आपने कभी सहेजी हैं, ताकि आप हवाई जहाज़ में, सीमा पर या किसी भी सिग्नल से दूर रहकर भी पूरी लाइब्रेरी ब्राउज़ कर सकें, खोज सकें और व्यवस्थित कर सकें।"
+    "source": "- **Your whole library, even offline.** Every app keeps an index of everything you have ever kept, so you can browse, search and organize all of it, place names included\\*, on a plane, at the border, or far from any signal.",
+    "target": "- **आपकी पूरी लाइब्रेरी, ऑफ़लाइन भी।** हर ऐप उन सभी चीज़ों का इंडेक्स रखता है जो आपने कभी सहेजी हैं, ताकि आप हवाई जहाज़ में, सीमा पर या किसी भी सिग्नल से दूर रहकर भी पूरी लाइब्रेरी, जगहों के नाम समेत\\*, ब्राउज़ कर सकें, खोज सकें और व्यवस्थित कर सकें।"
   },
   {
     "source": "- **Straight from the camera.** Pull photos over Wi-Fi or cable directly from your camera, with every file checksummed on arrival.",
     "target": "- **सीधे कैमरे से।** Wi-Fi या केबल के ज़रिए फ़ोटो सीधे अपने कैमरे से लें, और पहुँचते ही हर फ़ाइल का चेकसम जाँचा जाता है।"
+  },
+  {
+    "source": "- **Hand off huge uploads\\*.** On slow Wi-Fi, your phone hands a sealed bundle to your laptop, which uploads it as sealed bytes and never decrypts it.",
+    "target": "- **बड़े अपलोड किसी और को सौंपें\\*।** धीमे Wi-Fi पर आपका फ़ोन एक सील किया हुआ बंडल आपके लैपटॉप को सौंप देता है, जो उसे सील किए हुए बाइट्स के रूप में ही अपलोड करता है और कभी डिक्रिप्ट नहीं करता।"
   },
   {
     "source": "- **A library that outlives Capsule.** Every photo sits beside a signed sidecar in an open format, so your library stays readable without the app, without the database, and without us.",
@@ -56,16 +60,16 @@
     "target": "- एल्बम, और आपकी मूल फ़ाइलें, जो मेटाडेटा सहित बाइट-दर-बाइट सुरक्षित रहती हैं और ठीक उसी रूप में पुनर्स्थापित की जा सकती हैं जिसमें वे आई थीं"
   },
   {
-    "source": "- Search by date, place, camera, lens, rating and label, run on your device",
-    "target": "- तारीख, जगह, कैमरा, लेंस, रेटिंग और लेबल से खोज, जो आपके डिवाइस पर ही चलती है"
+    "source": "- Search by date and type on your device, and by place, rating and label with typo-tolerant suggestions from your own library and `@people` and `@tag` shortcuts\\*",
+    "target": "- आपके डिवाइस पर तारीख और प्रकार से खोज, और जगह, रेटिंग व लेबल से खोज, साथ में आपकी अपनी लाइब्रेरी से टाइपिंग की गलतियाँ सह लेने वाले सुझाव और `@people` व `@tag` शॉर्टकट\\*"
   },
   {
     "source": "- Ratings, picks and rejects for culling a shoot; labels and captions",
     "target": "- किसी शूट की छँटाई के लिए रेटिंग, पिक और रिजेक्ट; लेबल और कैप्शन"
   },
   {
-    "source": "- A map of where every photo was taken, with location fixes that keep the original",
-    "target": "- हर फ़ोटो कहाँ ली गई, इसका नक्शा, और लोकेशन में सुधार जो मूल जानकारी को बनाए रखते हैं"
+    "source": "- Location fixes that keep the original, and a map of where every photo was taken with pins clustered at every zoom\\*",
+    "target": "- लोकेशन में सुधार जो मूल जानकारी को बनाए रखते हैं, और हर फ़ोटो कहाँ ली गई, इसका नक्शा, हर ज़ूम स्तर पर समूहित पिन\\* के साथ"
   },
   {
     "source": "- Share links anyone can open in a browser, and upload links that let guests add their photos to yours",
@@ -74,6 +78,14 @@
   {
     "source": "- Backups that resume where they stopped, and device-to-device sync over your local network",
     "target": "- बैकअप जो वहीं से फिर शुरू होते हैं जहाँ रुके थे, और आपके लोकल नेटवर्क पर डिवाइस-से-डिवाइस सिंक"
+  },
+  {
+    "source": "- Export albums of any size to folders or ZIP, with your edits or the originals and their metadata\\*",
+    "target": "- किसी भी आकार के एल्बम का फ़ोल्डर या ZIP में एक्सपोर्ट, आपके संपादनों सहित या मूल फ़ाइलों और उनके मेटाडेटा के साथ\\*"
+  },
+  {
+    "source": "- Shortcuts and share-sheet integration on iPhone and Android\\*",
+    "target": "- iPhone और Android पर शॉर्टकट और शेयर शीट इंटीग्रेशन\\*"
   },
   {
     "source": "- Trash with a recovery window, hidden photos, and account recovery if you lose a device",

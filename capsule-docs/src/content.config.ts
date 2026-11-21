@@ -40,5 +40,10 @@ export const collections = {
     // Overrides of UI strings, keyed as in Starlight and its plugins. The blog
     // plugin's metadata strings carry their own " - " separators; the post
     // header supplies its own (src/styles/global.css), so these drop them.
+    // zh-Hans.json and zh-Hant.json are Starlight's own zh-CN and zh-TW
+    // strings: Starlight finds its built-in dictionary by language and
+    // region, so a script-tagged language (src/lib/locales.mjs) would
+    // otherwise render its interface in English. src/lib/locales.test.mjs
+    // keeps them in step with Starlight.
     i18n: defineCollection({ loader: i18nLoader(), schema: i18nSchema() }),
 };

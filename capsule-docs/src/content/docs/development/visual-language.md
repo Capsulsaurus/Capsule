@@ -103,11 +103,18 @@ one is designed.
   is one even pane of tinted glass from its top edge to its bottom edge, the page blurred beneath
   it, so text scrolling under it fades uniformly rather than showing through at the edges. The bar
   is laid out by the window's width alone, so it is identical on every page, the front page
-  included, and a navigation in a browser with view transitions keeps it in place. The section
-  links need a wide window (72rem, where the table of contents also appears); narrower, the sidebar
-  carries the sections, and below 50rem the menu carries the section links and the switcher.
-  Splash pages such as the front page have no menu, so there the sections are reached through the
-  page's own links.
+  included, and a navigation in a browser with view transitions keeps it in place, the mobile menu
+  button with it. The row of section links needs a wide window (72rem, where the table of contents
+  also appears); narrower, it folds into one pill beside the wordmark, named for the current
+  section ("Sections" outside one) and drawn like the version switcher, that opens the same links
+  as a list. It is part of the bar, so every page has it, splash pages included. A pill rather than
+  a scrolling strip of tabs: it fits the bar's single row at any width, and a strip would need a
+  second row under the glass or hide sections off its edge. Below 50rem the switcher, GitHub
+  button and theme toggle move into the menu, or on a splash page, which has no menu, into the
+  section pill's list. On a translated route (`/ja/…`) every header, footer and front-page link
+  stays in that language, with the section labels translated, and a page with no translation
+  shows the English page with Starlight's fallback notice. The language picker sits in the bar on
+  wide windows and in the menu, or the section pill's list on a splash page, on narrow ones.
 - **Page transitions.** Moving between pages animates the content, never the chrome: the header
   holds still, the sidebar crossfades so only its current-page pill changes, and the content and
   table of contents fade out as the new page's fade in, the content leaving from where the reader

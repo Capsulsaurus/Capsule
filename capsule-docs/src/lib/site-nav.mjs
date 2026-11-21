@@ -2,6 +2,14 @@
 // jump links. Their contents and order are a contract of the Visual Language
 // doc (development/visual-language.md). Pure data and functions, so the
 // header, the mobile menu and the footer render one tested list.
+//
+// On a locale's routes (src/lib/locales.mjs) every site link stays in that
+// locale: Starlight serves each page at the locale's route, translated where a
+// translation exists and in English with its fallback notice otherwise. The
+// labels follow the locale too (src/lib/nav-labels.mjs).
+
+import { localizePath } from './locales.mjs';
+import { localizeLabel } from './nav-labels.mjs';
 
 export const REPO = 'https://github.com/Capsulsaurus/Capsule';
 
@@ -16,17 +24,47 @@ export const REPO = 'https://github.com/Capsulsaurus/Capsule';
  * @property {boolean} [external]
  */
 
+/**
+ * Where the links are rendered: whether the blog is live (see
+ * src/lib/blog-posts.mjs) and the locale of the page (a key of
+ * src/lib/locales.mjs, undefined for English).
+ *
+ * @typedef {object} NavOptions
+ * @property {boolean} blogIsLive
+ * @property {string} [locale]
+ */
+
 /** @type {NavLink} */
 const BLOG = { label: 'Blog', href: '/blog/', section: '/blog/' };
 
 /**
- * The header's section links, in order. Blog sits with the docs sections and
- * appears only once the blog is live (see src/lib/blog-posts.mjs).
+ * A link as a locale renders it: its label translated and its site paths
+ * under the locale's prefix. External links keep their address.
  *
- * @param {{ blogIsLive: boolean }} options
+ * @param {NavLink} link
+ * @param {string | undefined} locale
+ * @returns {NavLink}
+ */
+export function localizeLink(link, locale) {
+    if (!locale) return link;
+    return {
+        ...link,
+        label: localizeLabel(link.label, locale),
+        ...(link.external ? {} : { href: localizePath(link.href, locale) }),
+        ...(link.section
+            ? { section: localizePath(link.section, locale) }
+            : {}),
+    };
+}
+
+/**
+ * The header's section links, in order. Blog sits with the docs sections and
+ * appears only once the blog is live.
+ *
+ * @param {NavOptions} options
  * @returns {NavLink[]}
  */
-export function headerLinks({ blogIsLive }) {
+export function headerLinks({ blogIsLive, locale }) {
     return [
         {
             label: 'Guides',
@@ -36,16 +74,16 @@ export function headerLinks({ blogIsLive }) {
         { label: 'Design', href: '/design/', section: '/design/' },
         { label: 'Reference', href: '/reference/', section: '/reference/' },
         ...(blogIsLive ? [BLOG] : []),
-    ];
+    ].map((link) => localizeLink(link, locale));
 }
 
 /**
  * The footer's jump links, in order.
  *
- * @param {{ blogIsLive: boolean }} options
+ * @param {NavOptions} options
  * @returns {NavLink[]}
  */
-export function footerLinks({ blogIsLive }) {
+export function footerLinks({ blogIsLive, locale }) {
     return [
         { label: 'Documentation', href: '/guides/getting-started/' },
         ...(blogIsLive ? [{ label: BLOG.label, href: BLOG.href }] : []),
@@ -58,7 +96,7 @@ export function footerLinks({ blogIsLive }) {
         { label: 'Downloads', href: '/downloads/' },
         { label: 'Support', href: '/support/' },
         { label: 'GitHub', href: REPO, external: true },
-    ];
+    ].map((link) => localizeLink(link, locale));
 }
 
 /**
@@ -91,4 +129,17 @@ function withSlash(path) {
 export function isActive(link, pathname) {
     if (!link.section) return false;
     return withSlash(pathname).startsWith(link.section);
+}
+
+/**
+ * The link whose section holds `pathname`, or `undefined` outside every
+ * section (the front page, the support page). Names the narrow-screen section
+ * menu's button.
+ *
+ * @param {NavLink[]} links
+ * @param {string} pathname
+ * @returns {NavLink | undefined}
+ */
+export function currentLink(links, pathname) {
+    return links.find((link) => isActive(link, pathname));
 }

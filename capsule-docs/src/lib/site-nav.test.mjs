@@ -3,9 +3,11 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
     ariaCurrent,
+    currentLink,
     footerLinks,
     headerLinks,
     isActive,
+    localizeLink,
     REPO,
 } from './site-nav.mjs';
 
@@ -130,5 +132,74 @@ describe('ariaCurrent', () => {
         [design, '/guides/', undefined],
     ])('%o on %s -> %s', (link, pathname, expected) => {
         expect(ariaCurrent(link, pathname)).toBe(expected);
+    });
+});
+
+describe('currentLink', () => {
+    const links = headerLinks({ blogIsLive: true });
+
+    it.each([
+        ['/design/cryptography/keys/', 'Design'],
+        ['/guides/getting-started/', 'Guides'],
+        ['/reference/api/upload/', 'Reference'],
+        ['/blog/first-post/', 'Blog'],
+        ['/', undefined],
+        ['/support/', undefined],
+        ['/designer/', undefined],
+    ])('%s -> %s', (pathname, label) => {
+        expect(currentLink(links, pathname)?.label).toBe(label);
+    });
+});
+
+describe("on a locale's routes", () => {
+    const links = headerLinks({ blogIsLive: true, locale: 'ja' });
+
+    it('keeps every section link and its section in the locale, labelled in its language', () => {
+        expect(links).toEqual([
+            {
+                label: 'ガイド',
+                href: '/ja/guides/getting-started/',
+                section: '/ja/guides/',
+            },
+            { label: '設計', href: '/ja/design/', section: '/ja/design/' },
+            {
+                label: 'リファレンス',
+                href: '/ja/reference/',
+                section: '/ja/reference/',
+            },
+            { label: 'ブログ', href: '/ja/blog/', section: '/ja/blog/' },
+        ]);
+    });
+
+    it('marks the current section from the localized path', () => {
+        expect(currentLink(links, '/ja/design/cryptography/')?.label).toBe(
+            '設計',
+        );
+        expect(ariaCurrent(links[0], '/ja/guides/getting-started/')).toBe(
+            'page',
+        );
+        // An English page is not in the locale's sections.
+        expect(currentLink(links, '/design/')).toBeUndefined();
+        expect(currentLink(links, '/ja/')).toBeUndefined();
+    });
+
+    it("keeps the footer's site links in the locale and its external links as they are", () => {
+        expect(
+            footerLinks({ blogIsLive: false, locale: 'ar' }).map(
+                ({ label, href }) => [label, href],
+            ),
+        ).toEqual([
+            ['التوثيق', '/ar/guides/getting-started/'],
+            ['خارطة الطريق', `${REPO}/blob/master/ROADMAP.md`],
+            ['النقاشات', `${REPO}/discussions`],
+            ['التنزيلات', '/ar/downloads/'],
+            ['الدعم', '/ar/support/'],
+            ['GitHub', REPO],
+        ]);
+    });
+
+    it('leaves the English links unchanged', () => {
+        const link = { label: 'Design', href: '/design/', section: '/design/' };
+        expect(localizeLink(link, undefined)).toBe(link);
     });
 });

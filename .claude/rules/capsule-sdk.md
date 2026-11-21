@@ -21,7 +21,7 @@ Follow, by module (`capsule-sdk/src/…`):
 | `upload`, `staged` | [Transfer](../../capsule-docs/src/content/docs/design/transfer/index.md), [Upload](../../capsule-docs/src/content/docs/design/transfer/upload.md) |
 | `fetch` | [Download](../../capsule-docs/src/content/docs/design/transfer/download.md), [Encryption](../../capsule-docs/src/content/docs/design/cryptography/encryption.md) |
 | `verify` | [Durability](../../capsule-docs/src/content/docs/design/transfer/durability.md) |
-| `net/` | [Networking](../../capsule-docs/src/content/docs/design/networking.md); `net/negotiation.rs` also [Versioning](../../capsule-docs/src/content/docs/design/versioning.md) |
+| `net/` | [Networking](../../capsule-docs/src/content/docs/design/networking.md), in particular [One HTTP stack](../../capsule-docs/src/content/docs/design/networking.md#one-http-stack) (every request through the generated client) and [Admission and priority](../../capsule-docs/src/content/docs/design/networking.md#admission-and-priority); `net/negotiation.rs` also [Versioning](../../capsule-docs/src/content/docs/design/versioning.md) |
 | `upgrade` | [Versioning](../../capsule-docs/src/content/docs/design/versioning.md) |
 | `sync` | [Sync](../../capsule-docs/src/content/docs/design/sync.md) |
 | `auth`, `cohort/` | [Authentication](../../capsule-docs/src/content/docs/design/authentication.md) |

@@ -28,12 +28,16 @@
     "target": "- **Partager entre serveurs.** Des personnes sur des serveurs différents partagent des albums entre elles, comme l'e-mail fonctionne d'un fournisseur à l'autre. Personne n'a besoin de rejoindre votre serveur, et aucune entreprise ne se place au milieu."
   },
   {
-    "source": "- **Your whole library, even offline.** Every app keeps an index of everything you have ever kept, so you can browse, search and organize all of it on a plane, at the border, or far from any signal.",
-    "target": "- **Toute votre bibliothèque, même hors ligne.** Chaque application garde un index de tout ce que vous avez conservé, pour parcourir, rechercher et organiser l'ensemble en avion, à la frontière ou loin de tout réseau."
+    "source": "- **Your whole library, even offline.** Every app keeps an index of everything you have ever kept, so you can browse, search and organize all of it, place names included\\*, on a plane, at the border, or far from any signal.",
+    "target": "- **Toute votre bibliothèque, même hors ligne.** Chaque application garde un index de tout ce que vous avez conservé, pour parcourir, rechercher et organiser l'ensemble, noms de lieux compris\\*, en avion, à la frontière ou loin de tout réseau."
   },
   {
     "source": "- **Straight from the camera.** Pull photos over Wi-Fi or cable directly from your camera, with every file checksummed on arrival.",
     "target": "- **Directement depuis l'appareil photo.** Récupérez les photos par Wi-Fi ou par câble directement depuis votre appareil, chaque fichier étant vérifié par somme de contrôle à son arrivée."
+  },
+  {
+    "source": "- **Hand off huge uploads\\*.** On slow Wi-Fi, your phone hands a sealed bundle to your laptop, which uploads it as sealed bytes and never decrypts it.",
+    "target": "- **Déléguez les gros téléversements\\*.** Sur un Wi-Fi lent, votre téléphone confie un paquet scellé à votre ordinateur portable, qui le téléverse sous forme d'octets scellés sans jamais le déchiffrer."
   },
   {
     "source": "- **A library that outlives Capsule.** Every photo sits beside a signed sidecar in an open format, so your library stays readable without the app, without the database, and without us.",
@@ -56,16 +60,16 @@
     "target": "- Des albums, et vos originaux conservés octet pour octet avec leurs métadonnées, restaurables exactement tels qu'ils ont été importés"
   },
   {
-    "source": "- Search by date, place, camera, lens, rating and label, run on your device",
-    "target": "- Recherche par date, lieu, appareil, objectif, note et étiquette, exécutée sur votre appareil"
+    "source": "- Search by date and type on your device, and by place, rating and label with typo-tolerant suggestions from your own library and `@people` and `@tag` shortcuts\\*",
+    "target": "- Recherche par date et par type sur votre appareil, et par lieu, note et étiquette avec des suggestions tolérantes aux fautes de frappe tirées de votre propre bibliothèque et des raccourcis `@people` et `@tag`\\*"
   },
   {
     "source": "- Ratings, picks and rejects for culling a shoot; labels and captions",
     "target": "- Notes, sélections et rejets pour trier une séance ; étiquettes et légendes"
   },
   {
-    "source": "- A map of where every photo was taken, with location fixes that keep the original",
-    "target": "- Une carte de l'endroit où chaque photo a été prise, avec des corrections de position qui conservent l'original"
+    "source": "- Location fixes that keep the original, and a map of where every photo was taken with pins clustered at every zoom\\*",
+    "target": "- Des corrections de position qui conservent l'original, et une carte de l'endroit où chaque photo a été prise, avec des repères regroupés à chaque niveau de zoom\\*"
   },
   {
     "source": "- Share links anyone can open in a browser, and upload links that let guests add their photos to yours",
@@ -74,6 +78,14 @@
   {
     "source": "- Backups that resume where they stopped, and device-to-device sync over your local network",
     "target": "- Des sauvegardes qui reprennent là où elles se sont arrêtées, et une synchronisation d'appareil à appareil sur votre réseau local"
+  },
+  {
+    "source": "- Export albums of any size to folders or ZIP, with your edits or the originals and their metadata\\*",
+    "target": "- Export d'albums de toute taille vers des dossiers ou un ZIP, avec vos retouches ou les originaux et leurs métadonnées\\*"
+  },
+  {
+    "source": "- Shortcuts and share-sheet integration on iPhone and Android\\*",
+    "target": "- Intégration aux raccourcis et au menu de partage sur iPhone et Android\\*"
   },
   {
     "source": "- Trash with a recovery window, hidden photos, and account recovery if you lose a device",

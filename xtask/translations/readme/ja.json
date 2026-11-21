@@ -28,12 +28,16 @@
     "target": "- **サーバーをまたいで共有。** 異なるサーバーのユーザー同士でも、メールがプロバイダー間でやり取りされるのと同じようにアルバムを共有できます。誰もあなたのサーバーに参加する必要はなく、間に企業が入ることもありません。"
   },
   {
-    "source": "- **Your whole library, even offline.** Every app keeps an index of everything you have ever kept, so you can browse, search and organize all of it on a plane, at the border, or far from any signal.",
-    "target": "- **オフラインでもライブラリ全体を。** どのアプリも、これまでに残したすべての写真のインデックスを保持しているため、機内でも、国境でも、電波の届かない場所でも、すべてを閲覧・検索・整理できます。"
+    "source": "- **Your whole library, even offline.** Every app keeps an index of everything you have ever kept, so you can browse, search and organize all of it, place names included\\*, on a plane, at the border, or far from any signal.",
+    "target": "- **オフラインでもライブラリ全体を。** どのアプリも、これまでに残したすべての写真のインデックスを保持しているため、機内でも、国境でも、電波の届かない場所でも、地名\\*を含めてすべてを閲覧・検索・整理できます。"
   },
   {
     "source": "- **Straight from the camera.** Pull photos over Wi-Fi or cable directly from your camera, with every file checksummed on arrival.",
     "target": "- **カメラから直接。** Wi-Fiまたはケーブルでカメラから直接写真を取り込み、すべてのファイルは到着時にチェックサムで検証されます。"
+  },
+  {
+    "source": "- **Hand off huge uploads\\*.** On slow Wi-Fi, your phone hands a sealed bundle to your laptop, which uploads it as sealed bytes and never decrypts it.",
+    "target": "- **大容量のアップロードを任せる\\*。** Wi-Fiが遅いときは、スマートフォンが封をしたバンドルをノートパソコンに渡し、ノートパソコンはそれを封をしたままのバイト列としてアップロードし、決して復号しません。"
   },
   {
     "source": "- **A library that outlives Capsule.** Every photo sits beside a signed sidecar in an open format, so your library stays readable without the app, without the database, and without us.",
@@ -56,16 +60,16 @@
     "target": "- アルバム、そしてメタデータとともにバイト単位でそのまま保存され、取り込んだときの状態に正確に復元できるオリジナル"
   },
   {
-    "source": "- Search by date, place, camera, lens, rating and label, run on your device",
-    "target": "- 日付、場所、カメラ、レンズ、レーティング、ラベルによる検索（デバイス上で実行）"
+    "source": "- Search by date and type on your device, and by place, rating and label with typo-tolerant suggestions from your own library and `@people` and `@tag` shortcuts\\*",
+    "target": "- デバイス上での日付と種類による検索と、場所、レーティング、ラベルによる検索。あなたのライブラリをもとにした入力ミスに強い候補表示と、`@people` や `@tag` のショートカット\\*付き"
   },
   {
     "source": "- Ratings, picks and rejects for culling a shoot; labels and captions",
     "target": "- 撮影後の選別のためのレーティング、採用・不採用の印、ラベルとキャプション"
   },
   {
-    "source": "- A map of where every photo was taken, with location fixes that keep the original",
-    "target": "- すべての写真の撮影場所を示す地図と、元の情報を残したままの位置修正"
+    "source": "- Location fixes that keep the original, and a map of where every photo was taken with pins clustered at every zoom\\*",
+    "target": "- 元の情報を残したままの位置修正と、すべての写真の撮影場所を示す地図（どのズームレベルでもピンをまとめて表示\\*）"
   },
   {
     "source": "- Share links anyone can open in a browser, and upload links that let guests add their photos to yours",
@@ -74,6 +78,14 @@
   {
     "source": "- Backups that resume where they stopped, and device-to-device sync over your local network",
     "target": "- 中断したところから再開するバックアップと、ローカルネットワーク経由のデバイス間同期"
+  },
+  {
+    "source": "- Export albums of any size to folders or ZIP, with your edits or the originals and their metadata\\*",
+    "target": "- どんなサイズのアルバムもフォルダーまたはZIPに書き出し、編集を反映した写真でも、オリジナルとそのメタデータでも出力可能\\*"
+  },
+  {
+    "source": "- Shortcuts and share-sheet integration on iPhone and Android\\*",
+    "target": "- iPhoneとAndroidでのショートカットと共有シートへの対応\\*"
   },
   {
     "source": "- Trash with a recovery window, hidden photos, and account recovery if you lose a device",

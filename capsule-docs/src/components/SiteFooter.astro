@@ -9,7 +9,9 @@ import { footerLinks, REPO } from '../lib/site-nav.mjs';
 declare const __BLOG_IS_LIVE__: boolean;
 declare const __BUILD_COMMIT__: { sha: string; short: string } | null;
 
-const links = footerLinks({ blogIsLive: __BLOG_IS_LIVE__ });
+// On a locale's routes the site links stay in that locale.
+const { locale } = Astro.locals.starlightRoute;
+const links = footerLinks({ blogIsLive: __BLOG_IS_LIVE__, locale });
 const commit = __BUILD_COMMIT__;
 const year = new Date().getFullYear();
 ---
