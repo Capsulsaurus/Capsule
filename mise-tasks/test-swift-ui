@@ -20,6 +20,10 @@ if [ "$(uname)" != "Darwin" ]; then echo "Skipping swift UI tests (not macOS)"; 
 # the date was invisible, which is exactly the class of defect a gate that never
 # looks at the screen cannot catch.
 #
+# `PseudolanguageRenderTests` is here for the same reason: whether a label went
+# through the string catalog, and whether back sits at the trailing edge under a
+# right-to-left language, are only visible on a running screen.
+#
 # `AccessibilityAuditTests` is deliberately NOT in this list, and that is a
 # statement about the app rather than about the suite: the audit fails today on
 # most surfaces and always has — verified against the tree before any of this
@@ -44,5 +48,6 @@ xcodebuild test \
     -only-testing:CapsuleAppUITests/SectionReachabilityTests \
     -only-testing:CapsuleAppUITests/LaunchFlowTests \
     -only-testing:CapsuleAppUITests/LibraryGridTests \
+    -only-testing:CapsuleAppUITests/PseudolanguageRenderTests \
     CODE_SIGNING_ALLOWED=NO \
     | mise exec -- xcbeautify

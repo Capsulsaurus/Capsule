@@ -35,8 +35,9 @@
 - **Private by construction, not by promise.** Photos are encrypted on your devices before they leave. The server stores only ciphertext and never holds a key, so not even whoever runs it can look.
 - **Proof of where every photo came from.** Each photo carries a signed history of who captured, imported and edited it, so its origin can be verified rather than trusted.
 - **Share across servers.** People on different servers share albums with each other, the way email works between providers. Nobody has to join your server, and no company sits in the middle.
-- **Your whole library, even offline.** Every app keeps an index of everything you have ever kept, so you can browse, search and organize all of it on a plane, at the border, or far from any signal.
+- **Your whole library, even offline.** Every app keeps an index of everything you have ever kept, so you can browse, search and organize all of it, place names included\*, on a plane, at the border, or far from any signal.
 - **Straight from the camera.** Pull photos over Wi-Fi or cable directly from your camera, with every file checksummed on arrival.
+- **Hand off huge uploads\*.** On slow Wi-Fi, your phone hands a sealed bundle to your laptop, which uploads it as sealed bytes and never decrypts it.
 - **A library that outlives Capsule.** Every photo sits beside a signed sidecar in an open format, so your library stays readable without the app, without the database, and without us.
 - **Native on every device\*.** Real native apps that follow each platform's own design, a web viewer for anyone you share with, and a scriptable command line and terminal UI.
 
@@ -45,11 +46,13 @@
 ## Everything you'd expect
 
 - Albums, plus your originals kept byte for byte with their metadata and restorable exactly as they went in
-- Search by date, place, camera, lens, rating and label, run on your device
+- Search by date and type on your device, and by place, rating and label with typo-tolerant suggestions from your own library and `@people` and `@tag` shortcuts\*
 - Ratings, picks and rejects for culling a shoot; labels and captions
-- A map of where every photo was taken, with location fixes that keep the original
+- Location fixes that keep the original, and a map of where every photo was taken with pins clustered at every zoom\*
 - Share links anyone can open in a browser, and upload links that let guests add their photos to yours
 - Backups that resume where they stopped, and device-to-device sync over your local network
+- Export albums of any size to folders or ZIP, with your edits or the originals and their metadata\*
+- Shortcuts and share-sheet integration on iPhone and Android\*
 - Trash with a recovery window, hidden photos, and account recovery if you lose a device
 - Apps in 13 languages
 

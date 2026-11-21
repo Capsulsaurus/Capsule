@@ -33,3 +33,4 @@ Follow:
 Keep current:
 
 - `capsule-docs/planned-modules.txt` and `capsule-docs/endpoint-census-allowlist.txt` — every row carries its reason; remove rows that no longer apply.
+- `capsule-docs/src/lib/llms-sets.mjs` — when a guide, design doc or reference section is added, renamed or moved, keep the `/llms.txt` topic sets covering it.

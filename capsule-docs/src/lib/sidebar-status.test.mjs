@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { badgeSidebar, routeKey } from './sidebar-status.mjs';
+import {
+    badgeSidebar,
+    routeKey,
+    withLocaleFallbacks,
+} from './sidebar-status.mjs';
 import { navBadge, titleBadge } from './status-badge.mjs';
 
 const link = (href, extra = {}) => ({
@@ -122,5 +126,39 @@ describe('badgeSidebar', () => {
         const snapshot = structuredClone(input);
         badgeSidebar(input, statuses);
         expect(input).toEqual(snapshot);
+    });
+});
+
+describe('withLocaleFallbacks', () => {
+    const english = new Map([
+        ['', 'draft'],
+        ['design/clients', 'stable'],
+        ['guides/start', 'draft'],
+        // A translation's own status.
+        ['ja/guides/start', 'stable'],
+        ['ja', 'stable'],
+    ]);
+    const statuses = withLocaleFallbacks(english, ['ja', 'ko']);
+
+    it("gives a locale's untranslated routes the English page's status", () => {
+        expect(statuses.get('ja/design/clients')).toBe('stable');
+        expect(statuses.get('ko/guides/start')).toBe('draft');
+        expect(statuses.get('ko')).toBe('draft');
+    });
+
+    it("keeps a translation's own status", () => {
+        expect(statuses.get('ja/guides/start')).toBe('stable');
+        expect(statuses.get('ja')).toBe('stable');
+    });
+
+    it('never treats a translation as English to copy', () => {
+        expect(statuses.has('ko/ja/guides/start')).toBe(false);
+        expect(statuses.has('ko/ja')).toBe(false);
+    });
+
+    it('badges a fallback route in the sidebar', () => {
+        expect(
+            badgeSidebar([link('/ko/guides/start/')], statuses)[0].badge,
+        ).toEqual(DRAFT);
     });
 });

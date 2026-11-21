@@ -874,6 +874,43 @@ fn every_info_plist_key_is_namespaced_so_it_stays_out_of_localizable() {
     }
 }
 
+fn mode(args: &[&str]) -> Result<Mode> {
+    Mode::parse(args.iter().map(|a| (*a).to_string()))
+}
+
+#[test]
+fn the_i18n_flags_parse_to_their_modes() {
+    assert_eq!(mode(&[]).unwrap(), Mode::Generate);
+    assert_eq!(mode(&["--check"]).unwrap(), Mode::Check);
+    assert_eq!(mode(&["--stamp"]).unwrap(), Mode::Stamp);
+    assert_eq!(
+        mode(&["--todo", "de"]).unwrap(),
+        Mode::Todo("de".to_string())
+    );
+}
+
+#[test]
+fn a_malformed_i18n_invocation_is_refused() {
+    assert!(mode(&["--todo"]).is_err(), "--todo needs a locale");
+    assert!(
+        mode(&["--chek"]).is_err(),
+        "an unknown flag is not a silent generate"
+    );
+    assert!(mode(&["--check", "extra"]).is_err());
+}
+
+/// The committed catalogs pass the lifecycle gate: every key translated, every
+/// translation current, every source entry with context, every verbatim term kept.
+#[test]
+fn the_committed_catalogs_have_no_lifecycle_problems() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let catalogs = Catalogs::load(&root).expect("catalogs load");
+    let entries = lifecycle::load(&root, &catalogs.supported).expect("entries load");
+    let glossary = lifecycle::Glossary::load(&root).expect("glossary loads");
+    let problems = lifecycle::problems(&catalogs.source, &entries, &glossary);
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
 /// A catalog set where `fr` translates `translated` of `total` source keys, `reviewed` of
 /// them by a fluent reader.
 fn stats_catalogs(total: usize, translated: usize, reviewed: usize) -> Catalogs {

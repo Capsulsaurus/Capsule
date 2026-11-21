@@ -15,6 +15,7 @@ freeze may need a migration.
 - [#666](https://github.com/Capsulsaurus/Capsule/issues/666) Bounded-memory (segmented) encryption for originals
 - [#667](https://github.com/Capsulsaurus/Capsule/issues/667) Labels on stacks, albums and image regions
 - [#668](https://github.com/Capsulsaurus/Capsule/issues/668) Keep original capture time and location beside corrections; location editing
+- [#1285](https://github.com/Capsulsaurus/Capsule/issues/1285) Keep a floating EXIF capture time instead of the import clock
 - [#669](https://github.com/Capsulsaurus/Capsule/issues/669) Decide the major dependency bumps
 
 ## B. Transfer hardening

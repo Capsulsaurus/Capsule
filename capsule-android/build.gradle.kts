@@ -88,8 +88,9 @@ dependencies {
     implementation(libs.androidx.viewmodel.compose)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.koin.androidx.compose)
+    // Image loading for the scaffold screens. No network module: nothing loads a remote URL yet
+    // (`EmptyMuseumRepository`), so ktor would be dead weight; add a fetcher with real sources.
     implementation(libs.coil.compose)
-    implementation(libs.coil.network.ktor)
     // JankStats (field frame telemetry) and the trace sections the parity benchmark reads.
     implementation(libs.androidx.metrics.performance)
     implementation(libs.androidx.tracing.ktx)

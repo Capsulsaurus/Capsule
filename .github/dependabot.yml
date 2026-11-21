@@ -44,7 +44,10 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+  # The one SwiftPM manifest in the tree. `capsule-swift/` is a Tuist project with no
+  # `Package.swift`, so an entry there watched nothing. A Tuist `Tuist/Package.swift` for the
+  # app's remote packages, when one exists, gets its own entry in the same change.
   - package-ecosystem: "swift"
-    directory: "/capsule-swift"
+    directory: "/capsule-core-swift"
     schedule:
       interval: "weekly"

@@ -28,12 +28,16 @@
     "target": "- **서버를 넘나드는 공유.** 이메일이 서비스 제공업체 사이를 오가듯, 서로 다른 서버의 사용자끼리 앨범을 공유할 수 있습니다. 누구도 여러분의 서버에 가입할 필요가 없고, 중간에 끼어드는 회사도 없습니다."
   },
   {
-    "source": "- **Your whole library, even offline.** Every app keeps an index of everything you have ever kept, so you can browse, search and organize all of it on a plane, at the border, or far from any signal.",
-    "target": "- **오프라인에서도 라이브러리 전체를.** 모든 앱이 지금까지 보관한 모든 사진의 색인을 유지하므로, 비행기 안에서도, 국경에서도, 신호가 닿지 않는 곳에서도 전부 둘러보고 검색하고 정리할 수 있습니다."
+    "source": "- **Your whole library, even offline.** Every app keeps an index of everything you have ever kept, so you can browse, search and organize all of it, place names included\\*, on a plane, at the border, or far from any signal.",
+    "target": "- **오프라인에서도 라이브러리 전체를.** 모든 앱이 지금까지 보관한 모든 사진의 색인을 유지하므로, 비행기 안에서도, 국경에서도, 신호가 닿지 않는 곳에서도 장소 이름\\*까지 포함해 전부 둘러보고 검색하고 정리할 수 있습니다."
   },
   {
     "source": "- **Straight from the camera.** Pull photos over Wi-Fi or cable directly from your camera, with every file checksummed on arrival.",
     "target": "- **카메라에서 바로.** Wi-Fi나 케이블로 카메라에서 직접 사진을 가져오며, 모든 파일은 도착 즉시 체크섬으로 검증됩니다."
+  },
+  {
+    "source": "- **Hand off huge uploads\\*.** On slow Wi-Fi, your phone hands a sealed bundle to your laptop, which uploads it as sealed bytes and never decrypts it.",
+    "target": "- **대용량 업로드는 맡기세요\\*.** Wi-Fi가 느릴 때는 휴대폰이 봉인된 번들을 노트북에 넘기고, 노트북은 이를 봉인된 바이트 그대로 업로드하며 절대 복호화하지 않습니다."
   },
   {
     "source": "- **A library that outlives Capsule.** Every photo sits beside a signed sidecar in an open format, so your library stays readable without the app, without the database, and without us.",
@@ -56,16 +60,16 @@
     "target": "- 앨범, 그리고 메타데이터와 함께 바이트 단위로 그대로 보관되어 가져온 그대로 정확히 복원할 수 있는 원본"
   },
   {
-    "source": "- Search by date, place, camera, lens, rating and label, run on your device",
-    "target": "- 날짜, 장소, 카메라, 렌즈, 별점, 라벨로 검색하며, 검색은 기기에서 실행"
+    "source": "- Search by date and type on your device, and by place, rating and label with typo-tolerant suggestions from your own library and `@people` and `@tag` shortcuts\\*",
+    "target": "- 기기에서 날짜와 유형으로 검색하고, 장소, 별점, 라벨로도 검색하며, 여러분의 라이브러리를 바탕으로 한 오타에 강한 추천과 `@people`, `@tag` 바로가기\\*를 제공"
   },
   {
     "source": "- Ratings, picks and rejects for culling a shoot; labels and captions",
     "target": "- 촬영본 선별을 위한 별점, 채택 및 제외 표시, 라벨과 캡션"
   },
   {
-    "source": "- A map of where every photo was taken, with location fixes that keep the original",
-    "target": "- 모든 사진의 촬영 장소를 보여 주는 지도, 원래 정보를 보존하는 위치 수정"
+    "source": "- Location fixes that keep the original, and a map of where every photo was taken with pins clustered at every zoom\\*",
+    "target": "- 원래 정보를 보존하는 위치 수정, 그리고 모든 사진의 촬영 장소를 보여 주는 지도(모든 확대 수준에서 핀 묶음 표시\\*)"
   },
   {
     "source": "- Share links anyone can open in a browser, and upload links that let guests add their photos to yours",
@@ -74,6 +78,14 @@
   {
     "source": "- Backups that resume where they stopped, and device-to-device sync over your local network",
     "target": "- 중단된 지점부터 다시 이어지는 백업, 로컬 네트워크를 통한 기기 간 동기화"
+  },
+  {
+    "source": "- Export albums of any size to folders or ZIP, with your edits or the originals and their metadata\\*",
+    "target": "- 크기에 관계없이 앨범을 폴더나 ZIP으로 내보내기, 편집본 또는 원본과 메타데이터 중 선택 가능\\*"
+  },
+  {
+    "source": "- Shortcuts and share-sheet integration on iPhone and Android\\*",
+    "target": "- iPhone과 Android의 단축어 및 공유 시트 연동\\*"
   },
   {
     "source": "- Trash with a recovery window, hidden photos, and account recovery if you lose a device",

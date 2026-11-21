@@ -138,9 +138,9 @@ The issuer refuses the request `401` when the header is absent or malformed, whe
 
 - The nonce is remembered only after the signature verifies, so a third party cannot spend a peer's nonces.
 - It is not spent for a blocked peer or one over its events budget. Those get their own coded `403` or `429`, and the request stays refused even if the block lifts or the budget window resets before the route decides, so a signature whose nonce was never remembered is never admitted.
-- The replay memory fails closed: a counter store that cannot answer, or is full, is a `401`.
+- The replay memory fails closed like every shared budget, with the statuses of [](/design/authorization/#when-the-counter-store-fails), and never admits the request.
 
-Neither the query string nor any other header is covered. What binds the presentation to the peer is a signature only the peer could have made, used once, within minutes of being made. Rewriting a signed request's query in flight needs a position inside its TLS session, and every query parameter these operations take is bounded by the capability itself (`aud` fixes the album). The reads carry no body and the refresh's body is empty. A session token on the same operations ignores the header.
+Neither the query string nor any other header is covered. What binds the presentation to the peer is a signature only the peer could have made, used once, within minutes of being made. Rewriting a signed request's query in flight needs a position inside its TLS session, and every query parameter these operations take is bounded by the capability itself: `aud` fixes the album, and the sync cursor's MAC binds the reading peer and the album ([](/design/sync/#cursor-authenticity-and-anti-rewind)), so a cursor substituted from another album is refused. The reads carry no body and the refresh's body is empty. A session token on the same operations ignores the header.
 
 ### What a scope hides, and what it does not
 
@@ -159,14 +159,14 @@ Every federated write is checked against [](/design/threat-model/validation/#ser
 
 ## Per-Peer Compartmentalization
 
-Each peer is its own blast radius. Transfer budgets per peer cover events, bytes and CPU per hour, and excess is queued or dropped.
+Each peer is its own blast radius. Transfer budgets per peer cover events, bytes and CPU per hour, and excess is queued or dropped. The amounts, and the tighter amounts on probation, are in [](/design/authorization/#rate-limits).
 
 | Budget | Serving side | Receiving side |
 | --- | --- | --- |
-| Events | 10,000/h (1,000 on probation), charged per capability presentation | — |
-| Bytes | 20 GiB/h (1 GiB on probation), charged per blob delivery | — |
-| CPU | — | 1 CPU-minute/h (6 CPU-seconds on probation) of pull validation time |
-| Errors | — | 10/h (3 on probation), then the circuit breaker opens |
+| Events | Per peer origin, charged per capability presentation | — |
+| Bytes | Per peer origin, charged per blob delivery | — |
+| CPU | — | Pull validation time per source peer |
+| Errors | — | Validation failures per source peer, then the circuit breaker opens |
 | Storage | — | per-`(receiving_user, source_peer)` caching budget, default 25% of the receiver's hard limit |
 
 - **Serving windows** are fixed and keyed on the peer's origin. Every `GET /v1/blob/{hash}` that carries bytes (`200`, `206`) charges the blob's whole size in one atomic weighted charge before the body is sent. A delivery that does not fit what is left of the window is refused whole, `429 error.federation.rate_budget_exceeded`; a revalidation (`304`) is not charged.
@@ -201,7 +201,7 @@ The receiver verifies a hint exactly as it verifies a report ([](/design/moderat
 2. Addressed to this server and signed within **5 minutes** of its clock either way.
 3. The peer's operator-pinned key: `403 error.federation.peer_unknown` with none, `403 error.moderation.server_blocked` for a blocked peer.
 4. The signature. A hint addressed elsewhere, stale, failing verification, or reusing a nonce this peer used within **10 minutes** is `401 error.federation.hint_unsigned`. Nothing is charged before the signature verifies.
-5. **600 hints an hour** per verified peer (`429 error.federation.hint_rate_limited`; a full limiter is `429 error.federation.hint_at_capacity`). Only then is its nonce spent.
+5. The per-peer hint budget ([](/design/authorization/#rate-limits); `429 error.federation.hint_rate_limited`; a full limiter is `429 error.federation.hint_at_capacity`). Only then is its nonce spent.
 
 A verified, admitted hint is answered `202 { received_at }` whether it moved a job, found it already due, named a job the receiver does not hold, or came from a peer on probation. A held job and one that is not cost the same store work, so neither the answer nor its timing tells them apart: a hint is never a way to learn which albums a server pulls. Only a store that cannot answer differs (`500 error.federation.unavailable`). A refused or lost hint costs at most the album's own interval.
 
@@ -212,6 +212,8 @@ The home server serves only an asset's **current** manifest. A presented manifes
 ## Soft-Fail Semantics
 
 A federated event that fails validation is not applied, not shown and grants no authority, but its hash is **remembered** so Capsule's view does not silently diverge from peers that accepted it. The table is bounded at a default 100,000 entries (`FEDERATION_REJECTED_HASH_CAPACITY`) with a 90-day TTL (`FEDERATION_REJECTED_HASH_TTL_DAYS`), both configurable, evicting LRU by last reference. A reference is the same hash presented again; reading the table is none. Eviction only forgets that a refusal happened: no blob, entry or head is held through a row, and the refusal itself rests on the asset's superseded heads, not on the table.
+
+The table is a correctness cache, not the audit record. Every refusal is also logged at the time it happens, with the peer, the album and the hash, and counted against the peer's error budget, which is a separate counter that eviction does not touch. A flood that cycles the table therefore loses neither the evidence nor the circuit breaker's view of the peer.
 
 ## Reconstructing State Without Trusting Peers
 
@@ -237,8 +239,13 @@ Federation supplies the transport for federated reports and the untrusted-server
 ## Server Identity and Key Rotation
 
 - **Two keys**, both at the well-known path. The **operational key** (Ed25519) signs server-to-server traffic and capabilities. The **attestation key** (hybrid Ed25519 + ML-DSA-65) signs custody receipts ([](/design/transfer/durability/#custody-receipts)) and keeps an **append-only history** so old receipts still verify.
+- **Attestation-key succession is cross-signed.** Each key after the first is published with a hybrid succession signature by the key it follows, over a domain-separated message binding the server origin, the new key's id and public key, and its `active_from`. A client pins the first history it sees (trust on first use, or the pin a backup artifact restores) and extends its pin only by entries whose succession signature verifies under the last key it already pinned, one link at a time. A history that drops a pinned key is refused as rewritten. An appended key without a valid succession signature is not pinned, receipts under it are reported unverified rather than accepted, and the client surfaces the broken succession to the user, who may re-pin explicitly. A server that has lost its attestation private key cannot rotate silently, which is the point: the user is told.
 - **Peer keys are pinned on first contact.** A rotation is accepted only after **at least two** independent vantage points (trusted peers or a configured notary) agree **unanimously**, and a failed corroboration is surfaced.
 - **Today peer keys are operator-pinned only.** `capsule-server peer pin ORIGIN KEY` takes the `signing_key` field of the peer's `server-info`, read out of band, and replaces any key already pinned. `peer block` refuses the peer at every boundary and revokes and publishes every live grant it holds; `peer unblock` keeps the key and restores no grant.
+
+## Known Gaps
+
+- The attestation-key record carries no succession signature, and a client appends any new key that extends its pin on sight.
 
 ## Validation
 
@@ -250,5 +257,6 @@ Federation supplies the transport for federated reports and the untrusted-server
 - **Budgets and circuit breaker (smoke):** exhaustion gives `429`; malformed floods open the breaker.
 - **Caching budget (conformance):** a page past a subscriber's budget on a peer writes nothing; a blob counts once across a subscriber's albums on a peer, each peer is its own budget, and each subscriber of a shared album is held to its own.
 - **Weighted charge (conformance):** a charge that overruns an open window is refused whole; racing charges admit exactly what fits.
-- **Soft-fail (unit):** the rejected-hash table evicts at its cap.
+- **Soft-fail (unit):** the rejected-hash table evicts at its cap, and an evicted refusal is still in the log and the error budget.
+- **Attestation-key succession (unit):** an extension whose every new key verifies under its predecessor is pinned; an unsigned or mis-signed extension, or one signed by a key other than the last pinned, is not pinned and is surfaced; a dropped key is refused as rewritten.
 - **Cross-server pull (E2E):** one case in the [E2E case index](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-e2e/src/lib.rs).

@@ -120,7 +120,6 @@ globset = "0.4.18"
 # and is byte-identical — it changes speed, never output. Imported **directly** rather than
 # through Rawshift, which .claude/rules/capsule-core.md forbids from wrapping it.
 chromahash = { version = "0.7.1", default-features = false, features = ["simd"] }
-indexmap = { workspace = true }
 jiff = { workspace = true }
 # EXIF reading, transitional: removed once Rawshift's metadata extraction covers capture time,
 # GPS and orientation (design/thumbnails.md, "Media Is Rawshift's").

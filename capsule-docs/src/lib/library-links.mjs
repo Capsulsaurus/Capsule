@@ -144,6 +144,20 @@ export const LIBRARIES = [
         names: ['PostgreSQL', 'Postgres'],
     },
     { url: 'https://github.com/sqlite/sqlite', names: ['SQLite'] },
+    { url: 'https://github.com/BurntSushi/fst', names: [], code: ['fst'] },
+    // Archives and geodesy. The `zip` crate's code spelling is also the
+    // archive format's name, so only its repository name links it.
+    { url: 'https://github.com/zip-rs/zip2', names: ['zip2'] },
+    {
+        url: 'https://github.com/bearcove/rc-zip',
+        names: [],
+        code: ['rc-zip'],
+    },
+    {
+        url: 'https://github.com/justin13888/geocoordinates-rs',
+        names: ['geocoordinates'],
+        code: ['geocoordinates'],
+    },
     // Encoding, errors, CLI
     {
         url: 'https://github.com/enarx/ciborium',
@@ -254,6 +268,11 @@ export const LIBRARIES = [
         code: ['cargo-deny'],
     },
     {
+        url: 'https://github.com/getkono/dependable',
+        names: ['dependable'],
+        code: ['dependable'],
+    },
+    {
         url: 'https://github.com/robolectric/robolectric',
         names: ['Robolectric'],
     },
@@ -299,7 +318,6 @@ export const LIBRARIES = [
         url: 'https://github.com/tailwindlabs/tailwindcss',
         names: ['Tailwind'],
     },
-    { url: 'https://github.com/colinhacks/zod', names: ['zod'] },
     { url: 'https://github.com/formatjs/formatjs', names: ['FormatJS'] },
     { url: 'https://github.com/shadcn-ui/ui', names: ['shadcn'] },
     // Media
