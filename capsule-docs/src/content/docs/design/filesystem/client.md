@@ -1,7 +1,7 @@
 ---
 title: Client Filesystem
 description: How clients lay out a library on disk — desktop, mobile, local index, and space recovery
-status: draft
+audit: none
 ---
 
 Clients hold keys, so a client stores plaintext. Depending on the sync scope ([](/design/sync/#synchronization-scope)), a library routinely holds assets whose original is server-only, so the layout represents an asset with or without its original. The layout is a contract: rebuild assumes exactly these names. [](/design/local-gallery/) owns the offline-first requirements it serves.

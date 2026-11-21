@@ -1,7 +1,7 @@
 ---
 title: Self Hosting
 description: Running capsule-server on PostgreSQL and a filesystem blob store
-status: draft
+audit: none
 ---
 
 No release has been cut, so you build the server from source. The server stores only ciphertext and

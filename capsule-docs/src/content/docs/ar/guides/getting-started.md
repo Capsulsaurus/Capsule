@@ -1,7 +1,7 @@
 ---
 title: البدء
 description: كيف تبدأ استخدام Capsule
-status: draft
+audit: none
 ---
 
 Capsule مكتبة للصور والوسائط مشفّرة من طرف إلى طرف. لم يُنشر أي إصدار بعد، لذا فأنت اليوم تبني

@@ -1,22 +1,25 @@
 ---
-// Starlight PageTitle override: renders the `status` frontmatter field
-// (see src/content.config.ts) as a badge beside an authored page's title, and on a page
-// scripts/gen-reference.mjs generated, the banner that says so: which surface
-// it documents, what it was generated from, and where to download that. The
-// status mapping is shared with the sidebar (src/lib/status-badge.mjs).
+// Starlight PageTitle override: renders an authored page's computed audit
+// status (src/lib/page-audit.mjs) as a badge beside its title, with the commit
+// and date it was last audited at; and on a page scripts/gen-reference.mjs
+// generated, the banner that says so: which surface it documents, what it was
+// generated from, and where to download that. The status mapping is shared
+// with the sidebar (src/lib/status-badge.mjs).
 import { Badge, Icon } from '@astrojs/starlight/components';
 import Default from '@astrojs/starlight/components/PageTitle.astro';
+import { commitUrl, entryAudit } from '../lib/entry-audit.mjs';
 import { titleBadge } from '../lib/status-badge.mjs';
 
-const { status, generated } = Astro.locals.starlightRoute.entry.data;
-// A generated page has no review state; a status on one would claim a review
+const { entry } = Astro.locals.starlightRoute;
+const { generated } = entry.data;
+// A generated page has no audit state; an audit on one would claim a review
 // its artifact never had.
-if (generated && status) {
-    throw new Error(
-        `${Astro.locals.starlightRoute.entry.id} is generated and sets status: ${status}`,
-    );
+if (generated && entry.data.audit !== undefined) {
+    throw new Error(`${entry.id} is generated and sets audit`);
 }
-const badge = titleBadge(status);
+const audit = entryAudit(entry);
+const badge = titleBadge(audit?.status);
+const pin = audit && 'commit' in audit ? audit : undefined;
 ---
 
 {
@@ -27,6 +30,16 @@ const badge = titleBadge(status);
     </div>
   ) : (
     <Default><slot /></Default>
+  )
+}
+{
+  pin && (
+    <p class="audit-pin not-content">
+      {pin.status === 'audited' ? 'Audited' : 'Last audited'} as of{' '}
+      <a href={commitUrl(pin.commit)}><code>{pin.commit.slice(0, 12)}</code></a> on{' '}
+      <time datetime={pin.date}>{pin.date}</time>
+      {pin.status === 'outdated' ? '; the page has changed since.' : '.'}
+    </p>
   )
 }
 {
@@ -68,6 +81,16 @@ const badge = titleBadge(status);
      wrapper above instead. */
   .title-with-status :global(h1) {
     margin-block-start: 0;
+  }
+
+  .audit-pin {
+    margin-block-start: 0.5rem;
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-2);
+  }
+
+  .audit-pin a {
+    color: var(--sl-color-text-accent);
   }
 
   .stale-banner {

@@ -1,7 +1,7 @@
 ---
 title: Migrating from Google Photos
 description: Export a Google Takeout archive and bring your originals into a local Capsule library
-status: draft
+audit: none
 ---
 
 Move your library from Google Photos into a local Capsule library: export with Google Takeout,

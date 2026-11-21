@@ -1,7 +1,7 @@
 ---
 title: Export
 description: Plaintext export of assets and albums to a folder or archives, with its options, archive format, resumability and command-line flow
-status: draft
+audit: none
 ---
 
 **Rule:** an export is the user's own plaintext, written where the user chose, in formats any tool reads. It never writes ciphertext and never changes an asset, its metadata or its provenance.

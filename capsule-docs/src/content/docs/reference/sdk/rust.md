@@ -1,7 +1,7 @@
 ---
 title: Rust
 description: capsule-sdk, the Rust crate every Capsule client is built on, and where its item-level reference lives
-status: draft
+audit: none
 ---
 
 `capsule-sdk` is the sanctioned network path for every Capsule client: the upload protocol, sync

@@ -1,7 +1,7 @@
 ---
 title: Notifications
 description: What a key-free server can and cannot tell you — local alerts, the contentless wake tier, and the self-hostability rule that decides the transport matrix
-status: draft
+audit: none
 ---
 
 This doc owns alert delivery and the vocabulary. The server holds only ciphertext, and the short-poll sync feed stays the fallback for any push ([](/design/networking/#adverse-network-posture)), so a server can tell a client *that* something changed, never *what*.

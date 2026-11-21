@@ -1,7 +1,7 @@
 ---
 title: Asset Organization
 description: Albums (container and view), default-album resolution, asset stacks, and trash retention
-status: draft
+audit: none
 ---
 
 Container albums ([](#container-albums)) are the cryptographic unit every asset belongs to; view albums ([](#system--smart-albums-views)) are derived, key-free presentations. **Stacks**, culling, hiding and trash are metadata-only and never touch asset bytes. The load-bearing security piece is `retention_until`, signed into the `delete` manifest so a hostile server cannot accelerate purges.

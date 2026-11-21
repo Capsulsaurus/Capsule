@@ -1,7 +1,7 @@
 ---
 title: Fehlerbehebung
 description: Sammeln Sie die Version und die Logs, die ein Bericht braucht, und beheben Sie die häufigen Probleme mit einem Capsule-Server, einem Import oder einer Bibliothek.
-status: draft
+audit: none
 ---
 
 Beginnen Sie hier, wenn etwas schiefgeht. Wenn nichts davon hilft, erfahren Sie unter

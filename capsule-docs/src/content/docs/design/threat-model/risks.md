@@ -1,7 +1,7 @@
 ---
 title: Implementation Risk Register
 description: Implementation faults that pass every structural check and can still lose or corrupt data, and the independent tests that must catch each one
-status: draft
+audit: none
 ---
 
 The rest of the threat model bounds what a faulty or hostile **client** can do to the server and to other clients. This page bounds a different fault: **Capsule's own code computing the wrong value consistently**. A wrong value that the client and the server compute the same way passes every server check, every custody receipt and every durability gate, because those gates check that the server holds what the client described, not that the description is right (assumption A7 of [](/design/threat-model/#assumptions)).

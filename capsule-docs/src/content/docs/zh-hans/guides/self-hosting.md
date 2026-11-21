@@ -1,7 +1,7 @@
 ---
 title: 自托管
 description: 在 PostgreSQL 和文件系统 blob 存储上运行 capsule-server
-status: draft
+audit: none
 ---
 
 目前尚未发布任何版本，因此你需要从源代码构建服务器。服务器只存储密文，从不解码媒体；所有处理和加密都由客户端完成。

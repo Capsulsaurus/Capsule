@@ -1,7 +1,7 @@
 ---
 title: Your Whole Library, Offline
 description: A full index of every photo you have ever kept, in every native app, with or without a connection
-status: draft
+audit: none
 ---
 
 Most photo services give a device a window onto a library on someone else's server, and the window

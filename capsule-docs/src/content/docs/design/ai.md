@@ -1,7 +1,7 @@
 ---
 title: AI/ML Integrations
 description: AI feature architecture, the canonical model inventory, embedding provenance, and AI/user metadata separation
-status: draft
+audit: none
 ---
 
 All ML runs **client-side**; the server never holds plaintext. The stable contract is [](#ai-output-containment), the model inventory ([](#models-and-algorithms)) and [](#embedding-provenance); feature lists and model picks are defaults that will move with field testing.

@@ -1,4 +1,4 @@
-// Decorates Starlight's sidebar with review-status badges. Pure: it returns a
+// Decorates Starlight's sidebar with audit-status badges. Pure: it returns a
 // new tree and never mutates its input. Wired in by src/route-data.ts.
 import { navBadge } from './status-badge.mjs';
 
@@ -25,7 +25,7 @@ function isExternal(href) {
 
 /**
  * Return a copy of `entries` in which every internal link whose page is not
- * `stable` carries that status's badge. A link that already has a badge keeps
+ * `audited` carries that status's badge. A link that already has a badge keeps
  * it; external links and routes with no known status are left alone; groups
  * are recursed into but never badged themselves.
  *

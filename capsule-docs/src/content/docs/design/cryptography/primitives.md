@@ -1,7 +1,7 @@
 ---
 title: Cryptographic Primitives
 description: Single-source-of-truth inventory of every cryptographic primitive Capsule uses
-status: draft
+audit: none
 ---
 
 The single source of truth for primitives: other docs link here and never restate. Constants live in `capsule-core/src/crypto/primitives.rs`.

@@ -1,7 +1,7 @@
 ---
 title: Damage Scenarios and Quarantine
 description: The damage-scenario → invariant map, quarantine surface inventory, and provenance immutability rules
-status: draft
+audit: none
 ---
 
 ## Damage Scenario → Invariant Map

@@ -1,7 +1,7 @@
 ---
 title: Clients
 description: Platform tiers and design language, what every client must validate, the client standards every client is built to, and the sandboxed decoder
-status: draft
+audit: none
 ---
 
 Clients are native per platform. Cross-platform logic (`verify_asset` per [](/design/cryptography/keys/#write-authorization), the [](/design/import/pipeline/), the library layout of [](/design/filesystem/client/)) lives in `capsule-core`, reached through `capsule-sdk`; a client owns rendering, input and platform integration. This doc owns what every client MUST do, since skipping it makes the client *faulty* ([](/design/threat-model/#client-class-taxonomy)), the standards every client is built to, and the sandboxed decoder. [](/design/local-gallery/) owns the offline-first requirements.

@@ -1,7 +1,7 @@
 ---
 title: Local Development
 description: The mise task graph, the services a local server needs, and which gates actually run on a developer machine.
-status: draft
+audit: none
 ---
 
 Every command runs through **mise**. `mise.toml` pins the toolchain and defines the task graph, with
@@ -36,6 +36,8 @@ Frequently used tasks:
 - `test-rust-containers`: see [](#the-container-tiers).
 - `test-web`: builds the WASM glue and KAT fixtures first.
 - `i18n` and `openapi-kynos`.
+- `audit-docs -- <page.md>...`: stamps docs pages as audited at HEAD
+  ([](/design/principles/#audit-status)).
 - For FFI, `targets-add`, then `build-ffi` and `gen-bindings`. On macOS, `setup-swift` builds the
   xcframework and the Xcode workspace.
 

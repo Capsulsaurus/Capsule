@@ -1,7 +1,7 @@
 ---
 title: Visual Language
 description: The brand tokens every Capsule surface shares, how each platform adopts them, and the rules the docs site follows
-status: draft
+audit: none
 ---
 
 This doc owns Capsule's **brand tokens**: the accent, neutral ramp, type, radius and spacing scales
@@ -126,10 +126,13 @@ one is designed.
   never competes with text. It shows behind the content and the table of contents; the sidebar
   covers it, the header's glass blurs it away, and it is not printed. It stays put while a page
   scrolls; a page transition carries it with the content, so it settles with the new page.
-- **Status badges.** Every authored page carries a review `status`
-  ([](/design/principles/#review-status)), except a splash page such as the support page, which has no
-  sidebar and may carry none. The page title always shows it. The sidebar shows it only for a page
-  that is not `stable`, so the navigation lists exactly what still awaits review.
+- **Status badges.** Every authored page carries an `audit` pin, and its status is computed from it
+  ([](/design/principles/#audit-status)). A splash page such as the support page is the exception: it
+  has no sidebar and may carry none. The page title always shows the status as a badge: Audited
+  (success), Changed since audit (caution) or Unaudited (caution). Under the title, a stamped page
+  names the commit it was audited at, linked to that commit, and the date. The sidebar badges only
+  pages that are not audited, as Changed or Unaudited, so the navigation lists exactly what still
+  needs an audit.
 - **Sidebar.** The same surface as the page, divided from it by a hairline; the current page is an
   accent-tinted pill. Where the table of contents appears beside it, the two columns are the same
   width and the content is centred between them, so the text has equal space on each side at every
@@ -150,13 +153,13 @@ one is designed.
   is laid out the way its readers' own tool lays it out: DocC for Swift (kind eyebrow, abstract,
   Declaration, Overview, Topics), Dokka for Kotlin (name beside signature and KDoc), TypeDoc for
   the browser module (kind chips, Parameters, Returns, where it is defined) and a man page for the
-  CLI (Synopsis, Description, Options). A generated page carries no review status.
+  CLI (Synopsis, Description, Options). A generated page carries no audit status.
 - **The blog goes live with its first post.** Until a post is published the production site has no
   blog route, header link, RSS feed, sitemap entry or footer link, so no reader lands on an empty
   index.
 - **Blog.** Announcements, release notes and design write-ups. A post links to the design doc it
   discusses rather than restating its contract. `draft: true` keeps a post unpublished; a published
-  post carries `status: stable`, so it never shows a Draft badge. A published post also carries a
+  post must compute to Audited, so an edit after publishing needs a fresh stamp. A published post also carries a
   title, a description of 50 to 160 characters, a date, at least one configured author and one tag,
   and an `<!-- excerpt -->` marker that ends its teaser on the index. A post's header shows its
   date, reading time and authors with their pictures, and its body is set to a reading measure.
@@ -193,8 +196,9 @@ one is designed.
 
 ## Validation
 
-- `scripts/page-status.test.mjs` fails on any docs page without a `status`, and on a published blog
-  post whose status is not `stable` or that breaks the post contract above
+- `scripts/page-audit.test.mjs` fails on any docs page without a well-formed `audit`, on a page still
+  setting the retired `status`, and on a published blog post that does not compute to Audited or
+  that breaks the post contract above
   (`src/lib/blog-posts.test.mjs` proves the contract check itself).
 - `src/lib/site-nav.test.mjs` proves the header and footer links, their order, the Blog link's
   dependence on the blog being live, and that every internal link resolves to a page.

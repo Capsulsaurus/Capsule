@@ -1,7 +1,7 @@
 ---
 title: Cryptography
 description: Capsule's cryptographic stack — the entry point to the sub-docs
-status: draft
+audit: none
 ---
 
 Every primitive and key-handling routine lives in `capsule-core::crypto`. All clients and the server's no-key validation path run the same code.

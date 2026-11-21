@@ -1,7 +1,7 @@
 ---
 title: Signed Manifests and Provenance
 description: Capsule's signed asset manifest, append-only provenance chains, and derivative provenance
-status: draft
+audit: none
 ---
 
 Every stored asset carries a client-signed **manifest**, and its manifests form an **append-only, hash-chained provenance log**. This separates legitimate writes from malicious or buggy ones after the fact and defeats stale revival ([](/design/threat-model/scenarios/#damage-scenario--invariant-map)).

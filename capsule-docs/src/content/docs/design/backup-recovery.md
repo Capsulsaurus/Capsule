@@ -1,7 +1,7 @@
 ---
 title: Backup and Recovery
 description: The portable backup artifact, the master-key escrow, and the recovery flows
-status: draft
+audit: none
 ---
 
 **Rule:** holding the recovery secret restores every asset the server holds and every asset in a backup artifact, even after every device is lost. The rule holds because the server never takes custody of an asset whose album key it does not also hold in escrow ([](#album-key-escrow)). An asset held back for that reason exists only on its device, and only that device or an artifact it exported can return it.

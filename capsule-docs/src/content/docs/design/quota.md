@@ -1,7 +1,7 @@
 ---
 title: Quota
 description: Storage quota accounting, thresholds, and enforcement points
-status: draft
+audit: none
 ---
 
 Quota is charged to `upload_user_id` (the authenticated uploader), not `owner_id`, so an on-behalf upload costs the account that spent the storage. This page owns the accounting model, the thresholds and the enforcement points; the code is [`capsule-server/src/quota/mod.rs`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-server/src/quota/mod.rs) and the wire contract is [](/reference/api/quota/).

@@ -1,7 +1,7 @@
 ---
 title: 문제 해결
 description: 보고서에 필요한 버전과 로그를 수집하고, Capsule 서버, 가져오기, 라이브러리에서 흔히 발생하는 문제를 해결합니다.
-status: draft
+audit: none
 ---
 
 문제가 생기면 여기서 시작하세요. 아래 내용으로 해결되지 않으면 [](/support/)에서 어디에

@@ -1,7 +1,7 @@
 ---
 title: Reference
 description: Generated reference for Capsule's developer surfaces
-status: draft
+audit: none
 ---
 
 Every page under this section is generated from the code and verified in CI, except each

@@ -1,7 +1,7 @@
 ---
 title: MLS Group Membership
 description: How Capsule binds MLS (RFC 9420) to its identity layer and uses it for album membership
-status: draft
+audit: none
 ---
 
 Album membership is MLS (RFC 9420) over OpenMLS with the X-Wing ciphersuite `0x004D` ([](/design/cryptography/primitives/#mls-ciphersuite)). `OpenMlsAuthority` (`capsule-core/src/crypto/authority/openmls_authority/`) implements `AlbumAuthority` ([](/design/cryptography/keys/#write-authority-interface)); `ReferenceAuthority` is the deterministic fixture.

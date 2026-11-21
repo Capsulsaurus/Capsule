@@ -1,7 +1,7 @@
 ---
 title: Platform Integrations
 description: How the native apps sit inside iOS and Android, from the Photos-parity layout and the Shortcuts actions to share targets, widgets, Spotlight and backup on capture, without letting decrypted content leave the app
-status: draft
+audit: none
 ---
 
 This doc owns how each native client plugs into its operating system: the iPhone layout contract against Apple Photos, App Intents and Shortcuts, Spotlight, widgets and the share extension on iOS, and the intents, picker, shortcuts, widgets and capture detection on Android. It also decides what ships in v1 on each platform. It defers platform tiers, design language and validation duties to [](/design/clients/), background transfer to [](/design/sync/#background-execution), offline behaviour to [](/design/local-gallery/), and export stripping to [](/design/metadata/#privacy-on-export).

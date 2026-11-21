@@ -482,11 +482,11 @@ describe('renderCliPage', () => {
         expect(page).toContain('Import files into a local Capsule library');
     });
 
-    it('opens with generated frontmatter and no review status', () => {
+    it('opens with generated frontmatter and no audit', () => {
         const page = renderCliPage(MINIMAL_CLI);
         expect(page.startsWith('---\n')).toBe(true);
         expect(page).toMatch(/^generated:$/m);
-        expect(page).not.toMatch(/^status:/m);
+        expect(page).not.toMatch(/^audit:/m);
         expect(page).toMatch(/^title: "Commands"$/m);
     });
 
@@ -679,7 +679,7 @@ describe('generate', () => {
             root,
             'capsule-docs/src/content/docs/reference/api/retired-group.md',
         );
-        writeFileSync(orphan, '---\ntitle: Gone\nstatus: stable\n---\n');
+        writeFileSync(orphan, '---\ntitle: Gone\naudit: none\n---\n');
         generate(root);
         expect(existsSync(orphan)).toBe(false);
     });
@@ -694,7 +694,7 @@ describe('generate', () => {
             root,
             'capsule-docs/src/content/docs/reference/cli.md',
         );
-        writeFileSync(overview, '---\ntitle: CLI\nstatus: draft\n---\n');
+        writeFileSync(overview, '---\ntitle: CLI\naudit: none\n---\n');
         generate(root);
         expect(existsSync(overview)).toBe(true);
     });
@@ -709,8 +709,8 @@ describe('generate', () => {
         mkdirSync(sdk, { recursive: true });
         const rust = join(sdk, 'rust.md');
         const orphan = join(sdk, 'retired-language.md');
-        writeFileSync(rust, '---\ntitle: Rust\nstatus: draft\n---\n');
-        writeFileSync(orphan, '---\ntitle: Gone\nstatus: stable\n---\n');
+        writeFileSync(rust, '---\ntitle: Rust\naudit: none\n---\n');
+        writeFileSync(orphan, '---\ntitle: Gone\naudit: none\n---\n');
         const written = generate(root);
         expect(existsSync(rust)).toBe(true);
         expect(existsSync(orphan)).toBe(false);
@@ -816,8 +816,8 @@ describe('the SDK pages', () => {
         );
     });
 
-    it('opens every SDK page as generated, with no review status', () => {
-        // A generated page tracks its artifact; it has no review state, and
+    it('opens every SDK page as generated, with no audit', () => {
+        // A generated page tracks its artifact; it has no audit state, and
         // PageTitle.astro refuses a page that claims both.
         for (const page of [
             renderWasmPage(wasm, parseWasmSurface(MINIMAL_WASM)),
@@ -826,7 +826,7 @@ describe('the SDK pages', () => {
         ]) {
             const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec(page);
             expect(frontmatter?.[1]).toMatch(/^generated:$/m);
-            expect(frontmatter?.[1]).not.toMatch(/^status:/m);
+            expect(frontmatter?.[1]).not.toMatch(/^audit:/m);
         }
     });
 
@@ -1521,7 +1521,7 @@ describe('renderApiPage', () => {
         const rendered = page();
         expect(rendered.startsWith('---\n')).toBe(true);
         expect(rendered).toMatch(/^generated:$/m);
-        expect(rendered).not.toMatch(/^status:/m);
+        expect(rendered).not.toMatch(/^audit:/m);
         expect(rendered).toMatch(/^title: "[^"]+"$/m);
     });
 

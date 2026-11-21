@@ -1,7 +1,7 @@
 ---
 title: Transfer Protocol
 description: The bidirectional, content-addressed protocol that moves encrypted blob bytes between Capsule clients and their home server
-status: draft
+audit: none
 ---
 
 The **transfer protocol** moves blob bytes between a client and its home server in both directions. It is Capsule-owned: session state, encrypted-blob provenance, finalization and access are one end-to-end security contract, so it offers no generic transfer library or TUS compatibility. The server never holds a key. Every byte it moves is opaque ciphertext except the signed provenance manifest, which is server-visible by design.

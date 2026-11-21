@@ -1,7 +1,7 @@
 ---
 title: Dépannage
 description: Collecter la version et les journaux qu'un rapport exige, et résoudre les problèmes courants d'un serveur Capsule, d'un import ou d'une bibliothèque.
-status: draft
+audit: none
 ---
 
 Commencez ici quand quelque chose ne va pas. Si rien ci-dessous ne règle le problème, [](/support/)

@@ -1,7 +1,7 @@
 ---
 title: 用户指南
 description: 使用 capsule CLI 日常使用 Capsule 照片库：导入、备份、验证、整理以及安全删除。
-status: draft
+audit: none
 ---
 
 本指南介绍参考客户端 `capsule` CLI。标有（*计划中*）的命令已列入[路线图](https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md)，但目前尚不可用。参数以 `capsule <command> --help` 为准；CLI 参考（[](/reference/cli/)）列出了全部参数。

@@ -1,7 +1,7 @@
 ---
 title: Validation Invariants
 description: Server and client refuse-by-default checklists; protocol handshake; idempotency; atomicity
-status: draft
+audit: none
 ---
 
 Refuse-by-default checks every receiver runs before persisting a write, against every client class ([](/design/threat-model/#client-class-taxonomy)).

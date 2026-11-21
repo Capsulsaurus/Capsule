@@ -1,7 +1,7 @@
 ---
 title: Guia do usuário
 description: O uso diário de uma biblioteca do Capsule com a CLI capsule — importar, fazer backup, verificar, organizar e excluir com segurança.
-status: draft
+audit: none
 ---
 
 Este guia cobre a CLI `capsule`, o cliente de referência. Os comandos marcados como *(planejado)*

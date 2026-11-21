@@ -1,7 +1,7 @@
 ---
 title: ユーザーガイド
 description: capsule CLIを使ったCapsuleライブラリの日常的な使い方。取り込み、バックアップ、検証、整理、安全な削除。
-status: draft
+audit: none
 ---
 
 このガイドでは、リファレンスクライアントである`capsule` CLIを扱います。（*予定*）と付いたコマンドは[ロードマップ](https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md)に載っているもので、まだ利用できません。フラグについては`capsule <command> --help`が正確な情報源で、CLIリファレンス（[](/reference/cli/)）にすべて掲載されています。

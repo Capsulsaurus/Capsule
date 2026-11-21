@@ -1,7 +1,7 @@
 ---
 title: Auto-hospedagem
 description: Como rodar o capsule-server sobre PostgreSQL e um armazenamento de blobs no sistema de arquivos
-status: draft
+audit: none
 ---
 
 Nenhuma versão foi lançada ainda, então você compila o servidor a partir do código-fonte. O servidor
