@@ -1,7 +1,7 @@
 ---
 title: Memories
 description: On This Day, trips, people and birthday memories generated on device from the local index, and the seen and saved state that syncs
-status: draft
+audit: none
 ---
 
 A **memory** is a titled, ordered set of assets the app offers without being asked: the photos from this day in past years, a trip, a person over the years, a birthday. Memories are generated on the client from the local index ([](/design/local-gallery/)); the server never sees one and cannot tell that one exists. This page owns the generators, their determinism and the state that syncs. Widgets that show a memory are owned by [](/design/platform-integrations/#widgets).
