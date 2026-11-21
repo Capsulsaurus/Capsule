@@ -158,6 +158,10 @@ one is designed.
   Declaration, Overview, Topics), Dokka for Kotlin (name beside signature and KDoc), TypeDoc for
   the browser module (kind chips, Parameters, Returns, where it is defined) and a man page for the
   CLI (Synopsis, Description, Options). A generated page carries no audit status.
+- **Code blocks.** Every code block names its language in a small hairline pill in its top
+  corner: Kotlin, Shell, JSON, and an unlisted language as its fence writes it. Plain text, raw
+  ANSI output and diagrams carry none. The pill is never selected or copied with the code; it
+  gives way to the copy button on hover, and sits beside it where the button always shows.
 - **The blog goes live with its first post.** Until a post is published the production site has no
   blog route, header link, RSS feed, sitemap entry or footer link, so no reader lands on an empty
   index.
@@ -214,6 +218,8 @@ one is designed.
 - `src/lib/theme-cycle.test.mjs` proves the toggle's cycle and that it stores what Starlight reads;
   `src/lib/build-commit.test.mjs` proves which commit the footer names.
 - `src/lib/sidebar-status.test.mjs` proves which sidebar entries carry a badge.
+- `src/lib/code-language.test.mjs` proves each code block's language name, which blocks carry
+  none, and that the tag lands once in the block's frame.
 - `src/lib/remark-link-titles.test.mjs`, `remark-library-links.test.mjs` and
   `remark-mermaid.test.mjs` prove the link labels and their parts, the library badges and the
   diagram compiler; the build fails on an empty link whose target is missing, on a link to a docs
