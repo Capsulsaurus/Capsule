@@ -1,7 +1,7 @@
 ---
 title: Guide d'utilisation
 description: L'usage quotidien d'une bibliothèque Capsule avec la CLI capsule — importer, sauvegarder, vérifier, organiser et supprimer en toute sécurité.
-status: draft
+audit: none
 ---
 
 Ce guide couvre la CLI `capsule`, le client de référence. Les commandes marquées *(prévu)*

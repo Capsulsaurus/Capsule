@@ -1,7 +1,7 @@
 ---
 title: People
 description: Face clustering on device, the signed corrections that make every device show the same people, and sharing a person with an album
-status: draft
+audit: none
 ---
 
 People are computed on the client from face embeddings ([](/design/ai/#dense-tagging)) and the user's corrections. The server sees neither: embeddings travel as sealed derivatives ([](/design/ai/#synced-embeddings)) and corrections as sealed operations. This page owns the clustering contract, the people section of the library-settings document and how a person is shared with an album. The models are owned by [](/design/ai/#models-and-algorithms).

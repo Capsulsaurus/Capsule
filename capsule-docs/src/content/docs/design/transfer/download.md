@@ -1,7 +1,7 @@
 ---
 title: Download
 description: Tiered, ranged, on-demand blob fetch — access scoping, the fallback ladder, client-side verification and prefetch
-status: draft
+audit: none
 ---
 
 The server-to-client half of the [](/design/transfer/), bound by its invariants ([](/design/transfer/#invariants)). Upload optimises for correctness under interruption; download optimises for **bandwidth and storage frugality**, fetching the smallest representation that serves the user's current intent. A client learns *what* to fetch from the sync feed ([](/design/sync/)). Server: `capsule-server::serve` behind `GET /v1/blob/{hash}` ([](/reference/api/sync/)); client: `capsule-sdk::fetch`.

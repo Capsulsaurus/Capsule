@@ -1,7 +1,7 @@
 ---
 title: Threat Model
 description: What Capsule assumes, who can attack it, where its trust boundaries lie, and how it contains damage from faulty, malicious, or version-mismatched clients
-status: draft
+audit: none
 ---
 
 The server holds no keys and clients write canonical state, so the design must bound what a client can break, and must say plainly what it trusts in order to do so.

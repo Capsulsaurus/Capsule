@@ -1,7 +1,7 @@
 ---
 title: MLS Resilience
 description: How Capsule's MLS layer recovers from lost commits, state divergence, and group corruption
-status: draft
+audit: none
 ---
 
 Recovery contracts for the honest MLS failures the base protocol leaves open. The steady state is in [](/design/cryptography/mls/) and attacks in the [](/design/threat-model/). Code: `capsule-core/src/crypto/authority/openmls_authority/resilience.rs`.

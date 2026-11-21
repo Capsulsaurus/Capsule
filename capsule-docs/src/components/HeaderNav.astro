@@ -33,7 +33,7 @@ const pathname = stripBase(Astro.url.pathname, base);
         href={link.href}
         aria-current={ariaCurrent(link, pathname)}
       >
-        {link.label}
+        <span class="label">{link.label}</span>
       </a>
     ))
   }
@@ -63,6 +63,27 @@ const pathname = stripBase(Astro.url.pathname, base);
   .site-nav a[aria-current] {
     color: var(--sl-color-text-accent);
     background: var(--sl-color-accent-low);
+  }
+
+  /* The row's spacing follows the form the header measured
+     (src/lib/nav-fit.mjs): wide by default, tighter when that does not fit.
+     A link can collapse to nothing (the pill form), so it clips its label,
+     which keeps its own width and so stays measurable. */
+  .bar {
+    gap: var(--capsule-nav-gap, 0.25rem);
+  }
+
+  .bar a {
+    flex: none;
+    max-width: calc(
+      var(--capsule-nav-label, 20rem) + 2 * var(--capsule-nav-pad-x, 0.75rem)
+    );
+    overflow: hidden;
+    padding-inline: var(--capsule-nav-pad-x, 0.75rem);
+  }
+
+  .label {
+    display: inline-block;
   }
 
   /* A list in a card: full-width rows tall enough to tap. */

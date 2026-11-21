@@ -1,7 +1,7 @@
 ---
 title: Versioning
 description: Update and versioning policy for servers and apps, and the invariants that stop any client and any server from corrupting each other's data
-status: draft
+audit: none
 ---
 
 Any server may meet any client: an app months older than its server, a server older than a freshly updated app, a federated peer on code Capsule never shipped. Both sides hold data the other cannot recreate: the client its keys and unsynced edits, the server the only copy of uploaded ciphertext. This page fixes the rules that keep every pairing safe: **reads stay compatible forever, writes fail closed, and nothing is ever dropped to resolve a mismatch.**

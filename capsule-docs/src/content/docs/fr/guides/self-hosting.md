@@ -1,7 +1,7 @@
 ---
 title: Auto-hébergement
 description: Faire tourner capsule-server sur PostgreSQL et un stockage de blobs sur système de fichiers
-status: draft
+audit: none
 ---
 
 Aucune version n'a encore été publiée : vous compilez donc le serveur depuis les sources. Le

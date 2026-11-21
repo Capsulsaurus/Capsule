@@ -1,7 +1,7 @@
 ---
 title: Metadata
 description: The CBOR sidecar schema v1, the CRDT semantics for collaborative metadata, identifiers, and geolocation
-status: draft
+audit: none
 ---
 
 The CBOR sidecar is the canonical metadata record for every asset, plaintext and local only ([](/design/filesystem/client/)). This page is its **single source of truth**: every implementation must encode it byte-for-byte as specified, or cross-peer signatures break. Other docs name fields and never re-declare them.

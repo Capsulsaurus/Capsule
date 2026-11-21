@@ -1,7 +1,7 @@
 ---
 title: Account Activity Log
 description: The durable record of an account's security events, what it may hold under E2EE, and who reads it
-status: draft
+audit: none
 ---
 
 The activity log is the account owner's record of what was done **to and with the account** on this server: sign-ins, sign-outs, revocations, credential changes, device enrollment and the links that open the account to someone else. It answers "was that me?" next to the session list ([](/design/authentication/#explicit-revocation)), and an operator and a user reconstruct an incident from it. Code: `capsule-server::activity`.

@@ -1,7 +1,7 @@
 ---
 title: Developer Documentation
 description: How Capsule's developer surfaces become published reference pages
-status: draft
+audit: none
 ---
 
 Capsule publishes one docs site, built from `capsule-docs/` with Starlight.

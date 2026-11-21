@@ -1,7 +1,7 @@
 ---
 title: Licensing
 description: Capsule's outbound licence, the inbound dependency-licence policy, and the linkage rules that keep both enforceable
-status: draft
+audit: none
 ---
 
 This doc owns Capsule's licensing position. Admitting a licence not already permitted requires

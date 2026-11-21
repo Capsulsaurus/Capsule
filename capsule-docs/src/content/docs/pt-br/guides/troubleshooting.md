@@ -1,7 +1,7 @@
 ---
 title: Solução de problemas
 description: Colete a versão e os logs de que um relato precisa, e resolva os problemas comuns com um servidor do Capsule, uma importação ou uma biblioteca.
-status: draft
+audit: none
 ---
 
 Comece aqui quando algo der errado. Se nada abaixo resolver, [](/support/) diz onde perguntar, e os

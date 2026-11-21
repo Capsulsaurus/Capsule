@@ -1,7 +1,7 @@
 ---
 title: Device Enrollment
 description: First-device bootstrap and cross-device add ceremonies for Capsule accounts
-status: draft
+audit: none
 ---
 
 Each device holds a DSK + DEK cross-signed into the user's device directory ([](/design/cryptography/keys/#device-directory)). Two ceremonies put a device there. Recovery after losing every device is cross-device recovery ([](/design/backup-recovery/#default-mechanisms)), not enrollment.

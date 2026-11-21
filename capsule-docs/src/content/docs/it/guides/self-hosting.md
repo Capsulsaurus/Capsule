@@ -1,7 +1,7 @@
 ---
 title: Self-hosting
 description: Eseguire capsule-server su PostgreSQL e un archivio di blob sul file system
-status: draft
+audit: none
 ---
 
 Non è ancora stata pubblicata alcuna release, quindi il server si compila dal codice sorgente. Il

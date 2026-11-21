@@ -1,7 +1,7 @@
 ---
 title: Troubleshooting
 description: Collect the version and logs a report needs, and fix the common problems with a Capsule server, an import or a library.
-status: draft
+audit: none
 ---
 
 Start here when something goes wrong. If nothing below fixes it, [](/support/) says where to ask,

@@ -1,7 +1,7 @@
 ---
 title: Network Resilience
 description: The one generated HTTP stack, the HTTP transport contract, content coding, connection classes and the path snapshot, per-request admission on metered paths, server advice, retry policy classes, and the adverse-network posture every transfer surface builds on
-status: draft
+audit: none
 ---
 
 This page owns the primitives every transfer surface consumes, and the one HTTP stack every Capsule request leaves through. Protocol mechanics stay with [](/design/transfer/), [](/design/sync/), [](/design/peering/) and [](/design/federation/).

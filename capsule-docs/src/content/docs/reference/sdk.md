@@ -1,7 +1,7 @@
 ---
 title: SDK
 description: Which Capsule SDK surface each platform builds on
-status: draft
+audit: none
 ---
 
 Every Capsule client is built on one Rust crate, `capsule-sdk`. The native apps reach it through

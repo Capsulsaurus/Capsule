@@ -1,7 +1,7 @@
 ---
 title: API Surfaces
 description: Why Capsule's server surface is one REST/OpenAPI contract, and which design doc owns each part of it
-status: draft
+audit: none
 ---
 
 Capsule has one public server transport: Kynos REST with a

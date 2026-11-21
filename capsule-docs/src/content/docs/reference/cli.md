@@ -1,7 +1,7 @@
 ---
 title: CLI
 description: What the capsule command line is for, how to install it, and where its contract lives
-status: draft
+audit: none
 ---
 
 `capsule` is the command line for a Capsule library. It is the only client that performs the whole

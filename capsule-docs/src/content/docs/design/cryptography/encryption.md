@@ -1,7 +1,7 @@
 ---
 title: Asset and Metadata Encryption
 description: How Capsule encrypts asset bytes and metadata blobs, the blob header and key commitment, and how a reader classifies a blob that will not open
-status: draft
+audit: none
 ---
 
 All asset bytes (originals, derivatives) and metadata blobs are encrypted client-side before crossing a network boundary. `capsule-core::crypto::encryption` is the only caller of AES-256-GCM for user data. Every encrypted blob is one [](#blob-header) followed by the output of one of two constructions:

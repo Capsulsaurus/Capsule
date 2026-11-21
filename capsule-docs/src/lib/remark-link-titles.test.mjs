@@ -30,7 +30,7 @@ describe('frontmatterTitle', () => {
 describe('outlineOf', () => {
     it('slugs headings as Astro does, suffixing repeats', () => {
         const outline = outlineOf(
-            '---\ntitle: Keys\nstatus: draft\n---\n\n## Device Keys\n\n### `amk_version` rules\n\n## Device Keys\n',
+            '---\ntitle: Keys\naudit: none\n---\n\n## Device Keys\n\n### `amk_version` rules\n\n## Device Keys\n',
         );
         expect(outline.title).toBe('Keys');
         expect([...outline.headings]).toEqual([

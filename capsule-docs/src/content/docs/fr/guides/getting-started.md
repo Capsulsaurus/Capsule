@@ -1,7 +1,7 @@
 ---
 title: Pour commencer
 description: Comment commencer à utiliser Capsule
-status: draft
+audit: none
 ---
 
 Capsule est une bibliothèque de photos et de médias chiffrée de bout en bout. Aucune version n'a

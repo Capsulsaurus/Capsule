@@ -1,7 +1,7 @@
 ---
 title: Authorization
 description: The closed lifecycle-action set, album membership on the server, freshness-gated operations, and the rate limit every endpoint is charged against
-status: draft
+audit: none
 ---
 
 **Rule:** every lifecycle transition is an asset manifest ([](/design/cryptography/provenance/#asset-manifest)) signed under the album's per-epoch write-tier key, the same proof as a write. There is no weaker path to destroy data than to add it. Clients reject anything `verify_asset` ([](/design/cryptography/keys/#write-authorization)) does not accept.

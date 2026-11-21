@@ -1,7 +1,8 @@
 ---
-// The header's section links below 72rem, where the row of links does not
-// fit: one pill naming the current section (or "Sections" outside them) that
-// discloses the same list (HeaderNav.astro, `menu`). It is in the header, so
+// The header's section links when no row of them fits the free space (the
+// header shows and hides it: src/lib/nav-fit.mjs): one pill naming the current
+// section (or "Sections" outside them) that discloses the same list
+// (HeaderNav.astro, `menu`). It is in the header, so
 // it is on every page whatever its template, the splash front page included,
 // and holds still through a page transition with the rest of the bar.
 //
@@ -157,13 +158,6 @@ const sections = localizeLabel('Sections', locale);
   /* From 50rem the header shows the preferences itself. */
   @media (min-width: 50rem) {
     .preferences {
-      display: none;
-    }
-  }
-
-  /* From 72rem the header shows the links in a row instead. */
-  @media (min-width: 72rem) {
-    .section-menu {
       display: none;
     }
   }

@@ -1,7 +1,7 @@
 ---
 title: Authentication
 description: Identity, account portability, session and access tokens
-status: draft
+audit: none
 ---
 
 The server can prove a request comes from a session it issued, not who the user is. The **master key**, held client-side, is the identity root. Every login credential authenticates a *session* only, and the master key never derives from, and is never visible to, the credential verifier. Endpoint shapes and status codes are in [](/reference/api/auth/).

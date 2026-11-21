@@ -5,7 +5,7 @@ date: 2026-11-09
 authors: justin
 tags:
   - announcement
-status: draft
+audit: none
 # Unpublished: Starlight excludes `draft: true` pages from production builds.
 # The outline below is a placeholder until the post is written.
 draft: true

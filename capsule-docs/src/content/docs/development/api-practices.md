@@ -1,7 +1,7 @@
 ---
 title: API Practices
 description: Contract and layering rules for the Kynos REST/OpenAPI server
-status: draft
+audit: none
 ---
 
 ## Layering

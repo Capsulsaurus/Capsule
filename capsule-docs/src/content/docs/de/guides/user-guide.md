@@ -1,7 +1,7 @@
 ---
 title: Benutzerhandbuch
 description: Der tägliche Umgang mit einer Capsule-Bibliothek über die capsule-CLI — importieren, sichern, prüfen, ordnen und sicher löschen.
-status: draft
+audit: none
 ---
 
 Dieses Handbuch behandelt die `capsule`-CLI, den Referenz-Client. Mit *(geplant)* markierte

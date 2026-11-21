@@ -1,7 +1,7 @@
 ---
 title: 開始使用
 description: 如何開始使用 Capsule
-status: draft
+audit: none
 ---
 
 Capsule 是一個端對端加密的相片與媒體庫。目前尚未發布任何版本，因此現階段需要從原始碼建置（[](/development/local-development/)），並使用 `capsule` 命令列。透過 CLI，您已經可以：

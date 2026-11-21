@@ -28,3 +28,4 @@ Follow:
 Keep current:
 
 - [Licensing](../../capsule-docs/src/content/docs/design/licensing.md) and the root `NOTICE` — for any licence beyond plain attribution; `mise run license-check` runs `cargo deny`.
+- [Component Map](../../capsule-docs/src/content/docs/development/components.md) — when a dependency between two of the repository's own components is added or removed, or a component is added, renamed or retired.

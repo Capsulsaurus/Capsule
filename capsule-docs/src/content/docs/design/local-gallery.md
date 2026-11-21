@@ -1,7 +1,7 @@
 ---
 title: Local Gallery
 description: The owner contract for offline-first native clients — every native app is a complete local gallery with no server
-status: draft
+audit: none
 ---
 
 Every native app is a **complete local gallery first** and a synced client second. Mechanisms live in [](/design/filesystem/client/) and [](/design/clients/); this page owns the requirements.

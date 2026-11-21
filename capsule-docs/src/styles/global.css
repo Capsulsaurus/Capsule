@@ -301,6 +301,54 @@ header.header {
     border-radius: var(--capsule-radius-card);
 }
 
+/* Code blocks: the language tag (src/lib/code-language.mjs). A hairline pill
+   in the code area's top corner, level with the copy button and on the code's
+   own background so a long first line runs beneath it. It is never selected
+   or copied with the code. Where the copy button shows only on hover, the two
+   trade places; where it always shows (touch screens), the tag sits beside
+   it. */
+.expressive-code .capsule-code-language {
+    position: absolute;
+    inset-block-start: calc(var(--ec-brdWd) + var(--button-spacing) + 0.4rem);
+    inset-inline-end: calc(var(--ec-brdWd) + var(--ec-uiPadInl) / 2);
+    padding: 0.0625rem 0.5rem;
+    border: 1px solid var(--sl-color-hairline-light);
+    border-radius: var(--capsule-radius-pill);
+    background: var(--code-background, var(--ec-codeBg));
+    color: var(--sl-color-gray-3);
+    font-family: var(--sl-font);
+    font-size: 0.6875rem;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    line-height: 1.4;
+    pointer-events: none;
+    user-select: none;
+    transition: opacity 0.2s;
+}
+
+@media (hover: hover) {
+    .expressive-code .frame:is(:hover, :focus-within) .capsule-code-language {
+        opacity: 0;
+    }
+}
+
+@media (hover: none) {
+    .expressive-code .capsule-code-language {
+        inset-inline-end: calc(
+            var(--ec-brdWd) +
+            var(--ec-uiPadInl) /
+            2 +
+            2.5rem
+        );
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .expressive-code .capsule-code-language {
+        transition: none;
+    }
+}
+
 .sl-markdown-content .starlight-aside {
     border-radius: var(--capsule-radius-sm);
     border-inline-start-width: 3px;

@@ -12,6 +12,7 @@ import { referenceSidebar } from './scripts/reference-groups.mjs';
 import baseLinks from './src/lib/base-links.mjs';
 import { BLOG_AUTHORS, hasPublishedPost } from './src/lib/blog-posts.mjs';
 import { resolveBuildCommit } from './src/lib/build-commit.mjs';
+import { pluginLanguageLabel } from './src/lib/code-language.mjs';
 import { versionFromBranch } from './src/lib/docs-version.mjs';
 import {
     LLMS_DETAILS,
@@ -117,8 +118,11 @@ export default defineConfig({
                 baseUrl:
                     'https://github.com/Capsulsaurus/Capsule/tree/master/capsule-docs',
             },
+            // Every code block names its language in its corner.
+            expressiveCode: { plugins: [pluginLanguageLabel()] },
             components: {
-                // Renders the `status` frontmatter (draft/stable) as a title badge.
+                // Renders the computed audit status as a title badge, with the
+                // commit and date of the page's last audit.
                 PageTitle: './src/components/PageTitle.astro',
                 // Appends the site footer (links, licence) to every page.
                 Footer: './src/components/Footer.astro',
@@ -138,7 +142,7 @@ export default defineConfig({
             // the locale's route in English, with its fallback notice.
             defaultLocale: 'root',
             locales: starlightLocales(),
-            // Badges every non-stable page in the sidebar. See src/route-data.ts.
+            // Badges every page that is not audited in the sidebar. See src/route-data.ts.
             routeMiddleware: './src/route-data.ts',
             // The top-level group labels carry every locale's rendering
             // (src/lib/nav-labels.mjs); the rest stay English. A page entry
