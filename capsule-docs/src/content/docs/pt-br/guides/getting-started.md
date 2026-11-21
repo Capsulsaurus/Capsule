@@ -1,7 +1,7 @@
 ---
 title: Primeiros passos
 description: Como começar a usar o Capsule
-status: draft
+audit: none
 ---
 
 O Capsule é uma biblioteca de fotos e mídia com criptografia de ponta a ponta. Nenhuma versão foi

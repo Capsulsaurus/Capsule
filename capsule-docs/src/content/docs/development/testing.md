@@ -1,7 +1,7 @@
 ---
 title: Testing and Validation
 description: What each layer is tested for, with which tools, and what must pass before Capsule holds real data.
-status: draft
+audit: none
 ---
 
 Capsule is trusted with originals that cannot be recreated, so correctness is proven by automated,

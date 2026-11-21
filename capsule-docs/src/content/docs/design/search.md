@@ -1,7 +1,7 @@
 ---
 title: Search
 description: The local search index, the query grammar and its chips, typo-tolerant suggestions, and how search compiles to smart-album predicates
-status: draft
+audit: none
 ---
 
 Search runs **on the device, over the device's own catalog**. The server holds only ciphertext and

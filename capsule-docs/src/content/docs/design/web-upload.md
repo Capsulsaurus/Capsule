@@ -1,7 +1,7 @@
 ---
 title: Web Upload
 description: Browser-based guest drops — upload-link provisioning, the sealed drop format, and adoption into the library
-status: draft
+audit: none
 ---
 
 Web upload lets a guest with no Capsule account, the non-registered account class ([](/design/authentication/#account-types)) using the browser *web client*, send assets to a user. The guest holds no album key or MLS membership and cannot sign, so it never writes into the library:

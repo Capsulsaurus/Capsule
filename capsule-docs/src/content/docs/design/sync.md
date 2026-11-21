@@ -1,7 +1,7 @@
 ---
 title: Sync
 description: The metadata sync feed — cursors, anti-rewind, stale-revival detection, auto-sync criteria and background execution
-status: draft
+audit: none
 ---
 
 The sync feed tells a client **what changed**; the [](/design/transfer/) moves the bytes. A client never polls assets individually: it holds one opaque cursor and reads everything after it. Server: `capsule-server::sync`; client: `capsule-sdk::sync`, applied by `capsule-library::lifecycle::sync_apply`.

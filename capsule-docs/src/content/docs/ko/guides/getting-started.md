@@ -1,7 +1,7 @@
 ---
 title: 시작하기
 description: Capsule 사용을 시작하는 방법
-status: draft
+audit: none
 ---
 
 Capsule은 종단 간 암호화된 사진 및 미디어 라이브러리입니다. 아직 릴리스가 공개되지 않았으므로,

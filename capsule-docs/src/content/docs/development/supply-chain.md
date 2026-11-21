@@ -1,7 +1,7 @@
 ---
 title: Supply Chain
 description: How a dependency is admitted, how every lockfile is scanned for advisories, how build inputs are pinned, and when an advisory may be ignored.
-status: draft
+audit: none
 ---
 
 This page owns the policy for third-party code and build inputs: admitting a dependency, scanning

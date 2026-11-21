@@ -1,7 +1,7 @@
 ---
 title: Getting Started
 description: How to start using Capsule
-status: draft
+audit: none
 ---
 
 Capsule is an end-to-end encrypted photo and media library. No release has been published yet, so

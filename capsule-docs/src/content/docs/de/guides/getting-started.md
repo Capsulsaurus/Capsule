@@ -1,7 +1,7 @@
 ---
 title: Erste Schritte
 description: So beginnen Sie mit Capsule
-status: draft
+audit: none
 ---
 
 Capsule ist eine Ende-zu-Ende-verschlüsselte Foto- und Medienbibliothek. Bisher wurde noch kein

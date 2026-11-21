@@ -1,7 +1,7 @@
 ---
 title: Server Architecture
 description: The Kynos REST/OpenAPI server and generated client architecture
-status: draft
+audit: none
 ---
 
 Capsule exposes one REST/OpenAPI contract ([](/design/api-surfaces/)).

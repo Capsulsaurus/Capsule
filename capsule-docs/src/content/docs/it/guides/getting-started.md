@@ -1,7 +1,7 @@
 ---
 title: Per iniziare
 description: Come iniziare a usare Capsule
-status: draft
+audit: none
 ---
 
 Capsule è una libreria di foto e contenuti multimediali cifrata end-to-end. Non è ancora stata

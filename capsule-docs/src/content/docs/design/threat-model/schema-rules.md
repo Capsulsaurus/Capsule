@@ -1,7 +1,7 @@
 ---
 title: Schema Rules and Open Questions
 description: Schema evolution, forbidden client behaviors, deprecation policy, and unresolved design questions
-status: draft
+audit: none
 ---
 
 Fields live in their owner docs; this doc fixes how they may evolve.

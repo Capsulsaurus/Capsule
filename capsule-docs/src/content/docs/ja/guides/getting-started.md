@@ -1,7 +1,7 @@
 ---
 title: はじめに
 description: Capsuleを使い始める方法
-status: draft
+audit: none
 ---
 
 Capsuleは、エンドツーエンドで暗号化された写真・メディアライブラリです。まだリリースは公開されていないため、現時点ではソースからビルドし（[](/development/local-development/)）、`capsule`コマンドラインを使います。CLIではすでに次のことができます。

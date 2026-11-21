@@ -1,4 +1,4 @@
-// Starlight route middleware: shows each page's review status in the sidebar,
+// Starlight route middleware: shows each page's audit status in the sidebar,
 // and keeps the front page's hero buttons in the page's locale. The
 // decorations themselves are the pure, tested `badgeSidebar` and
 // `localizeHero`; this file only supplies the statuses and hands the results
@@ -6,6 +6,7 @@
 
 import { getCollection } from 'astro:content';
 import { defineRouteMiddleware } from '@astrojs/starlight/route-data';
+import { entryAudit } from './lib/entry-audit.mjs';
 import { localizeHero } from './lib/hero-links.mjs';
 import { LOCALE_KEYS } from './lib/locales.mjs';
 import {
@@ -17,18 +18,21 @@ import {
 let statuses: Promise<ReadonlyMap<string, string>> | undefined;
 
 /**
- * Every docs page's `status`, keyed by route, with each locale's fallback
- * routes carrying the English page's. Cached for a production build; rebuilt
- * per request in `astro dev` so editing a page's status shows at once.
+ * Every docs page's computed audit status, keyed by route, with each locale's
+ * fallback routes carrying the English page's. Cached for a production build;
+ * rebuilt per request in `astro dev` so editing a page shows at once.
  */
 function statusByRoute(): Promise<ReadonlyMap<string, string>> {
     if (import.meta.env.DEV) statuses = undefined;
     statuses ??= getCollection('docs').then((entries) =>
         withLocaleFallbacks(
             new Map(
-                entries.flatMap(({ id, data: { status } }) =>
-                    status ? [[routeKey(id), status] as const] : [],
-                ),
+                entries.flatMap((entry) => {
+                    const audit = entryAudit(entry);
+                    return audit
+                        ? [[routeKey(entry.id), audit.status] as const]
+                        : [];
+                }),
             ),
             LOCALE_KEYS,
         ),

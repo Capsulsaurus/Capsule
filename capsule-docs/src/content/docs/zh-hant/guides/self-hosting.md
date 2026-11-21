@@ -1,7 +1,7 @@
 ---
 title: 自行代管
 description: 在 PostgreSQL 與檔案系統 blob 儲存區上執行 capsule-server
-status: draft
+audit: none
 ---
 
 目前尚未發布任何版本，因此您需要從原始碼建置伺服器。伺服器只儲存密文，從不解碼媒體；所有處理與加密都由用戶端完成。

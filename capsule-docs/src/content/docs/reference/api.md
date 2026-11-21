@@ -1,7 +1,7 @@
 ---
 title: REST API
 description: How Capsule's REST reference is organized, and what to read before an endpoint
-status: draft
+audit: none
 ---
 
 Capsule's server surface is REST over HTTP, described by one OpenAPI 3.2 document `capsule-server`

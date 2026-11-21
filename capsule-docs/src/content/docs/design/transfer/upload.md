@@ -1,7 +1,7 @@
 ---
 title: Upload
 description: Resumable, content-addressed upload sessions — chunk rules, session states, finalization, staged tiers and the error codes a client branches on
-status: draft
+audit: none
 ---
 
 The client-to-server half of the [](/design/transfer/), bound by its invariants ([](/design/transfer/#invariants)). It borrows the `PATCH` shape of TUS v1, generalised from an append offset to a byte range on a fixed grid, without claiming compatibility. Server: `capsule-server::upload`; client: `capsule-sdk::upload`. Shapes, headers and status codes are the generated [](/reference/api/upload/) reference, constants are `capsule-server::limits`, and this page fixes their semantics.

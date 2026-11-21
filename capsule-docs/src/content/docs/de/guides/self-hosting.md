@@ -1,7 +1,7 @@
 ---
 title: Self-Hosting
 description: capsule-server mit PostgreSQL und einem Blob-Speicher im Dateisystem betreiben
-status: draft
+audit: none
 ---
 
 Es wurde noch kein Release veröffentlicht, daher bauen Sie den Server aus dem Quellcode. Der

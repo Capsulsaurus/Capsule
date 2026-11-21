@@ -1,7 +1,7 @@
 ---
 title: 快速开始
 description: 如何开始使用 Capsule
-status: draft
+audit: none
 ---
 
 Capsule 是一个端到端加密的照片和媒体库。目前尚未发布任何版本，因此现在需要从源代码构建（[](/development/local-development/)）并使用 `capsule` 命令行。借助 CLI，你已经可以：

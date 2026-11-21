@@ -1,7 +1,7 @@
 ---
 title: 셀프 호스팅
 description: PostgreSQL과 파일 시스템 블롭 저장소로 capsule-server 운영하기
-status: draft
+audit: none
 ---
 
 아직 릴리스가 나오지 않았으므로 서버는 소스에서 빌드합니다. 서버는 암호문만 저장하고 미디어를

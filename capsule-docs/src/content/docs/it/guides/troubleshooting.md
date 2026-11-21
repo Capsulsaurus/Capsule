@@ -1,7 +1,7 @@
 ---
 title: Risoluzione dei problemi
 description: Raccogli la versione e i log necessari a una segnalazione, e risolvi i problemi più comuni con un server Capsule, un'importazione o una libreria.
-status: draft
+audit: none
 ---
 
 Inizia da qui quando qualcosa va storto. Se niente di quanto segue risolve il problema, [](/support/)
