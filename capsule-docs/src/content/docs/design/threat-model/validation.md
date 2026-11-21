@@ -108,6 +108,17 @@ Run before applying any received data; skipping one makes a client *faulty*.
 - Cap every response body after content decoding, per operation, before parsing it; never size an allocation from a length the server or a peer states ([](/design/networking/#http-transport)).
 - Accept an `AlbumKeyDistribution` only if it equals the receiver's own export for that epoch; never overwrite a held key ([](/design/cryptography/keys/#key-delivery-and-who-may-send-it)).
 
+### Bulk and Automatic Changes
+
+Rules for any operation that changes many assets at once or runs without a per-asset decision: a scan, a watched folder, an import rule, a duplicate review, a migration.
+
+- **Absence is never a delete.** A file missing from a scanned folder, a source that disappears or a scan that matches nothing changes nothing in the library. It is reported, never acted on.
+- **Destructive bulk operations are previewed and capped.** Any bulk trash, release or replace shows a dry-run list first, and a single run past its cap pauses for confirmation ([](/design/organization/#import-rules)). No automatic process deletes or purges.
+- **Merges are reversible operations.** Merging people, duplicates or stacks writes ordinary signed operations that never delete their inputs, so a merge can be undone and a replayed or racing merge is a no-op ([](/design/people/#corrections), [](/design/organization/#near-duplicate-review)).
+- **Upgrades migrate, never reset.** A model bump, schema bump or feature migration carries user corrections forward or keeps them verbatim; it never asks the user to discard names, labels or edits to proceed ([](/design/people/#corrections-outlive-models)).
+- **State applies to a whole stack.** Hiding, trashing or restoring a stack member applies to every member in one atomic batch, so no member is stranded outside the state its stack is in.
+- **The server never moves files a user can see.** Server storage layout is opaque and content-addressed; user-facing folder layouts exist only in exports ([](/design/export/)).
+
 ## Protocol and Capability Negotiation
 
 One fail-closed, one-shot gate on every versioned surface, before any state is written.
@@ -148,11 +159,14 @@ Duplicates are no-ops; the same key with different content is corruption. An unl
 
 - **Blob finalization:** each blob of a bundle finalizes on its own, and its index rows and custody receipt commit in one transaction; failure → `FailedProcessing`, partials GC'd ([](/design/filesystem/maintenance/#atomic-writes-and-crash-recovery)). A bundle becomes visible only once its provenance and metadata blobs have finalized (the visibility gate in [](/design/transfer/upload/#what-gets-uploaded)), and a `replace` applies as one act when its manifest lands.
 - **Stack edits:** all `.tmp` staged, renamed together; any failure discards the bundle.
+- **Batch metadata changes** (time corrections, duplicate merges, rule actions, stack-wide hide or trash): staged and committed together under the same rule.
 - **AMK epoch bump + write-tier rotation:** one MLS commit.
 - **Album upgrade:** one MLS commit (`AlbumTombstone`) ([](/design/versioning/#album-upgrade-ceremony)).
 - **Lifecycle manifest + provenance:** the same act, because the entry *is* the manifest plus its chain link.
 
 ## Known Gaps
+
+- Hiding or trashing one stack member does not yet carry the rest of the stack with it; the bulk-change rules have no shared preview and cap mechanism.
 
 - **7** compares the device's `added_at` with the manifest's `timestamp` (`capsule-server/src/upload/authority.rs`, `capsule-server/src/album/authority.rs`) instead of reading the directory version in force at receipt.
 - **14** has no independent counterpart: the content address is checked only by the hasher both sides share ([](/design/threat-model/risks/)).
