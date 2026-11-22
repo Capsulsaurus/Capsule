@@ -1114,6 +1114,12 @@ impl IfdEntry {
         Self::new(tag, 4, values.len(), value)
     }
 
+    /// A BigTIFF `LONG8` (type 16) entry, which gamut-ifd also reads in classic TIFF.
+    fn long8s(tag: TiffTag, values: &[u64]) -> Self {
+        let value = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+        Self::new(tag, 16, values.len(), value)
+    }
+
     fn rationals(tag: TiffTag, values: &[(u32, u32)]) -> Self {
         let value = values
             .iter()
@@ -1695,6 +1701,68 @@ fn an_oversized_raw_frame_is_refused_before_decoding() {
         probe_raw(&jxl, StillFormat::Dng, 256).is_ok(),
         "the same file within budget probes"
     );
+}
+
+/// gamut-ifd reads a size from `BYTE`, `SHORT`, `LONG`, `IFD`, `LONG8` and `IFD8` alike, and a
+/// `LONG8` in classic TIFF too, so a DNG stating its image or tile as `LONG8` is held to the
+/// budget before the eager reader allocates for it, and so is one whose raw image sits behind a
+/// `LONG8` `SubIFDs` pointer.
+#[test]
+fn a_long8_raw_frame_is_refused_before_decoding() {
+    let over = MediaError::PixelBudgetExceeded {
+        pixels: 400_000_000,
+        limit: MAX_DECODE_PIXELS,
+    };
+
+    let image = dng_cfa(4, 4, &[0; 16], |e| {
+        set_entry(e, IfdEntry::long8s(TiffTag::ImageWidth, &[20_000]));
+        set_entry(e, IfdEntry::long8s(TiffTag::ImageLength, &[20_000]));
+    });
+    assert_eq!(
+        check_ifd_bounds(&image).map(|w| w.max_image),
+        Ok((20_000, 20_000))
+    );
+    assert_eq!(RawshiftDecoder.probe(&image, "dng"), Err(over.clone()));
+    assert_eq!(RawshiftDecoder.decode(&image, "dng"), Err(over.clone()));
+
+    let codestream = jxl_bytes(&gradient(16, 16), None);
+    let tile = dng_linear_jxl_with(&codestream, (16, 16), |e, _, _| {
+        set_entry(e, IfdEntry::long8s(TiffTag::TileWidth, &[20_000]));
+        set_entry(e, IfdEntry::long8s(TiffTag::TileLength, &[20_000]));
+    });
+    assert_eq!(RawshiftDecoder.probe(&tile, "dng"), Err(over.clone()));
+
+    // The oversized raw image in a SubIFD that IFD0 points at through a one-element `LONG8`
+    // list: 8 bytes, so stored out of line in classic TIFF and read at 8 bytes, not 4.
+    let samples: Vec<u8> = [0u16; 16].iter().flat_map(|s| s.to_le_bytes()).collect();
+    let nested = tiff_file(&samples, |writer, offset, length| {
+        let mut raw = vec![
+            IfdEntry::long(TiffTag::ImageWidth, 20_000),
+            IfdEntry::long(TiffTag::ImageLength, 20_000),
+            IfdEntry::short(TiffTag::BitsPerSample, 16),
+            IfdEntry::short(TiffTag::Compression, 1),
+            IfdEntry::short(TiffTag::PhotometricInterpretation, 32803),
+            IfdEntry::short(TiffTag::SamplesPerPixel, 1),
+            IfdEntry::long(TiffTag::StripOffsets, offset),
+            IfdEntry::long(TiffTag::StripByteCounts, length),
+            IfdEntry::shorts(TiffTag::CFARepeatPatternDim, &[2, 2]),
+            IfdEntry::bytes(TiffTag::CFAPattern, &[0, 1, 1, 2]),
+        ];
+        let raw_at = writer.write_ifd(&mut raw, 0);
+        let mut ifd0 = vec![
+            IfdEntry::bytes(TiffTag::DNGVersion, &[1, 4, 0, 0]),
+            IfdEntry::ascii(TiffTag::Make, "Capsule"),
+            IfdEntry::ascii(TiffTag::Model, "Synthetic CFA"),
+            IfdEntry::long8s(TiffTag::SubIFDs, &[raw_at]),
+        ];
+        ifd0.extend(dng_profile());
+        writer.write_ifd(&mut ifd0, 0)
+    });
+    assert_eq!(
+        check_ifd_bounds(&nested).map(|w| (w.ifds, w.max_image)),
+        Ok((2, (20_000, 20_000)))
+    );
+    assert_eq!(RawshiftDecoder.probe(&nested, "dng"), Err(over));
 }
 
 /// Assert `bytes` probes and decodes as a `format` decode failure whose detail holds `needle`.

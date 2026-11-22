@@ -115,6 +115,9 @@ const TAG_EXIF_IFD: u16 = 0x8769;
 /// The GPS IFD pointer.
 const TAG_GPS_IFD: u16 = 0x8825;
 
+/// TIFF field type `BYTE`.
+const TYPE_BYTE: u16 = 1;
+
 /// TIFF field type `SHORT`.
 const TYPE_SHORT: u16 = 3;
 
@@ -123,6 +126,27 @@ const TYPE_LONG: u16 = 4;
 
 /// TIFF field type `IFD`.
 const TYPE_IFD: u16 = 13;
+
+/// BigTIFF field type `LONG8`, which gamut-ifd (built with `bigtiff`) accepts in classic TIFF too.
+const TYPE_LONG8: u16 = 16;
+
+/// BigTIFF field type `IFD8`, accepted like [`TYPE_LONG8`].
+const TYPE_IFD8: u16 = 18;
+
+/// The byte width of one element of an unsigned-integer type gamut-ifd coerces to a number:
+/// `BYTE`, `SHORT`, `LONG`, `IFD`, `LONG8` and `IFD8`, the types `Value::as_u32` and
+/// `Value::as_u64_vec` accept (the DNG reader's `get_u32` sizes and `get_u64_vec` `SubIFDs`)
+/// and a superset of the `LONG`/`IFD`/`LONG8`/`IFD8` that `pointer_offsets` follows. `None` for
+/// any other type, which no reader takes a size or a pointer from.
+const fn unsigned_width(data_type: u16) -> Option<u64> {
+    match data_type {
+        TYPE_BYTE => Some(1),
+        TYPE_SHORT => Some(2),
+        TYPE_LONG | TYPE_IFD => Some(4),
+        TYPE_LONG8 | TYPE_IFD8 => Some(8),
+        _ => None,
+    }
+}
 
 /// The byte size of one value of a TIFF (or BigTIFF) field type, and `None` for a type the
 /// specifications do not define.
@@ -227,12 +251,13 @@ pub(super) struct IfdWalk {
     /// The deepest level any IFD was reached at.
     pub depth: u32,
     /// The largest embedded-JPEG length any walked IFD's `JPEGInterchangeFormatLength` states,
-    /// read the way `RawFile::thumbnail` reads it (the first `SHORT` or `LONG` value), `0` where
-    /// none does. The thumbnail reader allocates that many bytes before it reads one, so
+    /// read as [`first_unsigned`] reads it (the first value of any unsigned-integer type, a
+    /// superset of what `RawFile::thumbnail` takes), `0` where none does. The thumbnail reader allocates that many bytes before it reads one, so
     /// [`crate::media::extract_embedded_preview`] holds it to the file's length first.
     pub max_jpeg_length: u64,
-    /// The largest `TileWidth` and the largest `TileLength` any walked IFD states (each the first
-    /// `SHORT` or `LONG` value, as a reader takes it), `(0, 0)` where none does. Two maxima rather
+    /// The largest `TileWidth` and the largest `TileLength` any walked IFD states (each read by
+    /// [`first_unsigned`], which accepts every type gamut-ifd's `as_u32` does, `BYTE` and
+    /// `LONG8` among them), `(0, 0)` where none does. Two maxima rather
     /// than one IFD's pair, so they bound every tile in the file, the RAW image's among them.
     pub max_tile: (u64, u64),
     /// The `ImageWidth` and `ImageLength` of the walked IFD that states the most pixels, read
@@ -254,9 +279,14 @@ enum Work {
         chain: bool,
         first: bool,
     },
-    /// `remaining` more `SubIFDs` offsets, the next one stored at `at`, each naming an IFD at
-    /// `depth`.
-    SubIfds { at: u64, remaining: u64, depth: u32 },
+    /// `remaining` more pointer-list offsets (`SubIFDs`, EXIF or GPS), each `width` bytes, the
+    /// next one stored at `at`, each naming an IFD at `depth`.
+    SubIfds {
+        at: u64,
+        remaining: u64,
+        width: u64,
+        depth: u32,
+    },
 }
 
 /// A TIFF read in place.
@@ -304,6 +334,17 @@ impl Tiff<'_> {
         })
     }
 
+    /// An unsigned integer `width` bytes wide (1, 2, 4 or 8), as [`unsigned_width`] sizes it.
+    fn uint_at(&self, at: u64, width: u64) -> Option<u64> {
+        match width {
+            1 => self.slice::<1>(at).map(|[b]| u64::from(b)),
+            2 => self.u16_at(at).map(u64::from),
+            4 => self.u32_at(at).map(u64::from),
+            8 => self.u64_at(at),
+            _ => None,
+        }
+    }
+
     /// An offset-sized field: 4 bytes in classic TIFF, 8 in BigTIFF.
     fn offset_at(&self, at: u64) -> Option<u64> {
         if self.big {
@@ -344,6 +385,16 @@ impl Entry {
         self.type_size()
             .and_then(|size| size.checked_mul(self.count))
             .is_some_and(|bytes| bytes <= tiff.inline_size())
+    }
+
+    /// Where the entry's values start: the value field itself where they are inline, else the
+    /// offset it holds.
+    fn values_at(&self, tiff: &Tiff<'_>) -> Option<u64> {
+        if self.is_inline(tiff) {
+            Some(self.field)
+        } else {
+            tiff.offset_at(self.field)
+        }
     }
 }
 
@@ -390,17 +441,19 @@ pub(super) fn check_ifd_bounds(bytes: &[u8]) -> Result<IfdWalk, IfdRefusal> {
             Work::SubIfds {
                 at,
                 remaining,
+                width,
                 depth,
             } => {
                 // The reader fails the whole list at the first unreadable element, so the rest
                 // are never parsed.
-                let Some(offset) = tiff.offset_at(at) else {
+                let Some(offset) = tiff.uint_at(at, width) else {
                     continue;
                 };
                 if remaining > 1 {
                     stack.push(Work::SubIfds {
-                        at: at + tiff.offset_size(),
+                        at: at + width,
                         remaining: remaining - 1,
+                        width,
                         depth,
                     });
                 }
@@ -526,25 +579,25 @@ fn walk_ifd(
         };
         check_entry(offset, &entry, file_len)?;
         if tag == TAG_JPEG_INTERCHANGE_FORMAT_LENGTH
-            && let Some(length) = first_short_or_long(tiff, &entry)
+            && let Some(length) = first_unsigned(tiff, &entry)
         {
             walk.max_jpeg_length = walk.max_jpeg_length.max(length);
         }
         if tag == TAG_TILE_WIDTH
-            && let Some(width) = first_short_or_long(tiff, &entry)
+            && let Some(width) = first_unsigned(tiff, &entry)
         {
             walk.max_tile.0 = walk.max_tile.0.max(width);
         }
         if tag == TAG_TILE_LENGTH
-            && let Some(height) = first_short_or_long(tiff, &entry)
+            && let Some(height) = first_unsigned(tiff, &entry)
         {
             walk.max_tile.1 = walk.max_tile.1.max(height);
         }
         if tag == TAG_IMAGE_WIDTH {
-            image_width = first_short_or_long(tiff, &entry);
+            image_width = first_unsigned(tiff, &entry);
         }
         if tag == TAG_IMAGE_LENGTH {
-            image_length = first_short_or_long(tiff, &entry);
+            image_length = first_unsigned(tiff, &entry);
         }
         follow(tiff, &entry, depth + 1, first, stack);
     }
@@ -600,65 +653,53 @@ fn check_entry(ifd_offset: u64, entry: &Entry, file_len: u64) -> Result<(), Over
     }
 }
 
-/// Push the IFDs the reader parses from `entry`, read the way the reader reads them, each at
+/// Push the IFDs the reader parses from `entry`, read the way gamut-ifd reads them, each at
 /// `depth`.
+///
+/// A `SubIFDs`, EXIF or GPS pointer is followed through every element, at the width of the
+/// type the entry declares, whichever TIFF variant holds it: gamut-ifd decodes a `LONG8` or
+/// `IFD8` list in classic TIFF as readily as in BigTIFF, the DNG reader takes `SubIFDs` through
+/// `get_u64_vec` (`BYTE`, `SHORT`, `LONG`, `IFD`, `LONG8`, `IFD8`) and `read_tree` through
+/// `pointer_offsets` (`LONG`, `IFD`, `LONG8`, `IFD8`). The walk follows the union, so every
+/// directory either reader parses is walked. A list of any other type is a pointer to nothing.
 fn follow(tiff: &Tiff<'_>, entry: &Entry, depth: u32, first: bool, stack: &mut Vec<Work>) {
-    let child = |offset: Option<u64>| {
-        offset.map(|offset| Work::Ifd {
+    let work = if entry.tag == TAG_SUB_IFDS || entry.tag == TAG_EXIF_IFD || entry.tag == TAG_GPS_IFD
+    {
+        match (unsigned_width(entry.data_type), entry.values_at(tiff)) {
+            (Some(width), Some(at)) if entry.count > 0 => Some(Work::SubIfds {
+                at,
+                remaining: entry.count,
+                width,
+                depth,
+            }),
+            _ => None,
+        }
+    } else if first && entry.tag == TAG_SONY_SR2_IFD {
+        first_unsigned(tiff, entry).map(|offset| Work::Ifd {
             offset,
             depth,
             chain: false,
             first: false,
         })
-    };
-    let work = if entry.tag == TAG_SUB_IFDS {
-        if entry.count == 0 {
-            None
-        } else if entry.is_inline(tiff) && entry.count == 1 {
-            child(tiff.offset_at(entry.field))
-        } else {
-            tiff.offset_at(entry.field).map(|at| Work::SubIfds {
-                at,
-                remaining: entry.count,
-                depth,
-            })
-        }
-    } else if entry.tag == TAG_EXIF_IFD || entry.tag == TAG_GPS_IFD {
-        // `read_value_as_u64`: the field itself where inline, else a `u32` at the offset it
-        // holds — a `u32` even in BigTIFF, as upstream reads it.
-        if entry.is_inline(tiff) {
-            child(tiff.offset_at(entry.field))
-        } else {
-            child(
-                tiff.offset_at(entry.field)
-                    .and_then(|at| tiff.u32_at(at))
-                    .map(u64::from),
-            )
-        }
-    } else if first && entry.tag == TAG_SONY_SR2_IFD {
-        child(first_short_or_long(tiff, entry))
     } else {
         None
     };
     stack.extend(work);
 }
 
-/// The first value of a `SHORT` or `LONG`/`IFD` entry, and nothing for any other type: how the
-/// ARW reader takes the SR2 IFD offset from IFD0's tag `0x02BC`, and how both RAW readers take an
-/// embedded JPEG's length from `JPEGInterchangeFormatLength`. Reading an `IFD`-typed length too
-/// only widens the bound, since the reader takes no length from one.
-fn first_short_or_long(tiff: &Tiff<'_>, entry: &Entry) -> Option<u64> {
+/// The first value of an unsigned-integer entry (`BYTE`, `SHORT`, `LONG`, `IFD`, `LONG8` or
+/// `IFD8`, see [`unsigned_width`]), and nothing for any other type or an empty entry.
+///
+/// This is how a reader takes a size or an offset: gamut-ifd's `Value::as_u32`, behind the DNG
+/// reader's `ImageWidth`, `ImageLength`, `TileWidth` and `TileLength`, accepts exactly these
+/// types. It reads them only at a count of one, and refuses a `LONG8` past `u32::MAX`; taking the
+/// first value at any count, at full width, only widens the bound, since a value the reader
+/// would refuse is one it allocates nothing for. The same reading serves the ARW reader's SR2
+/// IFD offset from IFD0's tag `0x02BC` and both RAW readers' embedded-JPEG length from
+/// `JPEGInterchangeFormatLength`.
+fn first_unsigned(tiff: &Tiff<'_>, entry: &Entry) -> Option<u64> {
     if entry.count == 0 {
         return None;
     }
-    let at = if entry.is_inline(tiff) {
-        entry.field
-    } else {
-        tiff.offset_at(entry.field)?
-    };
-    match entry.data_type {
-        TYPE_SHORT => tiff.u16_at(at).map(u64::from),
-        TYPE_LONG | TYPE_IFD => tiff.u32_at(at).map(u64::from),
-        _ => None,
-    }
+    tiff.uint_at(entry.values_at(tiff)?, unsigned_width(entry.data_type)?)
 }
