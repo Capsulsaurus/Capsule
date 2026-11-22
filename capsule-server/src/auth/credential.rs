@@ -87,6 +87,27 @@ pub struct Credentials {
     /// A real Argon2id hash of a password nobody has, so a lookup that found nothing can cost
     /// what a lookup that found something costs.
     decoy: String,
+    /// What [`Credentials::hold_verification`] holds closed. Shared by every clone, so a test
+    /// holding the verifier it handed an adapter holds the adapter's verifications too.
+    #[cfg(test)]
+    gate: std::sync::Arc<tokio::sync::RwLock<()>>,
+}
+
+/// While alive, every [`Credentials::verify`] on the verifier it came from (and its clones)
+/// waits before it starts, so its future stays pending until this is dropped.
+///
+/// Built only by [`Credentials::hold_verification`], which exists only in test builds. It is a
+/// test's way to keep an attempt *verifying* for as long as it likes: the reduced-cost hash
+/// finishes in microseconds on the blocking pool, so a test that only hopes the verification is
+/// still running when it looks can lose that race on a busy host (#1322). Outside a test build
+/// it is uninhabited: the type exists only so [`crate::auth::conformance::Harness`], which a
+/// production build compiles, can name it.
+#[derive(Debug)]
+pub struct VerificationHold {
+    #[cfg(test)]
+    _guard: tokio::sync::OwnedRwLockWriteGuard<()>,
+    #[cfg(not(test))]
+    _unconstructible: std::convert::Infallible,
 }
 
 impl fmt::Debug for Credentials {
@@ -110,7 +131,12 @@ impl Credentials {
     pub fn new() -> Result<Self, CredentialError> {
         let argon = Argon2::default();
         let decoy = hash_with(&argon, DECOY_PASSWORD)?;
-        Ok(Self { argon, decoy })
+        Ok(Self {
+            argon,
+            decoy,
+            #[cfg(test)]
+            gate: std::sync::Arc::default(),
+        })
     }
 
     /// A verifier at the smallest Argon2id cost the crate accepts (8 KiB, one pass), for tests.
@@ -128,7 +154,31 @@ impl Credentials {
         })?;
         let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
         let decoy = hash_with(&argon, DECOY_PASSWORD)?;
-        Ok(Self { argon, decoy })
+        Ok(Self {
+            argon,
+            decoy,
+            gate: std::sync::Arc::default(),
+        })
+    }
+
+    /// Hold every verification on this verifier and its clones until the hold is dropped.
+    ///
+    /// Test-only, like the gate it closes. A verification that starts while the hold is alive
+    /// waits before it reaches the blocking pool, so the attempt that called it is pending —
+    /// charged and verifying, from the adapter's side — for exactly as long as the test keeps
+    /// the hold. Hashing and the timing-equalized miss are not held.
+    ///
+    /// # Panics
+    ///
+    /// If a hold on this verifier is already alive: two holds at once would be a test that does
+    /// not know which one releases its attempt.
+    #[cfg(test)]
+    pub(crate) fn hold_verification(&self) -> VerificationHold {
+        VerificationHold {
+            _guard: std::sync::Arc::clone(&self.gate)
+                .try_write_owned()
+                .expect("one verification hold at a time"),
+        }
     }
 
     /// The PHC string to store for `password`.
@@ -158,6 +208,10 @@ impl Credentials {
     /// Returns [`CredentialError`] only when `stored` is not a PHC string this server can read —
     /// a corrupted row, not a wrong password — or when the blocking task could not finish.
     pub async fn verify(&self, password: &str, stored: &str) -> Result<bool, CredentialError> {
+        // A test's [`Self::hold_verification`] keeps this pending here; released at once, so
+        // a hold taken after this point does not reach a verification already under way.
+        #[cfg(test)]
+        drop(self.gate.read().await);
         let this = self.clone();
         let password = password.to_owned();
         let stored = stored.to_owned();

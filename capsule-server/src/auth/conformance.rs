@@ -50,6 +50,7 @@ use std::task::Poll;
 
 use jiff::{SignedDuration, Timestamp};
 
+use super::credential::VerificationHold;
 use super::directory::{AccountDirectory, Authentication, DirectoryError, DirectoryFuture};
 use super::oidc::{FederatedAccounts, FederatedLink, VerifiedIdentity};
 use super::profile::{
@@ -96,6 +97,15 @@ pub trait Harness: Send + Sync {
     /// it cancels the attempt, and on an adapter whose reservation is a network round trip a
     /// pending future says nothing about whether that round trip has finished.
     fn recorded_failures<'a>(&'a self, address: &'a str) -> StoreFuture<'a, Option<u32>>;
+
+    /// Hold every password verification the adapter starts until the returned hold is dropped:
+    /// [`Credentials::hold_verification`](super::credential::Credentials::hold_verification) on
+    /// the verifier the harness built its adapter over.
+    ///
+    /// [`a_cancelled_attempt_keeps_its_charge`] needs its attempt still verifying when it drops
+    /// it. Without a hold that is a race against the blocking pool, and a reduced-cost hash
+    /// finishing before the next poll on a busy host loses it (#1322).
+    fn hold_verification(&self) -> VerificationHold;
 }
 
 /// Unwrap a directory result, failing with the operation that was expected to work.
@@ -463,11 +473,17 @@ const CANCELLED_ATTEMPT_POLLS: u32 = 1_000;
 /// cancel the charge itself — a different event from cancelling a verification, and one this
 /// case does not assert about. Between polls the case yields, so a driver that needs the
 /// runtime to make progress gets it; a fixed poll budget bounds the wait.
+///
+/// The verification is held ([`Harness::hold_verification`]) from before the attempt starts
+/// until after it is dropped, so "every poll is pending" is a property of the adapter rather
+/// than of how fast the blocking pool ran the hash (#1322): an adapter that completes the
+/// attempt without verifying, or refunds the charge on drop, still fails.
 pub async fn a_cancelled_attempt_keeps_its_charge(h: &dyn Harness) {
     let (address, id) = seed(h, "cancelled").await;
     let ceiling = h.lockout_attempts();
     fail(h, &address, ceiling - 1).await;
 
+    let hold = h.hold_verification();
     let mut attempt = h.directory().authenticate(&address, PASSWORD);
     let mut charged = false;
     for _ in 0..CANCELLED_ATTEMPT_POLLS {
@@ -495,6 +511,7 @@ pub async fn a_cancelled_attempt_keeps_its_charge(h: &dyn Harness) {
         "the attempt's charge was not committed within {CANCELLED_ATTEMPT_POLLS} polls"
     );
     drop(attempt);
+    drop(hold);
 
     assert_eq!(
         ok(

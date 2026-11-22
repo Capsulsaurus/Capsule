@@ -271,10 +271,12 @@ async fn a_success_before_the_ceiling_clears_the_count() {
 async fn a_cancelled_attempt_keeps_its_charge() {
     // Decision 3 of #510: nothing refunds a charge when the request goes away, or
     // disconnecting mid-verification would be a free guess. The reservation here completes
-    // inside the first poll, so a pending first poll is an attempt charged and verifying.
+    // inside the first poll, and the hold keeps the verification from finishing however fast
+    // the blocking pool is (#1322), so the first poll is an attempt charged and verifying.
     let accounts = seeded().await;
     fail(&accounts, MAX_FAILED_ATTEMPTS - 1).await;
 
+    let hold = accounts.hold_verification();
     let mut attempt = accounts.authenticate(EMAIL, PASSWORD);
     let pending =
         std::future::poll_fn(|cx| std::task::Poll::Ready(attempt.as_mut().poll(cx).is_pending()))
@@ -285,6 +287,7 @@ async fn a_cancelled_attempt_keeps_its_charge() {
     );
     assert_eq!(accounts.recorded_failures(EMAIL), Some(MAX_FAILED_ATTEMPTS));
     drop(attempt);
+    drop(hold);
 
     // The correct password that was cancelled counted: the account is now at the ceiling.
     assert_eq!(accounts.recorded_failures(EMAIL), Some(MAX_FAILED_ATTEMPTS));
