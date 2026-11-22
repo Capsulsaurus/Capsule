@@ -14,7 +14,7 @@ Capsule embraces every format and capability its pinned Rawshift release support
 
 `capsule-core::media` is a thin adapter that owns only what is Capsule's: the pixel budget and decoder sandbox (`catch_unwind`), the tier table ([](#thumbnail-and-preview-formats)), metadata stripping before encryption, and derivative signing ([](#derivative-provenance)). Its tests are lean integration tests over a fixture corpus (one file per supported format and per known-hostile shape), not re-tests of Rawshift.
 
-Code that duplicates Rawshift today, deleted once the Rawshift release it waits for is pinned: Capsule's own format sniffing, the TIFF/RAW IFD pre-walk, EXIF parsing through `kamadak-exif`, the AV1 container pre-check, and the integer resize.
+Code that duplicates Rawshift today, deleted once the Rawshift revision it waits for is pinned: Capsule's own format sniffing, the TIFF/RAW IFD pre-walk, EXIF parsing through `kamadak-exif`, and the integer resize.
 
 **Every file is kept, whatever Rawshift supports.** An original in a format no codec in the build handles, video included, is still imported, encrypted, uploaded, verified and restorable byte for byte. Only its derivatives are absent, recorded as deferred and generated when a later build can. Format support governs previews, never whether Capsule will hold the file.
 
@@ -40,11 +40,13 @@ The table is the contract, not an inventory. Native encoders sit behind the opt-
 
 | Build | Thumbnail | Preview | Missing |
 | --- | --- | --- | --- |
-| `media-linked-codecs` (CLI) | JXL (lossy q=50) + AVIF | JXL + AVIF, q=70 | WebP (`rawshift-image` fails to compile it on aarch64) |
-| `media` only (FFI, cross) | JXL **lossless** (q=50 is advisory) | none | AVIF, lossy JXL (native code), WebP |
-| Either | — | — | All video derivatives (`rawshift-video` 0.1.1 is an unimplemented placeholder) |
+| `media-linked-codecs` (CLI) | JXL (lossy q=50) + AVIF | JXL + AVIF, q=70 | WebP (not enabled) |
+| `media` only (FFI, cross) | AVIF (q=50) | none | JXL (its only encoder, libjxl, is native code), WebP |
+| Either | — | — | All video derivatives (`rawshift-video` is an unimplemented placeholder) |
 
-Decode covers JPEG, PNG, JXL, TIFF, GIF, ARW and DNG in every build, plus AVIF under `media-avif-decode` (system libdav1d; not on Windows). Capsule pre-walks RAW IFD chains to bound value sizes and nesting depth (≤16) before handing them to the RAW reader. **HEIC is refused by decision**: libheif and libde265 are LGPL-3.0 ([](/design/licensing/)). WebP, other RAW families, and AVIF without the feature are recognised and refused.
+Decode covers JPEG, PNG, JXL, TIFF, GIF, ARW and DNG in every build, plus AVIF under `media-avif-decode` (the CLI). Rawshift decodes an AVIF's AV1 codestream only through a hardware decoder (VAAPI on Linux today), so on a host without one an AVIF is deferred, and its header size is checked before decode and its decoded frame after it, not its coded frame; both gaps are filed upstream ([visualcommons/rawshift#78](https://github.com/visualcommons/rawshift/issues/78), [#79](https://github.com/visualcommons/rawshift/issues/79)). Capsule pre-walks RAW IFD chains to bound value sizes and nesting depth (≤16), and a DNG's stated image and tile sizes, before handing them to the RAW reader. **HEIC is refused by decision**: libheif and libde265 are LGPL-3.0 ([](/design/licensing/)). WebP, other RAW families, and AVIF without the feature are recognised and refused.
+
+Rawshift is pinned to a commit of its git `master`, not a crates.io release, because its gamut codecs are unreleased. Keep bumping that pin, and return to a crates.io release once Rawshift is stable.
 
 Nothing is silent. An absent codec is `media::MediaError::UnsupportedFormat`; an unencodable `(tier, format)` pair is recorded as deferred and counted in the import summary while the asset's other derivatives still ship.
 :::
