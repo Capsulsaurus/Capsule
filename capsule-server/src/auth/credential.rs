@@ -96,7 +96,7 @@ pub struct Credentials {
 /// While alive, every [`Credentials::verify`] on the verifier it came from (and its clones)
 /// waits before it starts, so its future stays pending until this is dropped.
 ///
-/// Built only by [`Credentials::hold_verification`], which exists only in test builds. It is a
+/// Built only by `Credentials::hold_verification`, which exists only in test builds. It is a
 /// test's way to keep an attempt *verifying* for as long as it likes: the reduced-cost hash
 /// finishes in microseconds on the blocking pool, so a test that only hopes the verification is
 /// still running when it looks can lose that race on a busy host (#1322). Outside a test build

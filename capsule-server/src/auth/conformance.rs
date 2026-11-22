@@ -99,8 +99,8 @@ pub trait Harness: Send + Sync {
     fn recorded_failures<'a>(&'a self, address: &'a str) -> StoreFuture<'a, Option<u32>>;
 
     /// Hold every password verification the adapter starts until the returned hold is dropped:
-    /// [`Credentials::hold_verification`](super::credential::Credentials::hold_verification) on
-    /// the verifier the harness built its adapter over.
+    /// `Credentials::hold_verification` (test builds only) on the verifier the harness built its
+    /// adapter over.
     ///
     /// [`a_cancelled_attempt_keeps_its_charge`] needs its attempt still verifying when it drops
     /// it. Without a hold that is a race against the blocking pool, and a reduced-cost hash
