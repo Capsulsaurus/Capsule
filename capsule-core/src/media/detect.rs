@@ -28,10 +28,9 @@
 //!
 //! 1. **RAW refinement.** ARW, CR2, DNG and NEF are TIFF containers and CR3 is ISO-BMFF; their
 //!    headers are their container's, so only the extension distinguishes a Sony ARW from a
-//!    scanner's TIFF. A misrefinement costs a deferral, never wrong pixels: ARW and DNG are
-//!    decoded by `rawshift-image`'s RAW reader, which identifies the file again from its own
-//!    IFD0 (`DNGVersion`, then `Make`) and refuses one it cannot place as an unsupported
-//!    variant, and the other RAW families do not decode at all.
+//!    scanner's TIFF. A misrefinement costs a deferral, never wrong pixels: no RAW family
+//!    decodes on the import path today, and when ARW and DNG do (issue #1324), `rawshift-image`'s
+//!    RAW reader identifies the file again from its own IFD0 (`DNGVersion`, then `Make`).
 //! 2. **Fallback.** When the header sniffs to nothing at all.
 
 use std::fmt;
@@ -117,7 +116,7 @@ pub enum StillFormat {
 /// the cross builds do not enable; even with it, its pixels decode only on a host with a
 /// hardware AV1 decoder, and anywhere else decode defers it (`media::decode`). No RAW family is
 /// a member: ARW and DNG, the two upstream calls `raw-stabilizing`, are held out until their
-/// reader can open a file without decoding it ([`BOUNDED_RAW_FORMATS`], issue #1324), and the
+/// reader can open a file without decoding it (`BOUNDED_RAW_FORMATS`, issue #1324), and the
 /// `raw-incomplete` five (CR2, CR3, CRW, NEF, RAF) have no reader enabled.
 pub const SUPPORTED_STILL_FORMATS: &[StillFormat] = &[
     StillFormat::Jpeg,
@@ -160,7 +159,7 @@ impl StillFormat {
     /// Whether the format is one of the RAW families, which decode through `rawshift-image`'s RAW
     /// pipeline rather than its standard-image one. Their container is TIFF or ISO-BMFF, so the
     /// extension is what names the family. None is [decodable](Self::is_decodable) in this
-    /// build ([`BOUNDED_RAW_FORMATS`]).
+    /// build (`BOUNDED_RAW_FORMATS`).
     pub fn is_raw(self) -> bool {
         RAW_FORMATS.contains(&self)
     }
