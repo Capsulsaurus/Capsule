@@ -874,6 +874,14 @@ fn open_raw_within(
                 max_depth = MAX_IFD_DEPTH,
                 "media: refused a RAW still whose IFDs nest past the depth bound"
             ),
+            IfdRefusal::ScanBudget(scan) => tracing::warn!(
+                %format,
+                ifd_offset = scan.ifd_offset,
+                chunk = scan.chunk,
+                budget = scan.budget,
+                "media: refused a RAW still whose lossless-JPEG chunks exhaust the header scan's \
+                 budget"
+            ),
         }
         MediaError::Decode {
             format,

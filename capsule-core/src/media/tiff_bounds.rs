@@ -90,6 +90,17 @@
 //! header's size, which the walk reads from each chunk and compares with the strip or tile it
 //! fills ([`IfdWalk::ljpeg_overrun`]). The walk refuses none of these itself; the DNG budget in
 //! `decode` does, and the gaps are upstream's to close (visualcommons/rawshift#82).
+//!
+//! # The scan budget
+//!
+//! Reading each lossless-JPEG chunk's markers is the one part of the walk whose work is not
+//! bounded by the entries it reads: a strip list can name one large region many times, and many
+//! directories can name the same strips, so the scan would read the file's bytes once per listing
+//! (seconds for a few hundred KB, hours at 10 MB). The walk therefore holds the scan to one budget
+//! of [`file_len`](check_ifd_bounds) units, charging one per chunk visited and one per byte
+//! scanned, and refuses the file ([`IfdRefusal::ScanBudget`]) once a chunk would overdraw it. A
+//! real file's chunks are disjoint and each sits in the file beside its own offset and count, so
+//! together they cost less than the file's length; only overlapping or shared strips exceed it.
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry as Slot;
@@ -221,6 +232,8 @@ pub(super) enum IfdRefusal {
     Oversized(OversizedEntry),
     /// The directories nest deeper than [`MAX_IFD_DEPTH`].
     TooDeep(TooDeep),
+    /// The lossless-JPEG header scan would overdraw its budget (see the module docs).
+    ScanBudget(ScanBudget),
 }
 
 impl fmt::Display for IfdRefusal {
@@ -228,7 +241,31 @@ impl fmt::Display for IfdRefusal {
         match self {
             Self::Oversized(entry) => entry.fmt(f),
             Self::TooDeep(deep) => deep.fmt(f),
+            Self::ScanBudget(scan) => scan.fmt(f),
         }
+    }
+}
+
+/// The lossless-JPEG chunk whose header scan exhausted the walk's budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ScanBudget {
+    /// The offset of the IFD the chunk belongs to.
+    pub ifd_offset: u64,
+    /// The chunk's index in the IFD's strip or tile list.
+    pub chunk: u64,
+    /// The whole budget: the file's length, in chunks visited plus bytes scanned.
+    pub budget: u64,
+}
+
+impl fmt::Display for ScanBudget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "lossless-JPEG chunk {} of the IFD at offset {} exhausts the header scan's budget of \
+             {} chunks and bytes (the file's length): its strips or tiles overlap, or are shared \
+             between directories",
+            self.chunk, self.ifd_offset, self.budget
+        )
     }
 }
 
@@ -515,6 +552,8 @@ pub(super) fn check_ifd_bounds(bytes: &[u8]) -> Result<IfdWalk, IfdRefusal> {
     };
 
     let mut walk = IfdWalk::default();
+    // What the lossless-JPEG header scan may still spend; see the module docs.
+    let mut scan_left = tiff.file_len();
     // Each IFD's deepest level walked so far: one reached deeper is walked again, so its
     // children are measured from the deepest path to it.
     let mut deepest = HashMap::new();
@@ -589,7 +628,7 @@ pub(super) fn check_ifd_bounds(bytes: &[u8]) -> Result<IfdWalk, IfdRefusal> {
                     first,
                     new,
                 };
-                walk_ifd(&tiff, at, &mut walk, &mut stack).map_err(IfdRefusal::Oversized)?;
+                walk_ifd(&tiff, at, &mut walk, &mut stack, &mut scan_left)?;
             }
         }
     }
@@ -607,13 +646,15 @@ struct Visit {
     new: bool,
 }
 
-/// Check one IFD's entries and push the directories the reader would parse from it.
+/// Check one IFD's entries and push the directories the reader would parse from it, charging
+/// any lossless-JPEG header scan to `scan_left`.
 fn walk_ifd(
     tiff: &Tiff<'_>,
     visit: Visit,
     walk: &mut IfdWalk,
     stack: &mut Vec<Work>,
-) -> Result<(), OversizedEntry> {
+    scan_left: &mut u64,
+) -> Result<(), IfdRefusal> {
     let Visit {
         offset,
         depth,
@@ -666,7 +707,7 @@ fn walk_ifd(
             count,
             field: at + 4 + if tiff.big { 8 } else { 4 },
         };
-        check_entry(offset, &entry, file_len)?;
+        check_entry(offset, &entry, file_len).map_err(IfdRefusal::Oversized)?;
         if tag == TAG_JPEG_INTERCHANGE_FORMAT_LENGTH
             && let Some(length) = first_unsigned(tiff, &entry)
         {
@@ -692,7 +733,7 @@ fn walk_ifd(
         follow(tiff, &entry, depth + 1, first, stack);
     }
     if let (Some(width), Some(length)) = (image_width, image_length) {
-        account_image(tiff, offset, (width, length), &image, walk);
+        account_image(tiff, offset, (width, length), &image, walk, scan_left)?;
         let (max_w, max_l) = walk.max_image;
         // The first stated image is taken even at zero pixels, so a zero-sized one is reported
         // rather than mistaken for no image at all.
@@ -787,16 +828,17 @@ impl ImageEntries {
 /// SamplesPerPixel` samples, lays strips or tiles out the way its `chunk_grid` does (tiled where
 /// the IFD holds `TileOffsets` or `TileWidth`; `RowsPerStrip` defaulting to the height), and keeps
 /// what it decoded. An IFD it would refuse on a tag read here is still counted, which only
-/// widens the bound.
+/// widens the bound. Refuses only where the chunk scan overdraws `scan_left`.
 fn account_image(
     tiff: &Tiff<'_>,
     ifd_offset: u64,
     (width, length): (u64, u64),
     image: &ImageEntries,
     walk: &mut IfdWalk,
-) {
+    scan_left: &mut u64,
+) -> Result<(), IfdRefusal> {
     if image.strip_offsets.is_none() && image.tile_offsets.is_none() {
-        return;
+        return Ok(());
     }
     let samples_per_pixel = image.samples_per_pixel.unwrap_or(1);
     walk.max_samples_per_pixel = walk.max_samples_per_pixel.max(samples_per_pixel);
@@ -835,11 +877,13 @@ fn account_image(
             };
             if let (Some(capacity), Some(offsets), Some(counts)) = (capacity, offsets, counts) {
                 let capacity = capacity.saturating_mul(samples_per_pixel);
-                walk.ljpeg_overrun = ljpeg_overrun(tiff, ifd_offset, (offsets, counts), capacity);
+                walk.ljpeg_overrun =
+                    ljpeg_overrun(tiff, ifd_offset, (offsets, counts), capacity, scan_left)?;
             }
         }
         _ => {}
     }
+    Ok(())
 }
 
 /// The first lossless-JPEG chunk listed by `offsets` and `counts` whose SOF3 header states more
@@ -850,35 +894,66 @@ fn account_image(
 /// cannot place in the file or that has no SOF3 header ahead of any other frame, scan or end
 /// marker: the reader decodes no chunk past one it fails on, so nothing past it is allocated.
 /// Each chunk is scanned only up to its frame header, a prefix of what the reader reads itself.
+///
+/// Each chunk visited costs `scan_left` one, and each byte its scan reads one more. A chunk that
+/// would overdraw it refuses the file: the scan reads at most one chunk past the budget, so the
+/// whole walk scans at most twice the file's length.
 fn ljpeg_overrun(
     tiff: &Tiff<'_>,
     ifd_offset: u64,
     (offsets, counts): (Entry, Entry),
     capacity: u64,
-) -> Option<LjpegOverrun> {
-    let (offset_width, count_width) = (
-        unsigned_width(offsets.data_type)?,
-        unsigned_width(counts.data_type)?,
-    );
-    let (offsets_at, counts_at) = (offsets.values_at(tiff)?, counts.values_at(tiff)?);
+    scan_left: &mut u64,
+) -> Result<Option<LjpegOverrun>, IfdRefusal> {
+    let (Some(offset_width), Some(count_width)) = (
+        unsigned_width(offsets.data_type),
+        unsigned_width(counts.data_type),
+    ) else {
+        return Ok(None);
+    };
+    let (Some(offsets_at), Some(counts_at)) = (offsets.values_at(tiff), counts.values_at(tiff))
+    else {
+        return Ok(None);
+    };
     for chunk in 0..offsets.count.min(counts.count) {
+        let mut charge = |cost: u64| match scan_left.checked_sub(cost) {
+            Some(left) => {
+                *scan_left = left;
+                Ok(())
+            }
+            None => Err(IfdRefusal::ScanBudget(ScanBudget {
+                ifd_offset,
+                chunk,
+                budget: tiff.file_len(),
+            })),
+        };
+        charge(1)?;
         let start = tiff.uint_at(
             offsets_at.saturating_add(chunk * offset_width),
             offset_width,
-        )?;
-        let len = tiff.uint_at(counts_at.saturating_add(chunk * count_width), count_width)?;
-        let bytes = tiff.range(start, len)?;
-        let samples = sof3_samples(bytes)?;
+        );
+        let len = tiff.uint_at(counts_at.saturating_add(chunk * count_width), count_width);
+        let Some(bytes) = start
+            .zip(len)
+            .and_then(|(start, len)| tiff.range(start, len))
+        else {
+            return Ok(None);
+        };
+        let (samples, scanned) = sof3_samples(bytes);
+        charge(scanned)?;
+        let Some(samples) = samples else {
+            return Ok(None);
+        };
         if samples > capacity {
-            return Some(LjpegOverrun {
+            return Ok(Some(LjpegOverrun {
                 ifd_offset,
                 chunk,
                 samples,
                 capacity,
-            });
+            }));
         }
     }
-    None
+    Ok(None)
 }
 
 /// The samples (`width * height * components`) a lossless-JPEG stream's SOF3 frame header
@@ -887,7 +962,22 @@ fn ljpeg_overrun(
 /// `None` where the reader refuses the stream before allocating for it: no SOI, a frame header
 /// of another process, a scan or an end before any frame header, a precision outside 2..=16, a
 /// deferred (zero) height or 0 or more than 4 components, or a marker past the end.
-fn sof3_samples(stream: &[u8]) -> Option<u64> {
+///
+/// Also returns the bytes the scan read: up to the frame header where it found one, and the
+/// whole stream where it did not, which can only overstate the work done.
+fn sof3_samples(stream: &[u8]) -> (Option<u64>, u64) {
+    let mut pos = 0usize;
+    let samples = scan_to_sof3(stream, &mut pos);
+    let scanned = if samples.is_some() {
+        pos.min(stream.len())
+    } else {
+        stream.len()
+    };
+    (samples, scanned as u64)
+}
+
+/// [`sof3_samples`]'s marker walk, leaving `pos` at the frame header it found.
+fn scan_to_sof3(stream: &[u8], pos: &mut usize) -> Option<u64> {
     const MARKER: u8 = 0xFF;
     if stream.get(0..2) != Some(&[MARKER, 0xD8]) {
         return None;
@@ -896,28 +986,30 @@ fn sof3_samples(stream: &[u8]) -> Option<u64> {
         let b = stream.get(at..at.checked_add(2)?)?;
         Some(usize::from(u16::from_be_bytes([b[0], b[1]])))
     };
-    let mut pos = 2usize;
+    *pos = 2;
     loop {
-        pos += stream.get(pos..)?.iter().position(|&b| b == MARKER)?;
-        while stream.get(pos) == Some(&MARKER) {
-            pos += 1;
+        *pos += stream.get(*pos..)?.iter().position(|&b| b == MARKER)?;
+        while stream.get(*pos) == Some(&MARKER) {
+            *pos += 1;
         }
-        let marker = *stream.get(pos)?;
-        pos += 1;
+        let marker = *stream.get(*pos)?;
+        *pos += 1;
         match marker {
             0xC3 => {
-                let precision = *stream.get(pos + 2)?;
-                let height = be16(pos + 3)?;
-                let width = be16(pos + 5)?;
-                let components = *stream.get(pos + 7)?;
+                let at = *pos;
+                let precision = *stream.get(at + 2)?;
+                let height = be16(at + 3)?;
+                let width = be16(at + 5)?;
+                let components = *stream.get(at + 7)?;
                 if !(2..=16).contains(&precision) || height == 0 || !(1..=4).contains(&components) {
                     return None;
                 }
+                *pos = at + 8;
                 return Some(width as u64 * height as u64 * u64::from(components));
             }
             // Another frame process, a scan before the frame header, or the end of the image.
             0xC0..=0xC2 | 0xC5..=0xC7 | 0xC9..=0xCF | 0xDA | 0xD9 => return None,
-            _ => pos = pos.checked_add(be16(pos)?)?,
+            _ => *pos = pos.checked_add(be16(*pos)?)?,
         }
     }
 }

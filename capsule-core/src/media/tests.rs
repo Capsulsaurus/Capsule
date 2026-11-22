@@ -1978,6 +1978,53 @@ fn a_dng_chunk_is_bounded_before_the_reader_decompresses_it() {
     assert_eq!(RawshiftDecoder.decode(&deflate, "dng").map(|_| ()), defers);
 }
 
+/// The lossless-JPEG header scan is held to a budget of the file's length, so a strip list that
+/// names one region many times cannot make the walk read the file once per listing (review D1:
+/// seconds for a few hundred KB, hours at 10 MB). A chunk listed once fits the budget; the same
+/// chunk listed twice reads more than the file holds and is refused before the reader opens it.
+#[test]
+fn a_dng_whose_strips_overlap_exhausts_the_header_scan_budget() {
+    let samples = split_cfa(4, 4, 12_000, 1_200);
+    let stream = ljpeg_encode(4, 4, 16, &samples);
+    // An APP1 segment of 4000 bytes ahead of the frame header, which the scan reads past.
+    let pad = 4_000u16;
+    let mut padded = stream[..2].to_vec();
+    padded.extend([0xFF, 0xE1]);
+    padded.extend((pad + 2).to_be_bytes());
+    padded.extend(std::iter::repeat_n(0, usize::from(pad)));
+    padded.extend(&stream[2..]);
+    let listed = |times: usize| {
+        dng_cfa_stored(4, 4, &padded, &[], |e, offset, length| {
+            set_entry(e, IfdEntry::short(TiffTag::Compression, 7));
+            set_entry(
+                e,
+                IfdEntry::longs(TiffTag::StripOffsets, &vec![offset; times]),
+            );
+            set_entry(
+                e,
+                IfdEntry::longs(TiffTag::StripByteCounts, &vec![length; times]),
+            );
+        })
+    };
+
+    let once = listed(1);
+    assert!(
+        once.len() < 2 * padded.len(),
+        "the fixture is mostly its one strip"
+    );
+    assert_eq!(check_ifd_bounds(&once).map(|w| w.ljpeg_overrun), Ok(None));
+
+    let twice = listed(2);
+    let budget = twice.len() as u64;
+    match check_ifd_bounds(&twice) {
+        Err(IfdRefusal::ScanBudget(scan)) => {
+            assert_eq!((scan.chunk, scan.budget), (1, budget));
+        }
+        other => panic!("expected the scan budget to refuse, got {other:?}"),
+    }
+    assert_raw_decode_failure(&twice, "dng", StillFormat::Dng, "header scan's budget");
+}
+
 /// Assert `bytes` probes and decodes as a `format` decode failure whose detail holds `needle`.
 fn assert_raw_decode_failure(bytes: &[u8], ext: &str, format: StillFormat, needle: &str) {
     for (stage, result) in [
@@ -2758,19 +2805,19 @@ fn the_ifd_walk_covers_big_endian_and_bigtiff() {
     }
 }
 
-/// The oversized entry a refusal names, failing the test where the walk refused for depth.
+/// The oversized entry a refusal names, failing the test where the walk refused otherwise.
 fn oversized(refusal: IfdRefusal) -> OversizedEntry {
     match refusal {
         IfdRefusal::Oversized(entry) => entry,
-        IfdRefusal::TooDeep(deep) => panic!("expected an oversized entry, got {deep:?}"),
+        other => panic!("expected an oversized entry, got {other:?}"),
     }
 }
 
-/// The over-deep IFD a refusal names, failing the test where the walk refused an entry.
+/// The over-deep IFD a refusal names, failing the test where the walk refused otherwise.
 fn too_deep(refusal: IfdRefusal) -> TooDeep {
     match refusal {
         IfdRefusal::TooDeep(deep) => deep,
-        IfdRefusal::Oversized(entry) => panic!("expected a depth refusal, got {entry:?}"),
+        other => panic!("expected a depth refusal, got {other:?}"),
     }
 }
 
