@@ -483,35 +483,39 @@ pub async fn a_cancelled_attempt_keeps_its_charge(h: &dyn Harness) {
     let ceiling = h.lockout_attempts();
     fail(h, &address, ceiling - 1).await;
 
-    let hold = h.hold_verification();
-    let mut attempt = h.directory().authenticate(&address, PASSWORD);
-    let mut charged = false;
-    for _ in 0..CANCELLED_ATTEMPT_POLLS {
-        let pending =
-            std::future::poll_fn(|cx| Poll::Ready(attempt.as_mut().poll(cx).is_pending())).await;
-        assert!(
-            pending,
-            "the attempt finished before its charge was observed, so there was no verification \
-             to cancel"
-        );
-        let recorded = match h.recorded_failures(&address).await {
-            Ok(recorded) => present(recorded, "the seeded account"),
-            Err(error) => {
-                panic!("a conforming harness must be able to read its own count: {error}")
+    // The hold is released when this block ends, after the attempt is dropped: the attempt
+    // must never verify, and the authentication after it must be free to.
+    {
+        let _hold = h.hold_verification();
+        let mut attempt = h.directory().authenticate(&address, PASSWORD);
+        let mut charged = false;
+        for _ in 0..CANCELLED_ATTEMPT_POLLS {
+            let pending =
+                std::future::poll_fn(|cx| Poll::Ready(attempt.as_mut().poll(cx).is_pending()))
+                    .await;
+            assert!(
+                pending,
+                "the attempt finished before its charge was observed, so there was no verification \
+                 to cancel"
+            );
+            let recorded = match h.recorded_failures(&address).await {
+                Ok(recorded) => present(recorded, "the seeded account"),
+                Err(error) => {
+                    panic!("a conforming harness must be able to read its own count: {error}")
+                }
+            };
+            if recorded == ceiling {
+                charged = true;
+                break;
             }
-        };
-        if recorded == ceiling {
-            charged = true;
-            break;
+            tokio::task::yield_now().await;
         }
-        tokio::task::yield_now().await;
+        assert!(
+            charged,
+            "the attempt's charge was not committed within {CANCELLED_ATTEMPT_POLLS} polls"
+        );
+        drop(attempt);
     }
-    assert!(
-        charged,
-        "the attempt's charge was not committed within {CANCELLED_ATTEMPT_POLLS} polls"
-    );
-    drop(attempt);
-    drop(hold);
 
     assert_eq!(
         ok(
