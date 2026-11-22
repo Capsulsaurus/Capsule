@@ -87,10 +87,11 @@ pub enum StillFormat {
     /// HEIC / HEIF. Recognised, never decoded: libheif and its HEVC decoder libde265 are
     /// LGPL-3.0, which licence policy excludes (issue #588).
     Heic,
-    /// Sony ARW. Decoded by `rawshift-image`'s RAW pipeline (issue #589) where the raw frame is
-    /// lossless JPEG (compression 7, Sony's "lossless compressed" mode on current bodies); the
-    /// uncompressed and lossy "compressed RAW" modes have no upstream decoder and defer as an
-    /// unsupported variant.
+    /// Sony ARW. **Recognised, not decoded** (issue #1323): `rawshift-image`'s RAW reader picks
+    /// the family from the file's own IFD0, so an `.arw` stating `DNGVersion` opens through the
+    /// eager DNG reader, which decodes the whole file at open with no caller budget. The RAW
+    /// pipeline behind the pre-open bounds stays in `media::decode`, reached only by its tests,
+    /// until issue #1324 re-enables it.
     Arw,
     /// Canon CR2.
     Cr2,
@@ -98,10 +99,10 @@ pub enum StillFormat {
     Cr3,
     /// Canon CRW.
     Crw,
-    /// Adobe DNG (including Apple ProRAW). Decoded by `rawshift-image`'s RAW pipeline (issue
-    /// #589) where the raw IFD is uncompressed, lossless JPEG or JPEG XL (ProRAW); a DNG with
-    /// a Deflate image defers as an unsupported variant until upstream bounds its inflate
-    /// (visualcommons/rawshift#82).
+    /// Adobe DNG (including Apple ProRAW). **Recognised, not decoded** (issue #1323):
+    /// `rawshift-image`'s DNG reader decodes every image in the file inside `RawFile::open`, with
+    /// no caller budget on its allocations or its work (visualcommons/rawshift#82, #83), so no
+    /// untrusted DNG reaches it. Issue #1324 re-enables it behind the pre-open bounds.
     Dng,
     /// Nikon NEF.
     Nef,
@@ -114,22 +115,31 @@ pub enum StillFormat {
 /// Logged verbatim on a deferral so the gap is legible in the field rather than only in a doc.
 /// AVIF is a member only under the opt-in `media-avif-decode` feature, which the mobile FFI and
 /// the cross builds do not enable; even with it, its pixels decode only on a host with a
-/// hardware AV1 decoder, and anywhere else decode defers it (`media::decode`). ARW and DNG
-/// are the two RAW families upstream calls `raw-stabilizing`, pure Rust and so in every `media`
-/// build; the `raw-incomplete` five (CR2, CR3, CRW, NEF, RAF) stay recognised and refused.
+/// hardware AV1 decoder, and anywhere else decode defers it (`media::decode`). No RAW family is
+/// a member: ARW and DNG, the two upstream calls `raw-stabilizing`, are held out until their
+/// reader can open a file without decoding it ([`BOUNDED_RAW_FORMATS`], issue #1324), and the
+/// `raw-incomplete` five (CR2, CR3, CRW, NEF, RAF) have no reader enabled.
 pub const SUPPORTED_STILL_FORMATS: &[StillFormat] = &[
     StillFormat::Jpeg,
     StillFormat::Png,
     StillFormat::Jxl,
     StillFormat::Tiff,
     StillFormat::Gif,
-    StillFormat::Arw,
-    StillFormat::Dng,
     #[cfg(feature = "media-avif-decode")]
     StillFormat::Avif,
 ];
 
-/// The RAW families, all of them recognised. ARW and DNG decode; the rest are refused.
+/// The RAW families `media::decode` has a pipeline for, behind its pre-open bounds: ARW and DNG.
+///
+/// Not decodable (issue #1323). `rawshift-image`'s `RawFile::open` decodes a DNG eagerly, and
+/// routes any TIFF whose IFD0 states `DNGVersion` to that reader whatever its extension, so a
+/// crafted ARW is a crafted DNG. Every review of the pre-open bounds found another file that
+/// exhausted memory or time before them, so the import path defers both families as
+/// `DeferredNoCodec` and only the RAW pipeline's tests open them. Issue #1324 moves these into
+/// [`SUPPORTED_STILL_FORMATS`] once the bounds hold.
+pub(super) const BOUNDED_RAW_FORMATS: &[StillFormat] = &[StillFormat::Arw, StillFormat::Dng];
+
+/// The RAW families, all of them recognised and none decoded.
 const RAW_FORMATS: &[StillFormat] = &[
     StillFormat::Arw,
     StillFormat::Cr2,
@@ -149,8 +159,8 @@ impl StillFormat {
 
     /// Whether the format is one of the RAW families, which decode through `rawshift-image`'s RAW
     /// pipeline rather than its standard-image one. Their container is TIFF or ISO-BMFF, so the
-    /// extension is what names the family. Only ARW and DNG are also
-    /// [decodable](Self::is_decodable).
+    /// extension is what names the family. None is [decodable](Self::is_decodable) in this
+    /// build ([`BOUNDED_RAW_FORMATS`]).
     pub fn is_raw(self) -> bool {
         RAW_FORMATS.contains(&self)
     }
