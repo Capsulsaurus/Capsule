@@ -37,6 +37,8 @@ use super::decode::{
     Decoder, RawshiftDecoder, check_decoded_budget, decode_embedded_preview, decode_guarded,
     embedded_preview_within, extract_embedded_preview, probe_raw, standard_error,
 };
+#[cfg(feature = "media-linked-codecs")]
+use super::derivative::jxl_distance;
 use super::derivative::{
     DerivativeContext, DerivativeSealer, DerivativeTier, SealedDerivative, StillDerivatives,
     generate_still_derivatives,
@@ -3316,6 +3318,30 @@ fn the_jxl_thumbnail_is_lossy_with_libjxl() {
         mean < 8.0,
         "q=50 is still a faithful thumbnail: mean absolute error {mean:.2} per channel"
     );
+}
+
+/// The tier's JPEG-style quality reaches libjxl as the Butteraugli distance libjxl's own
+/// `JxlEncoderDistanceFromQuality` gives it: the tiers' q=50 and q=70 are 4.6 and 2.8, the two
+/// pieces meet at q=30, and the ends clamp into the `(0.0, 25.0]` range the config accepts.
+#[cfg(feature = "media-linked-codecs")]
+#[test]
+fn the_jxl_distance_follows_libjxls_quality_mapping() {
+    for (quality, distance) in [
+        (50.0, 4.6),
+        (70.0, 2.8),
+        (90.0, 1.0),
+        (30.0, 6.4),
+        (29.999, 6.4),
+        (10.0, 15.266_667),
+        (0.0, 25.0),
+        (100.0, 0.01),
+    ] {
+        let got = jxl_distance(quality);
+        assert!(
+            (got - distance).abs() < 1e-3,
+            "q={quality} gives distance {got}, expected {distance}"
+        );
+    }
 }
 
 /// With `media-linked-codecs` the JXL master joins the AVIF delivery variant, each real bytes of

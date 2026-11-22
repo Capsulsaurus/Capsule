@@ -499,7 +499,7 @@ fn encode(
 /// and mapped it the same way. q=50 is 4.6 and q=70 is 2.8; the result is clamped into the
 /// `(0.0, 25.0]` range the config accepts.
 #[cfg(feature = "media-linked-codecs")]
-fn jxl_distance(quality: f32) -> f32 {
+pub(super) fn jxl_distance(quality: f32) -> f32 {
     let distance = if quality >= 100.0 {
         0.0
     } else if quality >= 30.0 {
