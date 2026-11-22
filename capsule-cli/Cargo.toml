@@ -21,16 +21,28 @@ name = "capsule_cli"
 path = "src/lib.rs"
 
 [dependencies]
-# `media-linked-codecs`: the lossy libjxl master, the AVIF delivery variant and the preview tier
-# (issue #437). The CLI is the stabilize-first client that imports real libraries, and it builds
-# only for desktop hosts, so it takes the native-code encoders the mobile FFI deliberately does
-# not. Building it needs cmake, a C++17 compiler, libclang and — on x86_64 — nasm.
-capsule-core = { path = "../capsule-core", features = ["media-linked-codecs"] }
+# `media-linked-codecs`: the lossy libjxl master and the preview tier (issue #437). The CLI is the
+# stabilize-first client that imports real libraries, and it builds only for desktop hosts, so it
+# takes the native-code encoder the mobile FFI deliberately does not. Building it needs cmake and
+# a C++17 compiler.
+#
+# `media-avif-decode`: AVIF stills decode (issue #588), so an AVIF original gets its dimensions,
+# placeholder and thumbnail instead of a no-codec deferral, on a host with a hardware AV1 decoder
+# (VAAPI on Linux today). It needs no system library to build or run, so it is on for every
+# target; where no AV1 decoder is present an AVIF original is still recognised and deferred with
+# a typed no-codec status, never silently skipped.
+capsule-core = { path = "../capsule-core", features = [
+    "media-linked-codecs",
+    "media-avif-decode",
+] }
 # The local library: the SQLite index, the on-disk library, the `Workspace` and import execution
 # (`capsule-core` stays stateless; see its crate docs). Its codec pass-throughs are named too, not only core's, so the
 # library's own feature-gated derivative tests run in a workspace build exactly as they did when
 # the pipeline lived in `capsule-core`.
-capsule-library = { path = "../capsule-library", features = ["media-linked-codecs"] }
+capsule-library = { path = "../capsule-library", features = [
+    "media-linked-codecs",
+    "media-avif-decode",
+] }
 # `capsule camera import`: the in-house PTP/IP initiator the camera adapter speaks through. The
 # CLI names it for the TCP bring-up (`ptpip::tcp::connect`), the initiator identity it persists,
 # and the event-channel reader it runs beside the session.
@@ -99,17 +111,6 @@ url = "2.5.8"
 # the flume async channel, neither of which the blocking browse needs. Peering's live LAN
 # discovery (`capsule-sdk::peering::Discovery`, a mocked seam today) will use this crate too.
 mdns-sd = { version = "0.21.6", default-features = false }
-
-# `media-avif-decode`: AVIF stills decode, so an AVIF original gets its dimensions, placeholder and
-# thumbnail instead of a no-codec deferral (issue #588). It links a **system** libdav1d (BSD-2)
-# through pkg-config, so the build host needs `libdav1d-dev` / `dav1d` and the binary needs the
-# shared library at run time. Gated off Windows, which has no system package that ships libdav1d
-# with a pkg-config file on the release runner, and which is a deferred platform tier: there an
-# AVIF original is still recognised and deferred with a typed no-codec status, never silently
-# skipped. Cargo unifies this with the unconditional dependency above.
-[target.'cfg(not(windows))'.dependencies]
-capsule-core = { path = "../capsule-core", features = ["media-avif-decode"] }
-capsule-library = { path = "../capsule-library", features = ["media-avif-decode"] }
 
 [dev-dependencies]
 # `tests/oidc_dex.rs` plays the person at the browser against dex: it follows the
