@@ -209,8 +209,8 @@ fn a_decodable_still_imports_with_pixel_dimensions_and_an_lqip() {
 /// decodable still. Where the host's AV1 decoder decodes it, it imports `Decoded`, with pixel
 /// dimensions, a placeholder and a JXL thumbnail. `rawshift-image` decodes AV1 only through a
 /// hardware decoder (visualcommons/rawshift#78), so on a host with none it imports
-/// `DeferredNoCodec`, and on a VAAPI host, which decodes AV1 Profile 0 only, this fixture (gamut
-/// writes 4:4:4, Profile 1) imports `DecodeFailed`; either way the original is kept and signed.
+/// `DeferredNoCodec`, and so it does on a VAAPI host, which decodes AV1 Profile 0 only and refuses
+/// this fixture (gamut writes 4:4:4, Profile 1); either way the original is kept and signed.
 /// The source AVIF comes from gamut's encoder because the suite commits no binary fixtures.
 #[cfg(all(feature = "media-avif-decode", feature = "media-linked-codecs"))]
 #[test]
@@ -234,12 +234,7 @@ fn an_avif_original_imports_with_dimensions_an_lqip_and_derivatives() {
     assert_eq!(sidecar.content_type, "image/avif");
     assert!(sidecar.verify(&ws.user_ik_public()));
     if receipt.derivatives != DerivativeStatus::Decoded {
-        let expected = if rawshift_image::formats::avif_hw_decode_available() {
-            DerivativeStatus::DecodeFailed
-        } else {
-            DerivativeStatus::DeferredNoCodec
-        };
-        assert_eq!(receipt.derivatives, expected);
+        assert_eq!(receipt.derivatives, DerivativeStatus::DeferredNoCodec);
         return;
     }
     let dimensions = sidecar.dimensions.as_ref().expect("pixel dimensions");
