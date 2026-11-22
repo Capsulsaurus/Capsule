@@ -47,7 +47,10 @@ use super::derivative::{
 use super::detect::{BOUNDED_RAW_FORMATS, MAX_DECODE_PIXELS, SUPPORTED_STILL_FORMATS, StillFormat};
 use super::error::{FormatOp, MediaError};
 use super::resize::{capped_dimensions, downscale_rgba8};
-use super::tiff_bounds::{IfdRefusal, MAX_IFD_DEPTH, OversizedEntry, TooDeep, check_ifd_bounds};
+use super::tiff_bounds::{
+    Budget, Exhausted, IfdRefusal, MAX_BLACK_LEVEL_REPEAT, MAX_IFD_DEPTH, MAX_IFD_POINTERS,
+    OversizedEntry, TooDeep, Unbounded, check_ifd_bounds,
+};
 use crate::crypto::encryption::encrypt_asset_rekey;
 use crate::crypto::hash::Hash32;
 use crate::crypto::keys::{Amk, AmkVersion, HybridSigningKey};
@@ -1091,6 +1094,7 @@ enum TiffTag {
     GPSInfoIFDPointer = 0x8825,
     DNGVersion = 0xC612,
     UniqueCameraModel = 0xC614,
+    BlackLevelRepeatDim = 0xC619,
     BlackLevel = 0xC61A,
     WhiteLevel = 0xC61D,
     DefaultCropOrigin = 0xC61F,
@@ -1099,6 +1103,7 @@ enum TiffTag {
     AsShotNeutral = 0xC628,
     CalibrationIlluminant1 = 0xC65A,
     ActiveArea = 0xC68D,
+    OpcodeList2 = 0xC741,
 }
 
 /// The camera profile every DNG fixture carries, which gamut's DNG reader requires: a camera
@@ -2345,9 +2350,9 @@ fn decodable_arw() -> Vec<u8> {
 /// Each file is paired with what the RAW pipeline makes of it, so the refusal is provably the
 /// gate's: a sound ARW and DNG that the pipeline decodes, a DNG whose raw image the reader's
 /// eager decode at open fails on, a few-KB DNG stating 1.5 TB of samples, and a DNG named
-/// `.arw`, which the reader opens (and so decodes) as a DNG before the pipeline sees it is not an
-/// ARW. Had any reached `open`, it would have decoded or failed as [`MediaError::Decode`] rather
-/// than deferred.
+/// `.arw`, which the reader opens as a DNG and the pipeline decodes behind the DNG bounds. Had
+/// any reached `open`, it would have decoded or failed as [`MediaError::Decode`] rather than
+/// deferred.
 #[test]
 fn arw_and_dng_defer_without_reaching_the_raw_reader() {
     let samples = split_cfa(16, 8, 50_000, 5_000);
@@ -2363,7 +2368,8 @@ fn arw_and_dng_defer_without_reaching_the_raw_reader() {
         (&dng, "dng", StillFormat::Dng, true),
         (&garbage, "dng", StillFormat::Dng, false),
         (&wide, "dng", StillFormat::Dng, false),
-        (&dng, "arw", StillFormat::Arw, false),
+        // The reader opens it as the DNG it is, behind the DNG bounds, whatever its name.
+        (&dng, "arw", StillFormat::Arw, true),
     ];
     for (bytes, ext, format, pipeline_decodes) in cases {
         let bounded = BoundedRawDecoder.decode(bytes, ext).map(|_| ());
@@ -2889,6 +2895,235 @@ fn too_deep(refusal: IfdRefusal) -> TooDeep {
         IfdRefusal::TooDeep(deep) => deep,
         other => panic!("expected a depth refusal, got {other:?}"),
     }
+}
+
+// ── RAW pre-open work budgets (issue #1324) ──────────────────────────────────
+
+/// The budget a refusal names, failing the test where the walk refused otherwise.
+fn exhausted(refusal: IfdRefusal) -> Exhausted {
+    match refusal {
+        IfdRefusal::Exhausted(exhausted) => exhausted,
+        other => panic!("expected a work budget refusal, got {other:?}"),
+    }
+}
+
+/// The unbounded value a refusal names, failing the test where the walk refused otherwise.
+fn unbounded(refusal: IfdRefusal) -> Unbounded {
+    match refusal {
+        IfdRefusal::Unbounded(unbounded) => unbounded,
+        other => panic!("expected an unbounded value, got {other:?}"),
+    }
+}
+
+/// `RawFile::open` reads any TIFF whose IFD0 states `DNGVersion` through the eager DNG reader,
+/// whatever its extension, so the DNG bounds follow `DNGVersion`, not the name: a crafted DNG
+/// named `.arw` is refused the way it is as `.dng`, a Deflate one defers, and a sound one decodes
+/// like any DNG. An ARW states no `DNGVersion` and is walked as one.
+#[test]
+fn a_dng_named_arw_is_held_to_the_dng_bounds() {
+    assert_eq!(check_ifd_bounds(&decodable_arw()).map(|w| w.dng), Ok(false));
+    let dng = dng_cfa(16, 8, &split_cfa(16, 8, 50_000, 5_000), |_| {});
+    assert_eq!(check_ifd_bounds(&dng).map(|w| w.dng), Ok(true));
+    let decoded = BoundedRawDecoder
+        .decode(&dng, "arw")
+        .expect("a sound DNG named .arw decodes");
+    assert_eq!((decoded.width(), decoded.height()), (16, 8));
+
+    // 1.5 TB of samples over a 32-byte strip, named .arw.
+    let wide = dng_cfa(4, 4, &[0; 16], |e| {
+        set_entry(e, IfdEntry::long(TiffTag::ImageWidth, 4000));
+        set_entry(e, IfdEntry::long(TiffTag::ImageLength, 3000));
+        set_entry(e, IfdEntry::short(TiffTag::SamplesPerPixel, 65535));
+    });
+    assert_raw_decode_failure(&wide, "arw", StillFormat::Arw, "65535 samples per pixel");
+    assert!(
+        matches!(
+            extract_bounded_embedded_preview(&wide, "arw"),
+            Err(MediaError::Decode { .. })
+        ),
+        "the preview read opens it as a DNG too"
+    );
+
+    let deflate = dng_cfa(4, 4, &[0; 16], |e| {
+        set_entry(e, IfdEntry::short(TiffTag::Compression, 8));
+    });
+    assert_eq!(
+        BoundedRawDecoder.decode(&deflate, "arw").map(|_| ()),
+        Err(MediaError::UnsupportedFormat {
+            format: StillFormat::Arw,
+            op: FormatOp::Decode,
+        })
+    );
+}
+
+/// gamut's readers hold every value of every directory they parse, several times over, so the
+/// directories and values a file states are held to twice its length: an IFD whose entries each
+/// name most of the file passes the per-entry bound but not the total (at 65535 entries over a
+/// 1 MB file it would be 65 GB). One such entry is within it.
+#[test]
+fn overlapping_values_exhaust_the_structure_budget() {
+    let values = |entries: u16| {
+        let table: Vec<HandEntry> = (0..entries)
+            .map(|i| (0x9000 + i, T_UNDEFINED, 200, 8))
+            .collect();
+        let mut bytes = hand_tiff(&[&table]);
+        bytes.resize(bytes.len().max(208), 0);
+        bytes
+    };
+    assert!(check_ifd_bounds(&values(1)).is_ok());
+
+    let many = values(30);
+    let refused = exhausted(check_ifd_bounds(&many).expect_err("30 overlapping values"));
+    assert_eq!(
+        (refused.budget, refused.at, refused.limit),
+        (Budget::Structure, 8, 2 * many.len() as u64)
+    );
+    assert_raw_decode_failure(&many, "dng", StillFormat::Dng, "directory tables");
+    assert_raw_decode_failure(&many, "arw", StillFormat::Arw, "directory tables");
+}
+
+/// gamut's DNG reader copies every strip of an uncompressed image, and every chunk of an image it
+/// cannot decode, so the strips and tiles a file lists are held to twice its length: one strip a
+/// row, each naming the whole image's bytes, lists sixteen times them.
+#[test]
+fn a_strip_listed_many_times_exhausts_the_chunk_budget() {
+    let (width, height) = (32u32, 16u32);
+    let samples = split_cfa(width, height, 50_000, 5_000);
+    let once = dng_cfa(width, height, &samples, |_| {});
+    assert!(BoundedRawDecoder.decode(&once, "dng").is_ok());
+
+    let repeated = dng_cfa_with(width, height, &samples, |e, offset, length| {
+        set_entry(e, IfdEntry::long(TiffTag::RowsPerStrip, 1));
+        let rows = height as usize;
+        set_entry(
+            e,
+            IfdEntry::longs(TiffTag::StripOffsets, &vec![offset; rows]),
+        );
+        set_entry(
+            e,
+            IfdEntry::longs(TiffTag::StripByteCounts, &vec![length; rows]),
+        );
+    });
+    let refused = exhausted(check_ifd_bounds(&repeated).expect_err("sixteen copies"));
+    assert_eq!(
+        (refused.budget, refused.limit),
+        (Budget::Chunks, 2 * repeated.len() as u64)
+    );
+    assert_raw_decode_failure(&repeated, "dng", StillFormat::Dng, "strips or tiles");
+}
+
+/// gamut-dng and `rawshift-image` keep the SubIFD offsets they have visited in a list they scan
+/// linearly, so a file is held to [`MAX_IFD_POINTERS`] pointer elements: a million of them would
+/// cost the readers a trillion comparisons. At the limit the walk passes.
+#[test]
+fn a_pointer_flood_exhausts_the_pointer_budget() {
+    let flood = |elements: u32| {
+        let list = hand_ifd_offset(&[1], 1);
+        let mut bytes = hand_tiff(&[&[(TiffTag::SubIFDs.as_u16(), T_LONG, elements, list)]]);
+        // Each element points past the end of the file, so no IFD is read for it.
+        for _ in 0..elements {
+            bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        }
+        // Room for the 8 bytes a SubIFDs element is held to by the per-entry bound.
+        bytes.resize(8 * elements as usize + 64, 0);
+        bytes
+    };
+    let limit = MAX_IFD_POINTERS as u32;
+    assert!(check_ifd_bounds(&flood(limit)).is_ok());
+
+    let over = flood(limit + 1);
+    let refused = exhausted(check_ifd_bounds(&over).expect_err("one pointer past the limit"));
+    assert_eq!(
+        (refused.budget, refused.limit),
+        (Budget::Pointers, MAX_IFD_POINTERS)
+    );
+    assert_raw_decode_failure(&over, "dng", StillFormat::Dng, "pointers");
+}
+
+/// gamut-dng allocates `rows * columns * SamplesPerPixel` black levels from
+/// `BlackLevelRepeatDim` before it reads `BlackLevel`, so 65535 by 65535 asks for 137 GB. Each
+/// side is held to the DNG SDK's limit of eight, and a pattern within it decodes.
+#[test]
+fn a_black_level_pattern_past_the_sdk_limit_is_refused() {
+    let samples = split_cfa(16, 8, 50_000, 5_000);
+    let pattern = |rows: u16, columns: u16| {
+        dng_cfa(16, 8, &samples, |e| {
+            set_entry(
+                e,
+                IfdEntry::shorts(TiffTag::BlackLevelRepeatDim, &[rows, columns]),
+            );
+        })
+    };
+    assert!(BoundedRawDecoder.decode(&pattern(2, 2), "dng").is_ok());
+    assert!(check_ifd_bounds(&pattern(8, 8)).is_ok());
+
+    let huge = pattern(65535, 65535);
+    let refused = unbounded(check_ifd_bounds(&huge).expect_err("65535 x 65535"));
+    assert_eq!(
+        (refused.tag, refused.stated, refused.limit),
+        (
+            TiffTag::BlackLevelRepeatDim.as_u16(),
+            65535,
+            MAX_BLACK_LEVEL_REPEAT
+        )
+    );
+    assert_raw_decode_failure(&huge, "dng", StillFormat::Dng, "black-level pattern");
+    let tall = pattern(9, 1);
+    assert!(check_ifd_bounds(&tall).is_err(), "one side past eight");
+}
+
+/// An opcode list in the big-endian container: `opcodes` as `(id, parameters)`.
+fn opcode_list(opcodes: &[(u32, Vec<u8>)]) -> Vec<u8> {
+    let mut out = (opcodes.len() as u32).to_be_bytes().to_vec();
+    for (id, params) in opcodes {
+        out.extend_from_slice(&id.to_be_bytes());
+        out.extend_from_slice(&[1, 3, 0, 0]); // DNG 1.3
+        out.extend_from_slice(&0u32.to_be_bytes()); // flags
+        out.extend_from_slice(&(params.len() as u32).to_be_bytes());
+        out.extend_from_slice(params);
+    }
+    out
+}
+
+/// `FixBadPixelsList` parameters stating `points` and `rects` and carrying `carried` points.
+fn fix_bad_pixels(points: u32, rects: u32, carried: usize) -> Vec<u8> {
+    let mut params = points.to_be_bytes().to_vec();
+    params.extend_from_slice(&rects.to_be_bytes());
+    params.extend(std::iter::repeat_n(0, 8 * carried));
+    params
+}
+
+/// `rawshift-image` reserves a `FixBadPixelsList`'s stated points and rectangles before it reads
+/// one, so a list stating four billion points over none would ask for 32 GB when a LinearRaw DNG
+/// is processed. The counts are held to the parameter bytes that carry them, in every opcode
+/// list; a list whose counts fit passes, and so does every other opcode.
+#[test]
+fn an_opcode_list_stating_more_bad_pixels_than_it_carries_is_refused() {
+    let with_list = |list: &[u8]| {
+        dng_cfa(16, 8, &split_cfa(16, 8, 50_000, 5_000), |e| {
+            set_entry(
+                e,
+                IfdEntry::new(TiffTag::OpcodeList2, T_UNDEFINED, list.len(), list.to_vec()),
+            );
+        })
+    };
+    let fits = with_list(&opcode_list(&[
+        (9, vec![0; 4]),
+        (5, fix_bad_pixels(2, 0, 2)),
+    ]));
+    assert!(check_ifd_bounds(&fits).is_ok());
+
+    let bomb = with_list(&opcode_list(&[(5, fix_bad_pixels(u32::MAX, 0, 0))]));
+    let refused = unbounded(check_ifd_bounds(&bomb).expect_err("four billion points"));
+    assert_eq!(
+        (refused.tag, refused.stated, refused.limit),
+        (TiffTag::OpcodeList2.as_u16(), u64::from(u32::MAX) * 8, 0)
+    );
+    assert_raw_decode_failure(&bomb, "dng", StillFormat::Dng, "FixBadPixelsList");
+
+    // One rectangle too many past the points it carries.
+    let rects = with_list(&opcode_list(&[(5, fix_bad_pixels(1, 1, 1))]));
+    assert!(check_ifd_bounds(&rects).is_err());
 }
 
 // ── RAW IFD nesting depth (issue #647) ───────────────────────────────────────

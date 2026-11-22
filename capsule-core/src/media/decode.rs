@@ -53,7 +53,11 @@
 //!   allocates for it (visualcommons/rawshift#82). Before either is opened, a no-allocation
 //!   walk of the IFD chain (`tiff_bounds`, issue #644) refuses as [`MediaError::Decode`] any
 //!   entry whose value needs more bytes than the file holds, and (issue #647) any IFD nested
-//!   deeper than a recursive reader can safely follow.
+//!   deeper than a recursive reader can safely follow. The same walk (issue #1324) holds the
+//!   directories and values, the strips and tiles, and the pointers a file states to work
+//!   budgets proportional to its length, and refuses a black-level pattern or a bad-pixel list
+//!   stating more than a reader can hold it to. The DNG bounds apply to every file whose IFD0
+//!   states `DNGVersion`, because the reader opens any such file as a DNG whatever its name.
 //! - **Orientation** is applied by `process`, so it is reported in `orientation_applied` and
 //!   never applied a second time here.
 //! - **Unsupported variants defer.** Upstream decodes Sony lossless-JPEG ARW and uncompressed,
@@ -535,6 +539,9 @@ struct RawLayout {
     /// stated length before it reads. Empty for a DNG, whose reader no longer reports its ranges
     /// and checks them itself without allocating them (see [`raw_layout`]).
     ranges: Vec<(u64, u64)>,
+    /// Whether the reader checks the ranges itself rather than reporting them: true for the DNG
+    /// reader, whichever extension the file came with.
+    reader_checks_ranges: bool,
     bit_depth: u8,
     orientation: Option<u16>,
 }
@@ -607,6 +614,7 @@ fn raw_layout(
                 } else {
                     vec![(m.raw_data_offset, m.raw_data_size)]
                 },
+                reader_checks_ranges: false,
                 bit_depth: m.bit_depth,
                 orientation: m.orientation,
             }
@@ -646,6 +654,7 @@ fn raw_layout(
                 unit: if tiled { "tile" } else { "strip" },
                 // Upstream checks the ranges themselves; see above.
                 ranges: Vec::new(),
+                reader_checks_ranges: true,
                 bit_depth: m.bit_depth,
                 orientation: m.orientation,
             }
@@ -671,12 +680,16 @@ fn raw_layout(
 /// decoded Deflate; and a lossless-JPEG chunk is allocated at its own SOF3 header's size, so a
 /// header stating more samples than its strip or tile holds is refused. A real file never states
 /// one, and the reader would refuse it after decoding.
+///
+/// Applied to every file the reader opens as a DNG, which is any whose IFD0 states `DNGVersion`
+/// ([`IfdWalk::dng`]) whatever its extension, as well as to every `.dng`: a DNG named `.arw` is
+/// opened by the eager reader all the same.
 fn check_eager_raw_frames(
     format: StillFormat,
     walk: &IfdWalk,
     limit: u64,
 ) -> Result<(), MediaError> {
-    if format != StillFormat::Dng {
+    if format != StillFormat::Dng && !walk.dng {
         return Ok(());
     }
     let clamp = |v: u64| u32::try_from(v).unwrap_or(u32::MAX);
@@ -835,8 +848,9 @@ fn check_raw_layout(
         });
     }
     // A DNG's ranges are its reader's to check (see `raw_layout`), so only the families that
-    // report them can be refused for listing none.
-    if layout.ranges.is_empty() && format != StillFormat::Dng {
+    // report them can be refused for listing none. Which reader that was is the reader's choice,
+    // not the extension's: a DNG named `.arw` is read as a DNG.
+    if layout.ranges.is_empty() && !layout.reader_checks_ranges {
         return Err(MediaError::Decode {
             format,
             detail: "RAW file locates no strip or tile data".to_owned(),
@@ -939,6 +953,23 @@ fn open_raw_within(
                 budget = scan.budget,
                 "media: refused a RAW still whose lossless-JPEG chunks exhaust the header scan's \
                  budget"
+            ),
+            IfdRefusal::Exhausted(exhausted) => tracing::warn!(
+                %format,
+                budget = ?exhausted.budget,
+                at = exhausted.at,
+                limit = exhausted.limit,
+                "media: refused a RAW still whose directories, image data or pointers exhaust \
+                 the IFD walk's work budget"
+            ),
+            IfdRefusal::Unbounded(unbounded) => tracing::warn!(
+                %format,
+                ifd_offset = unbounded.ifd_offset,
+                tag = unbounded.tag,
+                stated = unbounded.stated,
+                limit = unbounded.limit,
+                "media: refused a RAW still stating a count its reader would allocate from \
+                 without bound"
             ),
         }
         MediaError::Decode {

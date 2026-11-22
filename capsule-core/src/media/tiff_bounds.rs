@@ -101,6 +101,41 @@
 //! scanned, and refuses the file ([`IfdRefusal::ScanBudget`]) once a chunk would overdraw it. A
 //! real file's chunks are disjoint and each sits in the file beside its own offset and count, so
 //! together they cost less than the file's length; only overlapping or shared strips exceed it.
+//!
+//! # The work budgets
+//!
+//! The per-entry bound above holds each value to the file's length, but gamut's readers hold every
+//! value of every directory they parse, several times over (gamut-ifd's chain, gamut-dng's
+//! `walk_ifds` clones, `rawshift-image`'s `parse_tree`), and copy every strip or tile of an image
+//! they cannot decode (gamut-dng's `undecoded_chunks`) or that is uncompressed. A few hundred KB
+//! can state the same region many times over: thousands of directories whose tables overlap, an
+//! IFD of 65535 entries each naming the whole file, a strip list naming one strip a million
+//! times. So the walk holds three more totals, each refused as [`IfdRefusal::Exhausted`]:
+//!
+//! - **Structure**: every distinct IFD's entry table plus the bytes of every value it states, at
+//!   most twice the file's length. A real file's directories and values are disjoint regions of
+//!   it, so they fit once over; the second leaves room for a writer that shares a value between
+//!   directories.
+//! - **Chunks**: every strip and tile byte range an image IFD lists (one unit per chunk, plus its
+//!   length where the file holds it whole), at most twice the file's length, charged on every
+//!   walk of the IFD, since the reader decodes each instance it parses.
+//! - **Pointers**: at most [`MAX_IFD_POINTERS`] `SubIFDs`, EXIF and GPS list elements followed.
+//!   gamut-dng's and `rawshift-image`'s pointer walks keep the offsets they visited in a list
+//!   they scan linearly, so a million pointers cost them a trillion comparisons; a real file
+//!   holds a handful.
+//!
+//! # Values the eager reader allocates from
+//!
+//! Two DNG values size an allocation from a count stated inside them rather than from their own
+//! length, and both are refused as [`IfdRefusal::Unbounded`]: `BlackLevelRepeatDim`, whose rows
+//! and columns gamut-dng multiplies into a black-level table before reading `BlackLevel` (held to
+//! [`MAX_BLACK_LEVEL_REPEAT`] a side, the DNG SDK's own limit), and an opcode list's
+//! `FixBadPixelsList`, whose point and rectangle counts `rawshift-image` reserves before reading
+//! a single point (held to the parameter bytes that carry them).
+//!
+//! The walk also records whether IFD0 states `DNGVersion` ([`IfdWalk::dng`]): `RawFile::open`
+//! opens any such file through the eager DNG reader whatever its extension, so the DNG budget
+//! in `decode` follows the reader's choice, not the file's name.
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry as Slot;
@@ -162,6 +197,26 @@ const TAG_EXIF_IFD: u16 = 0x8769;
 
 /// The GPS IFD pointer.
 const TAG_GPS_IFD: u16 = 0x8825;
+
+/// `DNGVersion`: in IFD0, what makes `RawFile::open` read a file as a DNG.
+const TAG_DNG_VERSION: u16 = 0xC612;
+
+/// `BlackLevelRepeatDim`: the rows and columns of a DNG's black-level pattern.
+const TAG_BLACK_LEVEL_REPEAT_DIM: u16 = 0xC619;
+
+/// `OpcodeList1`, `OpcodeList2` and `OpcodeList3`: a DNG's processing opcodes.
+const TAGS_OPCODE_LIST: [u16; 3] = [0xC740, 0xC741, 0xC74E];
+
+/// The opcode ID of `FixBadPixelsList` (DNG 1.7.1, chapter 7).
+const OPCODE_FIX_BAD_PIXELS_LIST: u32 = 5;
+
+/// The most rows or columns a `BlackLevelRepeatDim` may state: the DNG SDK's `kMaxBlackPattern`.
+/// gamut-dng allocates `rows * columns * SamplesPerPixel` black levels from it before it reads
+/// `BlackLevel`, so 65535 by 65535 would ask for 137 GB.
+pub(super) const MAX_BLACK_LEVEL_REPEAT: u64 = 8;
+
+/// The most `SubIFDs`, EXIF and GPS pointer elements the walk follows; see the module docs.
+pub(super) const MAX_IFD_POINTERS: u64 = 256;
 
 /// TIFF field type `BYTE`.
 const TYPE_BYTE: u16 = 1;
@@ -234,6 +289,10 @@ pub(super) enum IfdRefusal {
     TooDeep(TooDeep),
     /// The lossless-JPEG header scan would overdraw its budget (see the module docs).
     ScanBudget(ScanBudget),
+    /// The file overdraws one of the walk's work budgets (see the module docs).
+    Exhausted(Exhausted),
+    /// A value states a count the eager reader allocates from beyond any bound a real file needs.
+    Unbounded(Unbounded),
 }
 
 impl fmt::Display for IfdRefusal {
@@ -242,6 +301,126 @@ impl fmt::Display for IfdRefusal {
             Self::Oversized(entry) => entry.fmt(f),
             Self::TooDeep(deep) => deep.fmt(f),
             Self::ScanBudget(scan) => scan.fmt(f),
+            Self::Exhausted(exhausted) => exhausted.fmt(f),
+            Self::Unbounded(unbounded) => unbounded.fmt(f),
+        }
+    }
+}
+
+/// Which of the walk's work budgets a file overdrew.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Budget {
+    /// Directory tables and the values they state.
+    Structure,
+    /// Strip and tile byte ranges.
+    Chunks,
+    /// `SubIFDs`, EXIF and GPS pointer elements.
+    Pointers,
+}
+
+/// The point at which a file overdrew one of the walk's work budgets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Exhausted {
+    /// The budget it overdrew.
+    pub budget: Budget,
+    /// The offset of the IFD being walked, or for [`Budget::Pointers`] the position of the
+    /// pointer element that went past the limit.
+    pub at: u64,
+    /// The whole budget: bytes for [`Budget::Structure`] and [`Budget::Chunks`], pointers for
+    /// [`Budget::Pointers`].
+    pub limit: u64,
+}
+
+impl fmt::Display for Exhausted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { budget, at, limit } = *self;
+        match budget {
+            Budget::Structure => write!(
+                f,
+                "the IFD at offset {at} overdraws the {limit}-byte budget for directory tables \
+                 and their values (twice the file's length): its directories or values overlap"
+            ),
+            Budget::Chunks => write!(
+                f,
+                "the strips or tiles of the IFD at offset {at} overdraw the {limit}-unit budget \
+                 for image data (twice the file's length): they overlap, or are shared between \
+                 directories"
+            ),
+            Budget::Pointers => write!(
+                f,
+                "the SubIFD, EXIF or GPS pointer at offset {at} is past the limit of {limit} \
+                 pointers a file may follow"
+            ),
+        }
+    }
+}
+
+/// A value whose stated count the eager reader would allocate from without bound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Unbounded {
+    /// The offset of the IFD holding the value.
+    pub ifd_offset: u64,
+    /// The value's tag.
+    pub tag: u16,
+    /// What the value states, for the message.
+    pub what: &'static str,
+    /// The figure it states.
+    pub stated: u64,
+    /// The most it may state.
+    pub limit: u64,
+}
+
+impl fmt::Display for Unbounded {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "TIFF tag {:#06x} in the IFD at offset {} states {} {}, past the {} a reader can \
+             hold it to",
+            self.tag, self.ifd_offset, self.stated, self.what, self.limit
+        )
+    }
+}
+
+/// What the walk may still spend: the scan budget (the module docs' "scan budget") and the three
+/// work budgets.
+#[derive(Debug, Clone, Copy)]
+struct Budgets {
+    scan: u64,
+    structure: u64,
+    chunks: u64,
+    pointers: u64,
+}
+
+impl Budgets {
+    /// Every budget full, for a file of `file_len` bytes.
+    fn new(file_len: u64) -> Self {
+        Self {
+            scan: file_len,
+            structure: file_len.saturating_mul(2),
+            chunks: file_len.saturating_mul(2),
+            pointers: MAX_IFD_POINTERS,
+        }
+    }
+
+    /// Spend `cost` of `budget`, or refuse at `at` where it would overdraw it.
+    fn charge(
+        &mut self,
+        budget: Budget,
+        at: u64,
+        cost: u64,
+        file_len: u64,
+    ) -> Result<(), IfdRefusal> {
+        let (left, limit) = match budget {
+            Budget::Structure => (&mut self.structure, file_len.saturating_mul(2)),
+            Budget::Chunks => (&mut self.chunks, file_len.saturating_mul(2)),
+            Budget::Pointers => (&mut self.pointers, MAX_IFD_POINTERS),
+        };
+        match left.checked_sub(cost) {
+            Some(rest) => {
+                *left = rest;
+                Ok(())
+            }
+            None => Err(IfdRefusal::Exhausted(Exhausted { budget, at, limit })),
         }
     }
 }
@@ -359,6 +538,9 @@ pub(super) struct IfdWalk {
     /// chunk at its own header's `width * height * components` (up to 65535 x 65535 x 4) and
     /// compares that with the chunk's size only after decoding it.
     pub ljpeg_overrun: Option<LjpegOverrun>,
+    /// Whether IFD0 states `DNGVersion`, which is what makes `RawFile::open` read the file
+    /// through its eager DNG reader, whatever the file is named.
+    pub dng: bool,
 }
 
 /// A lossless-JPEG strip or tile whose header states more samples than the chunk holds.
@@ -552,8 +734,9 @@ pub(super) fn check_ifd_bounds(bytes: &[u8]) -> Result<IfdWalk, IfdRefusal> {
     };
 
     let mut walk = IfdWalk::default();
-    // What the lossless-JPEG header scan may still spend; see the module docs.
-    let mut scan_left = tiff.file_len();
+    // What the lossless-JPEG header scan and the work budgets may still spend; see the module
+    // docs.
+    let mut budgets = Budgets::new(tiff.file_len());
     // Each IFD's deepest level walked so far: one reached deeper is walked again, so its
     // children are measured from the deepest path to it.
     let mut deepest = HashMap::new();
@@ -571,6 +754,9 @@ pub(super) fn check_ifd_bounds(bytes: &[u8]) -> Result<IfdWalk, IfdRefusal> {
                 width,
                 depth,
             } => {
+                // Charged before the element is read: the readers record every offset they are
+                // handed, readable or not.
+                budgets.charge(Budget::Pointers, at, 1, tiff.file_len())?;
                 // The reader fails the whole list at the first unreadable element, so the rest
                 // are never parsed.
                 let Some(offset) = tiff.uint_at(at, width) else {
@@ -628,7 +814,7 @@ pub(super) fn check_ifd_bounds(bytes: &[u8]) -> Result<IfdWalk, IfdRefusal> {
                     first,
                     new,
                 };
-                walk_ifd(&tiff, at, &mut walk, &mut stack, &mut scan_left)?;
+                walk_ifd(&tiff, at, &mut walk, &mut stack, &mut budgets)?;
             }
         }
     }
@@ -647,13 +833,14 @@ struct Visit {
 }
 
 /// Check one IFD's entries and push the directories the reader would parse from it, charging
-/// any lossless-JPEG header scan to `scan_left`.
+/// the IFD's table and values (on its first walk only), its strips and tiles, and any
+/// lossless-JPEG header scan to `budgets`.
 fn walk_ifd(
     tiff: &Tiff<'_>,
     visit: Visit,
     walk: &mut IfdWalk,
     stack: &mut Vec<Work>,
-    scan_left: &mut u64,
+    budgets: &mut Budgets,
 ) -> Result<(), IfdRefusal> {
     let Visit {
         offset,
@@ -686,6 +873,16 @@ fn walk_ifd(
     walk.depth = walk.depth.max(depth);
 
     let file_len = tiff.file_len();
+    // The readers parse each distinct IFD a bounded number of times, so its table and values are
+    // charged once, on its first walk.
+    let charge_structure = |budgets: &mut Budgets, cost: u64| {
+        if new {
+            budgets.charge(Budget::Structure, offset, cost, file_len)
+        } else {
+            Ok(())
+        }
+    };
+    charge_structure(budgets, next_at + tiff.offset_size() - offset)?;
     let (mut image_width, mut image_length) = (None, None);
     let mut image = ImageEntries::default();
     for index in 0..entry_count {
@@ -708,6 +905,14 @@ fn walk_ifd(
             field: at + 4 + if tiff.big { 8 } else { 4 },
         };
         check_entry(offset, &entry, file_len).map_err(IfdRefusal::Oversized)?;
+        // A type no reader sizes is kept verbatim without its value being read.
+        if let Some(bytes) = entry.type_size().map(|size| size.saturating_mul(count)) {
+            charge_structure(budgets, bytes)?;
+        }
+        if first && tag == TAG_DNG_VERSION {
+            walk.dng = true;
+        }
+        check_unbounded(tiff, offset, &entry).map_err(IfdRefusal::Unbounded)?;
         if tag == TAG_JPEG_INTERCHANGE_FORMAT_LENGTH
             && let Some(length) = first_unsigned(tiff, &entry)
         {
@@ -733,7 +938,7 @@ fn walk_ifd(
         follow(tiff, &entry, depth + 1, first, stack);
     }
     if let (Some(width), Some(length)) = (image_width, image_length) {
-        account_image(tiff, offset, (width, length), &image, walk, scan_left)?;
+        account_image(tiff, offset, (width, length), &image, walk, budgets)?;
         let (max_w, max_l) = walk.max_image;
         // The first stated image is taken even at zero pixels, so a zero-sized one is reported
         // rather than mistaken for no image at all.
@@ -828,17 +1033,28 @@ impl ImageEntries {
 /// SamplesPerPixel` samples, lays strips or tiles out the way its `chunk_grid` does (tiled where
 /// the IFD holds `TileOffsets` or `TileWidth`; `RowsPerStrip` defaulting to the height), and keeps
 /// what it decoded. An IFD it would refuse on a tag read here is still counted, which only
-/// widens the bound. Refuses only where the chunk scan overdraws `scan_left`.
+/// widens the bound. Refuses only where its strips and tiles overdraw the chunk budget or the
+/// chunk scan overdraws the scan budget.
 fn account_image(
     tiff: &Tiff<'_>,
     ifd_offset: u64,
     (width, length): (u64, u64),
     image: &ImageEntries,
     walk: &mut IfdWalk,
-    scan_left: &mut u64,
+    budgets: &mut Budgets,
 ) -> Result<(), IfdRefusal> {
     if image.strip_offsets.is_none() && image.tile_offsets.is_none() {
         return Ok(());
+    }
+    // Both lists, whichever the reader decodes: gamut-dng picks tiles by `TileOffsets` or
+    // `TileWidth` to decode, but by `TileOffsets` alone to copy an image it could not decode.
+    for (offsets, counts) in [
+        (image.strip_offsets, image.strip_counts),
+        (image.tile_offsets, image.tile_counts),
+    ] {
+        if let (Some(offsets), Some(counts)) = (offsets, counts) {
+            charge_chunks(tiff, ifd_offset, (offsets, counts), budgets)?;
+        }
     }
     let samples_per_pixel = image.samples_per_pixel.unwrap_or(1);
     walk.max_samples_per_pixel = walk.max_samples_per_pixel.max(samples_per_pixel);
@@ -877,13 +1093,144 @@ fn account_image(
             };
             if let (Some(capacity), Some(offsets), Some(counts)) = (capacity, offsets, counts) {
                 let capacity = capacity.saturating_mul(samples_per_pixel);
-                walk.ljpeg_overrun =
-                    ljpeg_overrun(tiff, ifd_offset, (offsets, counts), capacity, scan_left)?;
+                walk.ljpeg_overrun = ljpeg_overrun(
+                    tiff,
+                    ifd_offset,
+                    (offsets, counts),
+                    capacity,
+                    &mut budgets.scan,
+                )?;
             }
         }
         _ => {}
     }
     Ok(())
+}
+
+/// Charge the chunk budget for every strip or tile `offsets` and `counts` list, read the way
+/// gamut-dng's `grid_chunks` reads them: one unit per chunk, plus its length where the file holds
+/// it whole. A chunk the file does not hold whole is one the reader refuses before it copies or
+/// decodes any of them, so its length costs nothing; the unit still bounds the walk's own work.
+fn charge_chunks(
+    tiff: &Tiff<'_>,
+    ifd_offset: u64,
+    (offsets, counts): (Entry, Entry),
+    budgets: &mut Budgets,
+) -> Result<(), IfdRefusal> {
+    let (Some(offset_width), Some(count_width)) = (
+        unsigned_width(offsets.data_type),
+        unsigned_width(counts.data_type),
+    ) else {
+        return Ok(());
+    };
+    let (Some(offsets_at), Some(counts_at)) = (offsets.values_at(tiff), counts.values_at(tiff))
+    else {
+        return Ok(());
+    };
+    for chunk in 0..offsets.count.min(counts.count) {
+        let start = tiff.uint_at(
+            offsets_at.saturating_add(chunk.saturating_mul(offset_width)),
+            offset_width,
+        );
+        let len = tiff.uint_at(
+            counts_at.saturating_add(chunk.saturating_mul(count_width)),
+            count_width,
+        );
+        let held = start
+            .zip(len)
+            .filter(|&(start, len)| tiff.range(start, len).is_some())
+            .map_or(0, |(_, len)| len);
+        budgets.charge(Budget::Chunks, ifd_offset, 1 + held, tiff.file_len())?;
+    }
+    Ok(())
+}
+
+/// Refuse a value that states a count the eager reader allocates from without bound: a
+/// `BlackLevelRepeatDim` past [`MAX_BLACK_LEVEL_REPEAT`] a side, or an opcode list whose
+/// `FixBadPixelsList` counts more points and rectangles than its parameters carry. Checked in
+/// every IFD, which only widens the bound: the readers take them from the raw image's.
+fn check_unbounded(tiff: &Tiff<'_>, ifd_offset: u64, entry: &Entry) -> Result<(), Unbounded> {
+    let unbounded = |what, stated, limit| Unbounded {
+        ifd_offset,
+        tag: entry.tag,
+        what,
+        stated,
+        limit,
+    };
+    if entry.tag == TAG_BLACK_LEVEL_REPEAT_DIM && entry.count >= 2 {
+        // gamut-dng reads exactly two values, of any type its `as_u32_vec` accepts; the first
+        // two of a longer list are what a widened reading would take.
+        let (Some(width), Some(at)) = (unsigned_width(entry.data_type), entry.values_at(tiff))
+        else {
+            return Ok(());
+        };
+        let side = [at, at.saturating_add(width)]
+            .into_iter()
+            .filter_map(|at| tiff.uint_at(at, width))
+            .max()
+            .unwrap_or(0);
+        if side > MAX_BLACK_LEVEL_REPEAT {
+            return Err(unbounded(
+                "black-level pattern rows or columns",
+                side,
+                MAX_BLACK_LEVEL_REPEAT,
+            ));
+        }
+    }
+    // An opcode list is UNDEFINED bytes; a byte-sized type is read the same way.
+    if TAGS_OPCODE_LIST.contains(&entry.tag)
+        && matches!(entry.data_type, 1 | 6 | 7)
+        && let Some(list) = entry
+            .values_at(tiff)
+            .and_then(|at| tiff.range(at, entry.count))
+        && let Some((stated, carried)) = fix_bad_pixels_overrun(list)
+    {
+        return Err(unbounded(
+            "bytes of FixBadPixelsList points and rectangles",
+            stated,
+            carried,
+        ));
+    }
+    Ok(())
+}
+
+/// The first `FixBadPixelsList` opcode in an opcode `list` whose point and rectangle counts need
+/// more bytes than its parameters hold, as `(bytes stated, bytes carried)`.
+///
+/// The list is walked the way `rawshift-image`'s `OpcodeList::parse` walks it (big-endian, a
+/// count, then a 16-byte header and the parameters per opcode, stopping at the first that runs
+/// past the end), and the opcode's counts read the way its `parse_fix_bad_pixels_list` reads
+/// them: it reserves 8 bytes a point and 16 a rectangle before it reads either.
+fn fix_bad_pixels_overrun(list: &[u8]) -> Option<(u64, u64)> {
+    let be32 = |at: usize| -> Option<u32> {
+        let b = list.get(at..at.checked_add(4)?)?;
+        Some(u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    let count = be32(0)?;
+    let mut pos = 4usize;
+    for _ in 0..count {
+        let (id, params_len) = (be32(pos)?, usize::try_from(be32(pos + 12)?).ok()?);
+        pos += 16;
+        let params = list.get(pos..pos.checked_add(params_len)?)?;
+        pos += params_len;
+        if id != OPCODE_FIX_BAD_PIXELS_LIST || params.len() < 8 {
+            continue;
+        }
+        let read = |at: usize| {
+            u64::from(u32::from_be_bytes([
+                params[at],
+                params[at + 1],
+                params[at + 2],
+                params[at + 3],
+            ]))
+        };
+        let stated = read(0) * 8 + read(4) * 16;
+        let carried = params.len() as u64 - 8;
+        if stated > carried {
+            return Some((stated, carried));
+        }
+    }
+    None
 }
 
 /// The first lossless-JPEG chunk listed by `offsets` and `counts` whose SOF3 header states more
