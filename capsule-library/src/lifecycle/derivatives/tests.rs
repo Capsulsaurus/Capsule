@@ -552,6 +552,57 @@ fn an_undecodable_original_still_imports_with_the_reason_recorded() {
     }
 }
 
+/// A little-endian TIFF whose IFD0 holds only `DNGVersion` 1.4.0.0: what rawshift's RAW reader
+/// identifies as a DNG, whatever the file is named, and then fails to decode at open.
+fn dng_header_only() -> Vec<u8> {
+    let mut tiff = b"II\x2A\x00\x08\x00\x00\x00".to_vec();
+    tiff.extend_from_slice(&1u16.to_le_bytes()); // one entry
+    tiff.extend_from_slice(&0xC612u16.to_le_bytes()); // DNGVersion
+    tiff.extend_from_slice(&1u16.to_le_bytes()); // BYTE
+    tiff.extend_from_slice(&4u32.to_le_bytes()); // count
+    tiff.extend_from_slice(&[1, 4, 0, 0]); // the value, inline
+    tiff.extend_from_slice(&0u32.to_le_bytes()); // no next IFD
+    tiff
+}
+
+/// **Issue #1323, through the real import.** A DNG and an ARW import as signed, verifiable
+/// originals recorded `DeferredNoCodec`, with nothing attempted: the RAW reader is never handed
+/// them, because rawshift's `RawFile::open` decodes a DNG eagerly with no caller budget. The
+/// bytes are a DNG header rawshift would open as a DNG under either name and then fail to
+/// decode, so a RAW that reached `open` would have imported `DecodeFailed` instead.
+#[test]
+fn a_raw_original_imports_deferred_without_reaching_the_raw_reader() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (mut ws, album) = workspace(lib.path());
+    let raw = dng_header_only();
+
+    for (name, content_type) in [
+        ("shot.dng", "image/x-adobe-dng"),
+        ("shot.arw", "image/x-sony-arw"),
+    ] {
+        let receipt = import(&mut ws, album, src.path(), name, &raw);
+        assert_eq!(
+            receipt.derivatives,
+            DerivativeStatus::DeferredNoCodec,
+            "{name} is deferred, not decoded"
+        );
+        assert_eq!(receipt.deferred_formats, 0, "{name}: nothing was attempted");
+        let sidecar = sidecar_of(lib.path(), receipt.asset_id);
+        assert_eq!(sidecar.content_type, content_type);
+        assert!(sidecar.lqip.is_none(), "{name}: no pixels, no placeholder");
+        assert!(
+            !derivatives_dir(lib.path(), receipt.asset_id).exists(),
+            "{name}: no derivative was written"
+        );
+        assert_eq!(
+            ws.verify(&receipt.asset_id).unwrap(),
+            capsule_core::crypto::verify_asset::VerifyOutcome::Accept,
+            "{name} is still a signed, encrypted, self-verifying backup"
+        );
+    }
+}
+
 /// Seal `bytes` as a guest drop claiming `content_type`, stage it, and adopt it.
 fn adopt(
     ws: &mut Workspace,
