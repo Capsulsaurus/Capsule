@@ -35,7 +35,7 @@ use uuid::Uuid;
 
 use super::decode::{
     Decoder, RawshiftDecoder, check_decoded_budget, decode_embedded_preview, decode_guarded,
-    embedded_preview_within, extract_embedded_preview, probe_raw,
+    embedded_preview_within, extract_embedded_preview, probe_raw, standard_error,
 };
 use super::derivative::{
     DerivativeContext, DerivativeSealer, DerivativeTier, SealedDerivative, StillDerivatives,
@@ -748,17 +748,69 @@ fn av1_decodes_here() -> bool {
     rawshift_image::formats::avif_hw_decode_available()
 }
 
-/// Whether a decode failure is the host's hardware AV1 decoder refusing the fixture's profile.
+/// Whether a decode is the backfillable deferral of a host whose hardware AV1 decoder refuses
+/// the fixture's profile.
 ///
 /// gamut's encoder writes identity-matrix 4:4:4 AV1, which is Profile 1, and the VAAPI backend
 /// decodes Profile 0 only, so on a VAAPI host the fixture cannot reach the pixel assertions; a
-/// camera's 4:2:0 AVIF is Profile 0 and does. Upstream reports that refusal as a decode error
-/// rather than as `HwDecoderUnavailable` (visualcommons/rawshift#78), so it surfaces as
-/// [`MediaError::Decode`] here.
+/// camera's 4:2:0 AVIF is Profile 0 and does. That refusal defers like a missing codec (see
+/// `a_hardware_av1_refusal_defers_rather_than_fails`), never a decode failure.
 #[cfg(feature = "media-avif-decode")]
 fn hardware_refused_the_profile(result: &Result<super::DecodedImage, MediaError>) -> bool {
-    matches!(result, Err(MediaError::Decode { format: StillFormat::Avif, detail })
-        if detail.contains("hardware AV1 decode failed") && detail.contains("Profile"))
+    matches!(
+        result,
+        Err(MediaError::UnsupportedFormat {
+            format: StillFormat::Avif,
+            op: FormatOp::Decode,
+        })
+    )
+}
+
+/// A hardware AV1 decoder that is present but refuses the codestream — a VAAPI host given a
+/// 4:4:4 Profile 1 AVIF, or 4:4:4 content its 4:2:0 surface cannot carry — is a codec this host
+/// lacks, so the AVIF defers (`DeferredNoCodec`, backfillable) rather than counting as a failed
+/// decode. Upstream reports both as AVIF decode errors (visualcommons/rawshift#78); any other
+/// decode error, and the same text for another format, stays a decode failure.
+#[test]
+fn a_hardware_av1_refusal_defers_rather_than_fails() {
+    use rawshift_image::error::{FormatError, RawError};
+    let avif_error = |message: &str| {
+        RawError::Format(FormatError::ImageDecode {
+            format: "AVIF",
+            message: message.to_owned(),
+        })
+    };
+    let deferral = MediaError::UnsupportedFormat {
+        format: StillFormat::Avif,
+        op: FormatOp::Decode,
+    };
+    for refusal in [
+        "hardware AV1 decode failed: vaEndPicture: VAProfileAV1Profile1 unsupported",
+        "AVIF: the hardware surface is 4:2:0; 4:2:2/4:4:4 coded content is outside the hardware \
+         decode scope (AV1 Profile 0 only)",
+    ] {
+        assert_eq!(
+            standard_error(StillFormat::Avif, avif_error(refusal)),
+            deferral
+        );
+    }
+    assert!(matches!(
+        standard_error(StillFormat::Avif, avif_error("AVIF: truncated box")),
+        MediaError::Decode {
+            format: StillFormat::Avif,
+            ..
+        }
+    ));
+    assert!(matches!(
+        standard_error(
+            StillFormat::Png,
+            avif_error("hardware AV1 decode failed: not an AVIF")
+        ),
+        MediaError::Decode {
+            format: StillFormat::Png,
+            ..
+        }
+    ));
 }
 
 /// An AVIF probes to the dimensions it was built with on any host. Where the host has an AV1

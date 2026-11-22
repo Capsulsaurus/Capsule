@@ -81,7 +81,8 @@ pub enum StillFormat {
     Ppm,
     /// AVIF. Decoded by `gamut-avif` under the opt-in `media-avif-decode` feature, its AV1
     /// codestream through a hardware decoder where the host has one; recognised and refused
-    /// without the feature, and deferred at decode on a host with no AV1 decoder.
+    /// without the feature, and deferred at decode on a host with no AV1 decoder or whose
+    /// hardware decoder refuses the codestream's profile.
     Avif,
     /// HEIC / HEIF. Recognised, never decoded: libheif and its HEVC decoder libde265 are
     /// LGPL-3.0, which licence policy excludes (issue #588).

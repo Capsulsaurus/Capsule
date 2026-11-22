@@ -189,7 +189,7 @@ pub enum DerivativeStatus {
     ///
     /// What reaches here today: HEIC (refused by licence policy), WebP and the RAW families
     /// whose decoders are not enabled, AVIF without `media-avif-decode` or on a host with no
-    /// AV1 decoder, and every video, whose derivatives no build generates yet.
+    /// AV1 decoder for its profile, and every video, whose derivatives no build generates yet.
     DeferredNoCodec,
     /// **A real problem.** The format *is* one this build can decode, but these particular
     /// bytes did not decode — truncation, corruption, or a decoder bug. The original is still

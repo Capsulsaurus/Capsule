@@ -82,7 +82,7 @@ use std::io::Cursor;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use rawshift_image::core::{ColorDescription, ColourPrimaries, RgbImage};
-use rawshift_image::error::RawError;
+use rawshift_image::error::{FormatError, RawError};
 use rawshift_image::formats::{
     RawFile, StandardFormat, decode_standard_image, probe_standard_image,
     read_standard_image_metadata,
@@ -382,8 +382,19 @@ pub(super) fn check_decoded_budget(decoded: &DecodedImage, limit: u64) -> Result
 /// through a hardware backend until it gains a software fallback
 /// (visualcommons/rawshift#78). That is a codec this host lacks, not a broken file, so it
 /// becomes the backfillable [`MediaError::UnsupportedFormat`], exactly like a build that links
-/// no AVIF decoder at all. Everything else is a real decode failure.
-fn standard_error(format: StillFormat, error: RawError) -> MediaError {
+/// no AVIF decoder at all.
+///
+/// A hardware decoder that is present but refuses the codestream defers the same way: a VAAPI
+/// host decodes AV1 Profile 0 only, so a sound 4:4:4 (Profile 1) AVIF is a codec this host
+/// lacks, not a broken file. Upstream reports that refusal as an AVIF `ImageDecode` error rather
+/// than as `HwDecoderUnavailable` (visualcommons/rawshift#78), so it is recognised by the
+/// message upstream builds for it ([`is_hardware_av1_refusal`]). Everything else is a real
+/// decode failure.
+pub(super) fn standard_error(format: StillFormat, error: RawError) -> MediaError {
+    let defer = || MediaError::UnsupportedFormat {
+        format,
+        op: FormatOp::Decode,
+    };
     match error {
         RawError::HwDecoderUnavailable { codec, reason } => {
             tracing::warn!(
@@ -392,16 +403,39 @@ fn standard_error(format: StillFormat, error: RawError) -> MediaError {
                 %reason,
                 "media: this host has no decoder for the codestream; deferring"
             );
-            MediaError::UnsupportedFormat {
-                format,
-                op: FormatOp::Decode,
-            }
+            defer()
+        }
+        RawError::Format(FormatError::ImageDecode {
+            format: "AVIF",
+            ref message,
+        }) if format == StillFormat::Avif && is_hardware_av1_refusal(message) => {
+            tracing::warn!(
+                %format,
+                %message,
+                "media: this host's hardware AV1 decoder refused the codestream; deferring"
+            );
+            defer()
         }
         other => MediaError::Decode {
             format,
             detail: other.to_string(),
         },
     }
+}
+
+/// Whether an AVIF decode message is the hardware AV1 decoder declining the codestream, rather
+/// than the container or the decoded frame being broken: `rawshift-image`'s AVIF reader reports
+/// a backend that accepted the job and failed as `hardware AV1 decode failed: …`
+/// (`HwDecodeError::Decode`), and 4:2:2 or 4:4:4 content its 4:2:0 surface cannot carry as
+/// `… outside the hardware decode scope …`.
+///
+/// A corrupt AV1 payload the backend fails on is deferred too, since nothing tells it apart
+/// from a refused profile; a deferral is backfilled from the stored original once upstream
+/// decodes AV1 in software (visualcommons/rawshift#78), which then reports it on its own
+/// terms, whereas a sound file marked as a decode failure would never be retried.
+fn is_hardware_av1_refusal(message: &str) -> bool {
+    message.contains("hardware AV1 decode failed")
+        || message.contains("outside the hardware decode scope")
 }
 
 /// A RAW file opened over the caller's bytes.
