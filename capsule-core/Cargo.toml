@@ -115,7 +115,7 @@ chromahash = { version = "0.7.1", default-features = false, features = ["simd"] 
 jiff = { workspace = true }
 # EXIF reading, transitional: removed once Rawshift's metadata extraction covers capture time,
 # GPS and orientation (design/thumbnails.md, "Media Is Rawshift's").
-kamadak-exif = "0.5"
+kamadak-exif = "0.6"
 # Still-image decode/encode for `capsule_core::media` (`media` feature). The pin itself (a git
 # revision of rawshift's master, and why) is the root `[workspace.dependencies]` entry; never
 # the `rawshift/` submodule, which is not a workspace member. Depended on directly rather than
