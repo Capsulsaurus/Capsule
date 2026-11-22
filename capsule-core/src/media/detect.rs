@@ -99,8 +99,9 @@ pub enum StillFormat {
     /// Canon CRW.
     Crw,
     /// Adobe DNG (including Apple ProRAW). Decoded by `rawshift-image`'s RAW pipeline (issue
-    /// #589) where the raw IFD is uncompressed or JPEG XL (ProRAW); lossless-JPEG DNG has no
-    /// upstream decoder and defers as an unsupported variant.
+    /// #589) where the raw IFD is uncompressed, lossless JPEG or JPEG XL (ProRAW); a DNG with
+    /// a Deflate image defers as an unsupported variant until upstream bounds its inflate
+    /// (visualcommons/rawshift#82).
     Dng,
     /// Nikon NEF.
     Nef,

@@ -37,14 +37,20 @@
 //!   list longer than the rows, a tile list that is not the grid and a JPEG XL tile (ProRAW)
 //!   whose codestream is not its tile's size, but allocates the image and each tile at their
 //!   stated sizes. So before a DNG is opened, every image and tile any of its IFDs states is held
-//!   to the budget, and after it the sensor, active area and crop are held as for an ARW. Before
-//!   either is opened, a no-allocation walk of the IFD chain (`tiff_bounds`, issue #644)
-//!   refuses as [`MediaError::Decode`] any entry whose value needs more bytes than the file
-//!   holds, and (issue #647) any IFD nested deeper than a recursive reader can safely follow.
+//!   to the budget, and after it the sensor, active area and crop are held as for an ARW. The
+//!   eager reader decodes and keeps every other image IFD too, so their pixels are summed
+//!   against the same budget, `SamplesPerPixel` is held to 4, and a lossless-JPEG chunk whose
+//!   own header states more samples than its strip or tile is refused before the reader
+//!   allocates for it (visualcommons/rawshift#82). Before either is opened, a no-allocation
+//!   walk of the IFD chain (`tiff_bounds`, issue #644) refuses as [`MediaError::Decode`] any
+//!   entry whose value needs more bytes than the file holds, and (issue #647) any IFD nested
+//!   deeper than a recursive reader can safely follow.
 //! - **Orientation** is applied by `process`, so it is reported in `orientation_applied` and
 //!   never applied a second time here.
 //! - **Unsupported variants defer.** Upstream decodes Sony lossless-JPEG ARW and uncompressed,
-//!   Deflate, lossless-JPEG or JPEG XL DNG. Any other ARW compression, a camera its reader does
+//!   lossless-JPEG or JPEG XL DNG. It decodes Deflate DNG too, but inflates each chunk with no
+//!   output bound, so Capsule defers a DNG with a Deflate image until upstream bounds it
+//!   (visualcommons/rawshift#82). Any other ARW compression, a camera its reader does
 //!   not place, or a TIFF that is not a RAW at all is `RawError::Unsupported`, and that is mapped
 //!   to
 //!   [`MediaError::UnsupportedFormat`] — `DeferredNoCodec`, backfillable when upstream grows the
@@ -597,6 +603,16 @@ fn raw_layout(
 /// states, and the largest tile width and length any IFD states. Every IFD's image is held, the
 /// raw one among them, because which IFD is the raw image is the reader's choice. ARW's reader
 /// reads no pixels at open, so its layout is checked after it, by [`check_raw_layout`].
+///
+/// The reader also decodes and keeps every other IFD that locates strips or tiles, at
+/// `SamplesPerPixel` `u16` samples a pixel, so those pixels together are held to the same budget
+/// and `SamplesPerPixel` to [`MAX_DNG_SAMPLES_PER_PIXEL`]: what the reader keeps is then at most
+/// the budget at four samples a pixel. Two compressions allocate past any stated size before the
+/// reader checks it (visualcommons/rawshift#82): a Deflate chunk inflates with no output bound,
+/// so a DNG holding one defers as [`MediaError::UnsupportedFormat`], as it did before rawshift
+/// decoded Deflate; and a lossless-JPEG chunk is allocated at its own SOF3 header's size, so a
+/// header stating more samples than its strip or tile holds is refused. A real file never states
+/// one, and the reader would refuse it after decoding.
 fn check_eager_raw_frames(
     format: StillFormat,
     walk: &IfdWalk,
@@ -614,8 +630,67 @@ fn check_eager_raw_frames(
     if tile_w > 0 || tile_h > 0 {
         check_raw_frame(format, "tile", (clamp(tile_w), clamp(tile_h)), limit)?;
     }
+    if walk.max_samples_per_pixel > MAX_DNG_SAMPLES_PER_PIXEL {
+        tracing::warn!(
+            %format,
+            samples_per_pixel = walk.max_samples_per_pixel,
+            max = MAX_DNG_SAMPLES_PER_PIXEL,
+            "media: refusing a DNG image stating more samples a pixel than any DNG image holds"
+        );
+        return Err(MediaError::Decode {
+            format,
+            detail: format!(
+                "RAW image states {} samples per pixel, past the {MAX_DNG_SAMPLES_PER_PIXEL} a \
+                 DNG image holds",
+                walk.max_samples_per_pixel
+            ),
+        });
+    }
+    if walk.decode_pixels > limit {
+        tracing::warn!(
+            %format,
+            pixels = walk.decode_pixels,
+            limit,
+            "media: refusing a DNG whose images together exceed the decode budget before the \
+             eager reader allocates them"
+        );
+        return Err(MediaError::PixelBudgetExceeded {
+            pixels: walk.decode_pixels,
+            limit,
+        });
+    }
+    if walk.deflate {
+        tracing::warn!(
+            %format,
+            "media: deferring a Deflate DNG, whose chunks the reader inflates without an output \
+             bound (visualcommons/rawshift#82)"
+        );
+        return Err(MediaError::UnsupportedFormat {
+            format,
+            op: FormatOp::Decode,
+        });
+    }
+    if let Some(overrun) = walk.ljpeg_overrun {
+        tracing::warn!(
+            %format,
+            ifd_offset = overrun.ifd_offset,
+            chunk = overrun.chunk,
+            samples = overrun.samples,
+            capacity = overrun.capacity,
+            "media: refusing a DNG whose lossless-JPEG chunk header states more samples than its \
+             strip or tile holds"
+        );
+        return Err(MediaError::Decode {
+            format,
+            detail: format!("RAW {overrun}"),
+        });
+    }
     Ok(())
 }
+
+/// The most `SamplesPerPixel` a DNG image IFD may state: a CFA raw holds 1, a linear raw or an
+/// RGB preview 3, and a lossless-JPEG stream carries at most 4 components.
+const MAX_DNG_SAMPLES_PER_PIXEL: u64 = 4;
 
 /// Refuse a frame the RAW pipeline would allocate for that is empty or over `limit` pixels.
 fn check_raw_frame(

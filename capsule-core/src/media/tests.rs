@@ -1336,7 +1336,19 @@ fn dng_cfa_previewed(
     edit: impl FnOnce(&mut Vec<IfdEntry>, u32, u32),
 ) -> Vec<u8> {
     let payload: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
-    tiff_file(&payload, |writer, offset, length| {
+    dng_cfa_stored(width, height, &payload, preview, edit)
+}
+
+/// [`dng_cfa_previewed`] over an already stored `payload`, for a strip that is not the samples
+/// verbatim (a lossless-JPEG stream, with `edit` setting the compression to match).
+fn dng_cfa_stored(
+    width: u32,
+    height: u32,
+    payload: &[u8],
+    preview: &[u8],
+    edit: impl FnOnce(&mut Vec<IfdEntry>, u32, u32),
+) -> Vec<u8> {
+    tiff_file(payload, |writer, offset, length| {
         let preview_at = (!preview.is_empty()).then(|| write_blob(writer, preview));
         let mut entries = vec![
             IfdEntry::long(TiffTag::ImageWidth, width),
@@ -1815,6 +1827,155 @@ fn a_long8_raw_frame_is_refused_before_decoding() {
         Ok((2, (20_000, 20_000)))
     );
     assert_eq!(RawshiftDecoder.probe(&nested, "dng"), Err(over));
+}
+
+/// A DNG whose IFD0 is a 4x4 CFA raw over 32 stored bytes and whose `SubIFDs` lists `extra`
+/// more IFDs, each stating a `size` image over that same strip.
+fn dng_with_shared_strip_images(extra: usize, size: (u32, u32)) -> Vec<u8> {
+    let samples: Vec<u8> = [0u16; 16].iter().flat_map(|s| s.to_le_bytes()).collect();
+    tiff_file(&samples, |writer, offset, length| {
+        let subs: Vec<u32> = (0..extra)
+            .map(|_| {
+                let mut entries = vec![
+                    IfdEntry::long(TiffTag::ImageWidth, size.0),
+                    IfdEntry::long(TiffTag::ImageLength, size.1),
+                    IfdEntry::short(TiffTag::BitsPerSample, 16),
+                    IfdEntry::short(TiffTag::Compression, 1),
+                    IfdEntry::short(TiffTag::SamplesPerPixel, 1),
+                    IfdEntry::long(TiffTag::StripOffsets, offset),
+                    IfdEntry::long(TiffTag::StripByteCounts, length),
+                ];
+                writer.write_ifd(&mut entries, 0) as u32
+            })
+            .collect();
+        let mut ifd0 = vec![
+            IfdEntry::long(TiffTag::ImageWidth, 4),
+            IfdEntry::long(TiffTag::ImageLength, 4),
+            IfdEntry::short(TiffTag::BitsPerSample, 16),
+            IfdEntry::short(TiffTag::Compression, 1),
+            IfdEntry::short(TiffTag::PhotometricInterpretation, 32803),
+            IfdEntry::short(TiffTag::SamplesPerPixel, 1),
+            IfdEntry::long(TiffTag::StripOffsets, offset),
+            IfdEntry::long(TiffTag::StripByteCounts, length),
+            IfdEntry::shorts(TiffTag::CFARepeatPatternDim, &[2, 2]),
+            IfdEntry::bytes(TiffTag::CFAPattern, &[0, 1, 1, 2]),
+            IfdEntry::bytes(TiffTag::DNGVersion, &[1, 4, 0, 0]),
+            IfdEntry::ascii(TiffTag::Make, "Capsule"),
+            IfdEntry::ascii(TiffTag::Model, "Synthetic CFA"),
+            IfdEntry::long(TiffTag::WhiteLevel, 65535),
+            IfdEntry::rationals(TiffTag::AsShotNeutral, &[(1, 1), (1, 1), (1, 1)]),
+            IfdEntry::longs(TiffTag::SubIFDs, &subs),
+        ];
+        ifd0.extend(dng_profile());
+        writer.write_ifd(&mut ifd0, 0)
+    })
+}
+
+/// gamut's eager DNG reader allocates `width * height * SamplesPerPixel` `u16` samples for every
+/// IFD that locates image data, the raw one and each sub-image, and keeps them all. So a DNG's
+/// `SamplesPerPixel` is held to four, and the pixels of all its images together to the budget,
+/// before the reader opens it: each of these few-KB files would otherwise ask it for gigabytes.
+#[test]
+fn a_dng_is_held_to_the_budget_across_every_image_it_decodes() {
+    // One 4000x3000 image claiming 65535 samples a pixel: 1.5 TB of `u16`s over a 32-byte strip.
+    let wide = dng_cfa(4, 4, &[0; 16], |e| {
+        set_entry(e, IfdEntry::long(TiffTag::ImageWidth, 4000));
+        set_entry(e, IfdEntry::long(TiffTag::ImageLength, 3000));
+        set_entry(e, IfdEntry::short(TiffTag::SamplesPerPixel, 65535));
+    });
+    assert_eq!(
+        check_ifd_bounds(&wide).map(|w| (w.max_samples_per_pixel, w.decode_pixels)),
+        Ok((65535, 12_000_000))
+    );
+    assert_raw_decode_failure(&wide, "dng", StillFormat::Dng, "65535 samples per pixel");
+
+    // Eleven sub-images stating 4000x3000 each over the raw image's one strip: each fits the
+    // budget, together they do not.
+    let many = dng_with_shared_strip_images(11, (4000, 3000));
+    let over = MediaError::PixelBudgetExceeded {
+        pixels: 16 + 11 * 12_000_000,
+        limit: MAX_DECODE_PIXELS,
+    };
+    assert_eq!(
+        check_ifd_bounds(&many).map(|w| (w.ifds, w.max_image, w.decode_pixels)),
+        Ok((12, (4000, 3000), over_pixels(&over)))
+    );
+    assert_eq!(RawshiftDecoder.probe(&many, "dng"), Err(over.clone()));
+    assert_eq!(RawshiftDecoder.decode(&many, "dng"), Err(over));
+
+    // The sum is the bound, and a file within it opens: the 4x4 raw and two 8x8 sub-images.
+    let two = dng_with_shared_strip_images(2, (8, 8));
+    assert_eq!(
+        probe_raw(&two, StillFormat::Dng, 143),
+        Err(MediaError::PixelBudgetExceeded {
+            pixels: 144,
+            limit: 143,
+        })
+    );
+    assert!(probe_raw(&two, StillFormat::Dng, 144).is_ok());
+
+    // A tiled image is counted at its whole tile grid, which the reader decodes in full: a
+    // 16x16 image in 10x10 tiles is a 20x20 grid.
+    let codestream = jxl_bytes(&gradient(16, 16), None);
+    let tiled = dng_linear_jxl_with(&codestream, (16, 16), |e, _, _| {
+        set_entry(e, IfdEntry::long(TiffTag::TileWidth, 10));
+        set_entry(e, IfdEntry::long(TiffTag::TileLength, 10));
+    });
+    assert_eq!(check_ifd_bounds(&tiled).map(|w| w.decode_pixels), Ok(400));
+}
+
+/// The pixel count a [`MediaError::PixelBudgetExceeded`] holds.
+fn over_pixels(error: &MediaError) -> u64 {
+    match error {
+        MediaError::PixelBudgetExceeded { pixels, .. } => *pixels,
+        other => panic!("not a budget refusal: {other:?}"),
+    }
+}
+
+/// A lossless-JPEG DNG decodes, and one whose chunk header states more samples than its strip
+/// holds is refused before the reader allocates at that header's size (up to 65535 x 65535 x 4
+/// samples). A Deflate DNG defers: the reader inflates it with no output bound
+/// (visualcommons/rawshift#82).
+#[test]
+fn a_dng_chunk_is_bounded_before_the_reader_decompresses_it() {
+    let samples = split_cfa(4, 4, 12_000, 1_200);
+    let stream = ljpeg_encode(4, 4, 16, &samples);
+    let lossless = |stream: &[u8]| {
+        dng_cfa_stored(4, 4, stream, &[], |e, _, _| {
+            set_entry(e, IfdEntry::short(TiffTag::Compression, 7));
+        })
+    };
+
+    let fits = lossless(&stream);
+    assert_eq!(check_ifd_bounds(&fits).map(|w| w.ljpeg_overrun), Ok(None));
+    let decoded = RawshiftDecoder
+        .decode(&fits, "dng")
+        .expect("a lossless-JPEG DNG decodes");
+    assert_eq!((decoded.width(), decoded.height()), (4, 4));
+
+    // The SOF3 header's height and width (bytes 7..11, after the SOI and the segment's marker,
+    // length and precision) restated as 65535 x 65535 over the same 4x4 strip.
+    let mut bomb = stream.clone();
+    bomb[7..11].copy_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
+    let bomb = lossless(&bomb);
+    assert_eq!(
+        check_ifd_bounds(&bomb).map(|w| w.ljpeg_overrun.map(|o| (o.chunk, o.samples, o.capacity))),
+        Ok(Some((0, 65_535 * 65_535, 16)))
+    );
+    assert_raw_decode_failure(&bomb, "dng", StillFormat::Dng, "lossless-JPEG chunk 0");
+
+    let deflate = dng_cfa(4, 4, &[0; 16], |e| {
+        set_entry(e, IfdEntry::short(TiffTag::Compression, 8));
+    });
+    let defers = Err(MediaError::UnsupportedFormat {
+        format: StillFormat::Dng,
+        op: FormatOp::Decode,
+    });
+    assert_eq!(
+        RawshiftDecoder.probe(&deflate, "dng").map(|_| ()),
+        defers.clone()
+    );
+    assert_eq!(RawshiftDecoder.decode(&deflate, "dng").map(|_| ()), defers);
 }
 
 /// Assert `bytes` probes and decodes as a `format` decode failure whose detail holds `needle`.
