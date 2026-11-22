@@ -39,14 +39,16 @@
 //!
 //! **Decode** covers JPEG, PNG, JXL, TIFF and GIF, the ARW and DNG RAW families (issue #589,
 //! through `rawshift-image`'s RAW pipeline rather than its standard-image one; see
-//! `media::decode`), plus AVIF under the opt-in `media-avif-decode` feature, which links a
-//! system libdav1d and which the CLI enables on every target but Windows (issue #588). An ARW
-//! or DNG variant upstream has no decoder for — Sony's lossy compressed ARW, a lossless-JPEG
-//! DNG — defers like a missing codec. **Encode** depends on the opt-in
-//! `media-linked-codecs` feature, which the CLI enables and the mobile FFI does not. With it,
-//! the thumbnail and preview tiers are encoded as **lossy** JXL (libjxl) and AVIF (ravif).
-//! Without it, only the thumbnail is encoded, as JXL alone and losslessly: the pure-Rust backend
-//! is `zune-jpegxl`'s `JxlSimpleEncoder`, so the tier's declared `q=50` is advisory there.
+//! `media::decode`), plus AVIF under the opt-in `media-avif-decode` feature, which the CLI
+//! enables (issue #588). AVIF goes through gamut's container parser and decodes its AV1
+//! codestream only where a hardware decoder is present (VAAPI on Linux today); elsewhere an
+//! AVIF defers like a missing codec until upstream gains a software AV1 fallback
+//! (visualcommons/rawshift#78). An ARW or DNG variant upstream has no decoder for — Sony's
+//! lossy compressed ARW — defers the same way. **Encode** writes the AVIF variant through
+//! gamut's pure-Rust AV1 encoder in every build. The opt-in `media-linked-codecs` feature, which
+//! the CLI enables and the mobile FFI does not, adds the **lossy** JXL master (libjxl) and the
+//! preview tier; without it only the thumbnail is encoded, as AVIF alone, and the JXL master is
+//! a recorded deferral.
 //!
 //! **Embedded previews** ([`extract_embedded_preview`](crate::media::extract_embedded_preview))
 //! are read from every RAW family the build decodes through `RawFile::thumbnail`, under the same
@@ -55,11 +57,9 @@
 //!
 //! HEIC, WebP and the other five RAW families (CR2, CR3, CRW, NEF, RAF) — and AVIF without
 //! `media-avif-decode` — sniff correctly and refuse to decode. HEIC is refused by decision: libheif and libde265 are LGPL-3.0 and excluded
-//! by policy, and no permissive backend exists in `rawshift-image`. **WebP is a compile failure
-//! rather than a missing
-//! toolchain**: `rawshift-image`'s WebP module passes `*const i8` where `libwebp-sys` declares
-//! `*const c_char`, which is `u8` on aarch64 — every mobile target — and the module is compiled
-//! by decode *or* encode, so there is no decode-only escape.
+//! by policy (`rawshift-image`'s gamut HEIC decoder needs a hardware HEVC decoder besides, and
+//! is not enabled). **WebP is not enabled**: `rawshift-image`'s WebP is now pure-Rust gamut and
+//! compiles everywhere, but enabling it is its own change.
 //!
 //! [`rawshift-image`]: https://docs.rs/rawshift-image
 

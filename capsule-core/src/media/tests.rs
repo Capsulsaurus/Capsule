@@ -17,30 +17,25 @@
 //!    decode there and nothing to fake: the assertion is that they are *recognised* and refused
 //!    with a typed error.
 //! 4. **Synthetic RAW files** ([`dng_cfa`], [`dng_linear_jxl`], [`sony_arw`]) for the two RAW
-//!    families that decode (issue #589). The container is written with the RAW reader's own
-//!    `tiff::TiffWriter`, which only serialises the IFDs this suite specifies; the ARW's raw
-//!    frame is a lossless-JPEG stream encoded here ([`ljpeg_encode`]), so like the hand-built
-//!    PNG its scan data owes nothing to the decoder under test. `dng-encode` is not used: its
-//!    `export_dng` writes a photometric-RGB IFD, which `dng-decode` does not read back.
+//!    families that decode (issue #589). The container is written by [`TiffWriter`], a minimal
+//!    little-endian IFD serialiser kept here (the RAW reader no longer exports one), which only
+//!    serialises the IFDs this suite specifies; the ARW's raw frame is a lossless-JPEG stream
+//!    encoded here ([`ljpeg_encode`]), so like the hand-built PNG its scan data owes nothing to
+//!    the decoder under test. `dng-encode` is not used, so every DNG is shaped by this suite.
 
 use std::collections::HashMap;
-use std::io::Cursor;
 
 use rawshift_image::core::metadata::{ImageInfo, ImageMetadata, URational};
-use rawshift_image::core::{BitDepth, MetadataEmbedOptions};
+use rawshift_image::core::{BitDepth, ColorDescription, MetadataEmbedOptions, RgbImage};
 use rawshift_image::formats::encode_rgb_image_to_vec;
 use rawshift_image::formats::export::{
-    CommonEncodeOptions, EncodeOptions, JpegEncEncodeConfig, ZuneJxlEncodeConfig,
-    ZunePngEncodeConfig,
+    CommonEncodeOptions, EncodeOptions, JpegEncodeConfig, JxlEncodeConfig, PngEncodeConfig,
 };
-use rawshift_image::tiff::{ByteOrder, IfdEntry, TiffTag, TiffWriter};
 use uuid::Uuid;
 
-#[cfg(feature = "media-avif-decode")]
-use super::decode::check_avif_frames;
 use super::decode::{
-    Decoder, RawshiftDecoder, decode_embedded_preview, decode_guarded, embedded_preview_within,
-    extract_embedded_preview, probe_raw,
+    Decoder, RawshiftDecoder, check_decoded_budget, decode_embedded_preview, decode_guarded,
+    embedded_preview_within, extract_embedded_preview, probe_raw,
 };
 use super::derivative::{
     DerivativeContext, DerivativeSealer, DerivativeTier, SealedDerivative, StillDerivatives,
@@ -138,19 +133,15 @@ fn quadrant_means(image: &RgbaImage) -> (u32, u32, u32, u32) {
 }
 
 /// Widen packed RGBA8 into the interleaved RGB `u16` the encoders take.
-fn to_rgb_u16(frame: &RgbaImage) -> rawshift_image::core::image::RgbImage {
+fn to_rgb_u16(frame: &RgbaImage) -> RgbImage {
     let mut data = Vec::with_capacity(frame.rgba.len() / 4 * 3);
     for px in frame.rgba.chunks_exact(4) {
         data.push(u16::from(px[0]) * 257);
         data.push(u16::from(px[1]) * 257);
         data.push(u16::from(px[2]) * 257);
     }
-    rawshift_image::core::image::RgbImage::with_color_space(
-        frame.width,
-        frame.height,
-        data,
-        rawshift_image::core::ColorSpace::Srgb,
-    )
+    RgbImage::with_color(frame.width, frame.height, data, ColorDescription::SRGB)
+        .expect("a fixture frame has non-zero dimensions")
 }
 
 /// A `CommonEncodeOptions` embedding whatever `metadata` asks for, at 8 bits.
@@ -175,9 +166,10 @@ fn jpeg_bytes(frame: &RgbaImage, metadata: Option<&ImageMetadata>) -> Vec<u8> {
     } else {
         MetadataEmbedOptions::none()
     };
-    let options = EncodeOptions::JpegJpegEnc(JpegEncEncodeConfig {
+    let options = EncodeOptions::Jpeg(JpegEncodeConfig {
         common: common(embed),
         quality: 90,
+        ..JpegEncodeConfig::default()
     });
     let empty = ImageMetadata::default();
     encode_rgb_image_to_vec(&to_rgb_u16(frame), metadata.unwrap_or(&empty), &options)
@@ -186,8 +178,9 @@ fn jpeg_bytes(frame: &RgbaImage, metadata: Option<&ImageMetadata>) -> Vec<u8> {
 
 /// Encode a frame as a PNG with no metadata at all.
 fn png_bytes(frame: &RgbaImage) -> Vec<u8> {
-    let options = EncodeOptions::PngZune(ZunePngEncodeConfig {
+    let options = EncodeOptions::Png(PngEncodeConfig {
         common: common(MetadataEmbedOptions::none()),
+        ..PngEncodeConfig::default()
     });
     encode_rgb_image_to_vec(&to_rgb_u16(frame), &ImageMetadata::default(), &options)
         .expect("the fixture PNG encodes")
@@ -195,10 +188,8 @@ fn png_bytes(frame: &RgbaImage) -> Vec<u8> {
 
 /// A bare 12-byte RIFF/WEBP header.
 ///
-/// A *header*, not an encode, because this build has no WebP codec at all: `rawshift-image`'s
-/// WebP module does not compile for aarch64 (`*const i8` against `libwebp-sys`'s `*const
-/// c_char`), so the crate's `webp` feature is off in both directions. Twelve bytes is all a
-/// detection case needs, and there is nothing to decode.
+/// A *header*, not an encode, because this build enables no WebP codec in either direction.
+/// Twelve bytes is all a detection case needs, and there is nothing to decode.
 fn webp_header() -> Vec<u8> {
     let mut bytes = b"RIFF".to_vec();
     bytes.extend_from_slice(&0u32.to_le_bytes());
@@ -206,18 +197,21 @@ fn webp_header() -> Vec<u8> {
     bytes
 }
 
-/// Encode a frame as JXL through the same backend the derivative path uses, optionally
-/// embedding `metadata`.
+/// Encode a frame as a **lossless** JXL through libjxl, optionally embedding `metadata`.
+///
+/// libjxl is the only JXL encoder `rawshift-image` has, so the dev-dependency enables
+/// `jxl-encode` for the fixtures whatever the build under test links; lossless so a decode case
+/// can compare pixels exactly.
 fn jxl_bytes(frame: &RgbaImage, metadata: Option<&ImageMetadata>) -> Vec<u8> {
     let embed = if metadata.is_some() {
         MetadataEmbedOptions::all()
     } else {
         MetadataEmbedOptions::none()
     };
-    let options = EncodeOptions::JxlZune(ZuneJxlEncodeConfig {
+    let options = EncodeOptions::Jxl(JxlEncodeConfig {
         common: common(embed),
-        quality: 50.0,
-        effort: 7,
+        lossless: true,
+        ..JxlEncodeConfig::default()
     });
     let empty = ImageMetadata::default();
     encode_rgb_image_to_vec(&to_rgb_u16(frame), metadata.unwrap_or(&empty), &options)
@@ -522,12 +516,12 @@ fn is_decodable_matches_the_supported_table() {
         .filter(|f| f.is_raw())
         .collect();
     assert_eq!(decodable_raw, vec![StillFormat::Arw, StillFormat::Dng]);
-    // AVIF decodes exactly where the opt-in libdav1d feature is linked (issue #588), and the
-    // pure-Rust default — what the mobile FFI and the cross builds compile — never claims it.
+    // AVIF is a decode case exactly where the opt-in feature is on (issue #588), and the default
+    // — what the mobile FFI and the cross builds compile — never claims it.
     assert_eq!(
         StillFormat::Avif.is_decodable(),
         cfg!(feature = "media-avif-decode"),
-        "AVIF is decodable iff `media-avif-decode` links libdav1d"
+        "AVIF is decodable iff `media-avif-decode` is on"
     );
     assert_eq!(
         SUPPORTED_STILL_FORMATS.to_vec(),
@@ -702,7 +696,7 @@ fn a_format_with_no_codec_refuses_with_a_typed_error() {
 
 /// With `media-avif-decode` an AVIF is a supported format, so an `ftyp avif` box with no image
 /// behind it passes the gate and fails the header probe: a **decode failure** worth reporting,
-/// no longer a no-codec deferral — and never a panic out of the C decoder.
+/// no longer a no-codec deferral — and never a panic out of the decoder.
 #[cfg(feature = "media-avif-decode")]
 #[test]
 fn a_truncated_avif_is_a_decode_error_rather_than_a_deferral() {
@@ -718,13 +712,14 @@ fn a_truncated_avif_is_a_decode_error_rather_than_a_deferral() {
     }
 }
 
-/// Encode a frame as AVIF through ravif, optionally embedding `metadata`'s EXIF.
+/// Encode a frame as AVIF through gamut's AV1 encoder, optionally embedding `metadata`'s EXIF.
 ///
 /// The decode tests need an AVIF source and the suite commits no binary fixtures, so the
-/// encoder `media-linked-codecs` links supplies one. It is a different codec from the one under
-/// test — rav1e encodes, libdav1d decodes — so agreement between them is evidence about the
-/// decoder rather than about a matched pair. Quality 90 for the same reason as [`jpeg_bytes`].
-#[cfg(all(feature = "media-avif-decode", feature = "media-linked-codecs"))]
+/// encoder every `media` build links supplies one. It is a different codec from the one under
+/// test (gamut encodes, the host's hardware AV1 decoder decodes), so agreement between them is
+/// evidence about the decoder rather than about a matched pair. Quality 90 for the same reason
+/// as [`jpeg_bytes`].
+#[cfg(feature = "media-avif-decode")]
 fn avif_bytes(frame: &RgbaImage, metadata: Option<&ImageMetadata>) -> Vec<u8> {
     let embed = if metadata.is_some() {
         MetadataEmbedOptions {
@@ -735,21 +730,44 @@ fn avif_bytes(frame: &RgbaImage, metadata: Option<&ImageMetadata>) -> Vec<u8> {
     } else {
         MetadataEmbedOptions::none()
     };
-    let options = EncodeOptions::AvifRavif(rawshift_image::formats::export::RavifEncodeConfig {
+    let options = EncodeOptions::Avif(rawshift_image::formats::export::AvifEncodeConfig {
         common: common(embed),
+        lossless: false,
         quality: 90,
-        speed: 6,
     });
     let empty = ImageMetadata::default();
     encode_rgb_image_to_vec(&to_rgb_u16(frame), metadata.unwrap_or(&empty), &options)
         .expect("the fixture AVIF encodes")
 }
 
-/// An AVIF decodes to upright, opaque RGBA8 of the dimensions it was built with, and its
-/// pixels are the ones encoded — each flat quadrant within the lossy codec's margin.
-#[cfg(all(feature = "media-avif-decode", feature = "media-linked-codecs"))]
+/// Whether this host has an AV1 decoder at all: `rawshift-image` decodes AVIF pixels only
+/// through a hardware AV1 decoder (visualcommons/rawshift#78), so the deferral assertions below
+/// hold on a host without one.
+#[cfg(feature = "media-avif-decode")]
+fn av1_decodes_here() -> bool {
+    rawshift_image::formats::avif_hw_decode_available()
+}
+
+/// Whether a decode failure is the host's hardware AV1 decoder refusing the fixture's profile.
+///
+/// gamut's encoder writes identity-matrix 4:4:4 AV1, which is Profile 1, and the VAAPI backend
+/// decodes Profile 0 only, so on a VAAPI host the fixture cannot reach the pixel assertions; a
+/// camera's 4:2:0 AVIF is Profile 0 and does. Upstream reports that refusal as a decode error
+/// rather than as `HwDecoderUnavailable` (visualcommons/rawshift#78), so it surfaces as
+/// [`MediaError::Decode`] here.
+#[cfg(feature = "media-avif-decode")]
+fn hardware_refused_the_profile(result: &Result<super::DecodedImage, MediaError>) -> bool {
+    matches!(result, Err(MediaError::Decode { format: StillFormat::Avif, detail })
+        if detail.contains("hardware AV1 decode failed") && detail.contains("Profile"))
+}
+
+/// An AVIF probes to the dimensions it was built with on any host. Where the host has an AV1
+/// decoder it decodes to upright, opaque RGBA8 whose pixels are the ones encoded, each flat
+/// quadrant within the lossy codec's margin; where it has none, decode is the backfillable
+/// no-codec deferral, never a decode failure.
+#[cfg(feature = "media-avif-decode")]
 #[test]
-fn an_avif_decodes_to_the_pixels_it_was_built_from() {
+fn an_avif_decodes_to_the_pixels_it_was_built_from_or_defers() {
     let frame = quadrants(64, 48);
     let avif = avif_bytes(&frame, None);
 
@@ -759,9 +777,22 @@ fn an_avif_decodes_to_the_pixels_it_was_built_from() {
     assert_eq!(probed.format, StillFormat::Avif);
     assert_eq!(probed.stored_dimensions, (64, 48));
 
-    let decoded = RawshiftDecoder
-        .decode(&avif, "avif")
-        .expect("the AVIF decodes");
+    let decoded = RawshiftDecoder.decode(&avif, "avif");
+    if !av1_decodes_here() {
+        assert_eq!(
+            decoded.map(|_| ()),
+            Err(MediaError::UnsupportedFormat {
+                format: StillFormat::Avif,
+                op: FormatOp::Decode,
+            }),
+            "with no AV1 decoder on the host an AVIF defers like a missing codec"
+        );
+        return;
+    }
+    if hardware_refused_the_profile(&decoded) {
+        return;
+    }
+    let decoded = decoded.expect("the AVIF decodes");
     assert_eq!(decoded.format, StillFormat::Avif);
     assert_eq!((decoded.width(), decoded.height()), (64, 48));
     assert_eq!(decoded.image.rgba.len(), 64 * 48 * 4);
@@ -780,9 +811,9 @@ fn an_avif_decodes_to_the_pixels_it_was_built_from() {
     }
 }
 
-/// An AVIF's EXIF orientation is honoured like a JPEG's: a quarter-turn transposes the decoded
-/// frame and is reported as consumed.
-#[cfg(all(feature = "media-avif-decode", feature = "media-linked-codecs"))]
+/// An AVIF's EXIF orientation is read like a JPEG's, and where the host decodes AV1, a
+/// quarter-turn transposes the decoded frame and is reported as consumed.
+#[cfg(feature = "media-avif-decode")]
 #[test]
 fn an_avif_exif_orientation_is_applied() {
     let avif = avif_bytes(&quadrants(64, 48), Some(&oriented(6)));
@@ -792,100 +823,33 @@ fn an_avif_exif_orientation_is_applied() {
     assert_eq!(probed.orientation, Some(6), "the EXIF tag is read");
     assert_eq!(probed.upright_dimensions(), (48, 64));
 
-    let decoded = RawshiftDecoder
-        .decode(&avif, "avif")
-        .expect("the AVIF decodes");
-    assert_eq!((decoded.width(), decoded.height()), (48, 64));
-    assert_eq!(decoded.orientation_applied, 6);
+    let decoded = RawshiftDecoder.decode(&avif, "avif");
+    if av1_decodes_here() && !hardware_refused_the_profile(&decoded) {
+        let decoded = decoded.expect("the AVIF decodes");
+        assert_eq!((decoded.width(), decoded.height()), (48, 64));
+        assert_eq!(decoded.orientation_applied, 6);
+    }
 }
 
-/// Rewrite an AVIF's `ispe` box to claim `width` x `height`, leaving the AV1 frame alone.
-#[cfg(all(feature = "media-avif-decode", feature = "media-linked-codecs"))]
-fn restate_ispe(avif: &mut [u8], width: u32, height: u32) {
-    let at = avif
-        .windows(4)
-        .position(|w| w == b"ispe")
-        .expect("the fixture AVIF has an ispe box");
-    // The fourcc, then a full box's version and flags, then width and height, big-endian.
-    avif[at + 8..at + 12].copy_from_slice(&width.to_be_bytes());
-    avif[at + 12..at + 16].copy_from_slice(&height.to_be_bytes());
-}
-
-/// An AVIF whose `ispe` understates its frame fools the header probe, so the budget is checked
-/// against the AV1 frames themselves: refused by dav1d's frame-size limit before it allocates,
-/// and accepted exactly up to the real frame's pixel count.
-#[cfg(all(feature = "media-avif-decode", feature = "media-linked-codecs"))]
+/// A decoded frame over the pixel budget is refused even where the header probe admitted it: an
+/// AVIF's probe reads its `ispe` box, a claim its AV1 frame need not honour, and upstream takes
+/// no frame-size limit for the AV1 decoder (visualcommons/rawshift#79). The check is the same
+/// one every standard format's decode passes through, driven here with a budget a small frame
+/// can exceed.
 #[test]
-fn an_avif_whose_ispe_understates_its_frame_is_budgeted_by_the_real_frame() {
-    let mut avif = avif_bytes(&quadrants(64, 48), None);
-    restate_ispe(&mut avif, 8, 6);
-    let probed = RawshiftDecoder
-        .probe(&avif, "avif")
-        .expect("the AVIF probes");
+fn a_decoded_frame_over_the_budget_is_refused() {
+    let jpeg = jpeg_bytes(&gradient(64, 48), None);
+    let decoded = RawshiftDecoder
+        .decode(&jpeg, "jpg")
+        .expect("the JPEG decodes");
+    assert_eq!(check_decoded_budget(&decoded, 64 * 48), Ok(()));
     assert_eq!(
-        probed.stored_dimensions,
-        (8, 6),
-        "the probe states the ispe claim, which is why decode cannot rely on it"
-    );
-
-    // A budget the claim fits and the real frame does not: dav1d refuses from the frame header.
-    assert_eq!(
-        check_avif_frames(&avif, 8 * 6),
+        check_decoded_budget(&decoded, 64 * 48 - 1),
         Err(MediaError::PixelBudgetExceeded {
-            pixels: 8 * 6 + 1,
-            limit: 8 * 6,
+            pixels: 64 * 48,
+            limit: 64 * 48 - 1,
         })
     );
-    assert!(matches!(
-        check_avif_frames(&avif, 64 * 48 - 1),
-        Err(MediaError::PixelBudgetExceeded { .. })
-    ));
-    assert_eq!(check_avif_frames(&avif, 64 * 48), Ok(()));
-
-    // Under the real budget the decode goes ahead, and reports the frame's size, not the claim.
-    let decoded = RawshiftDecoder
-        .decode(&avif, "avif")
-        .expect("an in-budget AVIF decodes whatever its ispe says");
-    assert_eq!((decoded.width(), decoded.height()), (64, 48));
-}
-
-/// An AVIF item that holds no AV1 frame is a decode failure: `image` would read it until dav1d
-/// yielded a picture, which never comes.
-#[cfg(all(feature = "media-avif-decode", feature = "media-linked-codecs"))]
-#[test]
-fn an_avif_item_with_no_frame_is_a_decode_failure() {
-    let mut avif = avif_bytes(&quadrants(64, 48), None);
-    let coded = mp4parse::read_avif(
-        &mut std::io::Cursor::new(&avif),
-        mp4parse::ParseStrictness::Normal,
-    )
-    .expect("the fixture AVIF parses")
-    .primary_item_coded_data()
-    .expect("the fixture AVIF has a primary item")
-    .to_vec();
-    let at = avif
-        .windows(coded.len())
-        .position(|w| w == coded.as_slice())
-        .expect("the primary item's bytes are in the file");
-    // Replace the item with one AV1 padding OBU (type 15, has_size_field) of the same length.
-    let payload = coded.len() - 3;
-    assert!(
-        payload < 1 << 14,
-        "two LEB128 bytes hold the padding length"
-    );
-    let padding = &mut avif[at..at + coded.len()];
-    padding.fill(0);
-    padding[0] = (15 << 3) | 0b10;
-    padding[1] = (payload & 0x7F) as u8 | 0x80;
-    padding[2] = (payload >> 7) as u8;
-
-    match RawshiftDecoder.decode(&avif, "avif") {
-        Err(MediaError::Decode { format, detail }) => {
-            assert_eq!(format, StillFormat::Avif);
-            assert!(detail.contains("no frame"), "{detail}");
-        }
-        other => panic!("a frameless AVIF item must be a decode failure, got {other:?}"),
-    }
 }
 
 /// Bytes that are no still at all are a distinct outcome from a still with no codec: there is
@@ -1042,32 +1006,218 @@ fn an_out_of_range_orientation_tag_is_ignored() {
 
 // ── RAW decode: ARW and DNG (issue #589) ─────────────────────────────────────
 
-/// Write a little-endian TIFF: `payload` first, straight after the header, then whatever IFDs
-/// `ifds` writes. `ifds` is given the payload's offset and length and returns IFD0's offset.
-fn tiff_file(
-    payload: &[u8],
-    ifds: impl FnOnce(&mut TiffWriter<Cursor<Vec<u8>>>, u32, u32) -> u64,
-) -> Vec<u8> {
-    let mut writer = TiffWriter::new(Cursor::new(Vec::new()), ByteOrder::LittleEndian);
-    writer.write_header().expect("TIFF header");
-    let offset = write_blob(&mut writer, payload);
-    let ifd0 = ifds(&mut writer, offset, payload.len() as u32);
-    writer.update_ifd0_offset(ifd0 as u32).expect("IFD0 offset");
-    writer.finish().into_inner()
+/// The TIFF and DNG tags the synthetic RAW fixtures write (TIFF 6.0, TIFF/EP, DNG 1.7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u16)]
+enum TiffTag {
+    ImageWidth = 0x0100,
+    ImageLength = 0x0101,
+    BitsPerSample = 0x0102,
+    Compression = 0x0103,
+    PhotometricInterpretation = 0x0106,
+    Make = 0x010F,
+    Model = 0x0110,
+    StripOffsets = 0x0111,
+    Orientation = 0x0112,
+    SamplesPerPixel = 0x0115,
+    RowsPerStrip = 0x0116,
+    StripByteCounts = 0x0117,
+    TileWidth = 0x0142,
+    TileLength = 0x0143,
+    TileOffsets = 0x0144,
+    TileByteCounts = 0x0145,
+    SubIFDs = 0x014A,
+    JPEGInterchangeFormat = 0x0201,
+    JPEGInterchangeFormatLength = 0x0202,
+    CFARepeatPatternDim = 0x828D,
+    CFAPattern = 0x828E,
+    ExifIFDPointer = 0x8769,
+    GPSInfoIFDPointer = 0x8825,
+    DNGVersion = 0xC612,
+    UniqueCameraModel = 0xC614,
+    BlackLevel = 0xC61A,
+    WhiteLevel = 0xC61D,
+    DefaultCropOrigin = 0xC61F,
+    DefaultCropSize = 0xC620,
+    ColorMatrix1 = 0xC621,
+    AsShotNeutral = 0xC628,
+    CalibrationIlluminant1 = 0xC65A,
+    ActiveArea = 0xC68D,
 }
 
-/// Write `bytes` verbatim at the writer's position and return their offset.
-///
-/// `TiffWriter` writes a payload as `u16` words in file order, so packing the bytes
-/// little-endian lands them verbatim. An odd payload gains one pad byte that the IFD's byte
-/// count does not include.
-fn write_blob(writer: &mut TiffWriter<Cursor<Vec<u8>>>, bytes: &[u8]) -> u32 {
-    let words: Vec<u16> = bytes
-        .chunks(2)
-        .map(|pair| u16::from_le_bytes([pair[0], pair.get(1).copied().unwrap_or(0)]))
-        .collect();
-    let (offset, _) = writer.write_image_strip_rgb16(&words).expect("payload");
-    offset as u32
+/// The camera profile every DNG fixture carries, which gamut's DNG reader requires: a camera
+/// whose native space *is* linear sRGB (`ColorMatrix1` is the XYZ-to-linear-sRGB matrix, in
+/// ten-thousandths) under D65 (`CalibrationIlluminant1` 21), so a neutral scene stays grey
+/// through the colour pipeline.
+fn dng_profile() -> [IfdEntry; 3] {
+    [
+        IfdEntry::ascii(TiffTag::UniqueCameraModel, "Capsule Synthetic"),
+        IfdEntry::srationals(
+            TiffTag::ColorMatrix1,
+            &[
+                (32406, 10000),
+                (-15372, 10000),
+                (-4986, 10000),
+                (-9689, 10000),
+                (18758, 10000),
+                (415, 10000),
+                (557, 10000),
+                (-2040, 10000),
+                (10570, 10000),
+            ],
+        ),
+        IfdEntry::short(TiffTag::CalibrationIlluminant1, 21),
+    ]
+}
+
+impl TiffTag {
+    const fn as_u16(self) -> u16 {
+        self as u16
+    }
+}
+
+/// One IFD entry under construction: its tag, TIFF field type, value count and value bytes
+/// (little-endian, as every fixture file is).
+#[derive(Debug, Clone)]
+struct IfdEntry {
+    tag: u16,
+    typ: u16,
+    count: u32,
+    value: Vec<u8>,
+}
+
+impl IfdEntry {
+    fn new(tag: TiffTag, typ: u16, count: usize, value: Vec<u8>) -> Self {
+        Self {
+            tag: tag.as_u16(),
+            typ,
+            count: count as u32,
+            value,
+        }
+    }
+
+    fn short(tag: TiffTag, value: u16) -> Self {
+        Self::shorts(tag, &[value])
+    }
+
+    fn shorts(tag: TiffTag, values: &[u16]) -> Self {
+        let value = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+        Self::new(tag, 3, values.len(), value)
+    }
+
+    fn long(tag: TiffTag, value: u32) -> Self {
+        Self::longs(tag, &[value])
+    }
+
+    fn longs(tag: TiffTag, values: &[u32]) -> Self {
+        let value = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+        Self::new(tag, 4, values.len(), value)
+    }
+
+    fn rationals(tag: TiffTag, values: &[(u32, u32)]) -> Self {
+        let value = values
+            .iter()
+            .flat_map(|(n, d)| n.to_le_bytes().into_iter().chain(d.to_le_bytes()))
+            .collect();
+        Self::new(tag, 5, values.len(), value)
+    }
+
+    fn srationals(tag: TiffTag, values: &[(i32, i32)]) -> Self {
+        let value = values
+            .iter()
+            .flat_map(|(n, d)| n.to_le_bytes().into_iter().chain(d.to_le_bytes()))
+            .collect();
+        Self::new(tag, 10, values.len(), value)
+    }
+
+    fn ascii(tag: TiffTag, text: &str) -> Self {
+        let mut value = text.as_bytes().to_vec();
+        value.push(0);
+        let count = value.len();
+        Self::new(tag, 2, count, value)
+    }
+
+    fn bytes(tag: TiffTag, data: &[u8]) -> Self {
+        Self::new(tag, 1, data.len(), data.to_vec())
+    }
+}
+
+/// A minimal little-endian classic-TIFF writer for the RAW fixtures: a header, then payloads and
+/// IFDs appended in the order they are written, each IFD's out-of-line values straight after
+/// its entry table, word-aligned.
+struct TiffWriter {
+    out: Vec<u8>,
+}
+
+impl TiffWriter {
+    /// A writer holding the 8-byte header, its IFD0 pointer still 0.
+    fn new() -> Self {
+        Self {
+            out: b"II\x2A\x00\x00\x00\x00\x00".to_vec(),
+        }
+    }
+
+    /// Append `bytes` verbatim, padded to a word boundary, and return their offset.
+    fn write_bytes(&mut self, bytes: &[u8]) -> u32 {
+        let offset = self.out.len() as u32;
+        self.out.extend_from_slice(bytes);
+        if !self.out.len().is_multiple_of(2) {
+            self.out.push(0);
+        }
+        offset
+    }
+
+    /// Append an IFD of `entries`, sorted by tag as TIFF requires, whose next-IFD pointer is
+    /// `next`, and return its offset.
+    fn write_ifd(&mut self, entries: &mut [IfdEntry], next: u32) -> u64 {
+        entries.sort_by_key(|e| e.tag);
+        let start = self.out.len() as u64;
+        let mut overflow = start + 2 + 12 * entries.len() as u64 + 4;
+        let mut spill = Vec::new();
+        self.out
+            .extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        for entry in entries.iter() {
+            self.out.extend_from_slice(&entry.tag.to_le_bytes());
+            self.out.extend_from_slice(&entry.typ.to_le_bytes());
+            self.out.extend_from_slice(&entry.count.to_le_bytes());
+            if entry.value.len() <= 4 {
+                let mut inline = [0u8; 4];
+                inline[..entry.value.len()].copy_from_slice(&entry.value);
+                self.out.extend_from_slice(&inline);
+            } else {
+                self.out.extend_from_slice(&(overflow as u32).to_le_bytes());
+                spill.extend_from_slice(&entry.value);
+                if !spill.len().is_multiple_of(2) {
+                    spill.push(0);
+                }
+                overflow = start + 2 + 12 * entries.len() as u64 + 4 + spill.len() as u64;
+            }
+        }
+        self.out.extend_from_slice(&next.to_le_bytes());
+        self.out.extend_from_slice(&spill);
+        start
+    }
+
+    /// Point the header at IFD0.
+    fn set_ifd0(&mut self, offset: u32) {
+        self.out[4..8].copy_from_slice(&offset.to_le_bytes());
+    }
+}
+
+/// Write a little-endian TIFF: `payload` first, straight after the header, then whatever IFDs
+/// `ifds` writes. `ifds` is given the payload's offset and length and returns IFD0's offset.
+fn tiff_file(payload: &[u8], ifds: impl FnOnce(&mut TiffWriter, u32, u32) -> u64) -> Vec<u8> {
+    let mut writer = TiffWriter::new();
+    let offset = write_blob(&mut writer, payload);
+    let ifd0 = ifds(&mut writer, offset, payload.len() as u32);
+    writer.set_ifd0(ifd0 as u32);
+    writer.out
+}
+
+/// Write `bytes` verbatim at the writer's position and return their offset. An odd payload gains
+/// one pad byte that the IFD's byte count does not include.
+fn write_blob(writer: &mut TiffWriter, bytes: &[u8]) -> u32 {
+    writer.write_bytes(bytes)
 }
 
 /// Point `entries` at an embedded JPEG written at `offset`, the way IFD0 of an ARW (and the
@@ -1148,11 +1298,12 @@ fn dng_cfa_previewed(
             IfdEntry::long(TiffTag::WhiteLevel, 65535),
             IfdEntry::rationals(TiffTag::AsShotNeutral, &[(1, 1), (1, 1), (1, 1)]),
         ];
+        entries.extend(dng_profile());
         if let Some(at) = preview_at {
             locate_preview(&mut entries, at, preview);
         }
         edit(&mut entries, offset, length);
-        writer.write_ifd(&mut entries, 0).expect("IFD0")
+        writer.write_ifd(&mut entries, 0)
     })
 }
 
@@ -1187,8 +1338,9 @@ fn dng_linear_jxl_with(
             IfdEntry::ascii(TiffTag::Model, "Synthetic ProRAW"),
             IfdEntry::rationals(TiffTag::AsShotNeutral, &[(1, 1), (1, 1), (1, 1)]),
         ];
+        entries.extend(dng_profile());
         edit(&mut entries, offset, length);
-        writer.write_ifd(&mut entries, 0).expect("IFD0")
+        writer.write_ifd(&mut entries, 0)
     })
 }
 
@@ -1296,7 +1448,7 @@ fn sony_arw_previewed(
             IfdEntry::short(TiffTag::WhiteLevel, 16383),
         ];
         raw(&mut raw_entries);
-        let raw_ifd = writer.write_ifd(&mut raw_entries, 0).expect("raw SubIFD");
+        let raw_ifd = writer.write_ifd(&mut raw_entries, 0);
         let mut entries = vec![
             IfdEntry::ascii(TiffTag::Make, "SONY"),
             // Not a real body: `rawshift-image` looks the model up in its camera database for a
@@ -1308,7 +1460,7 @@ fn sony_arw_previewed(
             locate_preview(&mut entries, at, preview);
         }
         ifd0(&mut entries);
-        writer.write_ifd(&mut entries, 0).expect("IFD0")
+        writer.write_ifd(&mut entries, 0)
     })
 }
 
@@ -1567,7 +1719,9 @@ fn assert_raw_decode_failure(bytes: &[u8], ext: &str, format: StillFormat, needl
 /// The number of decodes is bounded, not only the size of each: a few-KB file listing many
 /// tiles at one codestream would otherwise make the reader run that many full decodes. A tile
 /// or strip must fit the sensor, the file may list no more of them than the sensor's grid
-/// holds, and a JPEG XL codestream must fit the tile it fills.
+/// holds, and a JPEG XL codestream must be the size of the tile it fills. For a DNG the reader
+/// itself refuses each of these as it opens the file (gamut's DNG reader is eager); for an ARW,
+/// Capsule's layout check does, before the reader decodes anything.
 #[test]
 fn a_raw_file_cannot_list_more_work_than_its_sensor_holds() {
     let frame = gradient(16, 16);
@@ -1581,7 +1735,12 @@ fn a_raw_file_cannot_list_more_work_than_its_sensor_holds() {
             IfdEntry::longs(TiffTag::TileByteCounts, &[length, length]),
         );
     });
-    assert_raw_decode_failure(&repeated, "dng", StillFormat::Dng, "holds at most 1 tile");
+    assert_raw_decode_failure(
+        &repeated,
+        "dng",
+        StillFormat::Dng,
+        "tile count must cover the image grid",
+    );
 
     // The same two entries are sound once the sensor's grid holds two tiles.
     let two_across = dng_linear_jxl_with(&codestream, (16, 16), |e, offset, length| {
@@ -1606,7 +1765,7 @@ fn a_raw_file_cannot_list_more_work_than_its_sensor_holds() {
         &big_tile,
         "dng",
         StillFormat::Dng,
-        "exceeds the 16x16 sensor",
+        "JPEG XL chunk geometry disagrees with the tile/strip layout",
     );
 
     // A JPEG XL codestream larger than the tile it fills: its header, not the tile size, is
@@ -1616,7 +1775,21 @@ fn a_raw_file_cannot_list_more_work_than_its_sensor_holds() {
         &oversized,
         "dng",
         StillFormat::Dng,
-        "codestream is 40x40, larger than the declared 16x16 tile",
+        "JPEG XL chunk geometry disagrees with the tile/strip layout",
+    );
+
+    // A tile over the budget is refused before the reader allocates for it, whatever the
+    // sensor: the reader decodes each tile at its stated size.
+    let huge_tile = dng_linear_jxl_with(&codestream, (16, 16), |e, _, _| {
+        set_entry(e, IfdEntry::long(TiffTag::TileWidth, 20_000));
+        set_entry(e, IfdEntry::long(TiffTag::TileLength, 20_000));
+    });
+    assert_eq!(
+        RawshiftDecoder.probe(&huge_tile, "dng").map(|_| ()),
+        Err(MediaError::PixelBudgetExceeded {
+            pixels: 400_000_000,
+            limit: MAX_DECODE_PIXELS,
+        })
     );
 
     // Strips are held to the same grid: a sensor of 8 rows in strips of 8 holds one strip.
@@ -1628,7 +1801,12 @@ fn a_raw_file_cannot_list_more_work_than_its_sensor_holds() {
             IfdEntry::longs(TiffTag::StripByteCounts, &[length, length]),
         );
     });
-    assert_raw_decode_failure(&strips, "dng", StillFormat::Dng, "holds at most 1 strip");
+    assert_raw_decode_failure(
+        &strips,
+        "dng",
+        StillFormat::Dng,
+        "more strips than image rows",
+    );
 
     // And so are ARW tiles: a 32x32 tile on a 16x8 sensor.
     let arw = sony_arw(
@@ -1670,11 +1848,11 @@ fn a_raw_layout_with_nothing_to_decode_is_refused() {
         &no_data,
         "dng",
         StillFormat::Dng,
-        "locates no strip or tile data",
+        "missing StripOffsets/StripByteCounts",
     );
 
     let garbage = dng_linear_jxl_with(&[0x5A; 64], (16, 16), |_, _, _| {});
-    assert_raw_decode_failure(&garbage, "dng", StillFormat::Dng, "JPEG XL tile 0 header");
+    assert_raw_decode_failure(&garbage, "dng", StillFormat::Dng, "RAW open: DNG: decode");
 }
 
 /// A DNG's `ActiveArea` (`top, left, bottom, right`) is the frame the demosaic renders, so the
@@ -1734,7 +1912,7 @@ fn a_raw_layout_outside_its_file_is_a_decode_failure() {
     match RawshiftDecoder.probe(&past_the_end, "dng") {
         Err(MediaError::Decode { format, detail }) => {
             assert_eq!(format, StillFormat::Dng);
-            assert!(detail.contains("runs past"), "{detail}");
+            assert!(detail.contains("image data out of bounds"), "{detail}");
         }
         other => panic!("a strip past the end must be a decode failure, got {other:?}"),
     }
@@ -2628,15 +2806,15 @@ fn expected_encoded_formats() -> Vec<DerivativeFormat> {
     if cfg!(feature = "media-linked-codecs") {
         vec![DerivativeFormat::Jxl, DerivativeFormat::Avif]
     } else {
-        vec![DerivativeFormat::Jxl]
+        vec![DerivativeFormat::Avif]
     }
 }
 
-/// The thumbnail tier over a source larger than the cap: real JXL bytes, a signed manifest
-/// binding their hash, and the formats this build cannot encode recorded as deferrals rather
-/// than silently omitted.
+/// The thumbnail tier over a source larger than the cap: real bytes in the first format this
+/// build encodes (JXL with libjxl linked, AVIF without), a signed manifest binding their hash,
+/// and the formats this build cannot encode recorded as deferrals rather than silently omitted.
 #[test]
-fn the_thumbnail_tier_encodes_jxl_and_defers_the_rest() {
+fn the_thumbnail_tier_encodes_what_the_build_links_and_defers_the_rest() {
     let frame = gradient(512, 384);
     let original = png_bytes(&frame);
     let result = generate(&frame, &original);
@@ -2653,9 +2831,14 @@ fn the_thumbnail_tier_encodes_jxl_and_defers_the_rest() {
         "the thumbnail tier encodes exactly what this build links, in delivery order"
     );
     let thumb = &result.generated[0];
+    let (first_format, first_still) = if cfg!(feature = "media-linked-codecs") {
+        (DerivativeFormat::Jxl, StillFormat::Jxl)
+    } else {
+        (DerivativeFormat::Avif, StillFormat::Avif)
+    };
     assert_eq!(thumb.tier, DerivativeTier::Thumbnail);
-    assert_eq!(thumb.format, DerivativeFormat::Jxl);
-    assert_eq!(thumb.manifest.core.format, "image/jxl");
+    assert_eq!(thumb.format, first_format);
+    assert_eq!(thumb.manifest.core.format, first_format.mime());
     assert_eq!(thumb.manifest.core.role, DerivativeRole::Thumbnail);
     // The manifest commits to the **ciphertext**, not to the plaintext on disk. Re-derive it
     // the way the push path does — from the recorded prefix under the same AMK — and the
@@ -2696,19 +2879,16 @@ fn the_thumbnail_tier_encodes_jxl_and_defers_the_rest() {
         "first of its role"
     );
 
-    // The bytes are a real JXL of the tier's size.
-    assert_eq!(
-        StillFormat::from_bytes(&thumb.bytes),
-        Some(StillFormat::Jxl)
-    );
-    let back = RawshiftDecoder
-        .decode(&thumb.bytes, "jxl")
-        .expect("the thumbnail decodes");
-    assert_eq!((back.width(), back.height()), (256, 192));
+    // The bytes are a real file of that format at the tier's size (probed: an AVIF decodes only
+    // with `media-avif-decode` on a host with an AV1 decoder).
+    assert_eq!(StillFormat::from_bytes(&thumb.bytes), Some(first_still));
+    let probe =
+        rawshift_image::formats::probe_standard_image(&thumb.bytes).expect("the thumbnail probes");
+    assert_eq!((probe.size.width, probe.size.height), (256, 192));
 
     // The gap is per (tier, format), recorded rather than collapsed. WebP is deferred in every
-    // build — not a missing toolchain but a codec that does not compile for aarch64 — while AVIF
-    // is deferred only where `media-linked-codecs` is off.
+    // build (its codec is not enabled), while JXL is deferred where `media-linked-codecs` is off,
+    // since libjxl is its only encoder.
     let expected_deferred = if cfg!(feature = "media-linked-codecs") {
         vec![
             (DerivativeTier::Thumbnail, DerivativeFormat::WebP),
@@ -2716,7 +2896,7 @@ fn the_thumbnail_tier_encodes_jxl_and_defers_the_rest() {
         ]
     } else {
         vec![
-            (DerivativeTier::Thumbnail, DerivativeFormat::Avif),
+            (DerivativeTier::Thumbnail, DerivativeFormat::Jxl),
             (DerivativeTier::Thumbnail, DerivativeFormat::WebP),
         ]
     };
@@ -2737,33 +2917,41 @@ fn the_thumbnail_tier_encodes_jxl_and_defers_the_rest() {
     );
 }
 
-/// The tier's declared `q=50` is **advisory today**: `zune-jpegxl`'s `JxlSimpleEncoder` is
-/// lossless, so the thumbnail round-trips its downscaled pixels exactly and costs what a
-/// lossless encode costs.
-///
-/// Asserted rather than left as a comment, because it is the one place a build without
-/// `media-linked-codecs` visibly departs from the tier table.
-#[cfg(not(feature = "media-linked-codecs"))]
+/// The tier's `q=50` reaches the pure-Rust AVIF encoder in every build: the AVIF thumbnail is
+/// smaller than a lossless AVIF of the same downscaled frame.
 #[test]
-fn the_jxl_thumbnail_is_lossless_without_linked_codecs() {
+fn the_avif_thumbnail_is_lossy_at_the_tier_quality() {
     let frame = gradient(512, 384);
     let original = png_bytes(&frame);
     let result = generate(&frame, &original);
-    let thumb = &result.generated[0];
+    let thumb = result
+        .generated
+        .iter()
+        .find(|d| (d.tier, d.format) == (DerivativeTier::Thumbnail, DerivativeFormat::Avif))
+        .expect("every build writes the AVIF thumbnail");
 
-    let back = RawshiftDecoder
-        .decode(&thumb.bytes, "jxl")
-        .expect("the thumbnail decodes");
     let expected = downscale_rgba8(&gradient(512, 384), 256);
-    assert_eq!(
-        back.image, expected,
-        "a lossless encode reproduces the downscaled frame exactly"
+    let lossless = encode_rgb_image_to_vec(
+        &to_rgb_u16(&expected),
+        &ImageMetadata::default(),
+        &EncodeOptions::Avif(rawshift_image::formats::export::AvifEncodeConfig {
+            common: common(MetadataEmbedOptions::none()),
+            lossless: true,
+            quality: 100,
+        }),
+    )
+    .expect("the lossless AVIF encodes");
+    assert!(
+        thumb.bytes.len() < lossless.len(),
+        "the q=50 thumbnail ({} bytes) undercuts the lossless encode ({} bytes)",
+        thumb.bytes.len(),
+        lossless.len()
     );
 }
 
 /// With libjxl linked the tier's `q=50` reaches the codec: the thumbnail is **lossy** — close to
-/// the downscaled frame but not bit-exact — and smaller than the lossless encode of the same
-/// frame that a build without `media-linked-codecs` would ship.
+/// the downscaled frame but not bit-exact. (Not compared by size: libjxl's lossless mode codes a
+/// smooth gradient in fewer bytes than its lossy one.)
 #[cfg(feature = "media-linked-codecs")]
 #[test]
 fn the_jxl_thumbnail_is_lossy_with_libjxl() {
@@ -2800,18 +2988,10 @@ fn the_jxl_thumbnail_is_lossy_with_libjxl() {
         mean < 8.0,
         "q=50 is still a faithful thumbnail: mean absolute error {mean:.2} per channel"
     );
-
-    let lossless = jxl_bytes(&expected, None);
-    assert!(
-        thumb.bytes.len() < lossless.len(),
-        "the lossy master ({} bytes) undercuts the lossless encode ({} bytes)",
-        thumb.bytes.len(),
-        lossless.len()
-    );
 }
 
-/// With `media-linked-codecs` the AVIF delivery variant is real AVIF bytes of the tier's size,
-/// carrying no metadata, and the preview tier is generated at source resolution in both formats.
+/// With `media-linked-codecs` the JXL master joins the AVIF delivery variant, each real bytes of
+/// the tier's size, and the preview tier is generated at source resolution in both formats.
 #[cfg(feature = "media-linked-codecs")]
 #[test]
 fn linked_codecs_add_the_avif_variant_and_the_preview_tier() {
@@ -2883,8 +3063,8 @@ fn linked_codecs_add_the_avif_variant_and_the_preview_tier() {
     }
 }
 
-/// One encoder refusing one `(tier, format)` costs that pair alone. rav1e rejects a frame edge
-/// over 65535 px, which the decode budget admits — a wide panorama — so the source-resolution
+/// One encoder refusing one `(tier, format)` costs that pair alone. An AV1 frame edge cannot
+/// exceed 65536 px, which the decode budget admits — a wide panorama — so the source-resolution
 /// preview AVIF fails while every other pair, the thumbnail JXL included, still ships; the
 /// refused pair is recorded as a deferral beside WebP rather than failing the whole call.
 #[cfg(feature = "media-linked-codecs")]
@@ -3002,7 +3182,7 @@ fn a_source_within_the_cap_signs_the_original_sentinel() {
 ///
 /// Exercised through [`sign_derivative`](super::derivative::sign_derivative) rather than
 /// through [`generate_still_derivatives`], and deliberately: a build without
-/// `media-linked-codecs` encodes only JXL, so there a single call produces one manifest per role
+/// `media-linked-codecs` encodes only AVIF, so there a single call produces one manifest per role
 /// and the multi-link case — the half that can actually be wrong — is unreachable from the
 /// public entry point. (With the feature, `linked_codecs_add_the_avif_variant_and_the_preview_tier`
 /// covers the same link end to end.)
@@ -3088,12 +3268,14 @@ fn each_tier_starts_its_own_role_chain() {
     )
     .expect("both tiers");
 
-    // The first manifest of each role is its JXL master; a linked AVIF variant follows it in the
-    // same role's chain (covered by `linked_codecs_add_the_avif_variant_and_the_preview_tier`).
+    // The first manifest of each role is the first format this build encodes (the JXL master
+    // where libjxl is linked, else AVIF); a second format follows it in the same role's chain
+    // (covered by `linked_codecs_add_the_avif_variant_and_the_preview_tier`).
+    let first_format = expected_encoded_formats()[0];
     let masters: Vec<_> = both
         .generated
         .iter()
-        .filter(|d| d.format == DerivativeFormat::Jxl)
+        .filter(|d| d.format == first_format)
         .collect();
     let roles: Vec<DerivativeRole> = masters.iter().map(|d| d.manifest.core.role).collect();
     assert_eq!(
@@ -3118,10 +3300,9 @@ fn each_tier_starts_its_own_role_chain() {
         .iter()
         .find(|d| d.tier == DerivativeTier::Preview)
         .expect("a preview was generated");
-    let back = RawshiftDecoder
-        .decode(&previewed.bytes, "jxl")
-        .expect("the preview decodes");
-    assert_eq!((back.width(), back.height()), (512, 384));
+    let probe = rawshift_image::formats::probe_standard_image(&previewed.bytes)
+        .expect("the preview probes");
+    assert_eq!((probe.size.width, probe.size.height), (512, 384));
 }
 
 /// Two derivatives of one asset get **distinct** nonce prefixes, and therefore distinct keys and
@@ -3302,20 +3483,19 @@ fn the_closed_format_set_round_trips_and_admits_nothing_else() {
             "{rejected:?} is outside the closed set"
         );
     }
-    // JXL — the table's committed *master* format — and the sentinel are produced in every
-    // build. AVIF only where `media-linked-codecs` links ravif; WebP in none, blocked on an
-    // upstream defect, its codec not compiling for aarch64 at all.
-    assert!(DerivativeFormat::Jxl.is_encodable());
+    // AVIF — through gamut's pure-Rust AV1 encoder — and the sentinel are produced in every
+    // build. JXL, the table's committed *master* format, only where `media-linked-codecs` links
+    // libjxl; WebP in none, its codec not enabled.
+    assert!(DerivativeFormat::Avif.is_encodable());
     assert!(DerivativeFormat::Original.is_encodable());
     assert_eq!(
-        DerivativeFormat::Avif.is_encodable(),
+        DerivativeFormat::Jxl.is_encodable(),
         cfg!(feature = "media-linked-codecs")
     );
     assert!(!DerivativeFormat::WebP.is_encodable());
 }
 
-/// The preview tier is generated exactly when a lossy master codec is linked: a
-/// source-resolution lossless still would rival the original in size.
+/// The preview tier is generated exactly when the JXL master codec is linked.
 #[test]
 fn the_generated_tiers_follow_the_linked_codecs() {
     if cfg!(feature = "media-linked-codecs") {

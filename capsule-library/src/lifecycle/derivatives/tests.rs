@@ -4,17 +4,17 @@ use capsule_core::derivative_format::{DerivativeFormat, verify_still_format};
 use capsule_core::media::Decoder as _;
 use capsule_core::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
 use rawshift_image::core::metadata::{ImageInfo, ImageMetadata};
-use rawshift_image::core::{BitDepth, MetadataEmbedOptions};
+use rawshift_image::core::{BitDepth, ColorDescription, MetadataEmbedOptions, RgbImage};
 use rawshift_image::formats::encode_rgb_image_to_vec;
 use rawshift_image::formats::export::{
-    CommonEncodeOptions, EncodeOptions, JpegEncEncodeConfig, ZunePngEncodeConfig,
+    CommonEncodeOptions, EncodeOptions, JpegEncodeConfig, PngEncodeConfig,
 };
 use tempfile::TempDir;
 
 use super::super::{DerivativeStatus, SignedImportOptions, Workspace, fast_workspace};
 use super::*;
 
-/// Delivery formats this build encodes: JXL, plus AVIF under `capsule-core`'s
+/// Delivery formats this build encodes: AVIF, plus the JXL master under `capsule-core`'s
 /// `media-linked-codecs`.
 ///
 /// Read from what core generates rather than from a `cfg!` here: the codec feature is
@@ -36,7 +36,7 @@ fn encoded_pairs_per_large_still() -> usize {
 }
 
 /// A deterministic RGB gradient, `width` x `height`, as interleaved RGB `u16`.
-fn frame(width: u32, height: u32) -> rawshift_image::core::image::RgbImage {
+fn frame(width: u32, height: u32) -> RgbImage {
     let (w, h) = (width as usize, height as usize);
     let mut data = Vec::with_capacity(w * h * 3);
     for y in 0..h {
@@ -46,12 +46,8 @@ fn frame(width: u32, height: u32) -> rawshift_image::core::image::RgbImage {
             data.push((((x + y) * 255 / (w + h)) as u16) * 257);
         }
     }
-    rawshift_image::core::image::RgbImage::with_color_space(
-        width,
-        height,
-        data,
-        rawshift_image::core::ColorSpace::Srgb,
-    )
+    RgbImage::with_color(width, height, data, ColorDescription::SRGB)
+        .expect("a fixture frame has non-zero dimensions")
 }
 
 fn common(metadata: MetadataEmbedOptions) -> CommonEncodeOptions {
@@ -79,9 +75,10 @@ pub(super) fn jpeg(width: u32, height: u32, orientation: Option<u16>) -> Vec<u8>
     encode_rgb_image_to_vec(
         &frame(width, height),
         &metadata,
-        &EncodeOptions::JpegJpegEnc(JpegEncEncodeConfig {
+        &EncodeOptions::Jpeg(JpegEncodeConfig {
             common: common(embed),
             quality: 90,
+            ..JpegEncodeConfig::default()
         }),
     )
     .expect("the fixture JPEG encodes")
@@ -91,8 +88,9 @@ fn png(width: u32, height: u32) -> Vec<u8> {
     encode_rgb_image_to_vec(
         &frame(width, height),
         &ImageMetadata::default(),
-        &EncodeOptions::PngZune(ZunePngEncodeConfig {
+        &EncodeOptions::Png(PngEncodeConfig {
             common: common(MetadataEmbedOptions::none()),
+            ..PngEncodeConfig::default()
         }),
     )
     .expect("the fixture PNG encodes")
@@ -208,9 +206,12 @@ fn a_decodable_still_imports_with_pixel_dimensions_and_an_lqip() {
 }
 
 /// **Issue #588, through the real import.** With `media-avif-decode` an AVIF original is a
-/// decodable still: it imports `Decoded`, with pixel dimensions, a placeholder and a JXL
-/// thumbnail, where without the feature it would be `DeferredNoCodec`. The source AVIF comes
-/// from ravif (`media-linked-codecs`) because the suite commits no binary fixtures.
+/// decodable still. Where the host's AV1 decoder decodes it, it imports `Decoded`, with pixel
+/// dimensions, a placeholder and a JXL thumbnail. `rawshift-image` decodes AV1 only through a
+/// hardware decoder (visualcommons/rawshift#78), so on a host with none it imports
+/// `DeferredNoCodec`, and on a VAAPI host, which decodes AV1 Profile 0 only, this fixture (gamut
+/// writes 4:4:4, Profile 1) imports `DecodeFailed`; either way the original is kept and signed.
+/// The source AVIF comes from gamut's encoder because the suite commits no binary fixtures.
 #[cfg(all(feature = "media-avif-decode", feature = "media-linked-codecs"))]
 #[test]
 fn an_avif_original_imports_with_dimensions_an_lqip_and_derivatives() {
@@ -221,18 +222,26 @@ fn an_avif_original_imports_with_dimensions_an_lqip_and_derivatives() {
     let avif = encode_rgb_image_to_vec(
         &frame(512, 384),
         &ImageMetadata::default(),
-        &EncodeOptions::AvifRavif(rawshift_image::formats::export::RavifEncodeConfig {
+        &EncodeOptions::Avif(rawshift_image::formats::export::AvifEncodeConfig {
             common: common(MetadataEmbedOptions::none()),
+            lossless: false,
             quality: 90,
-            speed: 6,
         }),
     )
     .expect("the fixture AVIF encodes");
     let receipt = import(&mut ws, album, src.path(), "photo.avif", &avif);
-    assert_eq!(receipt.derivatives, DerivativeStatus::Decoded);
-
     let sidecar = sidecar_of(lib.path(), receipt.asset_id);
     assert_eq!(sidecar.content_type, "image/avif");
+    assert!(sidecar.verify(&ws.user_ik_public()));
+    if receipt.derivatives != DerivativeStatus::Decoded {
+        let expected = if rawshift_image::formats::avif_hw_decode_available() {
+            DerivativeStatus::DecodeFailed
+        } else {
+            DerivativeStatus::DeferredNoCodec
+        };
+        assert_eq!(receipt.derivatives, expected);
+        return;
+    }
     let dimensions = sidecar.dimensions.as_ref().expect("pixel dimensions");
     assert_eq!((dimensions.width, dimensions.height), (512, 384));
     assert!(

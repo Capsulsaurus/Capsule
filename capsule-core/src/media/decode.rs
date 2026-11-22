@@ -11,9 +11,9 @@
 //!    [`probe`](Decoder::probe) refuses an oversized frame before the decoder allocates. It has
 //!    to be pre-decode: `rawshift-image` decodes to interleaved RGB `u16`, so the bomb is
 //!    inside the decoder, not in Capsule's copy of the result. An AVIF's header size is its
-//!    `ispe` box, a claim the AV1 frame need not honour, so with `media-avif-decode` decode
-//!    also bounds the real AV1 frames through dav1d's own `frame_size_limit` before
-//!    `rawshift-image` decodes them.
+//!    `ispe` box, a claim the AV1 frame need not honour, and `rawshift-image` takes no
+//!    frame-size limit for the AV1 decoder (visualcommons/rawshift#79), so an AVIF is bounded
+//!    by its `ispe` before decode and by its decoded frame after it, not by its coded frame.
 //! 4. **Decode**, then **apply the EXIF orientation** to the pixels, so the frame this module
 //!    returns is always upright and its dimensions are the ones a viewer shows.
 //! 5. **Normalise** to packed RGBA8, which is what [`crate::lqip`] and the downscale both take.
@@ -26,25 +26,27 @@
 //! orientation** itself, then tags the result display-referred sRGB. So the RAW path differs at
 //! three steps:
 //!
-//! - **Budget.** `RawFile::open` parses the IFDs and reads no pixels, so the probe *is* the
-//!   open. The budget is checked against every frame the pipeline will allocate from the file's
-//!   own claims — the sensor, the active area, the default crop and each tile — and every strip
-//!   and tile byte range must lie inside the file, because the reader allocates each one at the
-//!   length the file states before it reads a byte. The work is bounded as well as each
-//!   allocation: a tile or strip must fit inside the sensor, the file may list no more of them
-//!   than the sensor's grid holds, and a JPEG XL tile (ProRAW), which states its own size in
-//!   its codestream header, is probed and must fit inside the tile or strip it fills. Without
-//!   those, a few-KB file listing many entries at one compressible codestream would make the
-//!   reader run that many full-budget decodes. All of that reads what `open` has already
-//!   parsed, and `open` itself allocates each IFD entry's value at the count the entry claims,
-//!   so before it runs, a no-allocation walk of the IFD chain (`tiff_bounds`, issue #644)
+//! - **Budget.** For an ARW, `RawFile::open` parses the IFDs and reads no pixels, so the probe
+//!   *is* the open. The budget is checked against every frame the pipeline will allocate from
+//!   the file's own claims — the sensor, the active area, the default crop and each tile — and
+//!   every strip and tile byte range must lie inside the file, because the reader allocates each
+//!   one at the length the file states before it reads a byte. The work is bounded as well as
+//!   each allocation: a tile or strip must fit inside the sensor, and the file may list no more
+//!   of them than the sensor's grid holds. A DNG's `open` instead decodes the whole raw image
+//!   through gamut, which borrows each range in place, refuses one outside the file, a strip
+//!   list longer than the rows, a tile list that is not the grid and a JPEG XL tile (ProRAW)
+//!   whose codestream is not its tile's size, but allocates the image and each tile at their
+//!   stated sizes. So before a DNG is opened, every image and tile any of its IFDs states is held
+//!   to the budget, and after it the sensor, active area and crop are held as for an ARW. Before
+//!   either is opened, a no-allocation walk of the IFD chain (`tiff_bounds`, issue #644)
 //!   refuses as [`MediaError::Decode`] any entry whose value needs more bytes than the file
-//!   holds, and (issue #647) any IFD nested deeper than `open`'s recursion can safely follow.
+//!   holds, and (issue #647) any IFD nested deeper than a recursive reader can safely follow.
 //! - **Orientation** is applied by `process`, so it is reported in `orientation_applied` and
 //!   never applied a second time here.
-//! - **Unsupported variants defer.** Upstream decodes Sony lossless-JPEG ARW and uncompressed or
-//!   JPEG XL DNG. Any other compression, a camera its reader does not place, or a TIFF that is not
-//!   a RAW at all is `RawError::Unsupported`, and that is mapped to
+//! - **Unsupported variants defer.** Upstream decodes Sony lossless-JPEG ARW and uncompressed,
+//!   Deflate, lossless-JPEG or JPEG XL DNG. Any other ARW compression, a camera its reader does
+//!   not place, or a TIFF that is not a RAW at all is `RawError::Unsupported`, and that is mapped
+//!   to
 //!   [`MediaError::UnsupportedFormat`] — `DeferredNoCodec`, backfillable when upstream grows the
 //!   decoder — rather than [`MediaError::Decode`], which would report a known gap as a broken file.
 //!
@@ -79,8 +81,7 @@
 use std::io::Cursor;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use rawshift_image::core::ColorSpace;
-use rawshift_image::core::image::RgbImage;
+use rawshift_image::core::{ColorDescription, ColourPrimaries, RgbImage};
 use rawshift_image::error::RawError;
 use rawshift_image::formats::{
     RawFile, StandardFormat, decode_standard_image, probe_standard_image,
@@ -91,7 +92,7 @@ use rawshift_image::transforms::orientation::apply_orientation;
 
 use super::detect::{MAX_DECODE_PIXELS, StillFormat};
 use super::error::{FormatOp, MediaError};
-use super::tiff_bounds::{IfdRefusal, MAX_IFD_DEPTH, check_ifd_bounds};
+use super::tiff_bounds::{IfdRefusal, IfdWalk, MAX_IFD_DEPTH, check_ifd_bounds};
 use crate::lqip::{Gamut, RgbaImage};
 
 /// The EXIF orientation value meaning "already upright".
@@ -118,9 +119,9 @@ pub struct MediaMetadata {
     /// The gamut [`crate::lqip::Lqip::encode`] is told to interpret the samples in.
     ///
     /// **Always [`Gamut::Srgb`] in this build, and that is upstream's doing rather than a
-    /// choice made here.** `probe_standard_image` hard-codes `ColorSpace::Srgb` into every
+    /// choice made here.** `probe_standard_image` hard-codes `ColorDescription::SRGB` into every
     /// `ImageProbe` it returns, and `decode_standard_image` likewise tags every decoded frame
-    /// sRGB without converting — so `rawshift-image` 0.1.1 reports no source gamut for a
+    /// sRGB without converting — so `rawshift-image` reports no source gamut for a
     /// standard format at all, whatever the file's ICC profile says. The consequence is a
     /// fidelity limitation, not a correctness bug: a Display P3 source gets a placeholder
     /// interpreted as sRGB, i.e. slightly under-saturated, which is the safer direction
@@ -261,19 +262,13 @@ impl Decoder for RawshiftDecoder {
         }
         let probed = self.probe(bytes, ext)?;
         let format = probed.format;
-        // The probe's AVIF size is the `ispe` box, which the file states and nothing checks
-        // against the AV1 frame `image` then decodes and allocates for. Bound the real frames.
-        #[cfg(feature = "media-avif-decode")]
-        if format == StillFormat::Avif {
-            check_avif_frames(bytes, MAX_DECODE_PIXELS)?;
-        }
-        let mut rgb = decode_standard_image(bytes, standard_format(format)).map_err(|e| {
-            MediaError::Decode {
-                format,
-                detail: e.to_string(),
-            }
-        })?;
+        let mut rgb = decode_standard_image(bytes, standard_format(format))
+            .map_err(|e| standard_error(format, e))?;
         check_rgb_buffer(&rgb, format)?;
+        // The probe held the header's size to the budget, but a header can understate its frame
+        // (an AVIF's `ispe` is only a claim about its AV1 frame), so the decoded frame is held to
+        // it too before Capsule copies or resamples it.
+        check_frame_budget(format, rgb.width(), rgb.height(), MAX_DECODE_PIXELS)?;
 
         let orientation = probed.orientation.unwrap_or(ORIENTATION_NORMAL);
         if orientation != ORIENTATION_NORMAL {
@@ -318,8 +313,8 @@ pub fn decode_guarded(
 /// sanctions it in.
 ///
 /// Not just for `decode` — that is not the only third-party code the import path runs over pixels:
-/// the placeholder goes through `chromahash` (also pre-1.0) and the derivative through
-/// `zune-jpegxl`, and the module's promise is that *none* of them can abort an import — not that the
+/// the placeholder goes through `chromahash` (also pre-1.0) and the derivative through the
+/// encoder, and the module's promise is that *none* of them can abort an import — not that the
 /// decoder specifically cannot. `stage` names the step in the warning so a caught panic is
 /// attributable.
 ///
@@ -339,147 +334,6 @@ pub fn guarded<T>(
     Err(MediaError::DecoderPanic)
 }
 
-/// `DAV1D_ERR(ERANGE)`: what dav1d returns when a frame header exceeds `frame_size_limit`.
-/// `ERANGE` is 34 on every host `media-avif-decode` builds for (Linux and macOS; Windows is
-/// excluded), and `dav1d` maps no named variant onto it.
-#[cfg(feature = "media-avif-decode")]
-const DAV1D_FRAME_TOO_LARGE: dav1d::Error = dav1d::Error::UnknownError(-34);
-
-/// Refuse an AVIF any of whose AV1 frames holds more than `limit` pixels, before
-/// `rawshift-image` decodes it.
-///
-/// The header probe reads the `ispe` box, which is the file's own claim. `image`'s
-/// `AvifDecoder` then runs libdav1d with no `frame_size_limit` and allocates its output from the
-/// real frame size, so an AVIF whose `ispe` understates its frame would reach an allocation
-/// failure, which aborts rather than unwinds and so is beyond [`decode_guarded`]. This decodes
-/// the same items `image` will (`mp4parse` at the same strictness, primary and alpha) with
-/// dav1d's own `frame_size_limit` set, which refuses an oversized frame from its header, before
-/// dav1d allocates the picture; every frame it does produce is checked again by its decoded size.
-///
-/// Three decisions this function embodies, each recorded in #629's `## Decisions taken`:
-///
-/// - **A full second decode is the bound.** Every AV1 item of every in-budget AVIF is decoded
-///   here and again by `image`, so its AV1 decode CPU roughly doubles (unmeasured). The
-///   alternative, refusing from a hand-written parse of the AV1 sequence and frame headers, would
-///   be a second parser of a format dav1d already parses, and a weaker bound: frame-size
-///   override caps a frame only by `2^frame_width_bits`. Every frame is drained rather than the
-///   first only, because `image` reads them all. Each picture is dropped before the next, so the
-///   two decodes never hold frames at once.
-/// - **`dav1d` and `mp4parse` are direct dependencies**, pinned to the versions `image` resolves,
-///   because neither `rawshift-image` nor `image` exposes a frame-size limit. A future `image`
-///   bump that moves either major version leaves two copies until these pins follow it.
-/// - **A header refusal reports `pixels: limit + 1`**, a lower bound, because dav1d's
-///   `DAV1D_ERR(ERANGE)` carries no frame size; see [`MediaError::PixelBudgetExceeded`]. A frame
-///   that decodes over budget reports its real size.
-///
-/// Delete this pre-flight, and the two `dep:` entries on `media-avif-decode`, once
-/// `rawshift-image` passes a frame-size limit to dav1d itself.
-///
-/// `pub(super)` so the tests can drive it with a budget a small fixture can exceed.
-#[cfg(feature = "media-avif-decode")]
-pub(super) fn check_avif_frames(bytes: &[u8], limit: u64) -> Result<(), MediaError> {
-    let context = mp4parse::read_avif(
-        &mut std::io::Cursor::new(bytes),
-        mp4parse::ParseStrictness::Normal,
-    )
-    .map_err(|e| MediaError::Decode {
-        format: StillFormat::Avif,
-        detail: format!("AVIF container: {e}"),
-    })?;
-    for (item, coded) in [
-        ("primary", context.primary_item_coded_data()),
-        ("alpha", context.alpha_item_coded_data()),
-    ] {
-        if let Some(coded) = coded.filter(|coded| !coded.is_empty()) {
-            check_av1_frames(item, coded, limit)?;
-        }
-    }
-    Ok(())
-}
-
-/// Decode one AV1 item with `frame_size_limit = limit`, draining every frame it holds.
-#[cfg(feature = "media-avif-decode")]
-fn check_av1_frames(item: &'static str, coded: &[u8], limit: u64) -> Result<(), MediaError> {
-    let refused = |e: dav1d::Error| {
-        if e == DAV1D_FRAME_TOO_LARGE {
-            tracing::warn!(
-                item,
-                limit,
-                "media: refusing an AVIF whose AV1 frame exceeds the decode budget"
-            );
-            // dav1d refuses from the frame header without reporting its size; the frame is
-            // known only to hold more than `limit` pixels.
-            MediaError::PixelBudgetExceeded {
-                pixels: limit.saturating_add(1),
-                limit,
-            }
-        } else {
-            MediaError::Decode {
-                format: StillFormat::Avif,
-                detail: format!("AV1 {item} item: {e}"),
-            }
-        }
-    };
-    let mut settings = dav1d::Settings::new();
-    // One thread and no frame delay, so every frame is decoded, and checked, in order here.
-    settings.set_n_threads(1);
-    settings.set_max_frame_delay(1);
-    settings.set_frame_size_limit(u32::try_from(limit).unwrap_or(u32::MAX));
-    let mut decoder = dav1d::Decoder::with_settings(&settings).map_err(refused)?;
-
-    let mut pending = match decoder.send_data(coded.to_vec(), None, None, None) {
-        Ok(()) => false,
-        Err(dav1d::Error::Again) => true,
-        Err(e) => return Err(refused(e)),
-    };
-    let mut frames = 0_u32;
-    loop {
-        match decoder.get_picture() {
-            Ok(picture) => {
-                frames += 1;
-                let pixels = u64::from(picture.width()) * u64::from(picture.height());
-                if pixels > limit {
-                    tracing::warn!(
-                        item,
-                        width = picture.width(),
-                        height = picture.height(),
-                        pixels,
-                        limit,
-                        "media: refusing an AVIF whose decoded AV1 frame exceeds the decode budget"
-                    );
-                    return Err(MediaError::PixelBudgetExceeded { pixels, limit });
-                }
-                continue;
-            }
-            Err(dav1d::Error::Again) => {}
-            Err(e) => return Err(refused(e)),
-        }
-        if !pending {
-            break;
-        }
-        pending = match decoder.send_pending_data() {
-            Ok(()) => false,
-            Err(dav1d::Error::Again) => true,
-            Err(e) => return Err(refused(e)),
-        };
-    }
-    if frames == 0 {
-        // `image` reads an item until dav1d yields a picture, so an item that yields none would
-        // spin there rather than fail.
-        return Err(MediaError::Decode {
-            format: StillFormat::Avif,
-            detail: format!("AV1 {item} item holds no frame"),
-        });
-    }
-    tracing::debug!(
-        item,
-        frames,
-        limit,
-        "media: AVIF frames are within the decode budget"
-    );
-    Ok(())
-}
-
 /// Identify a still and refuse anything this build has no codec for, before any decoder runs.
 fn gate(bytes: &[u8], ext: &str, op: FormatOp) -> Result<StillFormat, MediaError> {
     let Some(format) = StillFormat::detect(bytes, ext) else {
@@ -489,6 +343,65 @@ fn gate(bytes: &[u8], ext: &str, op: FormatOp) -> Result<StillFormat, MediaError
         return Err(MediaError::UnsupportedFormat { format, op });
     }
     Ok(format)
+}
+
+/// Refuse a decoded frame of more than `limit` pixels.
+fn check_frame_budget(
+    format: StillFormat,
+    width: u32,
+    height: u32,
+    limit: u64,
+) -> Result<(), MediaError> {
+    let pixels = u64::from(width) * u64::from(height);
+    if pixels > limit {
+        tracing::warn!(
+            %format,
+            width,
+            height,
+            pixels,
+            limit,
+            "media: refusing a decoded frame larger than its header claimed and the budget allows"
+        );
+        return Err(MediaError::PixelBudgetExceeded { pixels, limit });
+    }
+    Ok(())
+}
+
+/// [`check_frame_budget`] over a decoded still, with the budget as a parameter so a test can
+/// exceed it with a small frame.
+#[cfg(test)]
+pub(super) fn check_decoded_budget(decoded: &DecodedImage, limit: u64) -> Result<(), MediaError> {
+    check_frame_budget(decoded.format, decoded.width(), decoded.height(), limit)
+}
+
+/// Map a standard-format decode error onto Capsule's, keeping a missing decoder apart from a
+/// broken file.
+///
+/// `RawError::HwDecoderUnavailable` is upstream saying this host has no decoder for the
+/// codestream inside a container it parsed: an AVIF's AV1, which `rawshift-image` decodes only
+/// through a hardware backend until it gains a software fallback
+/// (visualcommons/rawshift#78). That is a codec this host lacks, not a broken file, so it
+/// becomes the backfillable [`MediaError::UnsupportedFormat`], exactly like a build that links
+/// no AVIF decoder at all. Everything else is a real decode failure.
+fn standard_error(format: StillFormat, error: RawError) -> MediaError {
+    match error {
+        RawError::HwDecoderUnavailable { codec, reason } => {
+            tracing::warn!(
+                %format,
+                codec,
+                %reason,
+                "media: this host has no decoder for the codestream; deferring"
+            );
+            MediaError::UnsupportedFormat {
+                format,
+                op: FormatOp::Decode,
+            }
+        }
+        other => MediaError::Decode {
+            format,
+            detail: other.to_string(),
+        },
+    }
 }
 
 /// A RAW file opened over the caller's bytes.
@@ -521,10 +434,9 @@ struct RawLayout {
     /// `"strip"` or `"tile"`: what [`ranges`](Self::ranges) holds, for the error detail.
     unit: &'static str,
     /// Every strip or tile as `(offset, length)`, each of which the reader allocates at the
-    /// stated length before it reads.
+    /// stated length before it reads. Empty for a DNG, whose reader no longer reports its ranges
+    /// and checks them itself without allocating them (see [`raw_layout`]).
     ranges: Vec<(u64, u64)>,
-    /// Whether each range is a JPEG XL codestream (DNG compression 52546, i.e. ProRAW).
-    jxl: bool,
     bit_depth: u8,
     orientation: Option<u16>,
 }
@@ -552,7 +464,14 @@ impl RawLayout {
 /// The match is exhaustive over the families this build enables (`arw-decode`, `dng-decode`),
 /// with no wildcard, on purpose: enabling another family is then a compile error here until its
 /// layout — and so its budget — is written.
-fn raw_layout(raw: &OpenRaw<'_>, format: StillFormat) -> Result<RawLayout, MediaError> {
+///
+/// `max_tile` is the IFD walk's [`IfdWalk::max_tile`](super::tiff_bounds::IfdWalk::max_tile),
+/// which stands in for the DNG tile size the reader no longer reports.
+fn raw_layout(
+    raw: &OpenRaw<'_>,
+    format: StillFormat,
+    max_tile: (u64, u64),
+) -> Result<RawLayout, MediaError> {
     let missing = || MediaError::Decode {
         format,
         detail: "RAW reader returned no metadata".to_owned(),
@@ -590,14 +509,22 @@ fn raw_layout(raw: &OpenRaw<'_>, format: StillFormat) -> Result<RawLayout, Media
                 } else {
                     vec![(m.raw_data_offset, m.raw_data_size)]
                 },
-                jxl: false,
                 bit_depth: m.bit_depth,
                 orientation: m.orientation,
             }
         }
         RawFile::Dng(dng) => {
             let m = dng.metadata().ok_or_else(missing)?;
-            let tiled = !m.tile_offsets.is_empty();
+            // `DngMetadata` no longer reports the strip or tile layout: gamut's DNG reader
+            // resolves it at decode, refusing a range outside the file, a strip list longer than
+            // the rows and a tile list that does not match the grid, and borrowing each range
+            // rather than allocating it. What it does not bound is a tile's own size, which it
+            // decodes into before placing it, so the tile size is taken from the IFD walk's
+            // largest stated `TileWidth` and `TileLength` and held to the sensor below. A
+            // stripped DNG's strips are at most the sensor's width by its height.
+            let (tile_w, tile_h) = max_tile;
+            let tiled = tile_w > 0 || tile_h > 0;
+            let clamp = |v: u64| u32::try_from(v).unwrap_or(u32::MAX);
             let (sensor_w, sensor_h) = (m.sensor_size.width, m.sensor_size.height);
             RawLayout {
                 sensor: (sensor_w, sensor_h),
@@ -613,22 +540,14 @@ fn raw_layout(raw: &OpenRaw<'_>, format: StillFormat) -> Result<RawLayout, Media
                     .default_crop_origin
                     .zip(m.default_crop_size)
                     .map(|((x, y), (w, h))| (x, y, w, h)),
-                // Upstream reads a zero `RowsPerStrip` as one strip of the whole sensor, and
-                // clips a larger one to the sensor's height.
                 unit_size: if tiled {
-                    (m.tile_width, m.tile_height)
-                } else if m.rows_per_strip == 0 {
-                    (sensor_w, sensor_h)
+                    (clamp(tile_w), clamp(tile_h))
                 } else {
-                    (sensor_w, m.rows_per_strip.min(sensor_h))
+                    (sensor_w, sensor_h)
                 },
                 unit: if tiled { "tile" } else { "strip" },
-                ranges: if tiled {
-                    pairs(&m.tile_offsets, &m.tile_byte_counts)
-                } else {
-                    pairs(&m.strip_offsets, &m.strip_byte_counts)
-                },
-                jxl: m.compression == DNG_COMPRESSION_JXL,
+                // Upstream checks the ranges themselves; see above.
+                ranges: Vec::new(),
                 bit_depth: m.bit_depth,
                 orientation: m.orientation,
             }
@@ -636,8 +555,33 @@ fn raw_layout(raw: &OpenRaw<'_>, format: StillFormat) -> Result<RawLayout, Media
     })
 }
 
-/// DNG's `Compression` value for JPEG XL (DNG 1.7), which ProRAW uses.
-const DNG_COMPRESSION_JXL: u16 = 52546;
+/// Hold a DNG's stated frames to the budget before `RawFile::open`, which for a DNG decodes the
+/// whole raw image (gamut's reader is eager) and so allocates for the image and each tile at
+/// the sizes the file states before Capsule can read a layout back.
+///
+/// The bound is taken from the IFD walk rather than from the reader: the largest image any IFD
+/// states, and the largest tile width and length any IFD states. Every IFD's image is held, the
+/// raw one among them, because which IFD is the raw image is the reader's choice. ARW's reader
+/// reads no pixels at open, so its layout is checked after it, by [`check_raw_layout`].
+fn check_eager_raw_frames(
+    format: StillFormat,
+    walk: &IfdWalk,
+    limit: u64,
+) -> Result<(), MediaError> {
+    if format != StillFormat::Dng {
+        return Ok(());
+    }
+    let clamp = |v: u64| u32::try_from(v).unwrap_or(u32::MAX);
+    let (width, height) = walk.max_image;
+    if (width, height) != (0, 0) {
+        check_raw_frame(format, "image", (clamp(width), clamp(height)), limit)?;
+    }
+    let (tile_w, tile_h) = walk.max_tile;
+    if tile_w > 0 || tile_h > 0 {
+        check_raw_frame(format, "tile", (clamp(tile_w), clamp(tile_h)), limit)?;
+    }
+    Ok(())
+}
 
 /// Refuse a frame the RAW pipeline would allocate for that is empty or over `limit` pixels.
 fn check_raw_frame(
@@ -674,8 +618,7 @@ fn check_raw_frame(
 /// unwind, but are refused here too so they report as a decode failure rather than a panic.
 ///
 /// The number of decodes is held too, not only the size of each: every strip or tile must fit
-/// the sensor, there may be no more of them than the sensor's grid of that size holds, and a
-/// JPEG XL codestream must fit the strip or tile it fills.
+/// the sensor, and there may be no more of them than the sensor's grid of that size holds.
 fn check_raw_layout(
     bytes: &[u8],
     format: StillFormat,
@@ -724,51 +667,25 @@ fn check_raw_layout(
             ),
         });
     }
-    if layout.ranges.is_empty() {
+    // A DNG's ranges are its reader's to check (see `raw_layout`), so only the families that
+    // report them can be refused for listing none.
+    if layout.ranges.is_empty() && format != StillFormat::Dng {
         return Err(MediaError::Decode {
             format,
             detail: "RAW file locates no strip or tile data".to_owned(),
         });
     }
     let file_len = bytes.len() as u64;
+    // A JPEG XL tile (ProRAW) is a DNG's, whose ranges its reader checks: it refuses a
+    // codestream whose header is not its tile's size before decoding it.
     for (index, &(offset, length)) in layout.ranges.iter().enumerate() {
-        let Some(end) = offset.checked_add(length).filter(|end| *end <= file_len) else {
+        if offset.checked_add(length).is_none_or(|end| end > file_len) {
             return Err(MediaError::Decode {
                 format,
                 detail: format!(
                     "{unit} {index} ({length} bytes at {offset}) runs past the {file_len}-byte file"
                 ),
             });
-        };
-        if layout.jxl {
-            // In range, so these casts cannot truncate: both are at most `bytes.len()`.
-            let codestream = &bytes[offset as usize..end as usize];
-            let probe = probe_standard_image(codestream).map_err(|e| MediaError::Decode {
-                format,
-                detail: format!("JPEG XL {unit} {index} header: {e}"),
-            })?;
-            // The tile decoder allocates from this header, not from the declared size, so a
-            // codestream larger than its slot is refused. Fitting the slot also holds it to the
-            // budget: the slot fits the sensor, which is already within `limit`.
-            let (jxl_w, jxl_h) = (probe.size.width, probe.size.height);
-            if jxl_w > unit_w || jxl_h > unit_h {
-                tracing::warn!(
-                    %format,
-                    index,
-                    jxl_w,
-                    jxl_h,
-                    unit_w,
-                    unit_h,
-                    "media: refusing a JPEG XL codestream larger than its declared slot"
-                );
-                return Err(MediaError::Decode {
-                    format,
-                    detail: format!(
-                        "JPEG XL {unit} {index} codestream is {jxl_w}x{jxl_h}, larger than \
-                         the declared {unit_w}x{unit_h} {unit}"
-                    ),
-                });
-            }
         }
     }
     Ok(())
@@ -861,8 +778,9 @@ fn open_raw_within(
         depth = walk.depth,
         "media: RAW IFD value counts are within the file and its IFDs within the depth bound"
     );
+    check_eager_raw_frames(format, &walk, limit)?;
     let raw = RawFile::open(Cursor::new(bytes)).map_err(|e| raw_error(format, "open", e))?;
-    let layout = raw_layout(&raw, format)?;
+    let layout = raw_layout(&raw, format, walk.max_tile)?;
     check_raw_layout(bytes, format, &layout, limit)?;
     let metadata = MediaMetadata {
         format,
@@ -879,7 +797,6 @@ fn open_raw_within(
         stored = ?metadata.stored_dimensions,
         unit = layout.unit,
         units = layout.ranges.len(),
-        jxl = layout.jxl,
         orientation = ?metadata.orientation,
         bit_depth = layout.bit_depth,
         "media: probed a RAW still"
@@ -1003,8 +920,10 @@ pub(super) fn embedded_preview_within(
             ),
         });
     }
+    // A DNG's open decodes its raw image, so the preview extraction pays the same pre-open bound.
+    check_eager_raw_frames(format, &walk, limit)?;
     let mut raw = RawFile::open(Cursor::new(bytes)).map_err(|e| raw_error(format, "open", e))?;
-    let raw_orientation = raw_layout(&raw, format)
+    let raw_orientation = raw_layout(&raw, format, walk.max_tile)
         .ok()
         .and_then(|layout| layout.orientation)
         .filter(|o| (1..=8).contains(o));
@@ -1131,43 +1050,42 @@ fn orientation_of(bytes: &[u8], format: StillFormat) -> Option<u16> {
     metadata.image.orientation.filter(|o| (1..=8).contains(o))
 }
 
-/// Map the crate's colour space onto the gamut the LQIP encoder takes.
+/// Map the crate's colour description onto the gamut the LQIP encoder takes.
 ///
-/// `LinearSrgb` and `Unknown` both become [`Gamut::Srgb`]: `Linear` names a transfer function
-/// rather than a gamut, and sRGB primaries are the only safe assumption for an untagged source
-/// (over-saturating is worse than under-saturating).
+/// Only the CICP primaries matter: the transfer function names no gamut. BT.709 (sRGB and linear
+/// sRGB alike) and unspecified primaries both become [`Gamut::Srgb`], since sRGB primaries are
+/// the only safe assumption for an untagged source (over-saturating is worse than
+/// under-saturating). Adobe RGB and ProPhoto RGB have no CICP code point, so upstream tags them
+/// unspecified and leaves their truth in the ICC profile; they map to sRGB here too.
 ///
 /// **The wide-gamut arms are unreachable today**, because `probe_standard_image` hard-codes
-/// `ColorSpace::Srgb` for every format (see [`MediaMetadata::gamut`]). They are here as the one
-/// place that has to change when the crate starts reporting a source gamut, rather than as a
+/// `ColorDescription::SRGB` for every format (see [`MediaMetadata::gamut`]). They are here as the
+/// one place that has to change when the crate starts reporting a source gamut, rather than as a
 /// claim that it already does.
-fn gamut_of(color_space: ColorSpace) -> Gamut {
-    match color_space {
-        ColorSpace::DisplayP3 => Gamut::DisplayP3,
-        ColorSpace::AdobeRgb => Gamut::AdobeRgb,
-        ColorSpace::Rec2020 => Gamut::Bt2020,
-        ColorSpace::ProPhotoRgb => Gamut::ProPhotoRgb,
-        // `Srgb`, `LinearSrgb`, `Unknown`, and — because `ColorSpace` is `#[non_exhaustive]` —
-        // any variant a future release adds. One wildcard rather than an explicit list plus a
-        // catch-all, since the answer is the same and two arms with one body only look like a
-        // distinction. sRGB is the conservative default: under-saturating a wide-gamut source
-        // is a smaller defect than over-saturating a narrow one.
+fn gamut_of(color: ColorDescription) -> Gamut {
+    match color.primaries {
+        ColourPrimaries::DisplayP3 => Gamut::DisplayP3,
+        ColourPrimaries::Bt2020 => Gamut::Bt2020,
+        // BT.709, unspecified, and — because `ColourPrimaries` is `#[non_exhaustive]` — any code
+        // point a future release adds. One wildcard, since the answer is the same: sRGB is the
+        // conservative default.
         _ => Gamut::Srgb,
     }
 }
 
 /// Refuse a decoder result whose buffer does not match the dimensions it reports.
 ///
-/// `RgbImage::new` performs no validation and `set_size` is public, so a decoder bug (or a
-/// transform bug) can produce an inconsistent value. Checked here because the very next thing
-/// Capsule does is index that buffer by those dimensions.
+/// `RgbImage` now validates its length against its dimensions at every construction (it wraps
+/// gamut's `ImageBuf`), so this cannot fire against the pinned revision. It stays because the
+/// very next thing Capsule does is index that buffer by those dimensions, and a pre-1.0
+/// dependency's invariant is cheaper to recheck than to trust across every bump of the pin.
 fn check_rgb_buffer(rgb: &RgbImage, format: StillFormat) -> Result<(), MediaError> {
     let (width, height) = (rgb.width(), rgb.height());
     if width == 0 || height == 0 {
         return Err(MediaError::ZeroDimension { width, height });
     }
     let expected = u128::from(width) * u128::from(height) * 3;
-    let actual = rgb.data.len() as u128;
+    let actual = rgb.data().len() as u128;
     if expected != actual {
         return Err(MediaError::BufferLengthMismatch {
             format,
@@ -1185,8 +1103,8 @@ fn check_rgb_buffer(rgb: &RgbImage, format: StillFormat) -> Result<(), MediaErro
 /// `sample >> 8` is the exact inverse of the crate's `v * 257` widening, so an 8-bit source is
 /// reproduced bit-for-bit.
 fn to_rgba8(rgb: &RgbImage) -> RgbaImage {
-    let mut rgba = Vec::with_capacity(rgb.data.len() / 3 * 4);
-    for px in rgb.data.chunks_exact(3) {
+    let mut rgba = Vec::with_capacity(rgb.data().len() / 3 * 4);
+    for px in rgb.data().chunks_exact(3) {
         rgba.push((px[0] >> 8) as u8);
         rgba.push((px[1] >> 8) as u8);
         rgba.push((px[2] >> 8) as u8);

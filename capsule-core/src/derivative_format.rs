@@ -30,16 +30,16 @@ use crate::crypto::provenance::{DerivativeManifest, DerivativeRole};
 /// outside this set is a structural rejection, never a "future format to ignore".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DerivativeFormat {
-    /// **JPEG XL** — the committed primary/master still codec, encodable in every `media` build:
-    /// **lossy** through libjxl under the opt-in `media-linked-codecs` feature, and losslessly
-    /// through the pure-Rust `zune-jpegxl` `JxlSimpleEncoder` without it.
+    /// **JPEG XL** — the committed primary/master still codec. Encodable, **lossy**, only under
+    /// the opt-in `media-linked-codecs` feature: libjxl is the one JXL encoder `rawshift-image`
+    /// has, and it is a C++ build the pure-Rust builds do not carry.
     Jxl,
-    /// **AVIF** — the universal delivery format for clients without a JXL decoder. Encodable only
-    /// under `media-linked-codecs` (`ravif` -> rav1e, which needs `nasm` on an x86_64 host).
+    /// **AVIF** — the universal delivery format for clients without a JXL decoder. Encodable in
+    /// every build, through gamut's pure-Rust AV1 intra encoder.
     Avif,
     /// **WebP** — the last-resort delivery fallback. Not encodable in this build: the crate's
-    /// WebP codec does not compile for aarch64 — see `media::StillFormat::WebP`, which cannot be
-    /// linked from here because `media` is feature-gated and this module is not.
+    /// WebP encoder is not enabled — see `media::StillFormat::WebP`, which cannot be linked from
+    /// here because `media` is feature-gated and this module is not.
     WebP,
     /// The recognised `format = "original"` sentinel: the tier **references** the original asset
     /// rather than generating a redundant derivative, because the source is not larger than the
@@ -101,13 +101,13 @@ impl DerivativeFormat {
 
     /// Whether this build can produce bytes in this format.
     ///
-    /// Feature-dependent on purpose: the answer is about *this build*, and the AVIF encoder is
+    /// Feature-dependent on purpose: the answer is about *this build*, and the JXL encoder is
     /// linked only by `media-linked-codecs`. The mobile FFI and the `rust-cross` targets build
-    /// without it, and there AVIF is a recorded per-`(tier, format)` deferral rather than a gap.
+    /// without it, and there JXL is a recorded per-`(tier, format)` deferral rather than a gap.
     pub const fn is_encodable(self) -> bool {
         match self {
-            Self::Jxl | Self::Original => true,
-            Self::Avif => cfg!(feature = "media-linked-codecs"),
+            Self::Avif | Self::Original => true,
+            Self::Jxl => cfg!(feature = "media-linked-codecs"),
             Self::WebP => false,
         }
     }
@@ -177,8 +177,8 @@ pub fn verify_still_role_format(
 pub enum DerivativeStatus {
     /// The still decoded: `dimensions` and `lqip` came from real pixels, and the derivatives
     /// this build can encode were generated and signed. **Independent of how many *formats*
-    /// deferred** — a decoded still whose AVIF and WebP variants have no encoder here is still
-    /// `Decoded`, because it has a renderable JXL thumbnail. The per-format gap is counted
+    /// deferred** — a decoded still whose JXL and WebP variants have no encoder here is still
+    /// `Decoded`, because it has a renderable AVIF thumbnail. The per-format gap is counted
     /// separately, by the import summary's deferred-format count.
     Decoded,
     /// **Expected deferral.** This build links no codec for the asset's format — see the media
@@ -187,9 +187,9 @@ pub enum DerivativeStatus {
     /// which point derivatives can be backfilled from the stored original. Counted by the import
     /// summary's deferred-derivative count.
     ///
-    /// What reaches here today: HEIC, AVIF and the RAW families, each needing a system library
-    /// (libheif, libdav1d) or an assembler the cross and cargo-ndk builds do not carry, and
-    /// every video, whose derivatives no build generates yet.
+    /// What reaches here today: HEIC (refused by licence policy), WebP and the RAW families
+    /// whose decoders are not enabled, AVIF without `media-avif-decode` or on a host with no
+    /// AV1 decoder, and every video, whose derivatives no build generates yet.
     DeferredNoCodec,
     /// **A real problem.** The format *is* one this build can decode, but these particular
     /// bytes did not decode — truncation, corruption, or a decoder bug. The original is still
