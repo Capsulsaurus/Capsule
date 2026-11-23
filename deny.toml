@@ -127,6 +127,12 @@ ignore = [
     # and capsule-e2e that start the test containers. testcontainers 0.28.0, the latest release,
     # still requires it. Remove this entry in #1233, once testcontainers drops it.
     { id = "RUSTSEC-2026-0440", reason = "astral-tokio-tar (unmaintained) via testcontainers 0.27.3 (0.28.0 latest still requires it); dev-dependency only; tracked in #1233" },
+
+    # Unmaintained, no vulnerability, and every chrono version is affected, so no upgrade
+    # clears it. It is reached through sea-orm 2.0.4's default `with-chrono` feature, which also
+    # enables it in sea-query and sqlx, in capsule-server and its migrations. The remedy is
+    # leaving chrono for jiff, a workspace refactor of its own. Remove this entry in #1315.
+    { id = "RUSTSEC-2026-0543", reason = "chrono (unmaintained, all versions) via sea-orm 2.0.4's default with-chrono feature; replaced by jiff in #1315" },
 ]
 
 [bans]
