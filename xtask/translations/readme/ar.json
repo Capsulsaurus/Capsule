@@ -28,12 +28,16 @@
     "target": "- **مشاركة عبر الخوادم.** يتشارك الأشخاص على خوادم مختلفة الألبومات فيما بينهم، كما يعمل البريد الإلكتروني بين مزوّدين مختلفين. لا يحتاج أحد إلى الانضمام إلى خادمك، ولا تقف أي شركة في المنتصف."
   },
   {
-    "source": "- **Your whole library, even offline.** Every app keeps an index of everything you have ever kept, so you can browse, search and organize all of it on a plane, at the border, or far from any signal.",
-    "target": "- **مكتبتك كاملة، حتى دون اتصال.** يحتفظ كل تطبيق بفهرس لكل ما احتفظت به يومًا، فتستطيع تصفّحه كله والبحث فيه وتنظيمه على متن طائرة أو عند الحدود أو بعيدًا عن أي إشارة."
+    "source": "- **Your whole library, even offline.** Every app keeps an index of everything you have ever kept, so you can browse, search and organize all of it, place names included\\*, on a plane, at the border, or far from any signal.",
+    "target": "- **مكتبتك كاملة، حتى دون اتصال.** يحتفظ كل تطبيق بفهرس لكل ما احتفظت به يومًا، فتستطيع تصفّحه كله والبحث فيه وتنظيمه، بما في ذلك أسماء الأماكن\\*، على متن طائرة أو عند الحدود أو بعيدًا عن أي إشارة."
   },
   {
     "source": "- **Straight from the camera.** Pull photos over Wi-Fi or cable directly from your camera, with every file checksummed on arrival.",
     "target": "- **مباشرةً من الكاميرا.** انقل الصور من الكاميرا مباشرةً عبر Wi-Fi أو الكابل، مع التحقق من المجموع الاختباري لكل ملف فور وصوله."
+  },
+  {
+    "source": "- **Hand off huge uploads\\*.** On slow Wi-Fi, your phone hands a sealed bundle to your laptop, which uploads it as sealed bytes and never decrypts it.",
+    "target": "- **سلِّم عمليات الرفع الضخمة\\*.** على شبكة Wi-Fi بطيئة، يسلّم هاتفك حزمة مختومة إلى حاسوبك المحمول، فيرفعها كبايتات مختومة ولا يفك تشفيرها أبدًا."
   },
   {
     "source": "- **A library that outlives Capsule.** Every photo sits beside a signed sidecar in an open format, so your library stays readable without the app, without the database, and without us.",
@@ -56,16 +60,16 @@
     "target": "- الألبومات، إضافةً إلى نسخك الأصلية المحفوظة بايتًا ببايت مع بياناتها الوصفية والقابلة للاستعادة تمامًا كما دخلت"
   },
   {
-    "source": "- Search by date, place, camera, lens, rating and label, run on your device",
-    "target": "- البحث حسب التاريخ والمكان والكاميرا والعدسة والتقييم والتصنيف، وهو يجري على جهازك"
+    "source": "- Search by date and type on your device, and by place, rating and label with typo-tolerant suggestions from your own library and `@people` and `@tag` shortcuts\\*",
+    "target": "- البحث حسب التاريخ والنوع على جهازك، وحسب المكان والتقييم والتصنيف مع اقتراحات تتسامح مع الأخطاء الإملائية مستمدة من مكتبتك نفسها، واختصارات `@people` و`@tag`\\*"
   },
   {
     "source": "- Ratings, picks and rejects for culling a shoot; labels and captions",
     "target": "- التقييمات والاختيار والاستبعاد لفرز صور جلسة التصوير؛ والتصنيفات والتعليقات التوضيحية"
   },
   {
-    "source": "- A map of where every photo was taken, with location fixes that keep the original",
-    "target": "- خريطة لمكان التقاط كل صورة، مع تصحيحات للموقع تحافظ على الأصل"
+    "source": "- Location fixes that keep the original, and a map of where every photo was taken with pins clustered at every zoom\\*",
+    "target": "- تصحيحات للموقع تحافظ على الأصل، وخريطة لمكان التقاط كل صورة مع دبابيس مجمّعة عند كل مستوى تكبير\\*"
   },
   {
     "source": "- Share links anyone can open in a browser, and upload links that let guests add their photos to yours",
@@ -74,6 +78,14 @@
   {
     "source": "- Backups that resume where they stopped, and device-to-device sync over your local network",
     "target": "- نسخ احتياطي يُستأنف من حيث توقف، ومزامنة من جهاز إلى جهاز عبر شبكتك المحلية"
+  },
+  {
+    "source": "- Export albums of any size to folders or ZIP, with your edits or the originals and their metadata\\*",
+    "target": "- تصدير الألبومات بأي حجم إلى مجلدات أو ملف ZIP، مع تعديلاتك أو بالنسخ الأصلية وبياناتها الوصفية\\*"
+  },
+  {
+    "source": "- Shortcuts and share-sheet integration on iPhone and Android\\*",
+    "target": "- تكامل مع الاختصارات وورقة المشاركة على iPhone وAndroid\\*"
   },
   {
     "source": "- Trash with a recovery window, hidden photos, and account recovery if you lose a device",

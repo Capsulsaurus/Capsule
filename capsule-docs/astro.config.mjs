@@ -7,12 +7,21 @@ import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'astro/config';
 import starlightBlog from 'starlight-blog';
 import starlightLinksValidator from 'starlight-links-validator';
+import starlightLlmsTxt from 'starlight-llms-txt';
 import { referenceSidebar } from './scripts/reference-groups.mjs';
 import baseLinks from './src/lib/base-links.mjs';
 import { BLOG_AUTHORS, hasPublishedPost } from './src/lib/blog-posts.mjs';
 import { resolveBuildCommit } from './src/lib/build-commit.mjs';
 import { versionFromBranch } from './src/lib/docs-version.mjs';
+import {
+    LLMS_DETAILS,
+    LLMS_PROMOTE,
+    LLMS_SETS,
+    LLMS_SMALL_EXCLUDE,
+} from './src/lib/llms-sets.mjs';
+import { starlightLocales } from './src/lib/locales.mjs';
 import markdownCacheKey from './src/lib/markdown-cache-key.mjs';
+import { sidebarTranslations } from './src/lib/nav-labels.mjs';
 import { installScript as pageTransitionScript } from './src/lib/page-transition.mjs';
 import rehypeNoTranslate from './src/lib/rehype-notranslate.mjs';
 import remarkLibraryLinks from './src/lib/remark-library-links.mjs';
@@ -119,31 +128,43 @@ export default defineConfig({
                 SiteTitle: './src/components/SiteTitle.astro',
                 SocialIcons: './src/components/SocialIcons.astro',
                 ThemeSelect: './src/components/ThemeToggle.astro',
-                // Carries the section links on narrow screens.
+                // The preferences row of the narrow-screen menu.
                 MobileMenuFooter: './src/components/MobileMenuFooter.astro',
             },
+            // English at the root, unprefixed; every other locale under
+            // /<key>/ (src/lib/locales.mjs, mirroring locales/config.json).
+            // Only the user-facing pages are translated
+            // (src/content/docs/<key>/); Starlight serves every other page at
+            // the locale's route in English, with its fallback notice.
+            defaultLocale: 'root',
+            locales: starlightLocales(),
             // Badges every non-stable page in the sidebar. See src/route-data.ts.
             routeMiddleware: './src/route-data.ts',
+            // The top-level group labels carry every locale's rendering
+            // (src/lib/nav-labels.mjs); the rest stay English. A page entry
+            // takes its label from the page's title, so a translated page
+            // names itself.
             sidebar: [
                 {
                     label: 'Guides',
+                    translations: sidebarTranslations('Guides'),
                     items: [
                         // Each item here is one entry in the navigation menu.
-                        {
-                            label: 'Getting Started',
-                            slug: 'guides/getting-started',
-                        },
+                        { slug: 'guides/getting-started' },
                         { slug: 'guides/user-guide' },
                         { slug: 'guides/self-hosting' },
                         { slug: 'guides/google-photos-migration' },
+                        { slug: 'guides/troubleshooting' },
                     ],
                 },
                 {
                     label: 'Features',
+                    translations: sidebarTranslations('Features'),
                     items: [{ autogenerate: { directory: 'features' } }],
                 },
                 {
                     label: 'Design',
+                    translations: sidebarTranslations('Design'),
                     items: [
                         {
                             label: 'Foundations',
@@ -195,6 +216,7 @@ export default defineConfig({
                                 { slug: 'design/import' },
                                 { slug: 'design/import/pipeline' },
                                 { slug: 'design/import/camera-import' },
+                                { slug: 'design/export' },
                                 { slug: 'design/transfer' },
                                 { slug: 'design/transfer/upload' },
                                 { slug: 'design/transfer/download' },
@@ -218,7 +240,12 @@ export default defineConfig({
                             label: 'Organization & Clients',
                             items: [
                                 { slug: 'design/organization' },
+                                { slug: 'design/search' },
+                                { slug: 'design/places' },
+                                { slug: 'design/people' },
+                                { slug: 'design/memories' },
                                 { slug: 'design/clients' },
+                                { slug: 'design/platform-integrations' },
                                 { slug: 'design/local-gallery' },
                                 { slug: 'design/notifications' },
                                 { slug: 'design/i18n' },
@@ -229,6 +256,7 @@ export default defineConfig({
                             label: 'Threat Model',
                             items: [
                                 { slug: 'design/threat-model' },
+                                { slug: 'design/threat-model/risks' },
                                 { slug: 'design/threat-model/scenarios' },
                                 { slug: 'design/threat-model/schema-rules' },
                                 { slug: 'design/threat-model/validation' },
@@ -238,6 +266,7 @@ export default defineConfig({
                 },
                 {
                     label: 'Development',
+                    translations: sidebarTranslations('Development'),
                     items: [{ autogenerate: { directory: 'development' } }],
                 },
                 {
@@ -249,6 +278,7 @@ export default defineConfig({
                     // edit moves a page and its navigation entry together, and a group
                     // with navigation but no page is not expressible.
                     label: 'Reference',
+                    translations: sidebarTranslations('Reference'),
                     items: referenceSidebar(),
                 },
             ],
@@ -257,7 +287,6 @@ export default defineConfig({
             // history (src/styles/motion.css). Inline and classic, so it is
             // listening before the new page's first render.
             head: [{ tag: 'script', content: pageTransitionScript() }],
-            // TODO: Add internationalization down the line: https://starlight.astro.build/guides/i18n/
             plugins: [
                 ...(blogIsLive
                     ? [
@@ -273,6 +302,29 @@ export default defineConfig({
                           }),
                       ]
                     : []),
+                // `/llms.txt` and its plain-text bundles, so an LLM agent reads
+                // the docs without crawling HTML. Sets: src/lib/llms-sets.mjs.
+                // Only on the latest build: agents look for /llms.txt at the
+                // site root, and base-links.mjs rebases only HTML, so a release
+                // build's bundles would link into the latest docs.
+                ...(docsVersion.version === null
+                    ? [
+                          starlightLlmsTxt({
+                              projectName: 'Capsule',
+                              details: LLMS_DETAILS,
+                              customSets: LLMS_SETS,
+                              exclude: LLMS_SMALL_EXCLUDE,
+                              promote: LLMS_PROMOTE,
+                              // One setting for llms-small and the topic sets:
+                              // keep line breaks so headings, lists and tables
+                              // stay parseable.
+                              minify: { whitespace: false },
+                              // Heading anchors would read "Section titled …"
+                              // after every heading.
+                              customSelectors: { all: ['.sl-anchor-link'] },
+                          }),
+                      ]
+                    : []),
                 // Feature cards on the front page link into the design docs.
                 // Only on the latest build. A release build is a frozen copy of
                 // a master commit whose CI build already validated it, and its
@@ -283,6 +335,13 @@ export default defineConfig({
                               components: [['Feature', 'href']],
                               // Served by the Pages Functions (functions/).
                               exclude: ['/rustdoc/**', '/v/**'],
+                              // A locale serves its untranslated pages as
+                              // English fallbacks: a link to one is valid,
+                              // and its anchors are the English page's.
+                              errorOnFallbackPages: false,
+                              // A translated page may link an English page
+                              // on purpose (src/lib/remark-link-titles.mjs).
+                              errorOnInconsistentLocale: false,
                           }),
                       ]
                     : []),

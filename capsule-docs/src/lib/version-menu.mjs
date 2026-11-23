@@ -54,6 +54,117 @@ export function menuEntries(json, current, pathname, fromBase) {
 }
 
 /**
+ * The `sessionStorage` key holding `/versions.json` once a page has read it,
+ * so the next page in the tab builds its menu without waiting on the network
+ * and the pill does not change shape after every navigation. Each page
+ * refreshes it in the background (`versionsForMenu`), so a release published
+ * mid-session shows from the next navigation.
+ */
+export const VERSIONS_CACHE_KEY = 'capsule-docs-versions';
+
+/**
+ * The cached `/versions.json`, or `undefined` when there is none, it does not
+ * parse, or storage is unavailable.
+ *
+ * @param {Pick<Storage, 'getItem'> | null | undefined} storage
+ * @returns {unknown}
+ */
+export function readCachedVersions(storage) {
+    try {
+        const text = storage?.getItem(VERSIONS_CACHE_KEY);
+        return text == null ? undefined : JSON.parse(text);
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * Caches `/versions.json` for the session. Storage that is full or refused
+ * (a private window) leaves the next page to fetch it again.
+ *
+ * @param {Pick<Storage, 'setItem'> | null | undefined} storage
+ * @param {unknown} json
+ */
+export function writeCachedVersions(storage, json) {
+    try {
+        storage?.setItem(VERSIONS_CACHE_KEY, JSON.stringify(json));
+    } catch {
+        // Not cached: the next page fetches.
+    }
+}
+
+/**
+ * The `/versions.json` to build the menu from, stale-while-revalidate. With a
+ * cached copy it resolves to that at once and refreshes the cache from
+ * `fetchList` in the background, keeping the stale copy if the fetch fails.
+ * With none it waits for the fetch, caches it, and resolves to `undefined`
+ * when the fetch fails. Either way the fetch starts once.
+ *
+ * @param {Pick<Storage, 'getItem' | 'setItem'> | null | undefined} storage
+ * @param {() => Promise<unknown>} fetchList Fetches and parses the list;
+ *   rejects on any failure.
+ * @returns {Promise<unknown>}
+ */
+export async function versionsForMenu(storage, fetchList) {
+    const cached = readCachedVersions(storage);
+    const refresh = fetchList().then((json) => {
+        writeCachedVersions(storage, json);
+        return json;
+    });
+    if (cached !== undefined) {
+        refresh.catch(() => {
+            // The stale copy stays until a later page's refresh succeeds.
+        });
+        return cached;
+    }
+    try {
+        return await refresh;
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * Whether the switcher will become a menu, decided before its script runs so
+ * the pill reserves the chevron's width from its first paint. A release build
+ * always lists itself; the latest build does once the cached list names a
+ * release. With no cache it guesses no menu, the state until a first release.
+ * Self-contained: `reserveScript` ships its source.
+ *
+ * @param {string} current `X.Y`, or `''` for the latest docs.
+ * @param {string | null} cached The raw cached `/versions.json`.
+ * @returns {boolean}
+ */
+export function expectsMenu(current, cached) {
+    if (current !== '') return true;
+    try {
+        const versions = JSON.parse(cached ?? 'null')?.versions;
+        return (
+            Array.isArray(versions) &&
+            versions.some((v) => typeof v === 'string' && /^\d+\.\d+$/.test(v))
+        );
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Inline script placed straight after a `<capsule-version-select>`: marks it
+ * `data-expect-menu` while the page parses, before the first paint.
+ *
+ * @returns {string}
+ */
+export function reserveScript() {
+    return `(() => {
+const expectsMenu = ${expectsMenu.toString()};
+const el = document.currentScript.previousElementSibling;
+let cached = null;
+try { cached = sessionStorage.getItem(${JSON.stringify(VERSIONS_CACHE_KEY)}); } catch {}
+if (expectsMenu(el.dataset.current || '', cached)) el.dataset.expectMenu = '';
+})();`;
+}
+
+/**
  * The item a navigation key moves focus to: arrows step and wrap, Home and
  * End jump. `index` is -1 when focus is outside the list. `null` for any
  * other key.

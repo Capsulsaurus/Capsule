@@ -19,6 +19,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { splitLocale } from '../src/lib/locales.mjs';
 import { walkFiles } from './lib/walk.mjs';
 
 /** The committed contract this check resolves against. */
@@ -30,7 +31,9 @@ const DOCS_ROOT = 'capsule-docs/src/content/docs';
 /**
  * Deliberately-unimplemented surfaces, as `<file>\t<METHOD /path>\t<reason>`.
  * Keyed on the citation rather than a line number, so reflowing a paragraph
- * does not churn the file. Mirrors `locales/i18n-guard-allowlist.txt`.
+ * does not churn the file. Mirrors `locales/i18n-guard-allowlist.txt`. A
+ * translation (`<DOCS_ROOT>/<locale>/…`, src/lib/locales.mjs) shares its
+ * English page's exemptions: it cites what the English page cites.
  */
 const ALLOWLIST = 'capsule-docs/endpoint-census-allowlist.txt';
 
@@ -44,6 +47,19 @@ const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
  * prose about the browser rather than a claim about the contract.
  */
 const PATH_PREFIXES = ['/v1/', '/s/', '/d/', '/.well-known/'];
+
+/**
+ * The English page a docs file translates, or the file itself when it is
+ * not a translation.
+ *
+ * @param {string} source Repo-relative path.
+ * @returns {string}
+ */
+export function originalOf(source) {
+    if (!source.startsWith(`${DOCS_ROOT}/`)) return source;
+    const { locale, path } = splitLocale(source.slice(DOCS_ROOT.length + 1));
+    return locale === undefined ? source : `${DOCS_ROOT}/${path}`;
+}
 
 /** Strip a query string, a trailing ellipsis, and surrounding punctuation. */
 function normalizePath(raw) {
@@ -160,8 +176,10 @@ export function checkEndpointCensus(root) {
         const body = readFileSync(join(root, source), 'utf8');
         for (const { citation, line } of endpointCitations(body)) {
             checked += 1;
-            const key = `${source}\t${citation}`;
-            if (allowed.has(key)) {
+            const key = [source, originalOf(source)]
+                .map((file) => `${file}\t${citation}`)
+                .find((candidate) => allowed.has(candidate));
+            if (key) {
                 exercised.add(key);
                 continue;
             }

@@ -1,0 +1,126 @@
+---
+title: Support
+description: Wo Sie eine Frage stellen, einen Fehler melden, eine Funktion vorschlagen oder eine Sicherheitslücke in Capsule melden, und was Sie angeben sollten, damit sich jemand darum kümmern kann.
+template: splash
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+Capsule wird von Freiwilligen öffentlich entwickelt und betreut. Es gibt keinen bezahlten oder
+privaten Supportkanal: Jede Frage, jede Meldung und jede Idee läuft über das GitHub des Projekts,
+wo jeder antworten kann und die Antwort der nächsten Person hilft. Die einzige Ausnahme ist eine
+Sicherheitslücke; sie wird vertraulich gemeldet.
+
+Capsule hatte noch kein Release; was heute funktioniert und was als Nächstes kommt, steht in der
+[Roadmap](https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md).
+
+<a id="before-you-ask"></a>
+
+## Bevor Sie fragen
+
+Die meisten Antworten gibt es schon. Eine Minute hier erspart meist eine Rückfrage.
+
+1. **Durchsuchen Sie die Dokumentation** mit dem Suchfeld oben auf jeder Seite, und lesen Sie
+   [](/guides/troubleshooting/). Dort stehen die häufigen Fehler und wie Sie Logs sammeln.
+2. **Durchsuchen Sie die [offenen und geschlossenen Issues](https://github.com/Capsulsaurus/Capsule/issues?q=is%3Aissue)**
+   und die [Diskussionen](https://github.com/Capsulsaurus/Capsule/discussions). Wenn es schon
+   jemand gemeldet hat, fügen Sie eine 👍-Reaktion oder einen Kommentar mit neuen Informationen
+   hinzu, statt ein Duplikat zu eröffnen.
+3. **Prüfen Sie die genauen Flags eines Befehls** in [](/reference/cli/).
+
+<a id="get-help"></a>
+
+## Hilfe bekommen
+
+<CardGrid>
+  <Card title="Eine Frage stellen" icon="comment">
+    Wie mache ich …? Ist das so gewollt? Hilfe bei der Einrichtung? Fragen Sie in
+    [Discussions › Q&A](https://github.com/Capsulsaurus/Capsule/discussions/categories/q-a).
+    Markieren Sie die Antwort, die das Problem gelöst hat, als Lösung, damit die nächste Person
+    sie findet.
+  </Card>
+  <Card title="Einen Fehler melden" icon="warning">
+    Etwas ist kaputt oder verhält sich anders als dokumentiert? Eröffnen Sie einen
+    [Fehlerbericht](https://github.com/Capsulsaurus/Capsule/issues/new?template=bug_report.yml).
+    Das Formular fragt nach Version, Plattform, Schritten zur Reproduktion und Logs: Ein Bericht
+    mit all dem lässt sich ohne Hin und Her einordnen.
+  </Card>
+  <Card title="Eine Funktion vorschlagen" icon="star">
+    Teilen Sie Ideen in
+    [Discussions › Ideas](https://github.com/Capsulsaurus/Capsule/discussions/categories/ideas),
+    wo andere dafür stimmen und sie verfeinern können. Die Maintainer machen aus einer Idee ein
+    Issue, sobald sie angenommen ist, und dort wird die Arbeit verfolgt.
+  </Card>
+  <Card title="Eine Sicherheitslücke melden" icon="padlock">
+    **Niemals in einem öffentlichen Issue.** Melden Sie sie vertraulich über ein
+    [GitHub Security Advisory](https://github.com/Capsulsaurus/Capsule/security/advisories/new).
+    Die [Sicherheitsrichtlinie](https://github.com/Capsulsaurus/Capsule/security/policy) nennt
+    die Versionen, die Korrekturen erhalten.
+  </Card>
+</CardGrid>
+
+<a id="specific-topics"></a>
+
+## Einzelne Themen
+
+<CardGrid>
+  <Card title="Einen Server betreiben" icon="setting">
+    Beginnen Sie mit [](/guides/self-hosting/), dann [](/guides/troubleshooting/). Kommen Sie
+    trotzdem nicht weiter? Fragen Sie in
+    [Q&A](https://github.com/Capsulsaurus/Capsule/discussions/categories/q-a) und geben Sie die
+    Version des Servers und sein Startlog an.
+  </Card>
+  <Card title="Fehlende oder beschädigte Fotos" icon="information">
+    Halten Sie inne und löschen Sie nichts. Lesen Sie
+    [](/guides/troubleshooting/#check-a-librarys-integrity) und
+    [](/design/backup-recovery/#recovery-paths), bevor Sie eine Lösung versuchen. Wenn Daten
+    verloren oder beschädigt sind, melden Sie es als Fehler: Der Schutz Ihrer Daten hat für das
+    Projekt oberste Priorität.
+  </Card>
+  <Card title="Übersetzungen" icon="translate">
+    Melden Sie einen falschen oder fehlenden Text mit einem
+    [Übersetzungsfehler](https://github.com/Capsulsaurus/Capsule/issues/new?template=translation-error.md),
+    oder wünschen Sie sich eine neue Sprache mit einer
+    [Sprachanfrage](https://github.com/Capsulsaurus/Capsule/issues/new?template=language-request.md).
+    Wie Übersetzungen entstehen, steht in
+    [locales/README.md](https://github.com/Capsulsaurus/Capsule/blob/master/locales/README.md).
+  </Card>
+  <Card title="Umzug von Google Fotos" icon="external">
+    Folgen Sie [](/guides/google-photos-migration/), einschließlich dessen, was der Importer nicht
+    garantieren kann, bevor Sie ein Importproblem melden.
+  </Card>
+</CardGrid>
+
+<a id="get-involved"></a>
+
+## Mitmachen
+
+<CardGrid>
+  <Card title="Beitragen" icon="github">
+    Lesen Sie den
+    [Leitfaden für Beiträge](https://github.com/Capsulsaurus/Capsule/blob/master/CONTRIBUTING.md),
+    und suchen Sie sich dann ein Issue mit dem Label
+    [good first issue](https://github.com/Capsulsaurus/Capsule/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+    aus. Fragen in Discussions zu beantworten hilft genauso viel.
+  </Card>
+  <Card title="Das Projekt unterstützen" icon="heart">
+    Capsule ist kostenlos und Open Source. Wenn es Ihnen nützt, hilft
+    [ein Sponsoring der Entwicklung auf GitHub](https://github.com/sponsors/justin13888), es am
+    Laufen zu halten.
+  </Card>
+</CardGrid>
+
+<a id="what-to-expect"></a>
+
+## Was Sie erwarten können
+
+- **Ehrenamtliche Zeit.** Fragen beantworten die Community und die Maintainer, wenn es ihre Zeit
+  erlaubt. Eine Antwortzeit ist nicht garantiert.
+- **Vollständige Berichte kommen zuerst dran.** Ein Fehlerbericht mit Version, Schritten zur
+  Reproduktion und Logs lässt sich bestätigen und beheben. Einer ohne diese Angaben wartet auf
+  eine Rückmeldung, bevor jemand handeln kann.
+- **Ein Thema pro Thread.** Zwei Probleme gehören in zwei Berichte, damit sich jedes für sich
+  verfolgen und schließen lässt.
+- **Standardmäßig öffentlich.** Alles außer der Meldung einer Sicherheitslücke ist öffentlich.
+  Schwärzen Sie daher Passphrasen, Wiederherstellungsgeheimnisse, Tokens, Serveradressen und
+  persönliche Dateipfade, bevor Sie ein Log einfügen.

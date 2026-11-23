@@ -3,7 +3,7 @@
 - **Status:** accepted
 - **Date:** 2026-10-22
 - **Supersedes:** —
-- **Superseded by:** —
+- **Superseded by:** [ADR-0017](0017-every-encrypted-blob-carries-a-header-with-a-key-commitment.md) (in part): its decision that originals keep the STREAM format unchanged. Its bounded-memory decision stands.
 - **Contract:** [Cryptography — Encryption § STREAM Construction](../capsule-docs/src/content/docs/design/cryptography/encryption.md#stream-construction)
 - **Issues:** #666
 

@@ -92,7 +92,7 @@ capsule-core = { path = "../capsule-core", features = ["test-support"] }
 # capsule-core's feature unification; a dev-dependency, so only test builds ask for it.
 aes-gcm = { version = "0.10", features = ["stream"] }
 proptest = { workspace = true }
-# The encoders the fixtures need and the shipping graph does not (see `capsule-core`'s manifest
-# for why `jpeg-encode` stays out of every release binary).
-rawshift-image = { version = "0.1.1", default-features = false, features = ["jpeg", "png"] }
+# The encoders the fixtures need and the shipping graph does not (see `capsule-core`'s manifest).
+# The workspace pin, so the fixtures and capsule-core resolve one rawshift revision.
+rawshift-image = { workspace = true, features = ["jpeg", "png"] }
 tempfile = "3"
