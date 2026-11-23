@@ -387,6 +387,94 @@ async fn an_offer_to_another_device_than_named_sends_nothing() {
     assert!(pulled.failed.is_empty(), "{:?}", pulled.failed);
 }
 
+/// A peer that connects and verifies inside the listen timeout keeps its session while it cuts
+/// its artifact past that timeout: the listen timeout bounds the wait for a verified peer, and
+/// the listing after it is the channel's to bound ([`capsule_sdk::peering::LISTING_BUILD_ALLOWANCE`]).
+/// The offering side stands in for a slow artifact build (a large library, or a loaded host) by
+/// waiting several listen timeouts between reading the offer and listing.
+#[tokio::test]
+async fn a_listing_built_past_the_listen_timeout_is_still_pulled() {
+    const LISTEN: Duration = Duration::from_millis(200);
+    let scratch = Scratch::new();
+    let mut pair = pair(&scratch);
+    let listener = PeerListener::bind("127.0.0.1:0".parse().expect("an address"), LISTEN)
+        .await
+        .expect("binds");
+    let address = listener.local_addr().expect("bound").to_string();
+    let (a_versions, b_versions) = (
+        MemoryDirectoryVersions::default(),
+        MemoryDirectoryVersions::default(),
+    );
+    let local_a = LocalPeer {
+        device_id: pair.a.device_id(),
+        signer: pair.a.device_signer(),
+        trust: &pair.trust,
+        versions: &a_versions,
+    };
+    let slow_offer = async {
+        let mut channel = dial(&address, local_a).await.expect("verified");
+        let offer = channel.receive_offer().await.expect("the offer reads");
+        tokio::time::sleep(LISTEN * 5).await;
+        let offering = Offering::new();
+        let served = serve(&mut channel, &offering, &pair.trust, &a_versions, |_| {
+            Err(DelegationError::AckMismatch)
+        })
+        .await;
+        (offer, served)
+    };
+    let none = BTreeSet::new();
+    let ((offer, served), pulled) = tokio::join!(
+        slow_offer,
+        receive(&mut pair.b, &pair.trust, &b_versions, &none, 0, &listener)
+    );
+    assert!(offer.is_some(), "the receiver opened with its offer");
+    assert!(served.is_ok(), "{served:?}");
+    assert!(pulled.failed.is_empty(), "{:?}", pulled.failed);
+    assert_eq!(pulled.peer, Some(pair.a.device_id()));
+    assert!(pulled.artifacts.is_empty() && pulled.applied.is_empty());
+}
+
+/// A verified peer that reads the offer and then hangs up without listing fails the pull under
+/// its own device id: the session was admitted, so the failure is the peer's, not the
+/// listener's timeout.
+#[tokio::test]
+async fn a_verified_peer_that_never_lists_fails_the_pull() {
+    let scratch = Scratch::new();
+    let mut pair = pair(&scratch);
+    let listener = PeerListener::bind(
+        "127.0.0.1:0".parse().expect("an address"),
+        Duration::from_secs(30),
+    )
+    .await
+    .expect("binds");
+    let address = listener.local_addr().expect("bound").to_string();
+    let (a_versions, b_versions) = (
+        MemoryDirectoryVersions::default(),
+        MemoryDirectoryVersions::default(),
+    );
+    let local_a = LocalPeer {
+        device_id: pair.a.device_id(),
+        signer: pair.a.device_signer(),
+        trust: &pair.trust,
+        versions: &a_versions,
+    };
+    let hang_up = async {
+        let mut channel = dial(&address, local_a).await.expect("verified");
+        channel.receive_offer().await.expect("the offer reads");
+    };
+    let none = BTreeSet::new();
+    let ((), pulled) = tokio::join!(
+        hang_up,
+        receive(&mut pair.b, &pair.trust, &b_versions, &none, 0, &listener)
+    );
+    assert_eq!(pulled.peer, Some(pair.a.device_id()));
+    assert_eq!(pulled.failed.len(), 1, "{:?}", pulled.failed);
+    assert_eq!(pulled.failed[0].subject, pair.a.device_id().to_string());
+    assert_ne!(pulled.failed[0].kind, "peering_timeout");
+    assert!(pulled.artifacts.is_empty() && pulled.applied.is_empty());
+    assert!(pulled.refused.is_empty(), "{:?}", pulled.refused);
+}
+
 /// A pull with no peer before the listen timeout reports it and writes nothing.
 #[tokio::test]
 async fn a_pull_with_no_peer_reports_the_timeout() {
