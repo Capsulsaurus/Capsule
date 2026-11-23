@@ -37,6 +37,11 @@
 //! quoted key to compare against (text lives in `<FormattedMessage id=…>`), so any
 //! captured web literal is a violation unless allowlisted.
 //!
+//! The same three surfaces are also scanned for physical-direction layout
+//! (`ml-`/`text-left` on the web, `chevron.left` in Swift, `TextAlign.Left` in
+//! Compose, a directional icon that does not mirror); those detectors live in
+//! [`layout`] and share the allowlist.
+//!
 //! Every detector is a pure `&str -> Vec<Finding>` function so the acceptance tests
 //! (zero findings on the migrated tree; an injected literal is caught) run without
 //! disk I/O.
@@ -49,6 +54,8 @@ use std::sync::OnceLock;
 use eyre::{Context, ContextCompat, Result, bail};
 use regex::Regex;
 use serde_json::Value;
+
+mod layout;
 
 /// Repo-relative path of the documented allowlist (one `path\tstring` per line;
 /// `#` comments and blank lines ignored). Entries suppress a single known,
@@ -112,13 +119,62 @@ pub(crate) fn run(root: &Path) -> Result<()> {
     )?;
     violations.retain(|v| !allowlist.contains(&(v.file.clone(), v.text.clone())));
 
+    let mut layout = Vec::new();
+    let never_a_key = |_text: &str| false;
+    scan_surface(
+        root,
+        &["capsule-web/src/routes", "capsule-web/src/components"],
+        "tsx",
+        &layout::web_findings,
+        &never_a_key,
+        &mut layout,
+    )?;
+    scan_surface(
+        root,
+        &["capsule-swift/App", "capsule-swift/Modules"],
+        "swift",
+        &layout::swift_findings,
+        &never_a_key,
+        &mut layout,
+    )?;
+    scan_surface(
+        root,
+        &["capsule-android/src"],
+        "kt",
+        &layout::kotlin_findings,
+        &never_a_key,
+        &mut layout,
+    )?;
+    layout.retain(|v| !allowlist.contains(&(v.file.clone(), v.text.clone())));
+
     // Runs before the literal verdict so a tree with both problems reports both
     // rather than hiding one behind the other's `bail!`.
     check_swift_error_codes(root, &keys)?;
 
-    if violations.is_empty() {
-        println!("i18n-guard: no hardcoded user-facing literals found across web/swift/compose.");
+    if violations.is_empty() && layout.is_empty() {
+        println!(
+            "i18n-guard: no hardcoded user-facing literals or physical-direction layout found \
+             across web/swift/compose."
+        );
         return Ok(());
+    }
+    if !layout.is_empty() {
+        eprintln!(
+            "i18n-guard: found {} physical-direction layout use(s). Use the logical form\n\
+             (leading/trailing, start/end, `ms-`/`me-`/`start-`/`text-start`, `Icons.AutoMirrored`,\n\
+             `chevron.forward`; a web icon flips with `rtl:rotate-180`), or, if the control is\n\
+             physically directional on purpose, add a `<path>\\t<token>` line to {ALLOWLIST_PATH}:\n",
+            layout.len()
+        );
+        for v in &layout {
+            eprintln!("  {}:{} [{}] {:?}", v.file, v.line, v.kind, v.text);
+        }
+    }
+    if violations.is_empty() {
+        bail!(
+            "i18n-guard failed: {} physical-direction layout use(s)",
+            layout.len()
+        );
     }
 
     eprintln!(
@@ -131,8 +187,9 @@ pub(crate) fn run(root: &Path) -> Result<()> {
         eprintln!("  {}:{} [{}] {:?}", v.file, v.line, v.kind, v.text);
     }
     bail!(
-        "i18n-guard failed: {} hardcoded literal(s)",
-        violations.len()
+        "i18n-guard failed: {} hardcoded literal(s), {} physical-direction layout use(s)",
+        violations.len(),
+        layout.len()
     );
 }
 

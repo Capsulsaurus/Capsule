@@ -233,13 +233,13 @@ function Storage() {
                                                 (category) => (
                                                     <div
                                                         key={category.nameId}
-                                                        className="flex items-center mr-6 mb-2"
+                                                        className="flex items-center me-6 mb-2"
                                                     >
                                                         <div
                                                             className={cn(
                                                                 'w-3 h-3 rounded-full',
                                                                 category.color,
-                                                                'mr-2',
+                                                                'me-2',
                                                             )}
                                                         />
                                                         <span className="text-sm text-gray-700">
@@ -266,7 +266,7 @@ function Storage() {
                                                 className={cn(
                                                     'w-3 h-3 rounded-full',
                                                     'bg-gray-200',
-                                                    'mr-2',
+                                                    'me-2',
                                                 )}
                                             />
                                             <span className="text-sm text-gray-700">
@@ -478,12 +478,12 @@ function AssetList({ assets }: { assets: Asset[] }) {
         }),
         columnHelper.accessor('size', {
             header: () => (
-                <div className="text-right">
+                <div className="text-end">
                     <FormattedMessage id="storage.col_size" />
                 </div>
             ),
             cell: (info) => (
-                <div className="text-right">
+                <div className="text-end">
                     {formatFileSize(info.getValue())}
                 </div>
             ),
@@ -491,12 +491,12 @@ function AssetList({ assets }: { assets: Asset[] }) {
         }),
         columnHelper.accessor('date', {
             header: () => (
-                <div className="text-right">
+                <div className="text-end">
                     <FormattedMessage id="storage.col_date" />
                 </div>
             ),
             cell: (info) => (
-                <div className="text-right">
+                <div className="text-end">
                     {intl.formatDate(info.getValue())}
                 </div>
             ),
@@ -538,7 +538,7 @@ function AssetList({ assets }: { assets: Asset[] }) {
                             {headerGroup.headers.map((header) => (
                                 <th
                                     key={header.id}
-                                    className="px-4 py-3 text-left text-sm font-medium text-gray-700"
+                                    className="px-4 py-3 text-start text-sm font-medium text-gray-700"
                                     onClick={header.column.getToggleSortingHandler()}
                                     onKeyDown={(e) => {
                                         if (
@@ -570,7 +570,7 @@ function AssetList({ assets }: { assets: Asset[] }) {
                                             header.getContext(),
                                         )}
                                         {header.column.getCanSort() && (
-                                            <span className="ml-1">
+                                            <span className="ms-1">
                                                 {header.column.getIsSorted() ===
                                                 'asc'
                                                     ? '🔼'

@@ -403,3 +403,121 @@ fn raw_jpeg_stack_import_hides_secondary() {
     stack_ids.dedup();
     assert_eq!(stack_ids.len(), 1, "both members share one stack id");
 }
+
+// ── Catalog batching ─────────────────────────────────────────────────────────
+
+/// What another connection to the catalog sees — only committed rows.
+fn committed(lib: &Path, table: &str) -> i64 {
+    rusqlite::Connection::open(lib.join("index/library.sqlite"))
+        .unwrap()
+        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+        .unwrap()
+}
+
+/// **The catalog commits once per batch, and before any source can be released.** With a
+/// batch of two over three files, a second connection sees nothing while the first batch is
+/// open, both of its rows once the second batch starts, and every row by the time `execute`
+/// returns — which is the earliest a caller can release a Move source, and the executor
+/// itself has released none.
+#[test]
+fn the_catalog_commits_per_batch_and_before_execute_returns() {
+    use std::cell::RefCell;
+
+    let src = TempDir::new().unwrap();
+    let lib_dir = TempDir::new().unwrap();
+    let mut sources = Vec::new();
+    for i in 0..3 {
+        let path = src.path().join(format!("photo_{i}.jpg"));
+        fs::write(&path, format!("batched content {i}").as_bytes()).unwrap();
+        sources.push(path);
+    }
+
+    let mut ws = signed_workspace(lib_dir.path());
+    let scan_result = scan(&[src.path().to_path_buf()]).unwrap();
+    let config = ImportConfig {
+        import_mode: ImportMode::Move,
+        ..Default::default()
+    };
+    let plan_result = plan(&scan_result, ws.db(), &config).unwrap();
+    assert_eq!(plan_result.actions.len(), 3);
+
+    let seen_at_start = RefCell::new(Vec::new());
+    let lib = lib_dir.path().to_path_buf();
+    let summary = execute_batched(
+        &plan_result,
+        &mut ws,
+        &config,
+        &SourceMetadataIndex::empty(),
+        |event| {
+            if let ImportProgressEvent::CandidateStarted { index, .. } = event {
+                seen_at_start
+                    .borrow_mut()
+                    .push((index, committed(&lib, "assets")));
+            }
+        },
+        &CancellationToken::new(),
+        2,
+    )
+    .unwrap();
+
+    assert_eq!(summary.imported_count(), 3);
+    assert_eq!(
+        seen_at_start.into_inner(),
+        vec![(0, 0), (1, 0), (2, 2)],
+        "rows become visible only when their batch commits"
+    );
+    assert_eq!(
+        committed(lib_dir.path(), "assets"),
+        3,
+        "every batch has committed when execute returns"
+    );
+    assert!(!ws.db().in_transaction());
+    for source in &sources {
+        assert!(source.exists(), "the executor releases no Move source");
+    }
+    assert_eq!(summary.held_sources().len(), 3);
+}
+
+/// **A failure inside a batch does not cost the batch its committed rows.** The stack write
+/// is refused after both members are imported and indexed; `execute` fails, but the members'
+/// rows — whose bundles are durable — are committed, and the half-written stack is not.
+#[test]
+fn a_failed_stack_write_keeps_its_members_indexed() {
+    let src = TempDir::new().unwrap();
+    let lib_dir = TempDir::new().unwrap();
+    fs::write(src.path().join("img_0001.jpg"), b"jpeg content").unwrap();
+    fs::write(src.path().join("img_0001.ARW"), b"raw content").unwrap();
+
+    let mut ws = signed_workspace(lib_dir.path());
+    ws.db()
+        .connection()
+        .execute_batch(
+            "CREATE TRIGGER refuse_stacks BEFORE INSERT ON stack_members
+             BEGIN SELECT RAISE(ABORT, 'injected stack failure'); END;",
+        )
+        .unwrap();
+    let scan_result = scan(&[src.path().to_path_buf()]).unwrap();
+    let config = ImportConfig::default();
+    let plan_result = plan(&scan_result, ws.db(), &config).unwrap();
+
+    let result = execute(
+        &plan_result,
+        &mut ws,
+        &config,
+        noop_event,
+        &CancellationToken::new(),
+    );
+
+    assert!(result.is_err(), "the stack write failed the run");
+    assert!(!ws.db().in_transaction(), "the batch was still closed");
+    assert_eq!(
+        committed(lib_dir.path(), "assets"),
+        2,
+        "both members' rows committed despite the failure"
+    );
+    assert_eq!(
+        committed(lib_dir.path(), "asset_stacks"),
+        0,
+        "the stack row rolled back with its refused members"
+    );
+}

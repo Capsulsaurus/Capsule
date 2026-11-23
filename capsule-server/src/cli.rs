@@ -102,9 +102,9 @@ pub struct BackendArgs {
     #[arg(long, value_name = "PATH")]
     pub blob_root: Option<PathBuf>,
 
-    /// Run on the in-memory adapters instead of Postgres and Valkey.
+    /// Run on the in-memory adapters instead of Postgres.
     ///
-    /// A development profile, and an explicit act: a deployment that merely forgot `VALKEY_URL`
+    /// A development profile, and an explicit act: a deployment that merely forgot `DATABASE_URL`
     /// must fail closed rather than come up holding state it loses on the next restart.
     #[arg(long)]
     pub memory: bool,
@@ -265,7 +265,7 @@ pub enum Command {
 
     /// Emit the OpenAPI 3.2 document the SDK's client is generated from.
     ///
-    /// Needs no database, no Valkey, no key material, no disk and no network: the router is
+    /// Needs no database, no key material, no disk and no network: the router is
     /// built purely to describe it, which is what lets `--check` run in the Rust check gate.
     GenOpenapi {
         /// Output path for the document, relative to the repo root.
@@ -588,6 +588,8 @@ async fn serve(config: &Config) -> Result<ExitCode> {
     recover_stranded_claims(&assembled.app).await;
     // Detached, like the recovery: only a federating deployment has a worker to start (#1117).
     let _pull_worker = assembled.spawn_pull_worker();
+    // Detached too: only the durable arm has expired rows to reclaim.
+    let _expiry_sweeper = assembled.spawn_expiry_sweeper();
     // The router is built here rather than through `Assembled::service` because the trusted-proxy
     // policy is a property of the listener's deployment, not of the assembled stores (#704).
     tracing::info!(

@@ -1,14 +1,14 @@
-# The two external services a Capsule deployment needs, for local development.
+# The one external service a Capsule deployment needs, for local development.
 #
 # Bring them up with `mise run serve-deps` and the server up with `mise run serve`. The two are
 # deliberately separate tasks: a task that silently starts containers is a task that leaks them.
 #
-# **Both services are read.** A durable `capsule-server serve` opens the Postgres pool from
-# `DATABASE_URL` (#402), refusing a schema it was not built for until `capsule-server-migration up`
-# has run, and then proves `VALKEY_URL` answers (#403). With both services up, the migration
-# applied and `capsule-server/.env.example` exported, `mise run serve` runs a durable server;
-# `mise run serve-memory` needs neither service. The file is also what dependabot tracks the
-# images against.
+# A durable `capsule-server serve` opens the Postgres pool from `DATABASE_URL`, refusing a schema
+# it was not built for until `capsule-server-migration up` has run. Every durable port is on that
+# one database — sessions, upload sessions and rate limits included (ADR-0015 retired Valkey).
+# With Postgres up, the migration applied and `capsule-server/.env.example` exported,
+# `mise run serve` runs a durable server; `mise run serve-memory` needs no service. The file is
+# also what dependabot tracks the images against.
 #
 # There is deliberately **no object store**. Blobs are written to the filesystem `BLOB_ROOT`,
 # which is the blob backend and not a cache in front of one (design/filesystem/server.md); a
@@ -42,39 +42,6 @@ services:
       retries: 12
     volumes:
       - postgres_data:/var/lib/postgresql/data:Z,U
-
-  valkey:
-    image: docker.io/valkey/valkey:9.0.4
-    ports:
-      # Loopback only, and here it is load-bearing rather than tidy: `--protected-mode no` below
-      # is safe *because* nothing outside this machine can reach the port, and the two have to
-      # agree.
-      - "127.0.0.1:6379:6379"
-    environment:
-      # Carried over from the retired deployment, with one deliberate change. `noeviction`, not
-      # the retired `volatile-lru`: every key here is correctness state rather than cache, and an
-      # LRU over keys with a TTL can drop a per-user session index while the sessions it lists
-      # live on, so "revoke all sessions" would revoke none (#519). Under `noeviction` a full
-      # server refuses the write and every port fails closed; the counter ceilings and the
-      # `gc --apply` sweep of the upload-progress set are what keep the key space bounded.
-      # `appendonly` with `everysec` so a restart loses at most a second of session state rather
-      # than all of it, and the `lazyfree-*` set so expiry and deletion do not block the command
-      # that triggered them.
-      # `protected-mode no` is a development-only concession, and it is only a concession because
-      # the port above is published to loopback rather than to every interface.
-      #
-      # These flags do reach the server. `VALKEY_EXTRA_FLAGS` is often described as a Bitnami
-      # convention, but the official image honours it too: `valkey/valkey:9.0.4`'s own
-      # `/usr/local/bin/docker-entrypoint.sh` ends with `exec "$@" $VALKEY_EXTRA_FLAGS`,
-      # unquoted, so the variable word-splits into arguments of `valkey-server`.
-      VALKEY_EXTRA_FLAGS: "--maxmemory 4G --maxmemory-policy noeviction --save 900 1 300 10 --appendonly yes --appendfsync everysec --no-appendfsync-on-rewrite yes --auto-aof-rewrite-percentage 100 --auto-aof-rewrite-min-size 64mb --lazyfree-lazy-eviction yes --lazyfree-lazy-expire yes --lazyfree-lazy-server-del yes --replica-lazy-flush yes --protected-mode no --tcp-keepalive 60 --loglevel notice --slowlog-log-slower-than 10000 --slowlog-max-len 128 --io-threads 4"
-    healthcheck:
-      test: ["CMD-SHELL", "valkey-cli ping | grep -q PONG"]
-      interval: 5s
-      timeout: 3s
-      retries: 12
-    volumes:
-      - valkey_data:/data:Z,U
 
   # A development identity provider for the OIDC relying party (issue #407). Not a
   # dependency of the server — a deployment without `OIDC_ISSUER` never talks to it — so it is a
@@ -150,4 +117,3 @@ configs:
 
 volumes:
   postgres_data:
-  valkey_data:

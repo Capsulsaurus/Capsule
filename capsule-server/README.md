@@ -26,22 +26,23 @@ framework-free and testable without a router, which is why the operator workers 
 have no wire surface at all.
 
 Authentication state and upload-session state stay behind separate Capsule-owned ports whose
-adapters are Valkey and a deterministic in-memory double — not Postgres, which
-[Filesystem — Server](../capsule-docs/src/content/docs/design/filesystem/server.md) rejects for a
-session table. The durable records go to Postgres. There is no generic CAS, transfer or TTL
-abstraction, and none is planned.
+adapters are Postgres and a deterministic in-memory double (ADR-0015). Postgres is the only
+database: each expiring port keeps its own typed table whose rows carry their own `expires_at`, as
+[Filesystem — Server](../capsule-docs/src/content/docs/design/filesystem/server.md) requires. There
+is no generic CAS, transfer or TTL abstraction, and none is planned.
 
-## Every port has a double, and four of them have Postgres besides
+## Every port has a double, and a Postgres adapter besides
 
 Every port here has a deterministic in-memory adapter and a conformance suite, and that ordering
 was deliberate rather than an omission: the contract and its suite are what a real adapter is
 written *against*, and a port with two implementations before it has one suite is a port whose
 implementations will disagree.
 
-Every durable port now has the second implementation on Postgres (#402, #446), and every volatile
-one on Valkey (#403), each passing the same case list as its double against a container — the two
-OIDC stores included (#460): the pending ceremonies are on Valkey, and the federated accounts are
-rows of the Postgres account table, with a null credential no password can sign in to.
+Every port now has its second implementation on Postgres (#402, #446, #1214), each passing the
+same case list as its double against a container — the two OIDC stores included (#460): the
+pending ceremonies are rows of their own table, and the federated accounts are rows of the account
+table, with a null credential no password can sign in to. The counters split: the two per-chunk
+throughput budgets count in-process, every other budget counts in Postgres (`counter::split`).
 
 **The test suite still runs without a container.** Every Postgres case is gated on
 `CAPSULE_TEST_POSTGRES=1` and prints one line naming itself when it is skipped:
@@ -75,7 +76,7 @@ flavour. One test (`tests/sdk_client.rs`) binds an ephemeral port, because the p
 that the **generated** SDK client round-trips the real router over TCP — is the one an in-process
 client cannot.
 
-`mise run test-rust-containers` runs the Postgres and Valkey tiers, and with them the backup drill
+`mise run test-rust-containers` runs the Postgres tier, and with it the backup drill
 in `capsule-e2e/tests/backup_restore_drill.rs`. The drill takes a hot backup of a durable server,
 restores it onto a fresh host, and rebuilds the index from the owner ledgers into an empty
 database. It follows the procedure in the
@@ -110,10 +111,9 @@ capsule-server [--config PATH] <SUBCOMMAND>
   gen-openapi [FILE] [--check]
 
 Without `--memory` the three operator commands run on the durable stores `serve` writes, and need
-`DATABASE_URL` and then `VALKEY_URL`, in that order. The collector marks a blob on one pass and
-sweeps it on a later one, so its marks live in Postgres beside the index; the scrub reconciles the
-index against the upload sessions, which is how it tells a live transfer from an orphan, and those
-are Valkey's (#403). With `--memory` a fresh process can only ever mark, because its marks die with
+`DATABASE_URL`. The collector marks a blob on one pass and sweeps it on a later one, so its marks
+live in Postgres beside the index; the scrub reconciles the index against the upload sessions,
+which is how it tells a live transfer from an orphan, and those are in Postgres too. With `--memory` a fresh process can only ever mark, because its marks die with
 it.
 ```
 
@@ -130,8 +130,8 @@ manufacture custody evidence, and a different HKDF label over the same input is 
 `serve --memory` derives it, because a development server's whole state is discarded on exit.
 
 `boot::assemble` is the one composition root. `--memory` takes every in-crate adapter over a real
-filesystem blob store; anything else needs both `DATABASE_URL` and `VALKEY_URL`, and a deployment
-that forgot either is refused at startup with exit code 2, naming every missing variable at once,
+filesystem blob store; anything else needs `DATABASE_URL`, and a deployment that
+forgot it is refused at startup with exit code 2, naming every missing variable at once,
 rather than coming up on state it loses at the next restart.
 
 Logs go to stderr. stdout is a data channel: `serve` writes one `listening on <url>` line there,
@@ -141,25 +141,19 @@ which is how a `--listen 127.0.0.1:0` caller learns its port.
 needs `ATTESTATION_KEY_SEED`, because it signs each purge into the owner ledger before applying it,
 and it refuses to apply without the seed. It may run while `serve` is up: the two processes append
 to the ledger under a shared file lock. Without `--memory` they
-read the durable stores, so they need `DATABASE_URL` and `VALKEY_URL` as `serve` does. Dry run is the default for
+read the durable stores, so they need `DATABASE_URL` as `serve` does. Dry run is the default for
 the two that write; `scrub` mutates nothing and exits non-zero on a non-empty report. `gc --apply`
-also sweeps the upload-progress set, the one Valkey index with no lifetime of its own, so run it
-on a schedule rather than only when blobs need collecting (#519).
-
-Valkey must run with `--maxmemory-policy noeviction`, as `compose.yaml` does. Every key the
-server writes there is correctness state rather than cache: an evicting policy such as
-`volatile-lru` can drop a per-user session index while its sessions live on, and *revoke all
-sessions* then revokes none of them. Under `noeviction` a full server refuses writes and the server
-fails closed; the per-kind counter ceilings and the `gc --apply` sweep keep the key space bounded,
-so size `maxmemory` for live state rather than relying on eviction to make room.
+also deletes expired state rows (sessions, upload sessions, ceremonies, counter windows) through
+the `store::sweep` expiry sweeper, which `serve` runs on its own every five minutes. Every read
+already treats an expired row as absent, so the sweep reclaims space and never decides liveness.
 
 ## What is owed
 
 **A durable `serve` runs, OIDC included.** It opens the pool from `DATABASE_URL` and refuses a
-schema it was not built for, naming `capsule-server-migration up`. It then proves `VALKEY_URL`
-answers `PING`, and builds every port on one of the two: Postgres for every record a restart must
-not lose — the accounts, federated ones among them (#460) — and Valkey for the session,
-upload-session, ceremony and counter state, the pending OIDC authorizations among them.
+schema it was not built for, naming `capsule-server-migration up`. It builds every port on
+Postgres: every record a restart must not lose — the accounts, federated ones among them (#460) —
+and the session, upload-session, ceremony and counter state, the pending OIDC authorizations among
+them. A leftover `VALKEY_URL` is ignored with a warning.
 
 No port on that path is in-memory:
 [Filesystem — Server](../capsule-docs/src/content/docs/design/filesystem/server.md) says required

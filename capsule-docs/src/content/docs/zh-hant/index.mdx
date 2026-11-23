@@ -1,0 +1,93 @@
+---
+title: Capsule
+description: 一個開源的相片庫：在您自己的裝置上整理一生的相片，為每一張都提供端對端加密，並為跨伺服器分享而設計。
+status: draft
+template: splash
+hero:
+  title: 一生的相片，井然有序，隱私無虞
+  tagline: Capsule 在您自己的裝置上整理整個相片庫，每張相片都經過端對端加密，存放在從不持有金鑰的伺服器上，並為跨伺服器分享而設計。
+  image:
+    # Raw HTML rather than `file`: Starlight's hero sizes `file` images to a
+    # 400x400 square, which crops a portrait screenshot.
+    html: |
+      <img class="hero-shot hero-shot-light" src="/images/hero-light.webp" width="800" height="1538" alt="iPhone 上的 Capsule，顯示相片庫時間軸" />
+      <img class="hero-shot hero-shot-dark" src="/images/hero-dark.webp" width="800" height="1538" alt="iPhone 上的 Capsule，顯示相片庫時間軸" />
+  actions:
+    - text: 開始使用
+      link: /guides/getting-started/
+      icon: right-arrow
+    - text: 閱讀設計文件
+      link: /design/
+      variant: secondary
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+import Feature from '../../../components/Feature.astro';
+import FeatureGrid from '../../../components/FeatureGrid.astro';
+import StatusStrip from '../../../components/StatusStrip.astro';
+
+<StatusStrip
+  text="行動用戶端正在穩定與改進中，之後將提供給 Beta 測試人員。"
+  href="https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md"
+  linkLabel="路線圖"
+/>
+
+<a id="what-sets-capsule-apart"></a>
+
+## Capsule 的與眾不同之處
+
+<FeatureGrid>
+  <Feature icon="random" title="任何規模，井然有序" href="/features/smart-albums/" linkLabel="智慧相簿">
+    搜尋、智慧相簿與自動標記都設計為在您的裝置上、根據完整的本機索引執行，因此即使相片庫中有數百萬張相片，也不需要任何人手動整理，依然方便瀏覽。
+  </Feature>
+  <Feature icon="padlock" title="不持有金鑰的伺服器" href="/design/cryptography/" linkLabel="密碼學設計">
+    伺服器只儲存密文，從不持有金鑰。它無法讀取任何相片、說明文字或相簿標題，卻會為它接受的每一次上傳簽發一份保管收據。
+  </Feature>
+  <Feature icon="server" title="跨伺服器分享" href="/design/federation/" linkLabel="聯邦設計">
+    信任建立在密碼學之上，而不是伺服器之上，因此位於不同 Capsule 伺服器的人可以互相分享相簿，中間沒有任何中央服務。
+  </Feature>
+  <Feature icon="laptop" title="完整相片庫，離線也能用" href="/features/offline-library/" linkLabel="離線相片庫">
+    每個原生應用程式都設計為保存您留下的每一張相片的完整索引，因此不需連線即可瀏覽、搜尋與整理全部內容。
+  </Feature>
+  <Feature icon="approve-check-circle" title="可驗證的歷史" href="/design/cryptography/provenance/" linkLabel="來源設計">
+    每個資源都帶有一條經過簽章、只能附加的來源鏈，因此是哪個人、哪部裝置匯入或編輯了它，都經過驗證，而不是憑信任接受。
+  </Feature>
+  <Feature icon="database" title="設計上即可復原" href="/design/backup-recovery/" linkLabel="備份與復原">
+    每個資源都搭配一個經過簽章的中繼資料附屬檔（sidecar），因此即使沒有資料庫，相片庫依然可讀，並能從部分損毀中重建。
+  </Feature>
+</FeatureGrid>
+
+<a id="everything-you-would-expect"></a>
+
+## 您期待的功能，一應俱全
+
+原始檔以完整品質保存，可逐位元組還原。RAW 與影片皆為一級支援的格式。原生應用程式採用各平台自己的控制項打造。CLI 與 TUI 能完成應用程式能做的一切；請參閱 [](/reference/cli/)。
+
+<a id="why-it-is-built-this-way"></a>
+
+## 為什麼這樣打造
+
+大多數相片服務都要您二選一：要麼取得伺服器透過讀取您的相片庫才能提供的功能，要麼取得伺服器無法讀取時才有的隱私。Capsule 選擇了隱私，並在您的裝置上、根據只有這些裝置才能解密的資料，重新打造這些功能。
+
+這個選擇有其代價，設計文件會如實說明，而不是加以隱藏：不持有金鑰的伺服器能告訴您什麼、不能告訴您什麼（[](/design/notifications/)），金鑰遺失時會發生什麼事（[](/design/backup-recovery/#recovery-paths)），以及有缺陷或惡意的用戶端會被阻止做哪些事（[](/design/threat-model/)）。
+
+<a id="get-started"></a>
+
+## 開始使用
+
+<CardGrid>
+  <Card title="架設伺服器" icon="server">
+    在您自己的硬體上執行 Capsule。[](/guides/self-hosting/)
+  </Card>
+  <Card title="使用 Capsule" icon="open-book">
+    匯入、整理與瀏覽您的相片庫。[](/guides/user-guide/)
+  </Card>
+  <Card title="帶來您的相片庫" icon="cloud-download">
+    匯入 Google 相簿的 Takeout 匯出檔及其中繼資料。
+    [](/guides/google-photos-migration/)
+  </Card>
+  <Card title="參與打造 Capsule" icon="code-branch">
+    每一行程式碼都是開源的，並以公開方式開發。
+    [](/development/local-development/)
+  </Card>
+</CardGrid>

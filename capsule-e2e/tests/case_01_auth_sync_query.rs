@@ -6,11 +6,11 @@
 //! is what `capsule sync` and `capsule list` run; the SDK session is the one the CLI would have
 //! persisted after `capsule auth login`.
 
+use capsule_cli::db::LocalDb;
 use capsule_cli::remote::{self, RemoteConfig};
 use capsule_cli::session::SessionStore;
 use capsule_e2e::push::push_asset;
 use capsule_e2e::{Device, PROTOCOL_VERSION, Server};
-use migration::{Migrator, MigratorTrait as _};
 
 #[tokio::test]
 async fn e2e_case_1_sign_in_sync_and_a_local_query_lists_the_album() {
@@ -23,16 +23,9 @@ async fn e2e_case_1_sign_in_sync_and_a_local_query_lists_the_album() {
     // a fresh sign-in on the account, not the registration session.
     let signed_in = device.login_again(&server).await;
     let home = tempfile::tempdir().expect("a temp CLI home");
-    let db_url = format!(
-        "sqlite://{}?mode=rwc",
-        home.path().join("library.sqlite").display()
-    );
-    let db = sea_orm::Database::connect(&db_url)
+    let db = LocalDb::open_async(home.path().join("library.sqlite"))
         .await
-        .expect("the CLI store opens");
-    Migrator::up(&db, None)
-        .await
-        .expect("the CLI migrations run");
+        .expect("the CLI store opens and migrates");
     let store = SessionStore::new(home.path().join("session.json"));
     let persisted = signed_in.export().await.expect("a live session exports");
     store.save(&persisted).expect("the session persists");

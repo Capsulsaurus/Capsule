@@ -70,16 +70,14 @@ pub fn execute(
 /// discarded once the plan was built. A file the index does not cover imports exactly as it
 /// does through [`execute`].
 ///
+/// **Catalog batching.** The plan runs in bounded batches (`IMPORT_BATCH_SIZE`, 64 entries),
+/// each one catalog transaction with every asset's index write a savepoint inside it. A
+/// `CandidateCompleted` event can therefore precede the commit that makes its rows visible
+/// to another connection; every batch has committed by the time this returns, which is
+/// before any caller can release a Move source.
+///
 /// [source adapter]: crate::import::SourceAdapter
 /// [precedence rule]: https://docs/design/import/pipeline/#third-party-importers
-#[tracing::instrument(
-    skip_all,
-    fields(
-        candidates = plan.actions.len(),
-        mode = ?config.import_mode,
-        source_metadata = source.len(),
-    )
-)]
 pub fn execute_with_source_metadata(
     plan: &ImportActionPlan,
     workspace: &mut Workspace,
@@ -87,6 +85,37 @@ pub fn execute_with_source_metadata(
     source: &SourceMetadataIndex,
     on_event: impl Fn(ImportProgressEvent),
     cancel: &CancellationToken,
+) -> Result<ImportExecutionSummary, ExecError> {
+    execute_batched(
+        plan,
+        workspace,
+        config,
+        source,
+        on_event,
+        cancel,
+        IMPORT_BATCH_SIZE,
+    )
+}
+
+/// [`execute_with_source_metadata`] with the catalog batch size as a parameter, so tests can
+/// cross a batch boundary without importing [`IMPORT_BATCH_SIZE`] files.
+#[tracing::instrument(
+    skip_all,
+    fields(
+        candidates = plan.actions.len(),
+        mode = ?config.import_mode,
+        source_metadata = source.len(),
+        batch_size,
+    )
+)]
+pub(crate) fn execute_batched(
+    plan: &ImportActionPlan,
+    workspace: &mut Workspace,
+    config: &ImportConfig,
+    source: &SourceMetadataIndex,
+    on_event: impl Fn(ImportProgressEvent),
+    cancel: &CancellationToken,
+    batch_size: usize,
 ) -> Result<ImportExecutionSummary, ExecError> {
     // The library is the only authority on the derived de facto album (rule 3), so bind it
     // here and run the *same* resolution the planner ran — one policy, never two. The plan's
@@ -115,43 +144,63 @@ pub fn execute_with_source_metadata(
 
     let mut summary = ImportExecutionSummary::default();
     let mut enriched_candidates = 0u64;
+    let batch_size = batch_size.max(1);
 
-    for (i, (candidate, decision)) in plan.actions.iter().enumerate() {
+    for (batch_no, batch) in plan.actions.chunks(batch_size).enumerate() {
         if cancel.is_cancelled() {
             break;
         }
+        let base = batch_no * batch_size;
+        tracing::debug!(
+            batch = batch_no,
+            first_candidate = base,
+            candidates = batch.len(),
+            "import: catalog batch starting"
+        );
+        let cancelled = in_catalog_batch(workspace, |workspace| {
+            for (offset, (candidate, decision)) in batch.iter().enumerate() {
+                if cancel.is_cancelled() {
+                    return Ok(true);
+                }
+                let i = base + offset;
 
-        let primary_path = candidate.primary_path().clone();
-        on_event(ImportProgressEvent::CandidateStarted {
-            index: i as u64,
-            total,
-            primary_path: primary_path.clone(),
-        });
+                let primary_path = candidate.primary_path().clone();
+                on_event(ImportProgressEvent::CandidateStarted {
+                    index: i as u64,
+                    total,
+                    primary_path: primary_path.clone(),
+                });
 
-        let outcomes = match decision {
-            ImportDecision::Import => {
-                enriched_candidates +=
-                    u64::from(source.get(candidate.primary_path().as_path()).is_some());
-                execute_candidate(candidate, workspace, config, album_id, source)?
-            }
-            ImportDecision::SkipDuplicate { existing_uuid } => {
-                vec![(
-                    primary_path,
-                    ImportOutcome::DuplicateSkipped {
-                        existing_uuid: existing_uuid.clone(),
-                    },
-                )]
-            }
-            ImportDecision::SkipError(msg) => {
-                vec![(primary_path, ImportOutcome::CorruptUnreadable(msg.clone()))]
-            }
-        };
+                let outcomes = match decision {
+                    ImportDecision::Import => {
+                        enriched_candidates +=
+                            u64::from(source.get(candidate.primary_path().as_path()).is_some());
+                        execute_candidate(candidate, workspace, config, album_id, source)?
+                    }
+                    ImportDecision::SkipDuplicate { existing_uuid } => {
+                        vec![(
+                            primary_path,
+                            ImportOutcome::DuplicateSkipped {
+                                existing_uuid: existing_uuid.clone(),
+                            },
+                        )]
+                    }
+                    ImportDecision::SkipError(msg) => {
+                        vec![(primary_path, ImportOutcome::CorruptUnreadable(msg.clone()))]
+                    }
+                };
 
-        on_event(ImportProgressEvent::CandidateCompleted {
-            index: i as u64,
-            outcomes: outcomes.clone(),
-        });
-        summary.outcomes.extend(outcomes);
+                on_event(ImportProgressEvent::CandidateCompleted {
+                    index: i as u64,
+                    outcomes: outcomes.clone(),
+                });
+                summary.outcomes.extend(outcomes);
+            }
+            Ok(false)
+        })?;
+        if cancelled {
+            break;
+        }
     }
 
     on_event(ImportProgressEvent::ImportCompleted {
@@ -174,6 +223,46 @@ pub fn execute_with_source_metadata(
         "import: execution complete"
     );
     Ok(summary)
+}
+
+// ── Catalog batching ─────────────────────────────────────────────────────────
+
+/// How many plan entries share one catalog transaction.
+///
+/// Without batching every imported file cost the catalog its own commits (the asset row, its
+/// tags and its original's cache entry), each a WAL append and sync. 64 amortises that to one
+/// commit per 64 entries while keeping both costs of a large batch small: the write
+/// transaction (and the WAL frames it pins) stays short-lived, and a crash before the commit
+/// leaves at most 64 durable bundles without index rows, which the next
+/// [`Workspace::open`] re-indexes from their sidecars.
+pub(crate) const IMPORT_BATCH_SIZE: usize = 64;
+
+/// Run `body` inside one catalog batch and commit it, **whether or not `body` succeeded**.
+///
+/// Every asset `body` imports is durable on disk before its index rows are written, and each
+/// asset's rows are their own savepoint (so a failed asset rolled back only itself). The
+/// rows that did land therefore belong to bundles that exist, and are committed even when
+/// `body` ends in an error — rolling them back would leave durable bundles unindexed until the
+/// next open. Nothing inside a batch deletes or releases a source: the bulk executor defers
+/// every Move release to its caller, which runs only after this commit returned.
+fn in_catalog_batch<T>(
+    workspace: &mut Workspace,
+    body: impl FnOnce(&mut Workspace) -> Result<T, ExecError>,
+) -> Result<T, ExecError> {
+    workspace.db().begin_batch()?;
+    let outcome = body(workspace);
+    if let Err(e) = workspace.db().commit_batch() {
+        // The bundles are durable; only their rows were lost with the batch, and the next
+        // `Workspace::open` reconciles them from their sidecars.
+        tracing::error!(
+            error = %e,
+            body_failed = outcome.is_err(),
+            "import: catalog batch commit failed; its assets are on disk and are re-indexed \
+             on the next open"
+        );
+        return Err(e.into());
+    }
+    outcome
 }
 
 // ── Per-member enrichment ────────────────────────────────────────────────────
@@ -294,19 +383,30 @@ pub(crate) fn persist_stack(
         created_at: now,
         modified_at: now,
     };
-    workspace.db().insert_stack(&stack_row)?;
-
-    for (seq, (uuid, role)) in imported.iter().enumerate() {
-        let member_row = StackMemberRow {
-            id: format!("{stack_id}#{seq}"),
-            stack_id: stack_id.to_string(),
-            asset_id: uuid.clone(),
-            sequence_order: seq as i64,
-            member_role: role_str(*role).to_string(),
-            created_at: now,
-        };
-        workspace.db().insert_stack_member(&member_row)?;
-    }
+    // One scope: a stack row is never left without its members (or the reverse). Inside a
+    // bulk batch it is a savepoint, so a failure here rolls back only the stack, never the
+    // member rows already indexed.
+    let db = workspace.db();
+    db.with_transaction(|| {
+        db.insert_stack(&stack_row)?;
+        for (seq, (uuid, role)) in imported.iter().enumerate() {
+            let member_row = StackMemberRow {
+                id: format!("{stack_id}#{seq}"),
+                stack_id: stack_id.to_string(),
+                asset_id: uuid.clone(),
+                sequence_order: seq as i64,
+                member_role: role_str(*role).to_string(),
+                created_at: now,
+            };
+            db.insert_stack_member(&member_row)?;
+        }
+        Ok::<_, rusqlite::Error>(())
+    })?;
+    tracing::debug!(
+        stack_id,
+        members = imported.len(),
+        "import: stack rows written"
+    );
     Ok(())
 }
 

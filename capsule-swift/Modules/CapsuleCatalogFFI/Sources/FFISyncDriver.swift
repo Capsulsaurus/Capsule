@@ -364,8 +364,9 @@ public actor FFISyncDriver {
             known = fold.known
             listed.formUnion(fold.listed)
             tally.add(fold.tally)
+            let pagesSoFar = tally.pages
             syncLog.debug(
-                "sync page \(tally.pages, privacy: .public) kept: \(page.entries.count, privacy: .public) entries, more=\(page.hasMore, privacy: .public)"
+                "sync page \(pagesSoFar, privacy: .public) kept: \(page.entries.count, privacy: .public) entries, more=\(page.hasMore, privacy: .public)"
             )
             guard page.hasMore else { return }
         }

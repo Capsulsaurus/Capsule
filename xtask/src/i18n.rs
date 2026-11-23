@@ -6,10 +6,14 @@
 //!
 //! - `capsule-i18n/src/bundles/<locale>.json` + `generated.rs` — the Rust runtime bundle.
 //! - `capsule-web/src/i18n/messages/<locale>.json` — the FormatJS-consumable web catalog.
+//! - `capsule-web/src/i18n/messages/{en-XA,ar-XB}.json` — the web client's development-only
+//!   [`pseudo`]-locales, derived from the source catalog.
 //! - `capsule-android/.../res/values[-<qualifier>]/strings.xml` — Android resources.
 //! - `capsule-android/.../res/xml/locales_config.xml` — the Android per-app language list.
 //! - `capsule-swift/Generated/Localizable.xcstrings` — the iOS app's Apple String Catalog.
 //! - `capsule-swift/Generated/InfoPlist.xcstrings` — the `Info.plist` usage descriptions.
+//! - `locales/stats.json` — per-locale translated and reviewed percentages, read live by
+//!   the README's translation badges so the README itself never changes with a catalog.
 //!
 //! Every renderer is a pure function of the parsed catalogs, so `--check` can
 //! re-render in memory and diff against the committed files — the CI drift gate.
@@ -34,16 +38,96 @@ use capsule_i18n::plural;
 use eyre::{Context, ContextCompat, Result, bail};
 use serde_json::{Map, Value};
 
-/// Render every target and either write the files or, in `check` mode, verify the
-/// committed files match (failing if any drifted).
-pub(crate) fn run(root: &Path, check: bool) -> Result<()> {
+mod lifecycle;
+mod pseudo;
+
+/// What `xtask i18n` does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Mode {
+    /// Validate the catalogs and write every generated file.
+    Generate,
+    /// Validate the catalogs and verify the committed files match (the CI drift gate).
+    Check,
+    /// Print one locale's missing and stale keys as JSON, for a translation pass.
+    Todo(String),
+    /// Record `source` on every translation entry that lacks one.
+    Stamp,
+}
+
+impl Mode {
+    /// Parse the arguments after `i18n`.
+    pub(crate) fn parse(mut args: impl Iterator<Item = String>) -> Result<Self> {
+        const USAGE: &str = "usage: xtask i18n [--check | --todo <locale> | --stamp]";
+        let mode = match args.next().as_deref() {
+            None => Self::Generate,
+            Some("--check") => Self::Check,
+            Some("--stamp") => Self::Stamp,
+            Some("--todo") => Self::Todo(args.next().context(USAGE)?),
+            Some(other) => bail!("unknown flag `{other}`; {USAGE}"),
+        };
+        if let Some(extra) = args.next() {
+            bail!("unexpected argument `{extra}`; {USAGE}");
+        }
+        Ok(mode)
+    }
+}
+
+/// Run `xtask i18n` in `mode`. Generation and the check refuse a catalog set with any
+/// placeholder or [`lifecycle`] problem before rendering anything.
+pub(crate) fn run(root: &Path, mode: Mode) -> Result<()> {
     let catalogs = Catalogs::load(root)?;
-    catalogs.check_placeholder_parity()?;
-    let outputs = catalogs.render()?;
-    if check {
-        check_outputs(root, &outputs)
-    } else {
-        write_outputs(root, &outputs)
+    let entries = lifecycle::load(root, &catalogs.supported)?;
+    let source = entries
+        .get(&catalogs.source)
+        .with_context(|| format!("source locale `{}` has no catalog", catalogs.source))?;
+    match mode {
+        Mode::Todo(locale) => {
+            let translation = entries
+                .get(&locale)
+                .filter(|_| locale != catalogs.source)
+                .with_context(|| format!("`{locale}` is not a supported translation locale"))?;
+            let items = lifecycle::todo(source, translation);
+            tracing::info!(%locale, count = items.len(), "i18n: keys to translate");
+            println!("{}", serde_json::to_string_pretty(&items)?);
+            Ok(())
+        }
+        Mode::Stamp => {
+            for locale in catalogs.supported.iter().filter(|l| **l != catalogs.source) {
+                let path = root.join(format!("locales/{locale}.json"));
+                let mut catalog = read_json(&path)?
+                    .as_object()
+                    .cloned()
+                    .with_context(|| format!("{} must be a JSON object", path.display()))?;
+                let stamped = lifecycle::stamp(source, &mut catalog);
+                if stamped > 0 {
+                    let mut text = serde_json::to_string_pretty(&catalog)?;
+                    text.push('\n');
+                    fs::write(&path, text)
+                        .with_context(|| format!("writing {}", path.display()))?;
+                }
+                tracing::info!(%locale, stamped, "i18n: recorded source hashes");
+            }
+            Ok(())
+        }
+        Mode::Generate | Mode::Check => {
+            catalogs.check_placeholder_parity()?;
+            let glossary = lifecycle::Glossary::load(root)?;
+            let problems = lifecycle::problems(&catalogs.source, &entries, &glossary);
+            if !problems.is_empty() {
+                bail!(
+                    "locales/: {} catalog problem(s); `xtask i18n --todo <locale>` lists what to \
+                     translate:\n  {}",
+                    problems.len(),
+                    problems.join("\n  ")
+                );
+            }
+            let outputs = catalogs.render()?;
+            if mode == Mode::Check {
+                check_outputs(root, &outputs)
+            } else {
+                write_outputs(root, &outputs)
+            }
+        }
     }
 }
 
@@ -55,6 +139,8 @@ struct Catalogs {
     supported: Vec<String>,
     /// `locale -> (key -> message)`; both maps are sorted for deterministic output.
     messages: BTreeMap<String, BTreeMap<String, String>>,
+    /// `locale -> number of entries whose origin is `human`` (reviewed by a fluent reader).
+    reviewed: BTreeMap<String, usize>,
 }
 
 impl Catalogs {
@@ -82,6 +168,7 @@ impl Catalogs {
         }
 
         let mut messages = BTreeMap::new();
+        let mut reviewed = BTreeMap::new();
         for locale in &supported {
             let path = root.join(format!("locales/{locale}.json"));
             let catalog = read_json(&path)?;
@@ -89,6 +176,7 @@ impl Catalogs {
                 .as_object()
                 .with_context(|| format!("{} must be a JSON object", path.display()))?;
             let mut map = BTreeMap::new();
+            let mut human = 0;
             for (key, entry) in entries {
                 let message = entry
                     .get("message")
@@ -101,14 +189,19 @@ impl Catalogs {
                     })?;
                 check_origin(entry, locale == &source)
                     .with_context(|| format!("{}: key `{key}`", path.display()))?;
+                if entry.get("origin").and_then(Value::as_str) == Some("human") {
+                    human += 1;
+                }
                 map.insert(key.clone(), message.to_string());
             }
             messages.insert(locale.clone(), map);
+            reviewed.insert(locale.clone(), human);
         }
         Ok(Self {
             source,
             supported,
             messages,
+            reviewed,
         })
     }
 
@@ -174,6 +267,16 @@ impl Catalogs {
                 self.android_xml(locale, map)?,
             ));
         }
+        let source = self
+            .messages
+            .get(&self.source)
+            .with_context(|| format!("source locale `{}` has no catalog", self.source))?;
+        for (locale, map) in pseudo::catalogs(source)? {
+            outputs.push((
+                PathBuf::from(format!("capsule-web/src/i18n/messages/{locale}.json")),
+                pseudo::escape_controls(&flat_json(&map)?),
+            ));
+        }
         outputs.push((
             PathBuf::from(ANDROID_LOCALE_CONFIG),
             self.android_locale_config(),
@@ -190,7 +293,39 @@ impl Catalogs {
             PathBuf::from("capsule-swift/Generated/InfoPlist.xcstrings"),
             self.infoplist_xcstrings()?,
         ));
+        outputs.push((PathBuf::from(STATS_PATH), self.stats_json()?));
         Ok(outputs)
+    }
+
+    /// The translation-progress summary the README badges read: for every non-source
+    /// locale, the floored percentage of source keys it translates and of source keys a
+    /// fluent reader has reviewed (`origin: human`). Floored so `100` means complete.
+    ///
+    /// Keys the source lacks are refused by [`Self::check_placeholder_parity`], so a
+    /// locale's entry count never exceeds the source's.
+    fn stats_json(&self) -> Result<String> {
+        let total = self.messages.get(&self.source).map_or(0, BTreeMap::len);
+        let percent = |count: usize| (count * 100).checked_div(total).unwrap_or(0);
+        let mut root = Map::new();
+        root.insert(
+            "$comment".to_string(),
+            Value::from("GENERATED by `mise run i18n` from locales/. Do not edit by hand."),
+        );
+        for locale in &self.supported {
+            if locale == &self.source {
+                continue;
+            }
+            let translated = self.messages.get(locale).map_or(0, BTreeMap::len);
+            let reviewed = self.reviewed.get(locale).copied().unwrap_or(0);
+            let mut entry = Map::new();
+            entry.insert("translated".to_string(), Value::from(percent(translated)));
+            entry.insert("reviewed".to_string(), Value::from(percent(reviewed)));
+            root.insert(locale.clone(), Value::Object(entry));
+        }
+        let mut s = serde_json::to_string_pretty(&Value::Object(root))
+            .context("serializing translation stats")?;
+        s.push('\n');
+        Ok(s)
     }
 
     /// The committed Rust module: bundle pointers plus the `error.*` code constants.
@@ -889,6 +1024,9 @@ fn flat_json(map: &BTreeMap<String, String>) -> Result<String> {
     s.push('\n');
     Ok(s)
 }
+
+/// Where the translation-progress summary is generated.
+const STATS_PATH: &str = "locales/stats.json";
 
 /// Where the Android per-app language list (`android:localeConfig`) is generated.
 const ANDROID_LOCALE_CONFIG: &str = "capsule-android/src/main/res/xml/locales_config.xml";

@@ -19,4 +19,3 @@
 
 - Work is tracked in GitHub issues; [ROADMAP.md](ROADMAP.md) is the ordered path to the dogfood release. Issues labelled `track:deferred` are not drained automatically.
 - The CLI/TUI is the reference client: a feature lands there first, every user flow is reachable as a `--json` subcommand, and it is tested per the [testing plan](capsule-docs/src/content/docs/development/testing.md).
-

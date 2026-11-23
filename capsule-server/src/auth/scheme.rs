@@ -43,8 +43,8 @@
 //! here rather than discovered in a flame graph: [Authentication — Explicit
 //! Revocation](../../../capsule-docs/src/content/docs/design/authentication.md#explicit-revocation)
 //! promises revocation by invalidating a session token, and a promise nothing reads is not a
-//! promise. Valkey is a required service (`filesystem/server.md`, and the process refuses to
-//! boot without it), so this is a round trip to a store the request already depends on.
+//! promise. The session table is on the database the server cannot boot without, so this is a
+//! primary-key read on a store the request already depends on.
 //!
 //! ## The store-unavailable answer is **closed**, and that is the uncomfortable half
 //!
@@ -79,7 +79,7 @@
 //! is refreshed by a human at human intervals. So it is coalesced: at most one write per
 //! [`TOUCH_INTERVAL`] per session. That makes the listing stale by up to a minute, and the
 //! choice is stated rather than picked — a minute of staleness in a screen a user opens to see
-//! which devices are signed in is invisible, and one Valkey write per request per device is
+//! which devices are signed in is invisible, and one database write per request per device is
 //! not.
 //!
 //! A touch that *fails* does not fail the request. The authoritative read already succeeded, so

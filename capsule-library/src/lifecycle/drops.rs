@@ -490,8 +490,7 @@ impl capsule_core::drop::DropAdopter for Workspace {
             // After the asset's own files, as on import: a derivative is regenerable, so a
             // failure to write one is logged and never fails the adoption.
             ws.persist_derivatives(&asset, &derivatives);
-            ws.index_asset_row(&asset)?;
-            ws.index_original_representation(&asset, plaintext.len())
+            ws.index_asset_with_original(&asset, plaintext.len())
         };
         if let Err(e) = register(self) {
             tracing::error!(

@@ -8,7 +8,7 @@ mod postgres_conformance {
     use super::super::{PORT, PostgresAccounts};
     use crate::auth::accounts_memory::MAX_FAILED_ATTEMPTS;
     use crate::auth::conformance::{self, Harness};
-    use crate::auth::credential::Credentials;
+    use crate::auth::credential::{Credentials, VerificationHold};
     use crate::auth::directory::AccountDirectory;
     use crate::auth::oidc::FederatedAccounts;
     use crate::auth::profile::{AccountProfiles, PasswordChange};
@@ -89,6 +89,10 @@ mod postgres_conformance {
                     u32::try_from(failures).expect("a failure count is a small non-negative"),
                 ))
             })
+        }
+
+        fn hold_verification(&self) -> VerificationHold {
+            self.accounts.credentials.hold_verification()
         }
     }
 

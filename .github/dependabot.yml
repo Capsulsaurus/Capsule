@@ -25,7 +25,7 @@ updates:
       # makes them, so waiting forces no migration. Lift this when both dependents move (#669).
       - dependency-name: "ed25519-dalek"
         update-types: ["version-update:semver-major"]
-  # The server's local service images (Postgres, Valkey). Same story: `/capsule-api/compose.yaml`
+  # The server's local service images (Postgres, and Dex for OIDC development). Same story: `/capsule-api/compose.yaml`
   # went with the Salvo tree, and `capsule-server/compose.yaml` is the live file (issue #401).
   #
   # There is no `docker` entry any more. It watched `/capsule-api/Containerfile`, and no
@@ -44,7 +44,10 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+  # The one SwiftPM manifest in the tree. `capsule-swift/` is a Tuist project with no
+  # `Package.swift`, so an entry there watched nothing. A Tuist `Tuist/Package.swift` for the
+  # app's remote packages, when one exists, gets its own entry in the same change.
   - package-ecosystem: "swift"
-    directory: "/capsule-swift"
+    directory: "/capsule-core-swift"
     schedule:
       interval: "weekly"

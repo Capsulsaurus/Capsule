@@ -63,10 +63,11 @@ jobs:
             os: ubuntu-latest
             optional: false
           - target: aarch64-apple-darwin
-            os: macos-14
+            os: macos-26
             optional: false
-          # An Intel runner rather than a cross build from Apple Silicon: the CLI links the
-          # system libdav1d (#588), and Homebrew on an arm64 host only installs an arm64 one.
+          # An Intel runner builds natively. It was chosen because the CLI linked the system
+          # libdav1d (#588), which it no longer does (#1320); a cross build from Apple Silicon
+          # would now need only libjxl's cmake build to cross-compile, and is untried.
           - target: x86_64-apple-darwin
             os: macos-15-intel
             optional: false
@@ -83,20 +84,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.target }}
-      # The CLI enables capsule-core's `media-linked-codecs` (#437): rav1e's x86_64 assembly
-      # needs nasm on PATH. libjxl's cmake build and bindgen's libclang are already on every
-      # hosted runner image.
-      - name: Install nasm
-        uses: ilammy/setup-nasm@v1
-      # The CLI also enables `media-avif-decode` off Windows (#588): `dav1d-sys` links the
-      # system libdav1d through pkg-config and has no vendored build. The released binary
-      # links it dynamically, so it needs libdav1d installed where it runs.
-      - name: Install libdav1d (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libdav1d-dev
-      - name: Install libdav1d (macOS)
-        if: runner.os == 'macOS'
-        run: brew install dav1d pkgconf
+      # The CLI enables capsule-core's `media-linked-codecs` (#437): libjxl's build needs cmake
+      # and a C++ compiler, already on every hosted runner image. Its AVIF decode goes
+      # through rawshift's gamut codecs (#1320), so the binary links no libdav1d and needs no nasm.
       - name: Build the CLI
         run: cargo build -p capsule-cli --release --target ${{ matrix.target }}
       - name: Build the server

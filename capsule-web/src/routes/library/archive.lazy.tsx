@@ -23,7 +23,7 @@ function Archive() {
                         <FormattedMessage id="nav.archive" />
                     </h1>
                 </div>
-                <p className="text-muted-foreground ml-11">
+                <p className="text-muted-foreground ms-11">
                     <FormattedMessage id="library.archive.description" />
                 </p>
             </header>

@@ -39,13 +39,13 @@ use capsule_sdk::verify::{
     AssetQuery, HeldRelease, ReleaseCoordinator, StorageVerifyClient, VerifiedAttestation,
     VerifyError, VerifyTransport,
 };
-use sea_orm::{ConnectionTrait, TransactionTrait};
 use secrecy::SecretString;
 use serde::Serialize;
 use thiserror::Error;
 use tracing::instrument;
 use uuid::Uuid;
 
+use crate::db::LocalDb;
 use crate::restore::{self, RestoreOptions, RestoreSummary};
 use crate::session::{SessionError, SessionStore};
 use crate::syncstore::{self, SyncStoreError, SyncedAssetView};
@@ -1092,10 +1092,10 @@ pub struct SyncSummary {
 /// weaken the anti-rewind contract: the per-album high-water marks are still rehydrated from
 /// the store, so a replayed entry older than what was already applied is still refused.
 #[instrument(skip(store, db))]
-pub async fn sync<C: ConnectionTrait + TransactionTrait>(
+pub async fn sync(
     remote: &RemoteConfig,
     store: &SessionStore,
-    db: &C,
+    db: &LocalDb,
     page_size: u32,
     dry_run: bool,
     from_start: bool,
@@ -1109,9 +1109,9 @@ pub async fn sync<C: ConnectionTrait + TransactionTrait>(
 }
 
 /// The drain itself, over a session somebody else is responsible for persisting.
-async fn sync_with<C: ConnectionTrait + TransactionTrait>(
+async fn sync_with(
     remote: &RemoteConfig,
-    db: &C,
+    db: &LocalDb,
     session: Session,
     page_size: u32,
     dry_run: bool,
@@ -3797,8 +3797,8 @@ impl verify::VerdictSource for SdkVerdictSource {
 
 /// Query the sync-fed local store — the client-side library `capsule list` renders.
 #[instrument(skip(db))]
-pub async fn list<C: ConnectionTrait>(
-    db: &C,
+pub async fn list(
+    db: &LocalDb,
     include_tombstoned: bool,
 ) -> Result<Vec<SyncedAssetView>, RemoteError> {
     Ok(syncstore::list_assets(db, include_tombstoned).await?)

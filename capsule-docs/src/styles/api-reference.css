@@ -16,7 +16,7 @@ html:has(.api-op) {
     min-width: 3.75em;
     margin-inline-end: 0.35em;
     padding: 0.125em 0.5em;
-    border-radius: 999px;
+    border-radius: var(--capsule-radius-pill);
     background: color-mix(in srgb, var(--api-method-color) 16%, transparent);
     color: var(--api-method-color);
     font-family: var(--sl-font-mono);
@@ -93,7 +93,7 @@ html:has(.api-op) {
 }
 
 .sl-markdown-content .api-index > p {
-    margin-top: 0.75rem;
+    margin-block-start: 0.75rem;
     color: var(--sl-color-gray-2);
     font-size: var(--sl-text-sm);
     line-height: 1.9;
@@ -145,7 +145,7 @@ html:has(.api-op) {
 }
 
 .sl-markdown-content .api-fields li > p + p {
-    margin-top: 0.25rem;
+    margin-block-start: 0.25rem;
     color: var(--sl-color-gray-2);
     font-size: var(--sl-text-sm);
 }
@@ -170,13 +170,13 @@ html:has(.api-op) {
 .sl-markdown-content .api-op {
     display: grid;
     gap: 1rem 2rem;
-    margin-top: 3rem;
+    margin-block-start: 3rem;
     padding-top: 2rem;
     border-top: 1px solid var(--sl-color-hairline);
 }
 
 .sl-markdown-content .api-op h2 {
-    margin-top: 0;
+    margin-block-start: 0;
     font-family: var(--sl-font-mono);
     font-size: var(--sl-text-h4);
     font-weight: 600;
@@ -192,16 +192,16 @@ html:has(.api-op) {
 /* Starlight spaces every block from the one before it; the two columns sit
    side by side, so the panel takes none. Element selectors outrank that rule. */
 .sl-markdown-content div.api-op > div.api-op-panel {
-    margin-top: 0;
+    margin-block-start: 0;
 }
 
 .sl-markdown-content .api-op-main > :first-child,
 .sl-markdown-content .api-op-panel > :first-child {
-    margin-top: 0;
+    margin-block-start: 0;
 }
 
 .sl-markdown-content .api-panel-note {
-    margin-top: 0.75rem;
+    margin-block-start: 0.75rem;
     padding: 0.5rem 0.75rem;
     border: 1px dashed var(--sl-color-hairline);
     border-radius: var(--capsule-radius-sm);
@@ -225,6 +225,6 @@ html:has(.api-op) {
     }
 
     .sl-markdown-content .api-op-panel > * {
-        margin-top: 0.75rem;
+        margin-block-start: 0.75rem;
     }
 }

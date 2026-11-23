@@ -4,17 +4,17 @@ description: Storage verification, deep re-hash, custody receipts, proof of loss
 status: draft
 ---
 
-Finalization's `Completed` is a one-time transfer acknowledgement, and [`verify_asset`](/design/cryptography/keys/#write-authorization) proves cryptographic validity, never that the server still holds the bytes. This page defines the re-checkable durability verdict, the signed custody receipt, and the rule every client follows before destroying local data: the [transfer protocol's](/design/transfer/) invariants 6 and 7. Server: `capsule-server::verify`, `capsule-server::attestation`; client gate: `capsule-library::library::ReleaseGate`, driven by `capsule-sdk::verify`.
+Finalization's `Completed` is a one-time transfer acknowledgement, and `verify_asset` ([](/design/cryptography/keys/#write-authorization)) proves cryptographic validity, never that the server still holds the bytes. This page defines the re-checkable durability verdict, the signed custody receipt, and the rule every client follows before destroying local data: invariants 6 and 7 of the [](/design/transfer/). Server: `capsule-server::verify`, `capsule-server::attestation`; client gate: `capsule-library::library::ReleaseGate`, driven by `capsule-sdk::verify`.
 
 ## What "Safely Stored" Means
 
 `durable` is the conjunction, over **every hash the client declared** for the asset, of three key-free facts:
 
 - **indexed** — a live asset row of the caller's references the address.
-- **stored** — the bytes are present at the content address in the blob store.
-- **retrievable** — indexed ∧ stored ∧ nothing withholds it: not marked by [GC](/design/filesystem/server/#deletion-and-garbage-collection), not quarantined, not under a moderation hold.
+- **stored** — the bytes are present at the content address in the blob store and the address is not recorded as lost ([](/design/transfer/#repairing-a-lost-or-corrupt-blob)). Presence is a `stat`, which a file whose blocks have rotted still passes; that gap is what `deep` and the scrub close.
+- **retrievable** — indexed ∧ stored ∧ nothing withholds it: not marked by GC ([](/design/filesystem/server/#deletion-and-garbage-collection)), not quarantined, not under a moderation hold.
 
-`durable` attests **this home server's** storage only, not replicas, peers or [backups](/design/backup-recovery/).
+`durable` attests **this home server's** storage only, not replicas, peers or backups ([](/design/backup-recovery/)).
 
 ## Endpoint
 
@@ -23,16 +23,19 @@ Finalization's `Completed` is a one-time transfer acknowledgement, and [`verify_
 - **Fail closed.** An unknown asset is not durable, and a collaborator that cannot answer is an error, never an optimistic verdict. An empty declaration is `400`, not a vacuous `durable: true`.
 - **Owner-scoped.** Another account's asset is indistinguishable from a non-existent one.
 - **No existence oracle.** `indexed` is checked first: a hash the asset does not reference reports `stored = false, indexed = false` even if the store holds those bytes. Every declared hash appears in the response, in order.
-- **`deep`** re-reads and re-hashes the declared blobs, reporting `intact`, `corrupt` or `rate_limited` per blob. It is rate-limited per account, and a throttled request still returns the structural verdict. `deep` is **absent** when no scan ran, which a client MUST distinguish from `intact`. Results are not coalesced, because a cached integrity result would be a durability claim with an undisclosed age.
+- **`deep`** re-reads and re-hashes the declared blobs, reporting `intact`, `corrupt` or `rate_limited` per blob. It spends the account's deep-verify budget ([](/design/authorization/#rate-limits)), which counts bytes re-read rather than requests, so one request may verify many assets; a throttled blob still returns the structural verdict. The re-read bypasses the page cache (the server drops the file's cached pages first), so `intact` reports what the storage holds, not what memory still remembers. `deep` is **absent** when no scan ran, which a client MUST distinguish from `intact`. Results are not coalesced, because a cached integrity result would be a durability claim with an undisclosed age.
+- **A `corrupt` result is acted on**, not only reported: the server quarantines the blob and records the loss before it answers, so the same response already carries `stored = false` ([](/design/transfer/#repairing-a-lost-or-corrupt-blob)).
 
 ## Custody Receipts
 
 A verdict says the bytes are serveable *now*. A **custody receipt** proves the server *accepted* them, so "the server lost my photo" and "the client never uploaded it" stop being symmetric claims. The type is `capsule-core::crypto::receipts::CustodyReceipt`, shared by client and server.
 
-- **Contents.** Server identity and signing-key id, a per-server `receipt_seq` and `prior_receipt_hash`, the upload and asset ids, the blob role, the **server-recomputed** `ciphertext_hash` and size, the uploader, and `received_at` from the server clock. `envelope_hash` (SHA-256 over the signed manifest bytes) is present only on the `provenance` blob's receipt; the manifest already commits to the other blobs.
-- **Signed** under the server attestation key, a long-lived hybrid Ed25519 + ML-DSA-65 key distinct from the [operational key](/design/federation/#server-identity-and-key-rotation), with an append-only key history so old receipts verify forever.
-- **Issued with custody**, in the same transaction as the index record ([Upload — Finalization](/design/transfer/upload/#finalization-and-integrity)). There is no receipt without custody and no indexed blob without a receipt.
-- **Hash-chained and append-only.** `receipt_seq` and `prior_receipt_hash` form the server's receipt log; no API path overwrites or deletes an entry. Position allocation and signing happen in one operation, so the chain cannot fork.
+- **Contents.** Server identity and signing-key id, the **owner** whose chain it extends, that owner's `receipt_seq` and `prior_receipt_hash`, the upload and asset ids, the blob role, the **server-recomputed** `ciphertext_hash` and size, the uploader, and `received_at` from the server clock. `envelope_hash` (SHA-256 over the signed manifest bytes) is present only on the `provenance` blob's receipt; the manifest already commits to the other blobs. The version is `custody-receipt/v2`; a `custody-receipt/v1` receipt, chained server-wide with no owner, still verifies under the key history and is kept as evidence.
+- **Signed** under the server attestation key, a long-lived hybrid Ed25519 + ML-DSA-65 key distinct from the operational key ([](/design/federation/#server-identity-and-key-rotation)), with an append-only key history so old receipts verify forever. A client extends its pin of that history only through cross-signed succession ([](/design/federation/#server-identity-and-key-rotation)), and a receipt under a key it could not pin is reported unverified, never accepted. The signature dominates a receipt's size: about 3.4 KB of a receipt of roughly 3.9 KB.
+- **Issued with custody**, in the same transaction as the index record ([](/design/transfer/upload/#finalization-and-integrity)). There is no receipt without custody and no indexed blob without a receipt.
+- **Hash-chained per owner and append-only.** Each owner's receipts form one chain: `receipt_seq` counts from 1 per owner and `prior_receipt_hash` names that owner's previous receipt. No API path overwrites or deletes an entry. Position allocation and signing happen under a lock on **that owner's** chain head, so the chain cannot fork, and finalizations for different owners never wait for each other. The owner is the only party that can fetch and audit its receipts, so its chain is the one that has to be whole.
+- **Stored once.** The owner ledger holds the receipt's bytes ([](/design/filesystem/server/#the-owner-ledger)); PostgreSQL indexes it by owner, position, upload and asset, with its ledger position. The transaction that issues a receipt carries its bytes until the ledger entry holding them is durable, and only then does the index drop them, so a crash between the two never loses a receipt: boot and the scrub append any receipt whose bytes the index still holds and the ledger lacks. A receipt fetch reads the bytes from the ledger.
+- **Retained** for as long as its asset is. The index rows of a purged asset's receipts go with its purge, and its receipts stay in the ledger, which is never rewritten. The index therefore holds one row per blob finalization of the owner's unpurged assets, and its hot query, an asset's receipts in order, is one index range on `(owner, asset, position)`.
 - **Fetched** via `GET /v1/upload/{id}/receipt` within the session window and `GET /v1/assets/{asset_id}/receipts` durably. The durable fetch is **owner-only**: a non-owner gets the unknown-asset `404`.
 - **Verified and kept by the client.** The client checks the signature under the pinned key, that `ciphertext_hash`, `size` and `envelope_hash` match what it sent, and a gross clock-drift bound on `received_at`. It stores receipts beside the provenance chain and in the backup artifact. The client copy is evidence, not cache.
 
@@ -42,7 +45,7 @@ The verdict MAY be requested in a signed form carrying a client nonce and signed
 
 - **Requested** by sending `attestation_nonce`, 32 bytes the client draws fresh per request as lowercase hex, on `POST /v1/storage/verify`. The response then also carries `attestation`, the canonical-CBOR attestation in base64.
 - **Contents.** Server identity and signing-key id, the account the verdicts were computed for, the client's nonce, the server's `checked_at`, and the same per-asset, per-blob verdicts the unsigned response carries, `deep` included when a scan ran. The `storage-attestation/v1` version and field set keep it from being mistaken for a custody receipt, which the same key signs.
-- **Priced like `deep`.** Signing spends the account's deep-verify budget, charged once per request that asks for either. A throttled signed request is refused whole with `429` and `Retry-After`, never downgraded to an unsigned answer, since a client that asked for evidence and got none would not know it.
+- **Priced like `deep`.** Signing spends the account's deep-verify budget ([](/design/authorization/#rate-limits)). A throttled signed request is refused whole with `429` and `Retry-After`, never downgraded to an unsigned answer, since a client that asked for evidence and got none would not know it.
 - **Verified by the client.** The signature verifies under the pinned attestation key, the nonce is the one the client sent, and the verdicts answer exactly the assets and declared hashes asked about, in order; a replayed or tampered attestation fails one of these. The client acts on the verdicts read from the signed core and keeps the bytes as evidence.
 - **Kept by the client.** Only a verified attestation is kept, exactly as received: appended to the log of every asset it answers for, beside that asset's custody receipts, and carried in the backup artifact. The log is append-only and idempotent on the nonce, so a retried request never duplicates an entry and a later attestation reporting a blob lost never displaces an earlier one reporting it held. Like receipts, the client copy is evidence, not cache: a library rebuild never reads or rewrites it, and a restore returns it byte for byte.
 - **Reference client.** `capsule verify --signed` asks for one, declaring each asset's original and metadata blob.
@@ -55,17 +58,20 @@ A client proves loss with:
 2. later non-holding: a signed attestation reporting `H` not stored, or a failed content-addressed fetch, which is self-verifying;
 3. the absence of an authorized purge.
 
-The server's rebuttal is a device-signed `delete` with an elapsed [retention window](/design/organization/#retention-window). Conversely, a custody claim with no valid receipt is unbacked, and a receipt from another server fails on its server binding. Accepted v1 limitation: a server can show different log views to different auditors; gossiped signed log heads are the planned extension.
+The server's rebuttal is a device-signed `delete` with an elapsed retention window ([](/design/organization/#retention-window)). Conversely, a custody claim with no valid receipt is unbacked, and a receipt from another server fails on its server binding. Accepted v1 limitation: a server can show different log views to different auditors; gossiped signed log heads are the planned extension.
 
 ## Verify Before Destroy
 
-Before any post-write local cleanup that drops irreplaceable bytes, a client MUST hold all three:
+Before any post-write local cleanup that drops irreplaceable bytes, a client MUST hold all four:
 
-1. a verified [custody receipt](#custody-receipts) for the write;
-2. `durable = true` from `/storage/verify` for every declared blob;
-3. `verify_asset` acceptance.
+1. a passed open-after-seal check ([](/design/cryptography/encryption/#encryption-workflow)) for the exact bytes whose address the receipt names: after sealing and before signing, the writer decrypted every chunk it sealed and matched the source;
+2. a verified custody receipt for the write ([](#custody-receipts));
+3. `durable = true` from `/storage/verify` for every declared blob, with `deep = intact` for the **original**, from a verify made after the receipt was issued;
+4. `verify_asset` acceptance.
 
-A transport failure on any check retains the bytes. A non-durable verdict never triggers a destructive action: the client retains the copy, retries with backoff, and shows "not yet confirmed on server". A server that withholds receipts therefore never becomes the sole holder of an only copy.
+The first is the only one over plaintext. Every other check is over ciphertext identity and signatures, which bytes sealed under the wrong key, AAD or nonce pass ([](/design/threat-model/risks/)). An original with no such record, such as one written before the check existed, is retained.
+
+The `deep` condition is what makes custody mean the storage holds the bytes rather than that the server once hashed them: finalization hashes the stage, possibly from memory, and a `stat` passes a file whose blocks have rotted. It costs one server re-read of each original, once, at release. A `rate_limited` or absent `deep` retains the original and retries later; a `corrupt` one retains it and re-uploads ([](/design/transfer/#repairing-a-lost-or-corrupt-blob)). A transport failure on any check retains the bytes. A non-durable verdict never triggers a destructive action: the client retains the copy, retries with backoff, and shows "not yet confirmed on server". A server that withholds receipts therefore never becomes the sole holder of an only copy.
 
 The gate applies to:
 
@@ -73,8 +79,14 @@ The gate applies to:
 - **Move-mode** source deletion after import: the local commit never deletes a source, which is deleted only once both it and the library copy read back as the signed original and the gate passes. With no server to ask, every source is kept;
 - **streaming import** release ([](/design/import/pipeline/#import-upload-streaming-mode));
 - discarding local working state tied to a write (staged temporaries, the pre-edit copy across a `replace`);
-- releasing an original handed to a [delegate](/design/peering/#delegation): the origin fetches the receipt from the server and checks it against the hash it computed, never relayed by the delegate.
+- releasing an original handed to a delegate ([](/design/peering/#delegation)): the origin fetches the receipt from the server and checks it against the hash it computed, never relayed by the delegate.
 
-It does not apply to intentional deletes (governed by the retention window), rebuildable derivative cache, or re-fetchable server-origin blobs. The SQLite catalog is **not** rebuildable cache: it [migrates in place](/design/versioning/#client-catalog-migration), and evicting it is a repair action.
+It does not apply to intentional deletes (governed by the retention window), rebuildable derivative cache, or re-fetchable server-origin blobs. The SQLite catalog is **not** rebuildable cache: it migrates in place ([](/design/versioning/#client-catalog-migration)), and evicting it is a repair action.
 
 The verdict is point-in-time: the client re-verifies if a bounded interval passes before release, and on the server a blob that just answered `durable` cannot be deleted faster than the GC grace window. Together these make the gate sound without a lease.
+
+## Known Gaps
+
+- **One receipt chain per server.** `receipt_seq` counts the server's whole chain (`capsule-server/src/attestation/mod.rs:279`), position allocation holds `LOCK TABLE custody_receipts` for every finalization (`capsule-server/src/attestation/postgres.rs:127`), and `CustodyReceiptCore` carries no owner (`capsule-core/src/crypto/receipts.rs`).
+- **The release gate does not require `deep`.** `ReleaseGate::may_release` (`capsule-library/src/library/storage_verify.rs:167`) asks for the structural verdict and a receipt, never `deep = intact`, and it checks no open-after-seal record ([](/design/cryptography/encryption/#known-gaps)).
+- **The deep-verify budget counts requests** ([](/design/authorization/#known-gaps)).

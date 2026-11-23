@@ -46,6 +46,7 @@ jobs:
               - 'Cross.toml'
               - 'mise.toml'
               - 'mise-tasks/**'
+              - 'scripts/cross/**'
               - '.config/nextest.toml'
               - 'hk.pkl'
               - '.cargo/**'
@@ -60,6 +61,11 @@ jobs:
               - 'capsule-wasm/**'
               - 'ptpip-rs/**'
               - 'xtask/**'
+              # `gen-bindings --check` also dumps the hand-written platform
+              # adapters into capsule-sdk/bindings-surface.json, so a change to
+              # one alone must still pay the Rust gate to catch the dump's drift.
+              - 'capsule-core-kotlin/src/main/**'
+              - 'capsule-core-swift/Sources/**'
               # `check-rust` reads the catalogs directly: `i18n-check` and
               # `i18n-guard` are `cargo run -p xtask -- i18n …` over `locales/`,
               # so a catalog-only change must still pay the Rust gate. The
@@ -81,6 +87,19 @@ jobs:
               - 'capsule-android/src/main/res/values*/strings.xml'
               # The `prev-release-compat` job's flow.
               - 'scripts/prev-release-compat.sh'
+              # `translate-readme-check` (also in `check-rust`) gates README.md's
+              # generated language regions and the translations derived from it,
+              # so a README-only edit must still pay the Rust gate.
+              - 'README*.md'
+              # `i18n-guard` scans these client sources for hard-coded literals and
+              # physical-direction layout, and the `rust` job is the only CI route to
+              # it, so a client-only change must pay the Rust gate. Same surfaces as
+              # hk.pkl's `i18n-guard` glob; keep the two in step.
+              - 'capsule-web/src/routes/**/*.tsx'
+              - 'capsule-web/src/components/**/*.tsx'
+              - 'capsule-swift/App/**/*.swift'
+              - 'capsule-swift/Modules/**/*.swift'
+              - 'capsule-android/src/**/*.kt'
               - '.github/workflows/ci.yml'
             web:
               - 'capsule-web/**'
@@ -219,13 +238,9 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
       # `--workspace` builds capsule-cli, which enables capsule-core's `media-linked-codecs`
-      # (#437): rav1e's x86_64 assembly needs nasm. cmake, a C++ compiler and libclang (for
-      # libjxl and its bindgen bindings) are already on the runner image. It also enables
-      # `media-avif-decode` (#588), whose `dav1d-sys` links the system libdav1d through
-      # pkg-config and has no vendored build, so the headers and `dav1d.pc` come from
-      # libdav1d-dev.
-      - name: Install nasm and libdav1d
-        run: sudo apt-get update && sudo apt-get install -y nasm libdav1d-dev
+      # (#437): libjxl's build needs cmake and a C++ compiler, both already on the runner
+      # image. Its AVIF decode (`media-avif-decode`) goes through rawshift's gamut codecs
+      # (#1320) and links no system codec library, so neither libdav1d nor nasm is installed.
       # check-rust runs the verify-examples smoke via nextest.
       - name: Install nextest
         uses: taiki-e/install-action@v2
@@ -281,7 +296,7 @@ jobs:
     # tests needed testcontainers (Docker), which is slower and flakier; that crate is now
     # review material. Every case this job runs uses a deterministic in-memory adapter, and
     # Kynos's `TestClient` drives a built service in-process; the container-gated cases skip
-    # here and run against real Postgres and Valkey containers in `rust-containers`. A gate
+    # here and run against a real Postgres container in `rust-containers`. A gate
     # that is allowed to fail is not a gate.
     #
     # Disk (#1193): the workspace's test binaries, plus the `ffi` and `http3` variants, filled a
@@ -308,10 +323,6 @@ jobs:
         run: rustup toolchain install
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-      # nasm for rav1e's x86_64 assembly (#437) and libdav1d for AVIF decode (#588); see the
-      # `rust` job.
-      - name: Install nasm and libdav1d
-        run: sudo apt-get update && sudo apt-get install -y nasm libdav1d-dev
       - name: Install nextest
         uses: taiki-e/install-action@v2
         with:
@@ -343,11 +354,11 @@ jobs:
         if: always()
         run: df -h /
 
-  # The container tiers `rust-test` skips (#514). Every Postgres adapter conformance suite, the
-  # migration round trip, the durable boot arm and process cases, and the Valkey suite are gated
-  # on CAPSULE_TEST_POSTGRES / CAPSULE_TEST_VALKEY and pass as skipped without them — so before
-  # this job none of them had ever run in CI, and a broken adapter reported green. The task
-  # admits both tiers and fails on any skip line, so a runner that lost its container runtime
+  # The container tier `rust-test` skips (#514). Every Postgres adapter conformance suite, the
+  # migration round trip, and the durable boot arm and process cases are gated on
+  # CAPSULE_TEST_POSTGRES and pass as skipped without it — so before this job none of them had
+  # ever run in CI, and a broken adapter reported green. The task admits the tier and fails on
+  # any skip line, so a runner that lost its container runtime
   # fails here instead of passing vacuously. Each case starts its own container through
   # testcontainers on the runner's Docker socket; no `services:` block, because a shared
   # service would break the one-container-per-case isolation the suites rely on.
@@ -362,10 +373,6 @@ jobs:
         run: rustup toolchain install
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-      # nasm and libdav1d: capsule-e2e links capsule-cli's codecs through capsule-library, as
-      # in the `rust` job.
-      - name: Install nasm and libdav1d
-        run: sudo apt-get update && sudo apt-get install -y nasm libdav1d-dev
       - name: Install nextest
         uses: taiki-e/install-action@v2
         with:
@@ -374,13 +381,13 @@ jobs:
         uses: jdx/mise-action@v2
         with:
           install: false
-      - name: Test (Postgres + Valkey containers)
+      - name: Test (Postgres containers)
         env:
           NEXTEST_PROFILE: ci
         run: mise run test-rust-containers
 
   # The kill-anywhere suite (#678): the real `capsule` and `capsule-server` binaries over a
-  # Postgres and a Valkey container, with either process SIGKILLed at seeded points during
+  # Postgres container, with either process SIGKILLed at seeded points during
   # the phases whose kill points are armed, and every phase rerun to convergence (the suite's
   # header says which are armed and why). It skips without
   # CAPSULE_TEST_KILL_ANYWHERE, so the job sets it and fails on the skip line, as
@@ -399,9 +406,6 @@ jobs:
         run: rustup toolchain install
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-      # nasm and libdav1d: capsule-cli's codecs, as in the `rust` job.
-      - name: Install nasm and libdav1d
-        run: sudo apt-get update && sudo apt-get install -y nasm libdav1d-dev
       - name: Install nextest
         uses: taiki-e/install-action@v2
         with:
@@ -446,9 +450,6 @@ jobs:
         run: rustup toolchain install
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-      # nasm and libdav1d: capsule-cli's codecs, as in the `rust` job.
-      - name: Install nasm and libdav1d
-        run: sudo apt-get update && sudo apt-get install -y nasm libdav1d-dev
       - name: Install nextest
         uses: taiki-e/install-action@v2
         with:
@@ -543,9 +544,6 @@ jobs:
         run: rustup toolchain install
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-      # nasm and libdav1d: capsule-cli's codecs, as in the `rust` job.
-      - name: Install nasm and libdav1d
-        run: sudo apt-get update && sudo apt-get install -y nasm libdav1d-dev
       - name: Build the binaries under test
         run: cargo build -p capsule-cli -p capsule-server --bins
       - name: Previous release against this build, both directions
@@ -559,6 +557,33 @@ jobs:
           name: prev-release-compat-logs
           path: ${{ runner.temp }}/prev-release-compat.*/
           if-no-files-found: ignore
+
+  # Type-check the FFI for every Tier-1 and Tier-2 cross target from ONE Linux runner, exactly
+  # as a developer runs it locally (`mise run check-targets`, C through zig). This is the proof
+  # that the cross-target gate does not need each platform's runner. Tier 1 gates; Tier 2 is
+  # best-effort, matching `rust-cross` below.
+  rust-cross-check:
+    name: Rust cross check (Linux host)
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: cross-check
+      - name: Set up mise (task runner + zig)
+        uses: jdx/mise-action@v2
+        with:
+          install_args: zig
+      - name: Check Tier 1 targets
+        run: mise run check-targets --tier 1
+      - name: Check Tier 2 targets (best-effort)
+        continue-on-error: true
+        run: mise run check-targets --tier 2
 
   # Verify the app FFI — capsule-sdk with `--features ffi`, plus the capsule-core-ffi
   # umbrella on Apple, both linking capsule-core — cross-compiles to the formally
@@ -576,7 +601,7 @@ jobs:
       matrix:
         include:
           - name: apple
-            os: macos-14
+            os: macos-26
             recipe: build-apple
             targets: aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
             tier2: false
@@ -614,12 +639,12 @@ jobs:
         if: matrix.name == 'android'
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-ndk
+          tool: cargo-ndk@4.1.2 # matches the mise.toml pin
       - name: Install cross
         if: matrix.name == 'linux-arm64'
         uses: taiki-e/install-action@v2
         with:
-          tool: cross
+          tool: cross@0.2.5 # matches the mise.toml pin
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
@@ -812,6 +837,8 @@ jobs:
   # `rust-advisories`, unfiltered, #507), and `changes` is checked ahead of it under a stricter rule,
   # because "skipped" is only trustworthy when the filter that skipped it ran.
   # A job in `needs` but absent from both checks is a gate that cannot fail.
+  # `rust-cross-check` gates on purpose (#1310): a Tier-1 target that no longer type-checks
+  # through `mise run check-targets` blocks the merge, as a Tier-1 `rust-cross` failure does.
   # `prev-release` and `prev-release-compat` are absent from both on purpose (#761): the flow is
   # skipped until a release exists, and joins `needs` and the loop once it has passed against one.
   required:
@@ -819,7 +846,7 @@ jobs:
     if: always()
     # TODO(track:deferred): re-add `kotlin` and `swift` here and to the loop below when mobile
     # resumes — see #389 (Android) and #391–#393 (Apple). Both jobs are disabled (`if: false`).
-    needs: [changes, commit-lint, rust, rust-advisories, rust-test, rust-containers, rust-kill-anywhere, rust-oidc, rust-cross, web, docs, docs-truth, markdown]
+    needs: [changes, commit-lint, rust, rust-advisories, rust-test, rust-containers, rust-kill-anywhere, rust-oidc, rust-cross-check, rust-cross, web, docs, docs-truth, markdown]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs succeeded
@@ -841,7 +868,7 @@ jobs:
                    "${{ needs.rust-advisories.result }}" \
                    "${{ needs.rust-test.result }}" "${{ needs.rust-containers.result }}" \
                    "${{ needs.rust-kill-anywhere.result }}" \
-                   "${{ needs.rust-oidc.result }}" "${{ needs.rust-cross.result }}" \
+                   "${{ needs.rust-oidc.result }}" "${{ needs.rust-cross-check.result }}" "${{ needs.rust-cross.result }}" \
                    "${{ needs.web.result }}" \
                    "${{ needs.docs.result }}" "${{ needs.docs-truth.result }}" \
                    "${{ needs.markdown.result }}"; do

@@ -11,7 +11,7 @@ doc in `design/`.
 
 - **Determinism and idempotency.** Raw original data is the source of truth. Every process is repeatable from its inputs.
 - **4 KiB alignment.** Data crossing disk or memory boundaries is processed and written 4 KiB-aligned unless a concrete case demands otherwise.
-- **Forward and backward compatibility.** Old clients ignore new fields and new clients tolerate missing ones, subject to the [asymmetry](#postels-law-asymmetric) below.
+- **Forward and backward compatibility.** Old clients ignore new fields and new clients tolerate missing ones, subject to the asymmetry below ([](#postels-law-asymmetric)).
 - **Data integrity.** Capsule never deletes data unexpectedly. It acts only in strict scenarios and otherwise crashes early. Server data is assumed durable; client data is assumed losable.
 - **Ephemeral derived data.** Anything that is not an original asset is rebuildable and treated as such.
 - **Encryption and compartmentalization.** Metadata is encrypted alongside data. Every boundary (album, peer, event, user, version) is a failure-containment boundary.
@@ -38,6 +38,8 @@ Every primitive, construction, format or component identity is **declared in exa
 | MLS resilience | [](/design/mls-resilience/) |
 | Device enrollment | [](/design/device-enrollment/) |
 | ML model identities, embedding provenance | [](/design/ai/) |
+| Face clustering, people corrections | [](/design/people/) |
+| Memory generators, memory state | [](/design/memories/) |
 | LQIP, thumbnail/preview formats | [](/design/thumbnails/) |
 | Server filesystem, required services | [](/design/filesystem/server/) |
 | Client filesystem, local index | [](/design/filesystem/client/) |
@@ -47,17 +49,23 @@ Every primitive, construction, format or component identity is **declared in exa
 | CRDTs, identifiers, geolocation, sidecar schema | [](/design/metadata/) |
 | Import pipeline | [](/design/import/pipeline/) |
 | Upload protocol | [](/design/transfer/upload/) |
-| Download, sync feed, auto-sync | [](/design/transfer/download/) |
+| Download, transfer scheduler | [](/design/transfer/download/) |
+| Sync feed, auto-sync | [](/design/sync/) |
 | Storage durability, verify-before-destroy | [](/design/transfer/durability/) |
 | Tethered camera import | [](/design/import/camera-import/) |
+| Plaintext export, archive format | [](/design/export/) |
 | Connection and retry classes, transport security | [](/design/networking/) |
 | Offline-first requirements | [](/design/local-gallery/) |
 | Federation trust, capability tokens | [](/design/federation/) |
 | LAN discovery, peer channel | [](/design/peering/) |
 | Album protocol version pinning | [](/design/versioning/) |
 | Stacking, trash retention | [](/design/organization/) |
+| Search grammar, search index | [](/design/search/) |
+| Places, map clustering, geocoding | [](/design/places/) |
 | Lifecycle action set | [](/design/authorization/) |
+| Rate limits, freshness gates, server-side membership | [](/design/authorization/) |
 | Damage scenarios, client classes | [](/design/threat-model/) |
+| Risk register | [](/design/threat-model/risks/) |
 | Refuse-by-default validation invariants | [](/design/threat-model/validation/) |
 | Schema evolution, deprecation | [](/design/threat-model/schema-rules/) |
 | Outbound licence, dependency-licence policy | [](/design/licensing/) |
@@ -66,14 +74,17 @@ Every primitive, construction, format or component identity is **declared in exa
 | Moderation, reporting, blocklists | [](/design/moderation/) |
 | Quota accounting + enforcement | [](/design/quota/) |
 | Client validation duties, sandboxed decoder | [](/design/clients/) |
+| OS integrations (intents, shortcuts, system pickers) | [](/design/platform-integrations/) |
 | Alerts, delivery, wake tier | [](/design/notifications/) |
 | Catalogs, locale resolution, error codes | [](/design/i18n/) |
 | API surface ↔ transport map | [](/design/api-surfaces/) |
 | Developer-reference generation | [](/design/developer-docs/) |
+| Performance metrics, benchmarks | [](/development/performance/) |
+| Supply-chain policy | [](/development/supply-chain/) |
 
 ## Doc Structure
 
-Design docs are not templated, but each must answer four questions: **where it lives** (crate or module), **what its public surface is** (schema, wire format, trait, error domain), **what it defers to** (owner-doc links) and **how it is validated** (a [tier](#validation-tiers), where non-obvious). The code is the source of truth for module layout. Docs state contracts, not restated code.
+Design docs are not templated, but each must answer four questions: **where it lives** (crate or module), **what its public surface is** (schema, wire format, trait, error domain), **what it defers to** (owner-doc links) and **how it is validated** (a tier from [](#validation-tiers), where non-obvious). The code is the source of truth for module layout. Docs state contracts, not restated code.
 
 ### Implementation Status
 
@@ -81,14 +92,14 @@ A doc naming an implementing module states per surface whether it is **Implement
 
 ### Review Status
 
-Every authored page carries a required `status` frontmatter field tracking human review: `draft` (not re-reviewed since the last substantive change) or `stable` (signed off; a substantive edit flips it back). Drafts still publish, and the docs site badges every non-stable page in its navigation ([](/development/visual-language/#docs-site)). Generated reference pages carry no status: they track their artifact, not a review.
+Every authored page carries a required `status` frontmatter field tracking human review: `draft` (not re-reviewed since the last substantive change) or `stable` (signed off; a substantive edit flips it back). Drafts still publish, and the docs site badges every non-stable page in its navigation ([](/development/visual-language/#docs-site)). Generated reference pages carry no status: they track their artifact, not a review. A splash page such as the support page has no sidebar to badge, so it may carry none.
 
 ## Validation Tiers
 
 The tier is decided by **what is mocked**, not by where the test lives.
 
 - **Unit:** in-module tests against the contract, with peers and externals mocked. Deterministic and fast.
-- **Smoke:** one module's real implementation with real I/O and backing services (e.g. testcontainers Postgres or Valkey), peers mocked.
+- **Smoke:** one module's real implementation with real I/O and backing services (e.g. testcontainers Postgres), peers mocked.
 - **E2E:** several modules wired against real infrastructure. The list is **bounded** in the [E2E case index](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-e2e/src/lib.rs); growth past it signals unwanted coupling.
 
 ## Damage Containment

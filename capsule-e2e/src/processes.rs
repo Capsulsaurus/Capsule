@@ -60,7 +60,6 @@ const SERVER_SETTINGS: &[&str] = &[
     "BLOB_ROOT",
     "UPLOAD_DIR",
     "DATABASE_URL",
-    "VALKEY_URL",
     "JWT_ED25519_DER",
     "SYNC_CURSOR_MAC_KEY",
     "ATTESTATION_KEY_SEED",

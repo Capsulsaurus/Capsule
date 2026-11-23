@@ -648,3 +648,41 @@ fn cull_survives_index_loss_because_it_is_not_an_index_projection() {
     );
     assert_eq!(ws.assets_by_cull(CullFlag::Reject), vec![id]);
 }
+
+/// **User tags survive index loss.** The module doc always listed tags among what the sidecar
+/// carries, but the rebuild never wrote `asset_tags`, so a lost index silently lost every tag
+/// filter. Import, tag, delete the index file outright, rebuild: the tags are back, and a
+/// second rebuild leaves them as they are.
+#[test]
+fn tags_survive_index_loss_and_rebuild() {
+    let lib_dir = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let img = src.path().join("tagged.jpg");
+    fs::write(&img, b"\xFF\xD8\xFF tagged asset").unwrap();
+
+    let id = {
+        let mut ws =
+            Workspace::create_with_params(lib_dir.path(), b"passphrase", fast_params()).unwrap();
+        let album = ws.create_album("Trip").unwrap();
+        let id = ws.import_asset(album, &img).unwrap();
+        ws.tag_add(&id, "coast").unwrap();
+        ws.tag_add(&id, "sunset").unwrap();
+        ws.tag_remove(&id, "coast").unwrap();
+        ws.tag_add(&id, "harbour").unwrap();
+        id
+    };
+    let expected = vec!["harbour".to_string(), "sunset".to_string()];
+
+    fs::remove_file(lib_dir.path().join("index/library.sqlite")).unwrap();
+    let lib = open_library(lib_dir.path()).unwrap();
+    assert!(lib.db.tags_for(&id.to_string()).unwrap().is_empty());
+    rebuild_index(&lib).unwrap();
+    assert_eq!(lib.db.tags_for(&id.to_string()).unwrap(), expected);
+
+    rebuild_index(&lib).unwrap();
+    assert_eq!(
+        lib.db.tags_for(&id.to_string()).unwrap(),
+        expected,
+        "rebuilding again replaces the tags, never duplicates them"
+    );
+}

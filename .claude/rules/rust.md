@@ -12,7 +12,7 @@ paths:
 
 ## Rules
 
-- Datetime: `jiff`, never `chrono` — chrono exists only as the sea-orm column type inside `capsule-cli/entity` (convert at the entity boundary).
+- Datetime: `jiff`, never `chrono`. chrono reaches the lock file only through `sea-orm-migration`'s defaults in `capsule-server-migration`, a server dev-dependency; no workspace crate names it (`cargo xtask architecture-check` gates the server).
 - Errors: `thiserror` in libraries, `eyre`/`color-eyre` in binaries; no `anyhow`.
 - Logging: `tracing`, never the `log` facade in new code.
 - TLS: `rustls` only; never native-tls/openssl.

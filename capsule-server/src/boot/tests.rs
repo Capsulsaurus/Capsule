@@ -146,7 +146,6 @@ fn durable_environment(root: &std::path::Path) -> BTreeMap<String, String> {
             "DATABASE_URL".to_owned(),
             "postgres://127.0.0.1:1/capsule".to_owned(),
         ),
-        ("VALKEY_URL".to_owned(), "redis://127.0.0.1:1".to_owned()),
         // A durable deployment supplies its own attestation identity rather than having one
         // derived from the token signer; `config` refuses without it.
         (
@@ -174,32 +173,28 @@ mod postgres_conformance {
             .expect("it is well-formed")
     }
 
-    /// A durable boot clears Postgres and refuses on Valkey rather than falling back.
+    /// A durable boot assembles on Postgres alone, and a leftover `VALKEY_URL` changes nothing.
     ///
-    /// The property that matters is *which* refusal: falling back to the in-memory adapters
-    /// is the one thing that must never happen, and refusing on the first port anybody
-    /// happened to write would hide what is actually missing. Getting as far as the Valkey
-    /// probe proves the pool opened and the schema check passed.
-    ///
-    /// This was two cases before #402 and #403 met. #403 asserted the Valkey refusal as a
-    /// unit test, because nothing had yet demanded `DATABASE_URL` ahead of it; #402 asserted
-    /// that the arm reached `AdapterUnavailable { key: "VALKEY_URL" }`, which was the
-    /// refusal of a port *no adapter read*. Both halves have landed, so the durable arm now
-    /// needs a real database before it dials Valkey at all, and the honest error at
-    /// `redis://127.0.0.1:1` is [`BootError::Valkey`] — the adapter tried and nothing
-    /// answered. One case, both lanes' assertions, and it needs a container to reach.
+    /// Valkey is retired (ADR-0015). An environment that still names it — here an address
+    /// nothing listens at — must neither be dialled nor refused: the variable is read by
+    /// nothing, and the arm comes up on the one database it needs.
     #[tokio::test]
-    async fn the_durable_arm_clears_postgres_and_refuses_on_an_unreachable_valkey() {
+    async fn the_durable_arm_assembles_on_postgres_and_ignores_a_leftover_valkey_url() {
         let Some(database) = testing::start("the durable boot arm").await else {
             return;
         };
         let root = tempfile::tempdir().expect("a scratch directory");
-        let config = config_for(root.path(), database.url());
-        let error = assemble(&config).await.expect_err("it refuses");
-        assert!(matches!(error, BootError::Valkey { .. }), "{error:?}");
-        let message = format!("{error}");
-        assert!(message.contains("VALKEY_URL"), "{message}");
-        assert!(!message.contains("127.0.0.1:1"), "never the URL: {message}");
+        let mut environment: BTreeMap<String, String> = durable_environment(root.path());
+        environment.insert("DATABASE_URL".to_owned(), database.url().to_owned());
+        environment.insert("VALKEY_URL".to_owned(), "redis://127.0.0.1:1".to_owned());
+        let config = Config::load(&environment, &Overrides::default(), Demands::Serve)
+            .expect("it is well-formed");
+        let assembled = assemble(&config).await.expect("the durable arm assembles");
+        assert!(
+            assembled.expiry.is_some(),
+            "the durable arm sweeps its expired state"
+        );
+        assembled.service().expect("the router builds");
     }
 
     /// A database that has not been migrated refuses, and names the command that fixes it.
@@ -228,59 +223,21 @@ mod postgres_conformance {
         );
     }
 
-    /// A Valkey for a case that drives the whole durable arm, or `None` — logged — when the
-    /// Valkey tier is not admitted.
-    ///
-    /// The same gate and the same image tag as `tests/valkey.rs`, so one environment admits
-    /// both. The container is returned so the caller holds it for the length of the case.
-    async fn valkey(
-        case: &str,
-    ) -> Option<(
-        String,
-        testcontainers::ContainerAsync<testcontainers_modules::valkey::Valkey>,
-    )> {
-        use testcontainers::ImageExt as _;
-        use testcontainers::runners::AsyncRunner as _;
-
-        if std::env::var("CAPSULE_TEST_VALKEY").ok().as_deref() != Some("1") {
-            eprintln!("skipping {case}: set CAPSULE_TEST_VALKEY=1 to admit the Valkey tier");
-            return None;
-        }
-        let mut request = testcontainers_modules::valkey::Valkey::default().with_tag(VALKEY_TAG);
-        if let Ok(userns) = std::env::var("CAPSULE_TEST_CONTAINER_USERNS") {
-            request = request.with_userns_mode(&userns);
-        }
-        let container = request.start().await.expect("the Valkey container starts");
-        let host = container.get_host().await.expect("a host");
-        let port = container
-            .get_host_port_ipv4(testcontainers_modules::valkey::VALKEY_PORT)
-            .await
-            .expect("a mapped port");
-        Some((format!("redis://{host}:{port}"), container))
-    }
-
-    /// The image tag `capsule-server/compose.yaml` runs, as `tests/valkey.rs` pins it.
-    const VALKEY_TAG: &str = "9.0.4";
-
-    /// A durable `serve` assembles a whole server on Postgres and Valkey, and what it wrote
+    /// A durable `serve` assembles a whole server on Postgres, and what it wrote
     /// is there for the next one.
     ///
     /// The property #446 exists for: the arm used to refuse after both probes because some
     /// ports had no durable adapter. Now it builds every module context, and an account
     /// registered through the first assembly signs in through a second one built over the same
-    /// two backends — the in-process half of a restart. The process half is
+    /// database — the in-process half of a restart. The process half is
     /// `tests/binary.rs`'s.
     #[tokio::test]
     async fn the_durable_arm_assembles_a_server_whose_state_outlives_it() {
         let Some(database) = testing::start("the durable boot arm, whole").await else {
             return;
         };
-        let Some((valkey_url, _valkey)) = valkey("the durable boot arm, whole").await else {
-            return;
-        };
         let root = tempfile::tempdir().expect("a scratch directory");
-        let mut config = config_for(root.path(), database.url());
-        config.valkey_url = Some(valkey_url);
+        let config = config_for(root.path(), database.url());
 
         let first = assemble(&config).await.expect("the durable arm assembles");
         let client = kynos::test::TestClient::new(first.service().expect("the router builds"));
@@ -301,7 +258,7 @@ mod postgres_conformance {
         );
     }
 
-    /// A durable `serve` that configures OIDC assembles on Postgres and Valkey (#460).
+    /// A durable `serve` that configures OIDC assembles on Postgres (#460).
     ///
     /// It used to be refused by name before either probe, because its two stores had
     /// in-memory adapters only. Discovery is lazy, so an issuer nothing answers at still
@@ -311,13 +268,9 @@ mod postgres_conformance {
         let Some(database) = testing::start("the durable boot arm, with OIDC").await else {
             return;
         };
-        let Some((valkey_url, _valkey)) = valkey("the durable boot arm, with OIDC").await else {
-            return;
-        };
         let root = tempfile::tempdir().expect("a scratch directory");
         let mut environment: BTreeMap<String, String> = durable_environment(root.path());
         environment.insert("DATABASE_URL".to_owned(), database.url().to_owned());
-        environment.insert("VALKEY_URL".to_owned(), valkey_url);
         environment.insert(
             "OIDC_ISSUER".to_owned(),
             "http://127.0.0.1:9/nothing-listens-here".to_owned(),
@@ -338,13 +291,9 @@ mod postgres_conformance {
         let Some(database) = testing::start("the durable pulled-album budget").await else {
             return;
         };
-        let Some((valkey_url, _valkey)) = valkey("the durable pulled-album budget").await else {
-            return;
-        };
         let root = tempfile::tempdir().expect("a scratch directory");
         let mut environment: BTreeMap<String, String> = durable_environment(root.path());
         environment.insert("DATABASE_URL".to_owned(), database.url().to_owned());
-        environment.insert("VALKEY_URL".to_owned(), valkey_url);
         environment.insert("FEDERATION_PEER_BUDGET_PERCENT".to_owned(), "0".to_owned());
         let config = Config::load(&environment, &Overrides::default(), Demands::Serve)
             .expect("it is well-formed");
@@ -354,8 +303,8 @@ mod postgres_conformance {
         let connection = super::super::open_durable_database(&config)
             .await
             .expect("the database opens");
-        let valkey = super::super::valkey(&config).await.expect("Valkey answers");
-        let stores = base.durable(&connection, &valkey);
+        let state = super::super::state_stores(&config, &connection, &base.clock);
+        let stores = base.durable(&connection, &state);
         super::a_new_pulled_blob_is_refused_at_a_zero_budget(&stores).await;
     }
 
@@ -367,14 +316,9 @@ mod postgres_conformance {
         let Some(database) = testing::start("the durable collector and pulled albums").await else {
             return;
         };
-        let Some((valkey_url, _valkey)) = valkey("the durable collector and pulled albums").await
-        else {
-            return;
-        };
         let root = tempfile::tempdir().expect("a scratch directory");
         let mut environment: BTreeMap<String, String> = durable_environment(root.path());
         environment.insert("DATABASE_URL".to_owned(), database.url().to_owned());
-        environment.insert("VALKEY_URL".to_owned(), valkey_url);
         let config = Config::load(&environment, &Overrides::default(), Demands::Serve)
             .expect("it is well-formed");
         let clock = std::sync::Arc::new(crate::store::memory::ManualClock::new(
@@ -386,8 +330,8 @@ mod postgres_conformance {
         let connection = super::super::open_durable_database(&config)
             .await
             .expect("the database opens");
-        let valkey = super::super::valkey(&config).await.expect("Valkey answers");
-        let stores = base.durable(&connection, &valkey);
+        let state = super::super::state_stores(&config, &connection, &base.clock);
+        let stores = base.durable(&connection, &state);
         super::a_pulled_blob_outlives_the_assembled_collector(&stores, &clock).await;
     }
 
@@ -403,9 +347,6 @@ mod postgres_conformance {
         let Some(database) = testing::start("the durable maintenance arm").await else {
             return;
         };
-        let Some((valkey_url, _valkey)) = valkey("the durable maintenance arm").await else {
-            return;
-        };
         let root = tempfile::tempdir().expect("a scratch directory");
         let address = "b".repeat(64);
         let shard = root.path().join("blobs").join("bb").join("bb");
@@ -416,7 +357,6 @@ mod postgres_conformance {
         let mut environment: BTreeMap<String, String> = [
             ("BLOB_ROOT".to_owned(), root.path().display().to_string()),
             ("DATABASE_URL".to_owned(), database.url().to_owned()),
-            ("VALKEY_URL".to_owned(), valkey_url),
         ]
         .into_iter()
         .collect();
@@ -464,7 +404,6 @@ async fn a_durable_backend_with_oidc_configured_goes_on_to_the_probes() {
             "DATABASE_URL".to_owned(),
             "postgres://127.0.0.1:1/capsule".to_owned(),
         ),
-        ("VALKEY_URL".to_owned(), "redis://127.0.0.1:6379".to_owned()),
         (
             "ATTESTATION_KEY_SEED".to_owned(),
             base64::Engine::encode(
@@ -1501,10 +1440,9 @@ async fn a_locked_account_recovers_through_the_login_route_once_the_window_passe
 #[tokio::test]
 async fn a_durable_maintenance_command_without_a_database_url_refuses_by_name() {
     // An operator running `capsule-server scrub` without `--memory` is asking for the
-    // durable stores, and the first one those workers read is the index. Naming
-    // `VALKEY_URL` first would send them to configure the second thing before the first.
-    // `Config::load` names both at once (#520); this is the boot path's backstop, reached by
-    // a `Config` that lost both after loading.
+    // durable stores, and every one of them is on the database. `Config::load` names it
+    // (#520); this is the boot path's backstop, reached by a `Config` that lost it after
+    // loading.
     let root = tempfile::tempdir().expect("a scratch directory");
     let environment: BTreeMap<String, String> = [
         ("BLOB_ROOT".to_owned(), root.path().display().to_string()),
@@ -1512,14 +1450,12 @@ async fn a_durable_maintenance_command_without_a_database_url_refuses_by_name() 
             "DATABASE_URL".to_owned(),
             "postgres://127.0.0.1:1/capsule".to_owned(),
         ),
-        ("VALKEY_URL".to_owned(), "redis://127.0.0.1:1".to_owned()),
     ]
     .into_iter()
     .collect();
     let mut config = Config::load(&environment, &Overrides::default(), Demands::Maintenance)
         .expect("maintenance demands nothing else");
     config.database_url = None;
-    config.valkey_url = None;
     let error = super::assemble_maintenance(&config)
         .await
         .expect_err("it refuses");
@@ -1532,8 +1468,6 @@ async fn a_durable_maintenance_command_without_a_database_url_refuses_by_name() 
         ),
         "{error:?}"
     );
-    let message = format!("{error}");
-    assert!(!message.contains("VALKEY_URL"), "{message}");
 }
 
 #[tokio::test]

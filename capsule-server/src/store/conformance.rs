@@ -3,7 +3,7 @@
 //! # Why this is the deliverable, not the tests
 //!
 //! It lives in `src/`, not in `tests/`, because it is part of the contract: a port is only
-//! worth having if "the in-memory double behaves like Valkey" is *asserted* rather than
+//! worth having if "the in-memory double behaves like Postgres" is *asserted* rather than
 //! assumed, and an assertion that lives in one crate's test directory cannot be run against an
 //! adapter written elsewhere. Everything here is generic over [`Harness`], so it costs nothing
 //! in a binary that never instantiates it, and a container-backed smoke test is one
@@ -11,7 +11,7 @@
 //!
 //! It is also what lets the rest of the Kynos rebuild be tested without live infrastructure —
 //! the framework's acceptance gap. The in-memory adapter is
-//! only a legitimate stand-in for Valkey to the extent it passes this.
+//! only a legitimate stand-in for Postgres to the extent it passes this.
 //!
 //! # What is asserted, and what cannot be
 //!
@@ -57,13 +57,11 @@ use super::{StoreError, StoreFuture, deadline};
 
 /// The durable device-cohort map, on its own.
 ///
-/// Split out of [`Harness`] because [`CohortStore`] is the one port in this module that is
-/// **not** Valkey's. Everything else here is volatile TTL state — sessions, upload progress, four
+/// Split out of [`Harness`] because [`CohortStore`] is the one port in this module that does
+/// **not** expire. Everything else here is expiring state — sessions, upload progress, four
 /// ceremonies — and the cohort map deliberately outlives all of it: a cohort becomes worth
-/// knowing exactly when the sessions that carried it have expired. Its production adapter is
-/// therefore Postgres (#402) while the other five are Valkey's (#403), and a Postgres-backed
-/// harness that had to implement `auth()`, `uploads()` and three ceremony stores to run four
-/// cohort cases would have to invent five adapters it will never have.
+/// knowing exactly when the sessions that carried it have expired. A harness for the cohort map
+/// alone therefore needs no expiring store at all.
 ///
 /// `advance` rides along rather than staying on [`Harness`], for the same reason: a cohort case
 /// asserts the map does *not* expire, and a suite that could not move time could not assert it.
@@ -74,7 +72,7 @@ pub trait CohortHarness: Send + Sync {
     /// Move every store in this harness `by` forward in its own time.
     ///
     /// The seam that keeps the suite backend-agnostic. The deterministic double advances a
-    /// manual clock; a Valkey- or Postgres-backed harness sleeps, or resets its stores with a
+    /// manual clock; a Postgres-backed harness does too, or sleeps, or resets its stores with a
     /// lifetime short enough to wait out — and for a store with no TTL at all it is legitimately
     /// a no-op, because there is nothing to move.
     fn advance(&self, by: SignedDuration) -> StoreFuture<'_, ()>;
@@ -540,7 +538,7 @@ pub async fn a_past_cap_lineage_does_not_hide_a_live_one(h: &dyn Harness) {
 /// A restore is not an issuance — a password change closes every session of the account and
 /// puts the caller's back — so it must not slide the window: the record lives exactly as long
 /// as the refresh token minted when it was opened. The step is a microsecond rather than a
-/// nanosecond tick because the Valkey read gate compares microseconds, and the harness clock may
+/// nanosecond tick because the Postgres read gate compares microseconds, and the harness clock may
 /// sit between two of them by the time this case runs.
 pub async fn restoring_a_session_keeps_its_original_deadline(h: &dyn Harness) {
     let store = h.auth();
@@ -1638,8 +1636,8 @@ pub async fn an_oidc_authorization_expires_with_its_store(h: &dyn Harness) {
 ///
 /// The other side of [`an_oidc_authorization_expires_with_its_store`]'s boundary: an adapter
 /// that expired a record early would fail a person who signed in at the provider inside the
-/// window. A microsecond rather than a `tick()` because that is the Valkey adapter's resolution
-/// (its module docs): a deadline is kept as the microsecond it falls in, so a nanosecond short of
+/// window. A microsecond rather than a `tick()` because that is the Postgres adapter's resolution
+/// (a `BIGINT` of microseconds): a deadline is kept as the microsecond it falls in, so a nanosecond short of
 /// a deadline that is not microsecond-aligned is already that microsecond, and the answer would
 /// depend on where earlier cases left the shared clock.
 pub async fn an_oidc_authorization_is_live_until_its_deadline(h: &dyn Harness) {
@@ -2214,7 +2212,7 @@ pub async fn the_cohort_map_does_not_expire(h: &dyn CohortHarness) {
 
 /// Run every case above against one harness, in order.
 ///
-/// For a backend where standing up a harness is expensive — a Valkey or Postgres container —
+/// For a backend where standing up a harness is expensive — a Postgres container —
 /// this is the entry point. A unit-tier adapter should prefer calling the cases individually,
 /// one `#[tokio::test]` each, so a failure names the property that broke rather than the suite.
 pub async fn run_all(h: &dyn Harness) {

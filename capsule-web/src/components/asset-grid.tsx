@@ -305,7 +305,7 @@ const VirtualList = ({
                 return (
                     <div
                         key={virtualRow.index}
-                        className="absolute top-0 left-0 flex w-full"
+                        className="absolute top-0 start-0 flex w-full"
                         style={{
                             height: `${row.height}px`,
                             transform: `translateY(${virtualRow.start}px)`,
@@ -388,7 +388,7 @@ const AssetCard = ({
 
                     {/* Selection Checkbox - Visible on hover or if selected */}
                     <div
-                        className={`absolute top-2 left-2 transition-opacity duration-200 z-10
+                        className={`absolute top-2 start-2 transition-opacity duration-200 z-10
                             ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}
                         `}
                         onKeyUp={(e) => {
@@ -414,7 +414,7 @@ const AssetCard = ({
                     )}
 
                     {asset.duration && (
-                        <div className="absolute bottom-2 right-2 text-[10px] font-medium text-white bg-black/60 px-1.5 py-0.5 rounded-sm pointer-events-none">
+                        <div className="absolute bottom-2 end-2 text-[10px] font-medium text-white bg-black/60 px-1.5 py-0.5 rounded-sm pointer-events-none">
                             {asset.duration}
                         </div>
                     )}
@@ -423,7 +423,7 @@ const AssetCard = ({
             <ContextMenuContent className="w-52">
                 <ContextMenuSub>
                     <ContextMenuSubTrigger>
-                        <FolderInput className="w-4 h-4 mr-2" />
+                        <FolderInput className="w-4 h-4 me-2" />
                         <FormattedMessage id="assets.move_to_album" />
                     </ContextMenuSubTrigger>
                     <ContextMenuSubContent className="w-48">
@@ -439,7 +439,7 @@ const AssetCard = ({
                 </ContextMenuSub>
                 <ContextMenuSeparator />
                 <ContextMenuItem>
-                    <Share className="w-4 h-4 mr-2" />
+                    <Share className="w-4 h-4 me-2" />
                     <FormattedMessage id="common.share" />
                 </ContextMenuItem>
                 <ContextMenuSeparator />
@@ -447,7 +447,7 @@ const AssetCard = ({
                     className="text-destructive focus:text-destructive"
                     onClick={onDelete}
                 >
-                    <Trash2 className="w-4 h-4 mr-2" />
+                    <Trash2 className="w-4 h-4 me-2" />
                     <FormattedMessage id="common.delete" />
                 </ContextMenuItem>
             </ContextMenuContent>

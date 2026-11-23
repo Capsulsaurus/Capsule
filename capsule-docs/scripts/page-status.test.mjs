@@ -1,6 +1,7 @@
 // Every authored docs page must carry a review `status` (see
 // src/content.config.ts and Core Principles — Review Status), and no generated
-// page may: a generated page tracks its artifact and has no review state.
+// page may: a generated page tracks its artifact and has no review state. A
+// splash page has no sidebar to badge, so it may leave the status out.
 //
 // The content schema cannot require the field itself: plugin routes such as
 // the blog index render through <StarlightPage> with no frontmatter of their
@@ -15,7 +16,11 @@ import {
     isDraftPost,
     postContractViolations,
 } from '../src/lib/blog-posts.mjs';
-import { frontmatterGenerated, frontmatterStatus } from './lib/markdown.mjs';
+import {
+    frontmatterGenerated,
+    frontmatterStatus,
+    frontmatterTemplate,
+} from './lib/markdown.mjs';
 
 const DOCS = join(
     dirname(fileURLToPath(import.meta.url)),
@@ -33,6 +38,18 @@ describe('frontmatterStatus', () => {
         ['no frontmatter\nstatus: draft\n', undefined],
     ])('%j -> %s', (source, expected) => {
         expect(frontmatterStatus(source)).toBe(expected);
+    });
+});
+
+describe('frontmatterTemplate', () => {
+    it.each([
+        ['---\ntitle: A\ntemplate: splash\n---\nbody', 'splash'],
+        ["---\ntemplate: 'doc'\n---\n", 'doc'],
+        ['---\r\ntemplate: splash\r\n---\r\n', 'splash'],
+        ['---\ntitle: A\n---\ntemplate: splash\n', undefined],
+        ['no frontmatter\ntemplate: splash\n', undefined],
+    ])('%j -> %s', (source, expected) => {
+        expect(frontmatterTemplate(source)).toBe(expected);
     });
 });
 
@@ -64,6 +81,11 @@ describe('docs pages', () => {
             const source = readFileSync(join(DOCS, rel), 'utf8');
             if (frontmatterGenerated(source)) return false;
             const status = frontmatterStatus(source);
+            if (
+                frontmatterTemplate(source) === 'splash' &&
+                status === undefined
+            )
+                return false;
             return status !== 'draft' && status !== 'stable';
         });
         expect(unmarked).toEqual([]);

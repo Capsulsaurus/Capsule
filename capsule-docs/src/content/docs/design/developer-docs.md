@@ -4,7 +4,7 @@ description: How Capsule's developer surfaces become published reference pages
 status: draft
 ---
 
-Capsule publishes one docs site, built from `capsule-docs/` with [Starlight](https://github.com/withastro/starlight).
+Capsule publishes one docs site, built from `capsule-docs/` with Starlight.
 This doc owns how each developer surface becomes a page on it. Which surfaces exist is
 [](/design/api-surfaces/#surfaces); the rules server code follows are [](/development/api-practices/).
 A stale reference page is worse than a missing one, because it is confidently wrong, so none is
@@ -42,7 +42,11 @@ maintained by hand.
 
 - **Binding dump.** uniffi offers no stable machine-readable description of a namespace, so the
   dump is this repository's format: the declarations the native clients consume, as the generated
-  sources spell them. It fails when one is missing.
+  sources spell them. It fails when one is missing. It also carries each language's
+  hand-written platform adapters (`capsule-core-kotlin`, `capsule-core-swift`: the StrongBox,
+  Secure Enclave and software key stores an app constructs), which the pages render after the
+  generated declarations. Those sources are committed, so the same check catches their drift,
+  and the Rust CI filter lists them.
 - **Browser digest.** The caller-facing half of the declaration file wasm-bindgen emits, kept
   verbatim. Its check runs in the web gate, the only job that installs wasm-bindgen.
 - **Rustdoc is the one exception to one chrome.** The workspace is `publish = false`, so docs.rs
@@ -61,6 +65,10 @@ maintained by hand.
 - `/reference/cli/`: `capsule(1)`.
 - `/reference/sdk/`: the Rust page (hand-written, linking into rustdoc), then the generated Swift,
   Kotlin and browser pages.
+- `/llms.txt`: the [llms.txt](https://llmstxt.org) entry point for LLM agents, linking plain-text
+  bundles of the same pages: `/llms-full.txt`, `/llms-small.txt`, and one `/_llms-txt/<set>.txt`
+  per topic set curated in `capsule-docs/src/lib/llms-sets.mjs`. Generated from the pages at
+  build time, latest only.
 
 ## Hosting and Versions
 
@@ -83,6 +91,26 @@ The URL layout and the proxy mapping are `capsule-docs/src/lib/docs-version.mjs`
 The server is key-free: writes are sealed on the client and the sync feed returns opaque
 envelopes, so a try-it panel would teach that the API accepts plaintext. Executable examples live
 where sealing happens: SDK doctests and CLI transcripts.
+
+## Why Not Dokka
+
+The Kotlin page is laid out after Dokka (summary tables, member rows that link to
+themselves, the documented types a signature names) but rendered by the generator, for four
+reasons:
+
+- **Toolchain.** Dokka reads the sources against a resolved Gradle classpath. The bindings are
+  gitignored uniffi output, so the docs build would need Gradle, a JDK, cargo and uniffi, which
+  breaks the first rule.
+- **Chrome.** Its HTML is a site of its own, outside search, the link validator, the theme and
+  the version switcher. Its own templates can be overridden, but it stays a second site. Its
+  Markdown and Javadoc outputs are still alpha.
+- **Noise.** It documents every public declaration in the generated file, uniffi's converters
+  and buffers included, and `@suppress` cannot be added to a file nobody writes.
+- **No gain in prose.** uniffi copies Rust doc comments verbatim, so Dokka would publish the
+  same rustdoc paths (`Self::open`, `crate::ffi::…`). The generator resolves them to entries
+  on the page instead.
+
+The toolchain and chrome reasons hold for DocC and the Swift page too.
 
 ## Deferred
 

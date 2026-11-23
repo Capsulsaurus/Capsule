@@ -2,15 +2,18 @@ import { describe, expect, test } from 'bun:test';
 
 import {
     applyDocumentLocale,
+    availableLocales,
     directionFor,
     LANGUAGE_STORAGE_KEY,
     languageOptions,
     messagesFor,
     normalizeLanguage,
+    PSEUDO_LOCALES,
     RTL_LOCALES,
     readLanguagePreference,
     resolveLanguage,
     resolveLocale,
+    SOURCE_LOCALE,
     SUPPORTED_LOCALES,
     writeLanguagePreference,
 } from './locale';
@@ -143,7 +146,7 @@ describe('language preference', () => {
 
 describe('languageOptions', () => {
     test('offers every supported language, labelled in itself', () => {
-        const options = languageOptions();
+        const options = languageOptions(false);
         expect(options.map((option) => option.code)).toEqual([
             ...SUPPORTED_LOCALES,
         ]);
@@ -153,5 +156,52 @@ describe('languageOptions', () => {
         expect(options.find((option) => option.code === 'ja')?.name).toBe(
             '日本語',
         );
+    });
+
+    test('a development build also offers the pseudo-locales, last', () => {
+        expect(languageOptions(true).map((option) => option.code)).toEqual([
+            ...SUPPORTED_LOCALES,
+            ...PSEUDO_LOCALES,
+        ]);
+    });
+});
+
+describe('pseudo-locales', () => {
+    test('are never supported locales', () => {
+        for (const locale of PSEUDO_LOCALES) {
+            expect(SUPPORTED_LOCALES as readonly string[]).not.toContain(
+                locale,
+            );
+        }
+    });
+
+    test('are available only in a development build', () => {
+        expect(availableLocales(false)).toEqual([...SUPPORTED_LOCALES]);
+        expect(availableLocales(true)).toEqual([
+            ...SUPPORTED_LOCALES,
+            ...PSEUDO_LOCALES,
+        ]);
+        expect(normalizeLanguage('en-xa', true)).toBe('en-XA');
+        expect(normalizeLanguage('en-XA', false)).toBeUndefined();
+        expect(normalizeLanguage('ar-XB', false)).toBeUndefined();
+    });
+
+    test('are never negotiated from the OS', () => {
+        expect(resolveLocale(['en-XA'])).toBe('en');
+        expect(resolveLocale(['ar-XB'])).toBe('ar');
+    });
+
+    test('ar-XB lays out right to left, en-XA left to right', () => {
+        expect(directionFor('ar-XB')).toBe('rtl');
+        expect(directionFor('en-XA')).toBe('ltr');
+    });
+
+    test('each has a catalog covering every source key', () => {
+        const source = Object.keys(messagesFor(SOURCE_LOCALE)).sort();
+        for (const locale of PSEUDO_LOCALES) {
+            const catalog = messagesFor(locale);
+            expect(catalog).not.toBe(messagesFor(SOURCE_LOCALE));
+            expect(Object.keys(catalog).sort()).toEqual(source);
+        }
     });
 });

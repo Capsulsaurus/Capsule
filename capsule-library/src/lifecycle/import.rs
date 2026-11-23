@@ -647,16 +647,50 @@ impl Workspace {
     /// every change (import, metadata edit, soft-delete/restore), so the index reflects the
     /// asset's current rating, tags, and deletion state. Upsert keeps it conflict-safe even
     /// though the legacy importer shares the same `assets` table.
+    ///
+    /// Atomic: the row and the tag replace are one
+    /// [`with_transaction`](crate::db::DatabaseDriver::with_transaction) scope, so a failure
+    /// part-way leaves the previous row and tags rather than a new row with half its tags. Inside
+    /// an import batch it nests as a savepoint.
     pub(super) fn index_asset_row(&self, asset: &AssetState) -> Result<()> {
-        self.library
-            .db
-            .upsert_asset(&asset_row_from_state(asset))
+        let db = &self.library.db;
+        db.with_transaction(|| self.write_asset_row(asset))
             .map_err(|e| LifecycleError::Db(e.to_string()))?;
+        tracing::debug!(asset_id = %asset.asset_id, "index: asset row and tags written");
+        Ok(())
+    }
+
+    /// [`index_asset_row`](Self::index_asset_row) and
+    /// [`index_original_representation`](Self::index_original_representation) as **one**
+    /// atomic catalog write: a newly placed asset is either fully indexed or not at all, never a
+    /// row without its original's cache entry.
+    pub(super) fn index_asset_with_original(
+        &self,
+        asset: &AssetState,
+        original_bytes: usize,
+    ) -> Result<()> {
+        let db = &self.library.db;
+        let representation = self.original_representation_row(asset, original_bytes);
+        db.with_transaction(|| {
+            self.write_asset_row(asset)?;
+            db.upsert_representation(&representation)
+        })
+        .map_err(|e| LifecycleError::Db(e.to_string()))?;
+        tracing::debug!(
+            asset_id = %asset.asset_id,
+            original_bytes,
+            "index: asset row, tags and original representation written"
+        );
+        Ok(())
+    }
+
+    /// The row + tag writes [`index_asset_row`](Self::index_asset_row) wraps, unwrapped so a
+    /// caller can fold them into a larger scope.
+    fn write_asset_row(&self, asset: &AssetState) -> rusqlite::Result<()> {
+        let db = &self.library.db;
+        db.upsert_asset(&asset_row_from_state(asset))?;
         let tags: Vec<String> = asset.sidecar.tags_user.value().into_iter().collect();
-        self.library
-            .db
-            .replace_asset_tags(&asset.asset_id.to_string(), &tags)
-            .map_err(|e| LifecycleError::Db(e.to_string()))
+        db.replace_asset_tags(&asset.asset_id.to_string(), &tags)
     }
 
     /// Record the asset's own original as a device-owned cache representation — exempt from the
@@ -668,17 +702,25 @@ impl Workspace {
     ) -> Result<()> {
         self.library
             .db
-            .upsert_representation(&CachedRepresentationRow {
-                uuid: asset.asset_id.to_string(),
-                tier: "original".to_string(),
-                format: Some(asset.ext.clone()),
-                bytes: bytes as i64,
-                path: self.media_path(asset).to_string_lossy().into_owned(),
-                last_accessed_at: Timestamp::now().as_second(),
-                pinned: false,
-                is_owned_original: true,
-            })
+            .upsert_representation(&self.original_representation_row(asset, bytes))
             .map_err(|e| LifecycleError::Db(e.to_string()))
+    }
+
+    fn original_representation_row(
+        &self,
+        asset: &AssetState,
+        bytes: usize,
+    ) -> CachedRepresentationRow {
+        CachedRepresentationRow {
+            uuid: asset.asset_id.to_string(),
+            tier: "original".to_string(),
+            format: Some(asset.ext.clone()),
+            bytes: bytes as i64,
+            path: self.media_path(asset).to_string_lossy().into_owned(),
+            last_accessed_at: Timestamp::now().as_second(),
+            pinned: false,
+            is_owned_original: true,
+        }
     }
 
     /// Import a file into `album_id`: encrypt, build the signed create manifest + provenance,
@@ -1108,14 +1150,25 @@ impl Workspace {
         // failure to write one must never fail an import whose signed original is already
         // durable. `persist_derivatives` logs and continues rather than returning.
         self.persist_derivatives(&asset, &derivatives);
-        self.index_asset_row(&asset)?;
-        self.index_original_representation(&asset, enc.plaintext_size as usize)?;
+        self.index_asset_with_original(&asset, enc.plaintext_size as usize)?;
 
         // Move mode: release the source only after the durable, self-verified commit — unless
         // the caller defers release to its server-side verify-before-destroy gate,
         // where the source is the only copy until the *server* durably holds it.
         if opts.move_source && !opts.defer_source_release {
-            let _ = fs::remove_file(src);
+            if self.library.db.in_transaction() {
+                // The index rows above are not durable until an enclosing batch commits, so the
+                // source is not released from inside one: keeping it never loses data, and a
+                // batch caller defers release anyway.
+                tracing::warn!(
+                    asset_id = %asset_id,
+                    src = %src.display(),
+                    "import: catalog batch still open; Move source kept rather than released \
+                     before its index rows commit"
+                );
+            } else {
+                let _ = fs::remove_file(src);
+            }
         }
 
         self.assets.insert(asset_id, asset);

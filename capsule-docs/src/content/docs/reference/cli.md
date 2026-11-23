@@ -24,8 +24,9 @@ against the working tree and `cargo install --path capsule-cli` installs it.
 A `capsule` invocation reads at most two pieces of durable state.
 
 - **A library:** a directory named by `--library`, holding the encrypted assets, their sidecar
-  metadata, and a SQLite index that can be rebuilt from the sidecars alone
-  (`capsule library rebuild`). Every offline command operates on one.
+  metadata, and a SQLite index migrated forward in place. `capsule library rebuild` repairs
+  it from the sidecars, which restores the asset facts but not index-only state such as cache
+  bookkeeping or importer-formed stack placement. Every offline command operates on one.
 - **A session:** the token pair `capsule auth login` persists, owner-readable, under the user's
   configuration directory. Every networked command reads it, and `capsule reset` removes it.
 
@@ -72,7 +73,7 @@ flag for one.
   library's album keys. It writes an original only once its ciphertext matches the signed manifest
   and its plaintext matches the signed metadata's digest. An interrupted run resumes from the part
   files it left in `OUT/.capsule-restore/`.
-- The server endpoints behind the networked commands are the [REST API](/reference/api/)
+- The server endpoints behind the networked commands are the [](/reference/api/)
   reference.
 - The CLI and TUI are English-only. The shared `error.*` codes render through the English catalog
   described in [](/design/i18n/), and the remaining locale negotiation is to be dropped. The command

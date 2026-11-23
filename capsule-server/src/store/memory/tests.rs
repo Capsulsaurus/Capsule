@@ -97,7 +97,7 @@ cohort_conformance_cases! {
 /// The whole suite, in one pass on one harness.
 ///
 /// This is the entry point a container-backed adapter uses, so it is exercised here too —
-/// otherwise the first time anyone runs it would be against Valkey, where a failure is
+/// otherwise the first time anyone runs it would be against Postgres, where a failure is
 /// hardest to read. It also proves the cases really are independent: they share a harness
 /// and a clock that only moves forward.
 #[tokio::test]

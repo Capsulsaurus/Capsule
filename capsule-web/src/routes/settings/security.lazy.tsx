@@ -38,7 +38,7 @@ function DeviceCard({ device }: { device: Device }) {
                     {device.user_agent ??
                         intl.formatMessage({ id: 'security.unknown_device' })}
                     {device.current && (
-                        <span className="ml-2 text-xs text-green-600 font-normal">
+                        <span className="ms-2 text-xs text-green-600 font-normal">
                             <FormattedMessage id="security.this_device" />
                         </span>
                     )}

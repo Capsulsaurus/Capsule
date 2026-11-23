@@ -102,6 +102,27 @@ describe('checkCrossLinks', () => {
         );
     });
 
+    it('resolves a locale URL to its translation, or the English page it falls back to', () => {
+        const files = {
+            'capsule-docs/astro.config.mjs': ASTRO_CONFIG,
+            'capsule-docs/src/content/docs/design/thumbnails.md':
+                '# T\n\n## LQIP\n',
+            'capsule-docs/src/content/docs/ja/guides/start.md':
+                '# S\n\n## はじめに\n',
+            'README.ja.md': [
+                '[T](https://capsule.example.net/ja/design/thumbnails/#lqip)',
+                '[S](https://capsule.example.net/ja/guides/start/)',
+            ].join('\n'),
+        };
+        expect(checkCrossLinks(repo(files)).findings).toEqual([]);
+
+        files['README.ja.md'] =
+            '[T](https://capsule.example.net/ja/design/gone/)\n';
+        expect(checkCrossLinks(repo(files)).findings[0]).toContain(
+            'no page serves this route',
+        );
+    });
+
     it('reports an anchor that no heading in the target slugs to', () => {
         const { findings } = checkCrossLinks(
             repo({

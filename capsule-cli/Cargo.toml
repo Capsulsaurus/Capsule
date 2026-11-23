@@ -21,18 +21,28 @@ name = "capsule_cli"
 path = "src/lib.rs"
 
 [dependencies]
-capsule-cli-entity = { path = "./entity" }
-capsule-cli-migration = { path = "./migration" }
-# `media-linked-codecs`: the lossy libjxl master, the AVIF delivery variant and the preview tier
-# (issue #437). The CLI is the stabilize-first client that imports real libraries, and it builds
-# only for desktop hosts, so it takes the native-code encoders the mobile FFI deliberately does
-# not. Building it needs cmake, a C++17 compiler, libclang and — on x86_64 — nasm.
-capsule-core = { path = "../capsule-core", features = ["media-linked-codecs"] }
+# `media-linked-codecs`: the lossy libjxl master and the preview tier (issue #437). The CLI is the
+# stabilize-first client that imports real libraries, and it builds only for desktop hosts, so it
+# takes the native-code encoder the mobile FFI deliberately does not. Building it needs cmake and
+# a C++17 compiler.
+#
+# `media-avif-decode`: AVIF stills decode (issue #588), so an AVIF original gets its dimensions,
+# placeholder and thumbnail instead of a no-codec deferral, on a host with a hardware AV1 decoder
+# (VAAPI on Linux today). It needs no system library to build or run, so it is on for every
+# target; where no AV1 decoder is present an AVIF original is still recognised and deferred with
+# a typed no-codec status, never silently skipped.
+capsule-core = { path = "../capsule-core", features = [
+    "media-linked-codecs",
+    "media-avif-decode",
+] }
 # The local library: the SQLite index, the on-disk library, the `Workspace` and import execution
 # (`capsule-core` stays stateless; see its crate docs). Its codec pass-throughs are named too, not only core's, so the
 # library's own feature-gated derivative tests run in a workspace build exactly as they did when
 # the pipeline lived in `capsule-core`.
-capsule-library = { path = "../capsule-library", features = ["media-linked-codecs"] }
+capsule-library = { path = "../capsule-library", features = [
+    "media-linked-codecs",
+    "media-avif-decode",
+] }
 # `capsule camera import`: the in-house PTP/IP initiator the camera adapter speaks through. The
 # CLI names it for the TCP bring-up (`ptpip::tcp::connect`), the initiator identity it persists,
 # and the event-channel reader it runs beside the session.
@@ -62,7 +72,7 @@ eyre = { workspace = true }
 futures = "0.3.32"
 humansize = "2.1"
 indexmap = { workspace = true }
-nanoid = "0.4.0"
+nanoid = { workspace = true }
 ratatui = { workspace = true }
 # The library browser's inline preview: Kitty, Sixel or iTerm2 graphics where the terminal answers the query, a text fallback
 # elsewhere. No default features: `chafa-dyn` would load the LGPL libchafa, and the crossterm
@@ -71,11 +81,12 @@ ratatui = { workspace = true }
 # crate that names `image`, which is otherwise xtask tooling only.
 ratatui-image = { version = "11.1.0", default-features = false }
 image = { version = "0.25", default-features = false }
-sea-orm = { workspace = true, features = [
-    "sqlx-sqlite",
-    "runtime-tokio-rustls",
-    "debug-print",
-] }
+# `capsule.sqlite`, the CLI's local database (`src/db.rs`): the sync store and peering's floor and
+# tombstones, behind a forward-only `user_version` migrator. The workspace pin, the same bundled
+# SQLite `capsule-library` keeps its catalog on, so the client builds one SQLite engine. Not
+# sea-orm's `sqlx-sqlite`, which this replaced: a second SQLite stack and an ORM for six small
+# hand-written queries.
+rusqlite = { workspace = true }
 serde = { workspace = true }
 sysinfo = "0.36.1"
 thiserror = { workspace = true }
@@ -93,7 +104,6 @@ uuid = { workspace = true }
 # listener. Already in the graph under reqwest; named here so the listener does not hand-roll
 # percent-decoding.
 url = "2.5.8"
-walkdir = "2.5.0"
 # `capsule camera discover`, and `capsule camera import` without `--address`: browses DNS-SD
 # `_ptp._tcp` for a bounded window, behind a seam its tests script. Pure Rust, no async runtime,
 # builds for every client target; MIT OR Apache-2.0. Not `zeroconf` (binds Avahi/Bonjour) or
@@ -101,17 +111,6 @@ walkdir = "2.5.0"
 # the flume async channel, neither of which the blocking browse needs. Peering's live LAN
 # discovery (`capsule-sdk::peering::Discovery`, a mocked seam today) will use this crate too.
 mdns-sd = { version = "0.21.6", default-features = false }
-
-# `media-avif-decode`: AVIF stills decode, so an AVIF original gets its dimensions, placeholder and
-# thumbnail instead of a no-codec deferral (issue #588). It links a **system** libdav1d (BSD-2)
-# through pkg-config, so the build host needs `libdav1d-dev` / `dav1d` and the binary needs the
-# shared library at run time. Gated off Windows, which has no system package that ships libdav1d
-# with a pkg-config file on the release runner, and which is a deferred platform tier: there an
-# AVIF original is still recognised and deferred with a typed no-codec status, never silently
-# skipped. Cargo unifies this with the unconditional dependency above.
-[target.'cfg(not(windows))'.dependencies]
-capsule-core = { path = "../capsule-core", features = ["media-avif-decode"] }
-capsule-library = { path = "../capsule-library", features = ["media-avif-decode"] }
 
 [dev-dependencies]
 # `tests/oidc_dex.rs` plays the person at the browser against dex: it follows the
@@ -126,6 +125,10 @@ tokio = { workspace = true, features = ["test-util"] }
 # through `CARGO_BIN_EXE_capsule`, never `assert_cmd`. The TUI's
 # render tests snapshot `TestBackend` frames as plain text the same way (`src/tui/view/`).
 insta = { workspace = true }
+# The `capsule.sqlite` migrator's immutability lock (`src/db/migrate/tests.rs`): each shipped
+# step's rendering is pinned by its SHA-256, as `capsule-library`'s catalog migrator does. The
+# workspace pin, already in the graph through capsule-core.
+sha2 = { workspace = true }
 # `tests/escrow_publishes_directory.rs` drives `register`, `login`, `library init`, `auth escrow`,
 # `import` and `push` as spawned binaries against a server: `capsule-e2e`'s `Server` boots the
 # composition root `serve --memory` runs on an ephemeral port, in-process. Its own

@@ -28,49 +28,41 @@ native = ["mls", "media"]
 # is not among them. `capsule_core::lqip` stays unconditional and is NOT behind this feature — a
 # placeholder must not depend on which client imported the photo.
 media = ["dep:rawshift-image"]
-# `media-linked-codecs` adds the two still **encoders** that link native code, and is therefore
+# `media-linked-codecs` adds the one still **encoder** that links native code, and is therefore
 # **opt-in and never in `default`** (issue #437). `default` (via `native`) is what the mobile FFI
-# and every `rust-cross` target build, so keeping these out of it is what keeps those builds pure
+# and every `rust-cross` target build, so keeping it out of it is what keeps those builds pure
 # Rust. `capsule-cli` enables it — the stabilize-first consumer that runs on real libraries.
 #
-# - `jxl-encode-libjxl-vendored` — the **lossy** JXL master: the reference C++ libjxl, built from
-#   the `jpegxl-src` crate's vendored tree by cmake and bound by bindgen (so the build host needs
-#   cmake, a C++17 compiler and libclang). Replaces the lossless `zune-jpegxl` encode, so the tier
-#   table's q=50 / q=70 finally reach the codec. Vendored rather than system libjxl because no
-#   build host Capsule targets ships one reliably and a pkg-config miss would be a silent build
-#   break on a fresh machine. libjxl and its bundled highway, brotli and skcms are BSD-3 / MIT /
-#   Apache-2.0: attribution-only.
-# - `avif-encode-ravif` — the AVIF delivery variant via `ravif` -> rav1e. rav1e's default `asm`
-#   feature stays on (a transitive default cannot be turned off from here, and it is the fast
-#   path), so every **x86_64** build host needs `nasm` on PATH; aarch64 assembles with the C
-#   compiler. CI installs nasm for every job that builds `capsule-cli`.
+# - `jxl-encode` — the **lossy** JXL master: the reference C++ libjxl, built from source and
+#   statically linked by `gamut-jxl-sys` (cmake plus a C++17 toolchain on the build host; no
+#   bindgen). It is the only JXL encoder `rawshift-image` has at the pinned revision, so without
+#   this feature the JXL master is a recorded deferral (visualcommons/rawshift#80). Built from
+#   source rather than a system libjxl because no build host Capsule targets ships one reliably.
+#   libjxl and its bundled highway, brotli and skcms are BSD-3 / MIT / Apache-2.0:
+#   attribution-only.
 #
-# With both on, the preview tier is generated too (`media::DerivativeTier::GENERATED`): a
-# source-resolution still is only worth its bytes in a lossy codec.
+# With it on, the preview tier is generated too (`media::DerivativeTier::GENERATED`). The AVIF
+# delivery variant needs no feature: `avif-encode` below is gamut's pure-Rust AV1 encoder.
 #
 # HEIC decode is **not** here and cannot be by policy rather than toolchain: libheif and its HEVC
 # decoder libde265 are both LGPL-3.0, which .claude/rules/dependencies.md and `deny.toml` exclude
-# outright (issue #588; design/licensing.md). AVIF decode is
-# its own feature, `media-avif-decode`, below.
-media-linked-codecs = [
-    "media",
-    "rawshift-image/jxl-encode-libjxl-vendored",
-    "rawshift-image/avif-encode-ravif",
-]
+# outright (issue #588; design/licensing.md). AVIF decode is its own feature,
+# `media-avif-decode`, below.
+media-linked-codecs = ["media", "rawshift-image/jxl-encode"]
 # `media-avif-decode` adds the AVIF still **decoder** (issue #588): `rawshift-image`'s
-# `avif-decode-image`, which is `image` 0.25's `avif-native` — `mp4parse` (MPL-2.0) for the
-# container and `dav1d` for the AV1 bitstream. `dav1d-sys` links a **system** libdav1d (BSD-2)
-# through pkg-config and has no vendored build, so the build host needs `libdav1d-dev` (Debian /
-# Ubuntu), `dav1d` (Homebrew) or `libdav1d-devel` (Fedora), and the binary links it dynamically.
-# **Opt-in and never in `default`**, for the same reason as `media-linked-codecs`: `default` is
-# what the mobile FFI and every `rust-cross` target build, and a pkg-config dependency on a
-# cross-compiled C library is exactly what those builds must not grow. A separate feature rather
-# than a third arm of `media-linked-codecs`, because the two need different build hosts (cmake +
-# nasm versus a system library) and a caller may want one without the other. `capsule-cli`
-# enables it on every host but Windows. `dep:dav1d` and `dep:mp4parse` are the same two crates
-# `image` already links, named directly so `media::decode` can bound every AV1 frame with
-# dav1d's own `frame_size_limit` before `image` (which sets none) decodes it.
-media-avif-decode = ["media", "rawshift-image/avif-decode-image", "dep:dav1d", "dep:mp4parse"]
+# `avif-decode`, which parses the container, metadata and grids through pure-Rust `gamut-avif`,
+# and `hw`, which plugs the AV1 codestream into a hardware decoder where the target has one
+# (VAAPI on linux-gnu, dlopened at run time and never linked; VideoToolbox and MediaCodec are
+# unimplemented upstream, so elsewhere it compiles a stub). No system library is needed to build
+# or to run: on a host with no hardware AV1 decoder an AVIF's pixel decode reports
+# `HwDecoderUnavailable`, which `media::decode` defers like a missing codec, until upstream
+# gains a software AV1 fallback (visualcommons/rawshift#78). Nor does `rawshift-image` take a
+# frame-size limit for the AV1 decoder (visualcommons/rawshift#79), so an AVIF is budgeted by its
+# `ispe` box before decode and by its decoded frame after it. **Opt-in and never in
+# `default`**: `default` is what the mobile FFI and every `rust-cross` target build, and those
+# targets have no hardware backend upstream yet, so the feature would add the dependency and
+# decode nothing there. `capsule-cli` enables it on every target.
+media-avif-decode = ["media", "rawshift-image/avif-decode", "rawshift-image/hw"]
 # `mls` links the live OpenMLS group backend (`crypto::authority::OpenMlsAuthority`)
 # pinned to the X-Wing PQ ciphersuite `MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519`
 # (`0x004D`) via its formally-verified libcrux provider. Implied by `native` so the default
@@ -120,71 +112,54 @@ globset = "0.4.18"
 # and is byte-identical — it changes speed, never output. Imported **directly** rather than
 # through Rawshift, which .claude/rules/capsule-core.md forbids from wrapping it.
 chromahash = { version = "0.7.1", default-features = false, features = ["simd"] }
-indexmap = { workspace = true }
 jiff = { workspace = true }
 # EXIF reading, transitional: removed once Rawshift's metadata extraction covers capture time,
 # GPS and orientation (design/thumbnails.md, "Media Is Rawshift's").
 kamadak-exif = "0.5"
-# Still-image decode/encode for `capsule_core::media` (`media` feature). A **registry**
-# dependency, not the pinned `rawshift/` submodule, which is an uninitialised newer
-# v1-in-progress tree and is not a workspace member. Depended on directly rather than through
-# the `rawshift` facade because only the per-crate dependency gives per-format Cargo control
-# (`rawshift-image`'s own docs say so), and the format set is a licence, build-host and
-# *portability* decision:
+# Still-image decode/encode for `capsule_core::media` (`media` feature). The pin itself (a git
+# revision of rawshift's master, and why) is the root `[workspace.dependencies]` entry; never
+# the `rawshift/` submodule, which is not a workspace member. Depended on directly rather than
+# through the `rawshift` facade because only the per-crate dependency gives per-format Cargo
+# control (`rawshift-image`'s own docs say so), and the format set is a licence, build-host and
+# *portability* decision. Every codec below is gamut's, pure Rust, unless it says otherwise:
 #
-# - `jpeg-decode` / `png-decode` — pure-Rust zune decode for the two formats every library holds.
-#                     **Decode only in the shipping graph.** Their encoders exist and only the
-#                     test fixtures use them, so they ride `[dev-dependencies]` below: shipping
-#                     `jpeg-encode` would put `jpeg-encoder` — and its conjunctive IJG licence
-#                     arm, which cannot be elected away — into every release binary to satisfy
-#                     nothing a user does.
-# - `jxl`           — jxl-oxide decode plus the `zune-jpegxl` encoder that produces the thumbnail
-#                     tier. Pure Rust, and `image/jxl` is the tier table's committed *master*
-#                     format. The backend is `JxlSimpleEncoder`, which is lossless — a thumbnail
-#                     therefore costs more bytes than the table's q=50 intends. The lossy libjxl
-#                     backend is the opt-in `media-linked-codecs` feature above; `jxl` stays on
-#                     for the jxl-oxide decoder either way.
-# - `tiff-decode` / `gif-decode` — pure Rust, no encoder needed.
+# - `jpeg-decode` / `png-decode` — the two formats every library holds. **Decode only in the
+#                     shipping graph**: their encoders exist and only the test fixtures use
+#                     them, so they ride `[dev-dependencies]` below.
+# - `jxl-decode`    — jxl-rs through `gamut-jxl`. `image/jxl` is the tier table's committed
+#                     *master* format, but its only encoder is libjxl, the opt-in
+#                     `media-linked-codecs` feature above.
+# - `avif-encode`   — the AVIF delivery variant, through gamut's AV1 intra encoder: the one
+#                     derivative encoder in every `media` build, so the mobile FFI writes AVIF
+#                     thumbnails.
+# - `tiff-decode` / `gif-decode` — the `tiff` and `gif` crates, which upstream keeps as
+#                     exceptions to its gamut migration. No encoder needed.
 # - `arw-decode` / `dng-decode` — the two RAW families upstream calls `raw-stabilizing` (issue
-#                     #589), decoded through `RawFile::open(..).process(..)`: rawshift's own TIFF
-#                     parser (`binrw`, MIT) plus its lossless-JPEG and JXL tile decoders. Pure
-#                     Rust. **Decode only**: the `arw` / `dng` umbrellas would add `dng-encode`,
-#                     which nothing a user does needs and which the fixtures do not use either —
-#                     they are written with the parser's own `tiff::TiffWriter`, because
-#                     `export_dng` writes a photometric-RGB IFD that `dng-decode` cannot read back.
+#                     #589), decoded through `RawFile::open(..).process(..)` over gamut's IFD
+#                     parser, rawshift's lossless-JPEG decoder (ARW) and `gamut-dng` (DNG).
+#                     **Decode only**: the `arw` / `dng` umbrellas would add `dng-encode`, which
+#                     nothing a user does needs and which the fixtures do not use either.
 #
-# **`webp` is deliberately absent, and it is not a preference.** It does not compile for any
-# aarch64 target: `codecs/webp.rs:164,177,190` pass `b"EXIF".as_ptr() as *const i8` to
-# `WebPMuxSetChunk`, whose `libwebp-sys` 0.14.4 signature (`ffi.rs:881`) takes
-# `*const core::ffi::c_char` — and `c_char` is `u8` on aarch64, so the cast is an E0308. That
-# module is compiled under `any(webp-decode, webp-encode)`, so decode-only does not escape it.
-# Every mobile target Capsule ships is aarch64, so WebP is a recognised-but-undecodable format
-# here until upstream fixes the cast.
-#
-# Also absent: `heic` (libheif + libde265, both LGPL-3.0), AVIF *decode* (image's `avif-native` ->
-# system libdav1d), AVIF *encode* and lossy JXL by default (both in `media-linked-codecs`), `svg`, and the
-# other five RAW families (`raw-incomplete`: CR2, CR3, CRW, NEF, RAF; CR3 pixel decode is
-# unimplemented upstream). Each is a typed
-# `media::MediaError::UnsupportedFormat` today rather than a silent gap. MPL-2.0, already
-# allow-listed in `deny.toml`. Pure Rust by default; the linked codecs stay opt-in and never in
-# `default`. Absent from wasm32.
+# Also absent: `webp` (now pure-Rust gamut and buildable for aarch64; enabling it is its own
+# change), `heic` (refused by licence policy; upstream's decoder also needs a hardware HEVC
+# decoder), AVIF *decode* (the opt-in `media-avif-decode` feature above), lossy JXL by default
+# (`media-linked-codecs`), `svg`, and the other five RAW families (`raw-incomplete`: CR2, CR3,
+# CRW, NEF, RAF). Each is a typed `media::MediaError::UnsupportedFormat` today rather than a
+# silent gap. Absent from wasm32.
 #
 # Video is absent too. It waits on `rawshift-video`, which is still an unimplemented
-# placeholder at 0.1.1, and Capsule links no video codec of its own (design/licensing.md, "The
-# video transcoder seam").
-rawshift-image = { version = "0.1.1", default-features = false, features = [
+# placeholder, and Capsule links no video codec of its own (design/licensing.md, "The video
+# transcoder seam").
+rawshift-image = { workspace = true, features = [
     "jpeg-decode",
     "png-decode",
-    "jxl",
+    "jxl-decode",
+    "avif-encode",
     "tiff-decode",
     "gif-decode",
     "arw-decode",
     "dng-decode",
 ], optional = true }
-# The AVIF frame-size pre-flight (`media-avif-decode` only): the versions `image` 0.25's
-# `avif-native` already resolves, so the graph gains no crate. See `media::decode`.
-dav1d = { version = "0.11.1", optional = true }
-mp4parse = { version = "0.17.0", optional = true }
 serde = { workspace = true }
 serde_bytes = "0.11"     # CBOR byte-string (de)serialization for keys/signatures
 serde_json = { workspace = true }
@@ -273,12 +248,8 @@ uuid = { workspace = true, features = ["rng-getrandom"] }
 # and its feature set live in the root `[workspace.dependencies]`.
 proptest = { workspace = true }
 # The encoders the fixtures need and the shipping graph does not. Cargo unifies features per
-# build, so a `cargo build` links decode only while `cargo test` gets the encoders — which keeps
-# `jpeg-encoder`'s IJG arm out of every release binary while leaving it in the graph
-# `cargo deny --all-features` inspects, so its `deny.toml` exception and NOTICE section stay
-# matched rather than becoming stale. The `media` feature is named explicitly because a
-# dev-dependency does not inherit the optional dependency's gate.
-rawshift-image = { version = "0.1.1", default-features = false, features = [
-    "jpeg",
-    "png",
-] }
+# build, so a `cargo build` links decode only while `cargo test` gets the encoders, and no
+# release binary carries an encoder nothing a user does needs. `jxl` adds libjxl (cmake and a
+# C++ toolchain) for the JXL fixtures, since it is upstream's only JXL encoder; a workspace build
+# links it anyway through `capsule-cli`'s `media-linked-codecs`.
+rawshift-image = { workspace = true, features = ["jpeg", "png", "jxl"] }

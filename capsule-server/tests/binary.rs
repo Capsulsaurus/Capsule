@@ -76,6 +76,8 @@ fn server(args: &[&str]) -> Command {
         "BLOB_ROOT",
         "UPLOAD_DIR",
         "DATABASE_URL",
+        // Retired (ADR-0015), but still read for the warning that it is ignored: a developer's
+        // leftover export would otherwise put that warning into cases that assert it is absent.
         "VALKEY_URL",
         "JWT_ED25519_DER",
         "SYNC_CURSOR_MAC_KEY",
@@ -329,9 +331,10 @@ async fn serve_resolves_client_addresses_through_the_configured_proxy_trust() {
 }
 
 #[test]
-fn serving_without_valkey_and_without_the_memory_profile_refuses_by_name() {
+fn serving_without_a_database_and_without_the_memory_profile_refuses_by_name() {
     // `store/mod.rs` documents this refusal, and only a boot path can enforce it, so it is pinned
-    // here against the real binary.
+    // here against the real binary. PostgreSQL is the durable profile's only backend (ADR-0015),
+    // so `DATABASE_URL` is the one backend setting a durable serve can be missing.
     let root = tempfile::tempdir().expect("a scratch directory");
     let (code, _, stderr) = run(server(&[
         "serve",
@@ -342,13 +345,17 @@ fn serving_without_valkey_and_without_the_memory_profile_refuses_by_name() {
     ])
     .env("JWT_ED25519_DER", EXAMPLE_DER));
     assert_eq!(code, Some(2), "{stderr}");
-    assert!(stderr.contains("VALKEY_URL"), "{stderr}");
+    assert!(stderr.contains("DATABASE_URL"), "{stderr}");
+    assert!(
+        !stderr.contains("VALKEY_URL"),
+        "Valkey is retired, so it is never named as missing: {stderr}"
+    );
 }
 
 #[test]
 fn the_environment_cannot_select_the_memory_profile() {
     // Only `--memory` does (#521). The retired `CAPSULE_PROFILE=memory` is ignored, with a
-    // warning, so this is the durable serve above and is refused for the Valkey it lacks.
+    // warning, so this is the durable serve above and is refused for the database it lacks.
     let root = tempfile::tempdir().expect("a scratch directory");
     let (code, _, stderr) = run(server(&[
         "serve",
@@ -360,7 +367,7 @@ fn the_environment_cannot_select_the_memory_profile() {
     .env("JWT_ED25519_DER", EXAMPLE_DER)
     .env("CAPSULE_PROFILE", "memory"));
     assert_eq!(code, Some(2), "{stderr}");
-    assert!(stderr.contains("VALKEY_URL"), "{stderr}");
+    assert!(stderr.contains("DATABASE_URL"), "{stderr}");
     assert!(
         stderr.contains("CAPSULE_PROFILE is no longer read"),
         "{stderr}"
@@ -368,22 +375,12 @@ fn the_environment_cannot_select_the_memory_profile() {
 }
 
 #[test]
-fn a_durable_backend_refuses_by_name_rather_than_falling_back() {
-    // The other half of the same property: the operator *did* set `VALKEY_URL`, and falling
-    // back to the in-memory adapters is the one thing that must never happen.
-    //
-    // What the refusal *names* moved with #402. It used to be `#403`, because nothing read
-    // either backend URL; now the durable arm demands `DATABASE_URL` too — it is what the
-    // Postgres half opens the pool from — so a deployment that set one variable and not the
-    // other is told which one is missing rather than being pointed at an issue number. Since
-    // #520 that demand is `Config::load`'s, so it is a configuration refusal and exits 2, the
-    // same as a missing `VALKEY_URL`.
-    //
-    // The Valkey refusal is still there, one step further in, and #403 landed the adapter that
-    // makes it a real connection failure rather than an unimplemented port. It is asserted where
-    // it can now be reached — `boot::tests::postgres_conformance::
-    // the_durable_arm_clears_postgres_and_refuses_on_an_unreachable_valkey` — which needs a live
-    // database to get past the schema check first, and is gated accordingly.
+fn a_leftover_valkey_url_does_not_stand_in_for_the_database() {
+    // The other half of the same property. A deployment upgraded from before ADR-0015 may still
+    // export `VALKEY_URL`; it is read by nothing but a warning. It must not satisfy the durable
+    // profile in place of `DATABASE_URL` — falling back to the in-memory adapters is the one
+    // thing that must never happen — and it is never reported as a missing setting. Since #520
+    // the database demand is `Config::load`'s, so this is a configuration refusal and exits 2.
     let root = tempfile::tempdir().expect("a scratch directory");
     let (code, stdout, stderr) = run(server(&[
         "serve",
@@ -396,8 +393,14 @@ fn a_durable_backend_refuses_by_name_rather_than_falling_back() {
     .env("ATTESTATION_KEY_SEED", EXAMPLE_SEED)
     .env("VALKEY_URL", "redis://127.0.0.1:1"));
     assert_eq!(code, Some(2), "{stderr}");
-    assert!(stderr.contains("DATABASE_URL"), "{stderr}");
-    assert!(!stderr.contains("VALKEY_URL"), "it was set: {stderr}");
+    assert!(
+        stderr.contains("DATABASE_URL is required and is not set"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("VALKEY_URL is required"),
+        "a retired setting is never demanded: {stderr}"
+    );
     // A refusal names the variable, never the address, which carries the password.
     assert!(
         !stderr.contains("127.0.0.1:1"),
@@ -427,7 +430,7 @@ fn a_durable_serve_is_refused_without_an_attestation_seed_of_its_own() {
         &root.path().display().to_string(),
     ])
     .env("JWT_ED25519_DER", EXAMPLE_DER)
-    .env("VALKEY_URL", "redis://127.0.0.1:6379"));
+    .env("DATABASE_URL", "postgres://capsule@127.0.0.1:1/capsule"));
     assert_eq!(code, Some(2), "{stderr}");
     assert!(stderr.contains("ATTESTATION_KEY_SEED"), "{stderr}");
 }
@@ -785,9 +788,9 @@ fn the_operator_commands_need_no_key_material() {
 #[test]
 fn an_operator_command_without_memory_is_told_about_the_database_first() {
     // Without `--memory` these commands run on the durable stores, and the first one they read
-    // is the index. An operator who set no backend variable at all is told about both in one
-    // configuration refusal (#520), `DATABASE_URL` before `VALKEY_URL`, which is the order the
-    // workers open them in.
+    // is the index. An operator who set no backend variable at all is told about the database in
+    // a configuration refusal (#520). It is the only backend there is since ADR-0015, so the
+    // retired `VALKEY_URL` is never named.
     let root = tempfile::tempdir().expect("a scratch directory");
     for subcommand in ["gc", "purge", "scrub", "rebuild"] {
         let (code, _, stderr) = run(&mut server(&[
@@ -796,12 +799,8 @@ fn an_operator_command_without_memory_is_told_about_the_database_first() {
             &root.path().display().to_string(),
         ]));
         assert_eq!(code, Some(2), "{subcommand}: {stderr}");
-        let database = stderr.find("DATABASE_URL");
-        let valkey = stderr.find("VALKEY_URL");
-        assert!(
-            database.is_some() && valkey.is_some() && database < valkey,
-            "{subcommand}: {stderr}"
-        );
+        assert!(stderr.contains("DATABASE_URL"), "{subcommand}: {stderr}");
+        assert!(!stderr.contains("VALKEY_URL"), "{subcommand}: {stderr}");
     }
 }
 
@@ -888,13 +887,12 @@ fn an_operator_command_without_a_blob_root_refuses_by_name() {
     assert!(stderr.contains("BLOB_ROOT"), "{stderr}");
 }
 
-/// The durable profile, as processes: a real Postgres and a real Valkey, and a server that is
-/// killed rather than drained.
+/// The durable profile, as processes: a real Postgres — the durable profile's only backend
+/// (ADR-0015) — and a server that is killed rather than drained.
 ///
 /// Named `postgres_conformance` so `.config/nextest.toml` runs it in the one-thread `containers`
-/// group, and gated on **both** tiers — `CAPSULE_TEST_POSTGRES=1` and `CAPSULE_TEST_VALKEY=1` —
-/// because the durable arm opens both before it builds anything. Without them every case here
-/// prints why it skipped and passes, so `mise run test-rust` still needs no container runtime.
+/// group, and gated on `CAPSULE_TEST_POSTGRES=1`. Without it every case here prints why it
+/// skipped and passes, so `mise run test-rust` still needs no container runtime.
 mod postgres_conformance {
     use std::process::Stdio;
 
@@ -902,44 +900,37 @@ mod postgres_conformance {
     use testcontainers::runners::AsyncRunner as _;
     use testcontainers::{ContainerAsync, ImageExt as _};
     use testcontainers_modules::postgres::Postgres;
-    use testcontainers_modules::valkey::{VALKEY_PORT, Valkey};
 
     use super::{EXAMPLE_SEED, Serving, run, seeded_blob, seeded_root, server};
 
-    /// The tags `capsule-server/compose.yaml` runs, as the in-crate harnesses pin them.
+    /// The tag `capsule-server/compose.yaml` runs, as the in-crate harnesses pin it.
     const POSTGRES_TAG: &str = "18";
-    /// See [`POSTGRES_TAG`].
-    const VALKEY_TAG: &str = "9.0.4";
 
     /// The rootless-podman user-namespace mode, when the host needs one (`postgres::testing`).
     const USERNS_MODE: &str = "CAPSULE_TEST_CONTAINER_USERNS";
 
-    /// A migrated Postgres and a Valkey, held for the length of a case.
+    /// A migrated Postgres, held for the length of a case.
     struct Backends {
         database_url: String,
-        valkey_url: String,
         _postgres: ContainerAsync<Postgres>,
-        _valkey: ContainerAsync<Valkey>,
     }
 
     impl Backends {
         /// The settings a durable process needs on top of its blob root and signing key.
-        fn environment(&self) -> [(&str, &str); 3] {
+        fn environment(&self) -> [(&str, &str); 2] {
             [
                 ("DATABASE_URL", self.database_url.as_str()),
-                ("VALKEY_URL", self.valkey_url.as_str()),
                 ("ATTESTATION_KEY_SEED", EXAMPLE_SEED),
             ]
         }
     }
 
-    /// Both backends, migrated, or `None` — logged — unless both tiers are admitted.
+    /// A migrated Postgres, or `None` — logged — unless the tier is admitted.
     async fn backends(case: &str) -> Option<Backends> {
-        let admitted = |gate: &str| std::env::var(gate).ok().as_deref() == Some("1");
-        if !admitted("CAPSULE_TEST_POSTGRES") || !admitted("CAPSULE_TEST_VALKEY") {
+        if std::env::var("CAPSULE_TEST_POSTGRES").ok().as_deref() != Some("1") {
             eprintln!(
-                "skipping {case}: the durable process tier needs CAPSULE_TEST_POSTGRES=1 and \
-                 CAPSULE_TEST_VALKEY=1 with a reachable container runtime"
+                "skipping {case}: the durable process tier needs CAPSULE_TEST_POSTGRES=1 with a \
+                 reachable container runtime"
             );
             return None;
         }
@@ -971,22 +962,9 @@ mod postgres_conformance {
             .expect("the schema applies");
         drop(connection);
 
-        let mut valkey = Valkey::default().with_tag(VALKEY_TAG);
-        if let Some(mode) = &userns {
-            valkey = valkey.with_userns_mode(mode);
-        }
-        let valkey = valkey.start().await.expect("the Valkey container starts");
-        let host = valkey.get_host().await.expect("a host");
-        let port = valkey
-            .get_host_port_ipv4(VALKEY_PORT)
-            .await
-            .expect("a port");
-
         Some(Backends {
             database_url,
-            valkey_url: format!("redis://{host}:{port}"),
             _postgres: postgres,
-            _valkey: valkey,
         })
     }
 
@@ -1015,7 +993,7 @@ mod postgres_conformance {
     /// collector marks them. What only processes can show is the rest of that story:
     ///
     /// 1. a `serve` that is `SIGKILL`ed — no drain, no shutdown hook — has still kept the account
-    ///    it registered, because the next process over the same Postgres and Valkey signs it in;
+    ///    it registered, because the next process over the same Postgres signs it in;
     /// 2. the orphan (seeded onto disk the way the crash leaves it: bytes, no row) is **marked**
     ///    by one `gc` process and is still on disk afterwards;
     /// 3. and is **swept** by the next `gc` process, which only a durable mark store makes

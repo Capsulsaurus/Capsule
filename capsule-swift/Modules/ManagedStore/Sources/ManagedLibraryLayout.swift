@@ -5,13 +5,13 @@ import Foundation
 /// A pure value type: every path is *computed* from ``root``, so the layout is
 /// trivially testable and carries no I/O. It is the mobile adaptation of the
 /// `capsule-docs` filesystem design — media partitioned by capture date, a
-/// rebuildable SQLite index, a cache of thumbnails, and a trash:
+/// SQLite catalog migrated in place, a cache of thumbnails, and a trash:
 ///
 /// ```
 /// <root>/
 ///   media/{YYYY}/{YYYY-MM}/{uuid}.{ext}   — imported media files
 ///   media/{YYYY}/{YYYY-MM}/{uuid}.cbor    — the paired sidecar
-///   index/library.sqlite                  — the rebuildable catalog
+///   index/library.sqlite                  — the catalog (migrated in place)
 ///   index/thumbnails/                     — the thumbnail cache
 ///   .library/trash/                       — soft-deleted files
 /// ```

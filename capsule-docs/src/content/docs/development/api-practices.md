@@ -12,7 +12,7 @@ flowchart TB
   dto[Capsule request/response<br/>DTO mapping]:::server
   service[Framework-neutral<br/>application service]:::accent
   port[Typed repository<br/>or backend port]:::server
-  backend[(Postgres, Valkey or<br/>Capsule BlobStore adapter)]:::store
+  backend[(Postgres or<br/>Capsule BlobStore adapter)]:::store
   endpoint --> dto --> service --> port --> backend
 ```
 
@@ -23,11 +23,24 @@ deterministic mocks. Database models never become wire DTOs.
 
 - REST/OpenAPI is the only public server transport. Kynos owns runtime, routing, middleware, OpenAPI
   emission, limits, shutdown and runtime observability.
-- The checked-in [OpenAPI 3.2 document](/design/api-surfaces/#key-design-decisions) is generated
-  deterministically without live infrastructure, and Spargen generates the client from it.
+- The checked-in OpenAPI 3.2 document ([](/design/api-surfaces/#key-design-decisions)) is generated
+  deterministically without live infrastructure, and Spargen generates the client from it. Every
+  request to a declared operation goes through that client ([](/design/networking/#one-http-stack)).
+  A new operation is shaped so that the generator can lower it. When it cannot, the route still
+  ships, and its hand-written client call is an exemption with an upstream request filed against
+  the generator.
+- A new operation makes two decisions explicit: its default admission class
+  ([](/design/networking/#admission-and-priority)) and whether it joins the compression allowlist
+  ([](/design/networking/#compression)). Leaving either one out keeps the safe default: no
+  compression, and a test that fails until the operation has a class.
 - Every error carries a stable `error.*` code. The English detail is diagnostic; clients localize the
   code.
-- Protocol version headers are present on successful and failed responses.
+- Protocol version headers are present on successful and failed responses. A client sends the
+  protocol date from the one constant ([](/design/versioning/#protocol-version-source)), never as a
+  per-call argument.
+- Header parameters the transport always sets (the protocol, suite and sidecar-schema headers) are
+  declared in the document so that it stays truthful. The generated client takes them from the
+  transport, not from each call.
 - Binary bodies stream with backpressure and cancellation. Uploads and range downloads never buffer a
   whole blob.
 
@@ -49,9 +62,9 @@ authoritative.
 - Capsule owns the blob-store contract, and backends implement one narrow trait.
 - Capsule owns the E2EE-aware resumable-upload state machine. No external transfer server owns
   reservation, provenance, bundle visibility or finalization.
-- `AuthStateStore` and `UploadSessionStore` are distinct typed ports with Valkey and in-memory
-  adapters passing the same conformance suites. Valkey is
-  [required](/design/filesystem/server/#required-services); the in-memory adapter is a test double,
+- `AuthStateStore` and `UploadSessionStore` are distinct typed ports with PostgreSQL and in-memory
+  adapters passing the same conformance suites. PostgreSQL is
+  required ([](/design/filesystem/server/#required-services)); the in-memory adapter is a test double,
   not a deployment choice.
 
 ## Logging

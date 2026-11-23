@@ -668,3 +668,192 @@ fn eviction_empty_when_within_budget() {
         .unwrap();
     assert!(db.eviction_candidates(1000).unwrap().is_empty());
 }
+
+// ── Transactions: `with_transaction`, savepoint nesting, batches ─────────────
+
+/// A trigger that refuses one tag value, so a test can fail a write part-way through a
+/// multi-statement scope.
+fn refuse_tag(db: &DatabaseDriver, tag: &str) {
+    db.connection()
+        .execute_batch(&format!(
+            "CREATE TRIGGER refuse_tag BEFORE INSERT ON asset_tags WHEN NEW.tag = '{tag}'
+             BEGIN SELECT RAISE(ABORT, 'injected tag failure'); END;"
+        ))
+        .unwrap();
+}
+
+/// A file-backed catalog plus a second, independent connection to it — what another process
+/// (or a crash-restart) would see, i.e. only committed rows.
+fn file_catalog() -> (tempfile::TempDir, DatabaseDriver, Connection) {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("library.sqlite");
+    let db = DatabaseDriver::open(&path).unwrap();
+    let observer = Connection::open(&path).unwrap();
+    (dir, db, observer)
+}
+
+fn committed_assets(observer: &Connection) -> i64 {
+    observer
+        .query_row("SELECT COUNT(*) FROM assets", [], |r| r.get(0))
+        .unwrap()
+}
+
+#[test]
+fn with_transaction_commits_on_ok_and_rolls_back_on_err() {
+    let db = DatabaseDriver::open_in_memory().unwrap();
+    db.with_transaction(|| db.insert_asset(&make_asset("kept", &"a".repeat(64))))
+        .unwrap();
+
+    let failed: Result<(), rusqlite::Error> = db.with_transaction(|| {
+        db.insert_asset(&make_asset("dropped", &"b".repeat(64)))?;
+        Err(rusqlite::Error::InvalidQuery)
+    });
+    assert!(failed.is_err());
+    assert!(db.find_by_uuid("kept").unwrap().is_some());
+    assert!(
+        db.find_by_uuid("dropped").unwrap().is_none(),
+        "an Err rolls the scope back"
+    );
+    assert!(
+        !db.in_transaction(),
+        "the scope never strands a transaction"
+    );
+}
+
+/// A failed inner scope rolls back only its own writes; the enclosing scope's writes, before
+/// and after it, commit with the outer scope.
+#[test]
+fn a_nested_scope_is_a_savepoint_that_rolls_back_alone() {
+    let (_dir, db, observer) = file_catalog();
+    db.with_transaction(|| {
+        db.insert_asset(&make_asset("outer-before", &"a".repeat(64)))?;
+        assert!(db.in_transaction());
+        let inner: Result<(), rusqlite::Error> = db.with_transaction(|| {
+            db.insert_asset(&make_asset("inner", &"b".repeat(64)))?;
+            Err(rusqlite::Error::InvalidQuery)
+        });
+        assert!(inner.is_err());
+        assert!(
+            db.in_transaction(),
+            "the inner rollback keeps the outer open"
+        );
+        db.with_transaction(|| db.insert_asset(&make_asset("inner-ok", &"c".repeat(64))))?;
+        assert_eq!(
+            committed_assets(&observer),
+            0,
+            "nothing commits before the outer scope"
+        );
+        db.insert_asset(&make_asset("outer-after", &"d".repeat(64)))
+    })
+    .unwrap();
+
+    assert_eq!(committed_assets(&observer), 3);
+    assert!(db.find_by_uuid("inner").unwrap().is_none());
+    for kept in ["outer-before", "inner-ok", "outer-after"] {
+        assert!(db.find_by_uuid(kept).unwrap().is_some(), "{kept}");
+    }
+}
+
+/// A panic inside a scope rolls it back rather than leaving its writes pending.
+#[test]
+fn a_panicking_scope_rolls_back() {
+    let db = DatabaseDriver::open_in_memory().unwrap();
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _: Result<(), rusqlite::Error> = db.with_transaction(|| {
+            db.insert_asset(&make_asset("panicked", &"a".repeat(64)))
+                .unwrap();
+            panic!("injected");
+        });
+    }));
+    assert!(caught.is_err());
+    assert!(!db.in_transaction());
+    assert!(db.find_by_uuid("panicked").unwrap().is_none());
+    // The depth counter is restored: a later scope still works and commits.
+    db.with_transaction(|| db.insert_asset(&make_asset("after", &"b".repeat(64))))
+        .unwrap();
+    assert!(db.find_by_uuid("after").unwrap().is_some());
+}
+
+/// A batch is invisible to another connection until it commits; a failed scope inside it
+/// costs only its own rows.
+#[test]
+fn a_batch_commits_once_and_a_failed_scope_inside_it_rolls_back_alone() {
+    let (_dir, db, observer) = file_catalog();
+    db.begin_batch().unwrap();
+    db.with_transaction(|| db.insert_asset(&make_asset("first", &"a".repeat(64))))
+        .unwrap();
+    let failed: Result<(), rusqlite::Error> = db.with_transaction(|| {
+        db.insert_asset(&make_asset("failed", &"b".repeat(64)))?;
+        Err(rusqlite::Error::InvalidQuery)
+    });
+    assert!(failed.is_err());
+    db.with_transaction(|| db.insert_asset(&make_asset("third", &"c".repeat(64))))
+        .unwrap();
+    assert_eq!(
+        committed_assets(&observer),
+        0,
+        "the batch has not committed yet"
+    );
+
+    db.commit_batch().unwrap();
+    assert!(!db.in_transaction());
+    assert_eq!(committed_assets(&observer), 2);
+    assert!(db.find_by_uuid("failed").unwrap().is_none());
+}
+
+#[test]
+fn batches_do_not_nest() {
+    let db = DatabaseDriver::open_in_memory().unwrap();
+    db.begin_batch().unwrap();
+    assert!(db.begin_batch().is_err(), "a second batch is refused");
+    db.commit_batch().unwrap();
+    assert!(!db.in_transaction());
+}
+
+/// `purge_asset` used to open its own top-level transaction, which SQLite refuses inside
+/// another; it now nests, so it can run inside a batch.
+#[test]
+fn purge_asset_nests_inside_a_batch() {
+    let (_dir, db, observer) = file_catalog();
+    db.insert_asset(&make_asset("gone", &"a".repeat(64)))
+        .unwrap();
+    db.replace_asset_tags("gone", &["x".to_string()]).unwrap();
+
+    db.begin_batch().unwrap();
+    db.purge_asset("gone").unwrap();
+    assert_eq!(committed_assets(&observer), 1, "not yet committed");
+    db.commit_batch().unwrap();
+
+    assert_eq!(committed_assets(&observer), 0);
+    assert!(db.tags_for("gone").unwrap().is_empty());
+}
+
+/// **Tag replace atomicity.** A failure part-way through the inserts leaves the previous tag
+/// set, not the truncated one the old autocommit DELETE-then-INSERT loop left behind.
+#[test]
+fn a_failed_tag_replace_leaves_the_old_tags() {
+    let db = DatabaseDriver::open_in_memory().unwrap();
+    db.insert_asset(&make_asset("uuid-1", &"a".repeat(64)))
+        .unwrap();
+    db.replace_asset_tags("uuid-1", &["beach".to_string(), "dusk".to_string()])
+        .unwrap();
+    refuse_tag(&db, "boom");
+
+    let replaced = db.replace_asset_tags("uuid-1", &["alpha".to_string(), "boom".to_string()]);
+    assert!(replaced.is_err());
+    assert_eq!(
+        db.tags_for("uuid-1").unwrap(),
+        vec!["beach".to_string(), "dusk".to_string()]
+    );
+}
+
+#[test]
+fn asset_ids_lists_every_indexed_asset() {
+    let db = DatabaseDriver::open_in_memory().unwrap();
+    assert!(db.asset_ids().unwrap().is_empty());
+    db.insert_asset(&make_asset("a", &"a".repeat(64))).unwrap();
+    db.insert_asset(&make_asset("b", &"b".repeat(64))).unwrap();
+    let ids = db.asset_ids().unwrap();
+    assert_eq!(ids.len(), 2);
+    assert!(ids.contains("a") && ids.contains("b"));
+}

@@ -181,7 +181,7 @@ final class SectionReachabilityTests: CapsuleUITestCase {
             // screen has not arrived, so the suite fails on a busy machine and
             // passes on an idle one.
             XCTAssertTrue(
-                app.navigationBars.buttons.firstMatch.waitForExistence(timeout: 10),
+                backButton().waitForExistence(timeout: 10),
                 "'\(section)' never pushed a screen"
             )
             XCTAssertEqual(
@@ -318,6 +318,27 @@ final class SectionReachabilityTests: CapsuleUITestCase {
         return text.exists ? text : app.descendants(matching: .any)[identifier]
     }
 
+    /// Navigation-bar actions of the screens this suite pushes, which are
+    /// never the back button.
+    ///
+    /// XCUITest does not promise that the first navigation-bar button is back:
+    /// Albums carries a New album action, the transfer center a force-now
+    /// action, and Imports a start-import action, and any of the three can come
+    /// first in accessibility order. Tapping one instead of back opens a sheet
+    /// or starts uploads, and the walk then judges the wrong screen. A screen
+    /// that gains a bar action adds its identifier here.
+    private static let screenActions: Set<String> = [
+        "albums.new", "transfer.force_now", "imports.start",
+    ]
+
+    /// The navigation bar's back button: its first button that is not one of
+    /// the pushed screen's own actions.
+    private func backButton() -> XCUIElement {
+        app.navigationBars.buttons
+            .matching(NSPredicate(format: "NOT (identifier IN %@)", Array(Self.screenActions)))
+            .firstMatch
+    }
+
     /// Return to the previous screen.
     ///
     /// Prefers the navigation bar's own control and falls back to the
@@ -325,7 +346,7 @@ final class SectionReachabilityTests: CapsuleUITestCase {
     /// shell and on how the pushed screen configures its bar — and this suite
     /// asserts where navigation *goes*, not how the chrome is drawn.
     private func goBack() {
-        let back = app.navigationBars.buttons.firstMatch
+        let back = backButton()
         if back.exists, back.isHittable {
             back.tap()
             return

@@ -1,8 +1,8 @@
 # The bounded E2E surface (the case index is in `src/lib.rs`): the real `capsule-sdk`
 # and the real `capsule-core` library driven over TCP against the real `capsule-server`
 # composition root. A test crate rather than a `tests/` directory of one of those crates because
-# the cases need all of them at once — case 1 alone needs the CLI's sync orchestration, its
-# migrations and sea-orm, none of which belong in the server's or the SDK's dev graph.
+# the cases need all of them at once — case 1 alone needs the CLI's sync orchestration over its
+# local database, which belongs in neither the server's nor the SDK's dev graph.
 #
 # Every dependency below is already in `Cargo.lock`; this crate adds no external crate.
 [package]
@@ -54,9 +54,9 @@ capsule-server = { path = "../capsule-server", features = ["test-egress"] }
 # out of `cargo build --workspace` — it is on only when a test target is being built, which is
 # the only thing this crate has.
 capsule-library = { path = "../capsule-library", features = ["test-support"] }
-# Case 1's client leg is the CLI's own `remote::sync` / `remote::list` over its SQLite store.
+# Case 1's client leg is the CLI's own `remote::sync` / `remote::list` over its SQLite store
+# (`capsule_cli::db::LocalDb`, migrated on open).
 capsule-cli = { path = "../capsule-cli" }
-capsule-cli-migration = { path = "../capsule-cli/migration" }
 # Case 14's viewer leg opens a share link through the entry points the web viewer calls, run
 # natively — the same use `capsule-server/tests/share.rs` makes of it in-process.
 capsule-wasm = { path = "../capsule-wasm" }
@@ -67,12 +67,11 @@ capsule-wasm = { path = "../capsule-wasm" }
 reqwest = { workspace = true }
 # The golden records are canonical CBOR, committed as hex.
 hex = { workspace = true }
-sea-orm = { workspace = true, features = ["sqlx-sqlite", "runtime-tokio-rustls"] }
-# The backup drill (`tests/backup_restore_drill.rs`) runs the durable profile: a Postgres and a
-# Valkey per host, behind `CAPSULE_TEST_POSTGRES=1` and `CAPSULE_TEST_VALKEY=1` like the server's
-# own container tiers, and the migration `capsule-server-migration up` applies before `serve`.
+# The backup drill (`tests/backup_restore_drill.rs`) runs the durable profile: a Postgres per
+# host, behind `CAPSULE_TEST_POSTGRES=1` like the server's own container tier, and the migration
+# `capsule-server-migration up` applies before `serve`.
 # The kill-anywhere suite (`tests/kill_anywhere.rs`) needs the same, because a server that is
 # SIGKILLed and restarted keeps nothing in the `--memory` profile.
 capsule-server-migration = { path = "../capsule-server/migration" }
 testcontainers = { workspace = true }
-testcontainers-modules = { workspace = true, features = ["valkey"] }
+testcontainers-modules = { workspace = true }

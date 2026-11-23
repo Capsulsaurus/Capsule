@@ -61,12 +61,12 @@ public extension NavigationCommand {
         ),
         NavigationCommand(
             action: .previousAsset,
-            titleKey: "apple.menu.previous_asset", systemImage: "chevron.left",
+            titleKey: "apple.menu.previous_asset", systemImage: "chevron.backward",
             shortcut: CommandShortcut(.leftArrow, modifiers: []), placement: .view
         ),
         NavigationCommand(
             action: .nextAsset,
-            titleKey: "apple.menu.next_asset", systemImage: "chevron.right",
+            titleKey: "apple.menu.next_asset", systemImage: "chevron.forward",
             shortcut: CommandShortcut(.rightArrow, modifiers: []), placement: .view
         ),
         NavigationCommand(

@@ -19,29 +19,24 @@ use std::collections::HashMap;
 use base64::Engine as _;
 use capsule_core::crypto::provenance::{Action, ProvenanceRecord};
 use capsule_sdk::sync::{ChangeKind, FeedEntry, SyncCursor, SyncPage, SyncState};
-use entity::{sync_cursor, synced_asset};
 use jiff::Timestamp;
-use sea_orm::ActiveValue::Set;
-use sea_orm::sea_query::OnConflict;
-use sea_orm::{
-    ColumnTrait, ConnectionTrait, DbErr, EntityTrait, QueryFilter, QueryOrder, TransactionSession,
-    TransactionTrait,
-};
+use rusqlite::OptionalExtension;
 use thiserror::Error;
 use tracing::instrument;
 use uuid::Uuid;
 
+use crate::db::{DbError, LocalDb};
 use crate::peering_state::{feed_asset_uuid, record_purged};
 
 /// The singleton row id for the one opaque feed cursor.
-const CURSOR_ROW_ID: i32 = 0;
+const CURSOR_ROW_ID: i64 = 0;
 
 /// Everything the sync store can fail with.
 #[derive(Debug, Error)]
 pub enum SyncStoreError {
     /// A database operation failed.
     #[error("sync store database error: {0}")]
-    Db(#[from] DbErr),
+    Db(#[from] DbError),
     /// A stored id was not valid base64 (store corruption).
     #[error("corrupt stored id {value:?}: {source}")]
     CorruptId {
@@ -78,21 +73,36 @@ fn kind_label(kind: ChangeKind) -> &'static str {
 
 /// Rehydrate a [`SyncState`] from the durable store, pinned to the running build's
 /// `max_known_protocol`. A fresh store yields the first-sync sentinel.
-pub async fn load_sync_state<C: ConnectionTrait>(
-    db: &C,
+pub async fn load_sync_state(
+    db: &LocalDb,
     max_known_protocol: &str,
 ) -> Result<SyncState, SyncStoreError> {
-    let cursor = sync_cursor::Entity::find_by_id(CURSOR_ROW_ID)
-        .one(db)
-        .await?
-        .map_or_else(SyncCursor::start, |row| SyncCursor::from_bytes(row.cursor));
+    let (cursor, albums) = db
+        .call(|conn| {
+            let cursor: Option<Vec<u8>> = conn
+                .query_row(
+                    "SELECT cursor FROM sync_cursor WHERE id = ?1",
+                    [CURSOR_ROW_ID],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let mut stmt = conn.prepare("SELECT album_id, sync_seq FROM synced_assets")?;
+            let albums = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((cursor, albums))
+        })
+        .await?;
+    let cursor = cursor.map_or_else(SyncCursor::start, SyncCursor::from_bytes);
 
     // The per-album high-water mark is MAX(sync_seq) — every applied entry was
     // recorded, so this reconstructs the anti-rewind floor exactly.
     let mut high_water: HashMap<Vec<u8>, u64> = HashMap::new();
-    for row in synced_asset::Entity::find().all(db).await? {
-        let album = decode_id(&row.album_id)?;
-        let seq = row.sync_seq as u64;
+    for (album_id, sync_seq) in albums {
+        let album = decode_id(&album_id)?;
+        let seq = sync_seq as u64;
         let slot = high_water.entry(album).or_insert(0);
         *slot = (*slot).max(seq);
     }
@@ -108,21 +118,14 @@ pub async fn load_sync_state<C: ConnectionTrait>(
 /// [`load_sync_state`] derives from them goes, for the reason [`SyncState::reset_for_resync`]
 /// drops its in-memory marks: the rebuilt numbering may sit below them. The resync that follows
 /// re-delivers every asset the server holds and writes its new number back.
-pub async fn reset_for_resync<C: ConnectionTrait + TransactionTrait>(
-    db: &C,
-) -> Result<(), SyncStoreError> {
-    let txn = db.begin().await?;
-    sync_cursor::Entity::delete_by_id(CURSOR_ROW_ID)
-        .exec(&txn)
-        .await?;
-    synced_asset::Entity::update_many()
-        .col_expr(
-            synced_asset::Column::SyncSeq,
-            sea_orm::sea_query::Expr::value(0_i64),
-        )
-        .exec(&txn)
-        .await?;
-    txn.commit().await?;
+pub async fn reset_for_resync(db: &LocalDb) -> Result<(), SyncStoreError> {
+    db.call(|conn| {
+        let txn = conn.transaction()?;
+        txn.execute("DELETE FROM sync_cursor WHERE id = ?1", [CURSOR_ROW_ID])?;
+        txn.execute("UPDATE synced_assets SET sync_seq = 0", [])?;
+        txn.commit()
+    })
+    .await?;
     tracing::info!("the sync cursor and high-water marks were reset for a new sync epoch");
     Ok(())
 }
@@ -229,57 +232,58 @@ pub fn latest_changed_at(page: &SyncPage) -> Option<Timestamp> {
 /// Landing a page records no purge: a restore of the same asset may sit on a later page, so the
 /// sweep ([`record_elapsed_purges`]) runs only once the drain has reached the feed's head.
 #[instrument(level = "debug", skip_all, fields(entries = page.entries.len()), err)]
-pub async fn persist_page<C: ConnectionTrait + TransactionTrait>(
-    db: &C,
-    page: &SyncPage,
-) -> Result<usize, SyncStoreError> {
-    let txn = db.begin().await?;
+pub async fn persist_page(db: &LocalDb, page: &SyncPage) -> Result<usize, SyncStoreError> {
+    let rows: Vec<SyncedAssetRow> = page
+        .entries
+        .iter()
+        .map(|entry| SyncedAssetRow {
+            asset_id: encode_id(&entry.asset_id),
+            album_id: encode_id(&entry.album_id),
+            sync_seq: entry.sync_seq as i64,
+            kind: kind_label(entry.kind).to_string(),
+            original_held: entry.original_held,
+            tombstoned: entry.kind == ChangeKind::Deleted,
+            retention_until: match retention_of(entry) {
+                Retention::Open => None,
+                Retention::Until(until) => Some(until),
+                Retention::Purged => Some(PURGED_DEADLINE),
+            },
+        })
+        .collect();
+    let cursor = page.next_cursor.as_bytes().to_vec();
 
-    for entry in &page.entries {
-        let retention_until = match retention_of(entry) {
-            Retention::Open => None,
-            Retention::Until(until) => Some(until),
-            Retention::Purged => Some(PURGED_DEADLINE),
-        };
-        let model = synced_asset::ActiveModel {
-            asset_id: Set(encode_id(&entry.asset_id)),
-            album_id: Set(encode_id(&entry.album_id)),
-            sync_seq: Set(entry.sync_seq as i64),
-            kind: Set(kind_label(entry.kind).to_string()),
-            original_held: Set(entry.original_held),
-            tombstoned: Set(entry.kind == ChangeKind::Deleted),
-            retention_until: Set(retention_until),
-        };
-        synced_asset::Entity::insert(model)
-            .on_conflict(
-                OnConflict::column(synced_asset::Column::AssetId)
-                    .update_columns([
-                        synced_asset::Column::AlbumId,
-                        synced_asset::Column::SyncSeq,
-                        synced_asset::Column::Kind,
-                        synced_asset::Column::OriginalHeld,
-                        synced_asset::Column::Tombstoned,
-                        synced_asset::Column::RetentionUntil,
-                    ])
-                    .to_owned(),
-            )
-            .exec(&txn)
-            .await?;
-    }
-
-    sync_cursor::Entity::insert(sync_cursor::ActiveModel {
-        id: Set(CURSOR_ROW_ID),
-        cursor: Set(page.next_cursor.as_bytes().to_vec()),
+    db.call(move |conn| {
+        let txn = conn.transaction()?;
+        {
+            let mut upsert = txn.prepare(
+                "INSERT INTO synced_assets \
+                 (asset_id, album_id, sync_seq, kind, original_held, tombstoned, retention_until) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+                 ON CONFLICT (asset_id) DO UPDATE SET \
+                 album_id = excluded.album_id, sync_seq = excluded.sync_seq, \
+                 kind = excluded.kind, original_held = excluded.original_held, \
+                 tombstoned = excluded.tombstoned, retention_until = excluded.retention_until",
+            )?;
+            for row in &rows {
+                upsert.execute(rusqlite::params![
+                    row.asset_id,
+                    row.album_id,
+                    row.sync_seq,
+                    row.kind,
+                    row.original_held,
+                    row.tombstoned,
+                    row.retention_until,
+                ])?;
+            }
+        }
+        txn.execute(
+            "INSERT INTO sync_cursor (id, cursor) VALUES (?1, ?2) \
+             ON CONFLICT (id) DO UPDATE SET cursor = excluded.cursor",
+            rusqlite::params![CURSOR_ROW_ID, cursor],
+        )?;
+        txn.commit()
     })
-    .on_conflict(
-        OnConflict::column(sync_cursor::Column::Id)
-            .update_column(sync_cursor::Column::Cursor)
-            .to_owned(),
-    )
-    .exec(&txn)
     .await?;
-
-    txn.commit().await?;
     Ok(page.entries.len())
 }
 
@@ -301,22 +305,25 @@ pub async fn persist_page<C: ConnectionTrait + TransactionTrait>(
 /// [`SyncStoreError::Db`] when the store cannot be read or written,
 /// [`SyncStoreError::CorruptId`] when a stored id does not decode.
 #[instrument(level = "debug", skip(db), err)]
-pub async fn record_elapsed_purges<C: ConnectionTrait>(
-    db: &C,
-    at: Timestamp,
-) -> Result<usize, SyncStoreError> {
-    let rows = synced_asset::Entity::find()
-        .filter(synced_asset::Column::Tombstoned.eq(true))
-        .filter(synced_asset::Column::RetentionUntil.lte(at.as_second()))
-        .all(db)
+pub async fn record_elapsed_purges(db: &LocalDb, at: Timestamp) -> Result<usize, SyncStoreError> {
+    let judged_at = at.as_second();
+    let rows: Vec<String> = db
+        .call(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT asset_id FROM synced_assets \
+                 WHERE tombstoned = 1 AND retention_until <= ?1",
+            )?;
+            stmt.query_map([judged_at], |row| row.get(0))?
+                .collect::<Result<Vec<_>, _>>()
+        })
         .await?;
     let mut elapsed: Vec<Uuid> = Vec::with_capacity(rows.len());
-    for row in &rows {
-        if let Some(asset) = feed_asset_uuid(&decode_id(&row.asset_id)?) {
+    for asset_id in &rows {
+        if let Some(asset) = feed_asset_uuid(&decode_id(asset_id)?) {
             elapsed.push(asset);
         } else {
             tracing::debug!(
-                asset_id = %row.asset_id,
+                %asset_id,
                 "sync: an elapsed asset's id is not a UUID, so no peer can offer it"
             );
         }
@@ -327,15 +334,14 @@ pub async fn record_elapsed_purges<C: ConnectionTrait>(
     if !rows.is_empty() {
         // Recorded, so off the sweep: the next run does not record them again. Cleared after the
         // record, so a crash between the two only repeats a record that keeps its first stamp.
-        synced_asset::Entity::update_many()
-            .col_expr(
-                synced_asset::Column::RetentionUntil,
-                sea_orm::sea_query::Expr::value(Option::<i64>::None),
+        db.call(move |conn| {
+            conn.execute(
+                "UPDATE synced_assets SET retention_until = NULL \
+                 WHERE tombstoned = 1 AND retention_until <= ?1",
+                [judged_at],
             )
-            .filter(synced_asset::Column::Tombstoned.eq(true))
-            .filter(synced_asset::Column::RetentionUntil.lte(at.as_second()))
-            .exec(db)
-            .await?;
+        })
+        .await?;
     }
     tracing::debug!(
         %at,
@@ -343,6 +349,39 @@ pub async fn record_elapsed_purges<C: ConnectionTrait>(
         "sync: elapsed retention windows are recorded as purges"
     );
     Ok(elapsed.len())
+}
+
+/// A `synced_assets` row as stored: ids in their base64 text form.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SyncedAssetRow {
+    pub(crate) asset_id: String,
+    pub(crate) album_id: String,
+    pub(crate) sync_seq: i64,
+    pub(crate) kind: String,
+    pub(crate) original_held: bool,
+    pub(crate) tombstoned: bool,
+    pub(crate) retention_until: Option<i64>,
+}
+
+/// Run `sql`, a `SELECT *` over `synced_assets`, and read each row by column name.
+pub(crate) fn query_synced_assets<P: rusqlite::Params>(
+    conn: &rusqlite::Connection,
+    sql: &str,
+    params: P,
+) -> rusqlite::Result<Vec<SyncedAssetRow>> {
+    let mut stmt = conn.prepare(sql)?;
+    stmt.query_map(params, |row| {
+        Ok(SyncedAssetRow {
+            asset_id: row.get("asset_id")?,
+            album_id: row.get("album_id")?,
+            sync_seq: row.get("sync_seq")?,
+            kind: row.get("kind")?,
+            original_held: row.get("original_held")?,
+            tombstoned: row.get("tombstoned")?,
+            retention_until: row.get("retention_until")?,
+        })
+    })?
+    .collect()
 }
 
 /// A row of the sync-fed local store, decoded back to feed-native shapes.
@@ -364,18 +403,19 @@ pub struct SyncedAssetView {
 
 /// Query the sync-fed local store, ordered by album then sequence. Tombstoned
 /// assets are included only when `include_tombstoned` is set.
-pub async fn list_assets<C: ConnectionTrait>(
-    db: &C,
+pub async fn list_assets(
+    db: &LocalDb,
     include_tombstoned: bool,
 ) -> Result<Vec<SyncedAssetView>, SyncStoreError> {
-    let mut query = synced_asset::Entity::find();
-    if !include_tombstoned {
-        query = query.filter(synced_asset::Column::Tombstoned.eq(false));
-    }
-    let rows = query
-        .order_by_asc(synced_asset::Column::AlbumId)
-        .order_by_asc(synced_asset::Column::SyncSeq)
-        .all(db)
+    let rows = db
+        .call(move |conn| {
+            let sql = if include_tombstoned {
+                "SELECT * FROM synced_assets ORDER BY album_id, sync_seq"
+            } else {
+                "SELECT * FROM synced_assets WHERE tombstoned = 0 ORDER BY album_id, sync_seq"
+            };
+            query_synced_assets(conn, sql, [])
+        })
         .await?;
 
     rows.into_iter()

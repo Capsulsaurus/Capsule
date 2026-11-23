@@ -4,6 +4,7 @@
 // specifies it. Lay several out with FeatureGrid.astro.
 import { Icon } from '@astrojs/starlight/components';
 import type { StarlightIcon } from '@astrojs/starlight/types';
+import { localizePath } from '../lib/locales.mjs';
 
 interface Props {
     icon: StarlightIcon;
@@ -20,13 +21,24 @@ const { icon, title, href, linkLabel } = Astro.props;
 if (!linkLabel?.trim()) {
     throw new Error(`Feature "${title}" needs a linkLabel naming ${href}`);
 }
+// On a locale's front page the link stays in that locale: Starlight serves the
+// doc there, in English with its fallback notice until it is translated.
+// starlight-llms-txt renders pages outside a Starlight route, where reading
+// starlightRoute throws; its bundles are English, so the root locale applies.
+let locale: string | undefined;
+try {
+    locale = Astro.locals.starlightRoute.locale;
+} catch {
+    locale = undefined;
+}
+const target = localizePath(href, locale);
 ---
 
 <article class="feature">
   <span class="feature-icon" aria-hidden="true"><Icon name={icon} size="1.25rem" /></span>
   <h3>{title}</h3>
   <div class="feature-body"><slot /></div>
-  <a class="feature-link" href={href}>{linkLabel}<span aria-hidden="true"> →</span></a>
+  <a class="feature-link" href={target}>{linkLabel}<span aria-hidden="true"> →</span></a>
 </article>
 
 <style>
@@ -70,7 +82,7 @@ if (!linkLabel?.trim()) {
   }
 
   .feature-link {
-    margin-top: 0.25rem;
+    margin-block-start: 0.25rem;
     font-size: var(--sl-text-sm);
     font-weight: 500;
     color: var(--sl-color-text-accent);

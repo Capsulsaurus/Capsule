@@ -12,19 +12,18 @@
 //! one of the two columns of `quota_usage`; the other is when an operator suspended the account
 //! (`suspended_since`, #705), which no charge or release touches.
 //!
-//! # Pulled blobs are a stored total, kept by the schema (#1162, #1171)
+//! # Pulled blobs are a stored total, kept by every writer (#1162, #1171)
 //!
 //! An account's pulled metadata blobs ([`super`], "Pulled blobs") are part of the same total,
 //! but not summed at read time: that sum runs over every `(album, blob)` row the account's
 //! subscriptions hold, which no row count caps on an unlimited deployment, and it would run
 //! under the account's lock on every charge. `quota_usage.pulled` holds it instead, beside
 //! `quota_pulled_holdings`, one row per `(account, address)` with the number of the account's
-//! albums that hold it. Triggers on `federation_subscriptions`,
-//! `federation_pulled_metadata_blobs` and `quota_attributions` keep both, in the transaction of
-//! the statement that changed them (migration `000030` states the rule and its locks): the
-//! pulled page's commit, the unsubscribe, the cascade that forgets a job, a charge of an address
-//! the account holds pulled, and every release. So this adapter reads one row and writes nothing
-//! for pulled blobs. A release of an attribution returns the address to the pulled total while
+//! albums that hold it. Every writer of `federation_subscriptions`,
+//! `federation_pulled_metadata_blobs` and `quota_attributions` keeps both through
+//! `quota::pulled_total`, in the transaction of the statement that changed them: the pulled
+//! page's commit, the subscribe and unsubscribe, a charge of an address the account holds
+//! pulled, and every release. So reading the total is one row. A release of an attribution returns the address to the pulled total while
 //! the account still holds it, which is why [`QuotaStore::release_attribution`] never credits
 //! pulled bytes.
 //!
@@ -62,6 +61,7 @@ use super::{ChargeOutcome, ExpiredReservation, PulledDrift, QuotaLimits, QuotaSt
 use crate::blob::ContentAddress;
 use crate::postgres::error::Port;
 use crate::postgres::time::{from_micros, to_micros};
+use crate::quota::pulled_total::{self, Change};
 use crate::store::{StoreError, StoreFuture, UserId};
 
 /// Which port is speaking, for every error this adapter raises.
@@ -227,8 +227,8 @@ impl PostgresQuota {
     /// Every account whose stored pulled holdings or total differ from what its subscriptions,
     /// pulled blobs and attributions derive, in account order.
     ///
-    /// One statement, so one snapshot: the triggers move the stored state in the transaction
-    /// that moves the rows, so a committed snapshot shows no drift unless something bypassed
+    /// One statement, so one snapshot: every writer moves the stored state in the transaction
+    /// that moves the rows (`quota::pulled_total`), so a committed snapshot shows no drift unless something bypassed
     /// them. It reads every holding on the server, so it is an audit, not a request-path read.
     ///
     /// # Errors
@@ -270,7 +270,7 @@ impl PostgresQuota {
 
     /// Rebuild `user`'s pulled holdings and total from its rows, under its usage row's lock.
     ///
-    /// The lock is the one every trigger that changes `user`'s holdings takes before it does, so
+    /// The lock is the one every writer that changes `user`'s holdings takes before it does, so
     /// no change is lost: one that committed first is in the rows this rebuild reads, and one
     /// still waiting applies its own difference on top of the rebuilt state once this commits.
     ///
@@ -293,11 +293,7 @@ impl PostgresQuota {
                     .map_err(PORT.failing(doing))
             }
         };
-        run(
-            "SELECT quota_pulled_lock_accounts(ARRAY[$1]::TEXT[])".to_owned(),
-            "locking an account's usage row for a pulled rebuild",
-        )
-        .await?;
+        pulled_total::lock_accounts(&transaction, &[user.as_str().to_owned()]).await?;
         run(
             "DELETE FROM quota_pulled_holdings WHERE user_id = $1".to_owned(),
             "clearing an account's pulled holdings",
@@ -332,7 +328,7 @@ impl PostgresQuota {
     /// what was found.
     ///
     /// An empty answer is the expected one; each account it names is logged at `WARN`, because
-    /// drift means some write reached the tables without the triggers.
+    /// drift means some write reached the tables without `quota::pulled_total`.
     ///
     /// # Errors
     ///
@@ -396,16 +392,24 @@ impl PostgresQuota {
             // value for both so a quota endpoint cannot become a cross-tenant oracle.
             return Ok(ChargeOutcome::AlreadyAttributed);
         }
+        // An address the account holds pulled leaves its pulled total now that it is attributed
+        // to the account, in this transaction.
+        pulled_total::attributions_changed(
+            &transaction,
+            &[(user.as_str().to_owned(), address.as_str().to_owned())],
+            Change::Added,
+        )
+        .await?;
 
         // The account's row in `quota_usage` is created by whichever writer reaches it first:
-        // this insert, `suspend`'s upsert, `quota_pulled_lock_accounts` (called by every
-        // migration 000030 trigger on attributions, subscriptions and pulled blob rows, and by
-        // `repair_pulled`), or 000030's backfill. The attribution trigger already created it
-        // for the debit above, so this insert is a no-op kept so the lock below never depends
-        // on a trigger having run. Nothing deletes the row. Its columns and their writers:
-        // `over_since`, stamped below and cleared by `stop_the_clock` on every release;
-        // `suspended_since`, set by `suspend` and cleared by `unsuspend`; and the stored
-        // `pulled` total, written by the 000030 triggers, its backfill and `repair_pulled`.
+        // this insert, `suspend`'s upsert, `pulled_total`'s account lock (taken by every writer
+        // of attributions, subscriptions and pulled blob rows, and by `repair_pulled`), or
+        // migration 000030's backfill. The attribution above already created it, so this insert
+        // is a no-op kept so the lock below never depends on that. Nothing deletes the row. Its
+        // columns and their writers: `over_since`, stamped below and cleared by
+        // `stop_the_clock` on every release; `suspended_since`, set by `suspend` and cleared by
+        // `unsuspend`; and the stored `pulled` total, written by `pulled_total`, the 000030
+        // backfill and `repair_pulled`.
         transaction
             .execute_raw(Statement::from_sql_and_values(
                 DbBackend::Postgres,
@@ -617,6 +621,12 @@ impl QuotaStore for PostgresQuota {
             if released.rows_affected() == 0 {
                 return Ok(false);
             }
+            pulled_total::attributions_changed(
+                &transaction,
+                &[(user.as_str().to_owned(), address.as_str().to_owned())],
+                Change::Removed,
+            )
+            .await?;
             stop_the_clock(&transaction, user).await?;
             commit(transaction).await?;
             Ok(true)
@@ -648,6 +658,12 @@ impl QuotaStore for PostgresQuota {
             if released.rows_affected() == 0 {
                 return Ok(false);
             }
+            pulled_total::attributions_changed(
+                &transaction,
+                &[(user.as_str().to_owned(), address.as_str().to_owned())],
+                Change::Removed,
+            )
+            .await?;
             stop_the_clock(&transaction, user).await?;
             commit(transaction).await?;
             Ok(true)
@@ -679,6 +695,12 @@ impl QuotaStore for PostgresQuota {
             let failed = PORT.failing("reading a released attribution");
             let owner: String = released.try_get("", "user_id").map_err(&failed)?;
             let size: i64 = released.try_get("", "size").map_err(&failed)?;
+            pulled_total::attributions_changed(
+                &transaction,
+                &[(owner.clone(), address.as_str().to_owned())],
+                Change::Removed,
+            )
+            .await?;
             let owner = UserId::new(owner);
             stop_the_clock(&transaction, &owner).await?;
             commit(transaction).await?;

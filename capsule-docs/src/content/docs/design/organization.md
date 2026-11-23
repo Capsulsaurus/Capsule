@@ -4,29 +4,29 @@ description: Albums (container and view), default-album resolution, asset stacks
 status: draft
 ---
 
-[Container albums](#container-albums) are the cryptographic unit every asset belongs to; [view albums](#system--smart-albums-views) are derived, key-free presentations. **Stacks**, culling, hiding and trash are metadata-only and never touch asset bytes. The load-bearing security piece is `retention_until`, signed into the `delete` manifest so a hostile server cannot accelerate purges.
+Container albums ([](#container-albums)) are the cryptographic unit every asset belongs to; view albums ([](#system--smart-albums-views)) are derived, key-free presentations. **Stacks**, culling, hiding and trash are metadata-only and never touch asset bytes. The load-bearing security piece is `retention_until`, signed into the `delete` manifest so a hostile server cannot accelerate purges.
 
 ## Albums
 
-- **[Container albums](#container-albums)** are the real cryptographic unit. Every asset belongs to exactly one.
-- **[View albums](#system--smart-albums-views)** are computed client-side, hold no keys and own no assets.
+- **Container albums** ([](#container-albums)) are the real cryptographic unit. Every asset belongs to exactly one.
+- **View albums** ([](#system--smart-albums-views)) are computed client-side, hold no keys and own no assets.
 
 ### Container Albums
 
 A container album is the **sharing and access-control boundary** and *is* an MLS group. [](/design/cryptography/keys/) and [](/design/cryptography/mls/) own its keys and membership operations, and [](/design/filesystem/server/) its storage shape. This section owns the interaction surface.
 
-- **Moves are idempotent.** A move is a signed lifecycle action naming `(asset, target album, epoch)`. A replay finds the target state and no-ops, and concurrent moves resolve by MLS commit order ([grouping convergence](/design/metadata/#grouping-convergence-requirement)).
-- **Roles** are read (AMK), write (AMK + write-tier key) or admin (also admin-tier key), delivered over MLS ([AMKs](/design/cryptography/keys/#album-master-keys-amks)). A role change is an MLS commit and bumps the AMK epoch.
-- **Invite and join** is an MLS `Add` for all of the invitee's verified [devices](/design/cryptography/keys/#device-directory), whose `Welcome` delivers AMKs per `history_policy` ([](/design/cryptography/mls/#history-delivery-for-new-joiners)). Remote users also get a [federation capability](/design/federation/#federation-capabilities); non-account recipients use a [share link](/design/share-links/). Removal is an MLS `Remove` + epoch bump. Pending the MLS implementation.
-- **Album policy** (`history_policy`, `protocol_version` pin, default `retention_until`) is fixed at creation and changed only by an [album upgrade ceremony](/design/versioning/#album-upgrade-ceremony).
+- **Moves are idempotent.** A move is a signed lifecycle action naming `(asset, target album, epoch)`. A replay finds the target state and no-ops, and concurrent moves resolve by MLS commit order ([](/design/metadata/#grouping-convergence-requirement)).
+- **Roles** are read (AMK), write (AMK + write-tier key) or admin (also admin-tier key), delivered over MLS ([](/design/cryptography/keys/#album-master-keys-amks)). A role change is an MLS commit and bumps the AMK epoch.
+- **Invite and join** is an MLS `Add` for all of the invitee's verified devices ([](/design/cryptography/keys/#device-directory)), whose `Welcome` delivers AMKs per `history_policy` ([](/design/cryptography/mls/#history-delivery-for-new-joiners)). Remote users also get a federation capability ([](/design/federation/#federation-capabilities)); non-account recipients use a share link ([](/design/share-links/)). Removal is an MLS `Remove` + epoch bump. Pending the MLS implementation.
+- **Album policy** (`history_policy`, `protocol_version` pin, default `retention_until`) is fixed at creation and changed only by an album upgrade ceremony ([](/design/versioning/#album-upgrade-ceremony)).
 
 ### The Default Album
 
-Every owner has a nameless, otherwise ordinary **default album** from [first-device enrollment](/design/device-enrollment/#first-device-enrollment) onward, so an import always has a container to land in.
+Every owner has a nameless, otherwise ordinary **default album** from first-device enrollment ([](/design/device-enrollment/#first-device-enrollment)) onward, so an import always has a container to land in.
 
-- **Derived id.** Its album id is derived deterministically from the account master key (an identifier, not a key; [](/design/cryptography/keys/#key-chain)), so any of the owner's devices can locate it, including after recovery.
-- **Designation is a server-side pointer.** The current default is a non-secret `default_album_id` on the owner record ([](/design/filesystem/server/#ownership-partitioning-and-quota)), defaulting to the derived album. It is not security-bearing, since writes still need album write capability ([invariant 6](/design/threat-model/validation/#server-side-validation-invariants)).
-- **Always a container.** `resolve_default_album(context)` never returns a view. The [import planner](/design/import/pipeline/#plan--confirm) uses it when the user picks no album.
+- **Stored id.** Its album id is derived once, at account creation, from the account's first master key (an identifier, not a key), and stored from then on: sealed beside the identity key, so any of the owner's devices, a recovering one included, reads it rather than computing it ([](/design/cryptography/keys/#key-chain)). Nothing re-derives it: after a master-key rotation the derivation would name a different, empty album.
+- **Designation is a server-side pointer.** The current default is a non-secret `default_album_id` on the owner record ([](/design/filesystem/server/#ownership-partitioning-and-quota)), defaulting to the stored default album. It is not security-bearing, since writes still need album write capability (invariant 6 of [](/design/threat-model/validation/#server-side-validation-invariants)).
+- **Always a container.** `resolve_default_album(context)` never returns a view. The import planner ([](/design/import/pipeline/#plan--confirm)) uses it when the user picks no album.
 - **Undeletable while designated.** The user must repoint first.
 
 #### Scope Grammar (Local Source → Album Mapping)
@@ -51,43 +51,44 @@ Scope {
 | Desktop | folder / watched dir | canonicalized path (symlinks resolved) | |
 | Any | removable volume | volume UUID + relative path | stable across mount points |
 
-- **Resolution order** (first match wins): explicit user pick → `scope_id` override row → per-`SourceKind` default row → `default_album_id` pointer → derived default album. The planner records which rule fired.
-- **Rows** live in the [library-settings document](/design/metadata/#the-library-settings-document) (`scope_overrides`, `source_kind_defaults`), E2E-encrypted, LWW per key.
+- **Resolution order** (first match wins): explicit user pick → `scope_id` override row → per-`SourceKind` default row → `default_album_id` pointer → the stored default album id ([](#the-default-album)). The planner records which rule fired.
+- **Rows** (`scope_overrides`, `source_kind_defaults`) live in the library-settings document ([](/design/metadata/#the-library-settings-document)), E2E-encrypted, LWW per key.
 - **Unmapped sources ask once**, and the answer becomes the scope's override row. Automated imports never invent destinations.
 
-v1 ships only explicit pick → pointer → derived album; the override and default rows are deferred with the library-settings document.
+v1 ships only explicit pick → pointer → stored default album; the override and default rows are deferred with the library-settings document.
 
 ### Album Order and Recency
 
 Every native app and the CLI list container albums in one order, computed once in `capsule-library`, which the CLI links directly and the native apps reach through the FFI. No app sorts albums on its own.
 
-- **Most recent asset first.** An album ranks by the latest [effective](/design/metadata/#as-imported-and-user-values) capture time among its assets that are neither hidden nor trashed. An album with no such asset ranks by its own creation time. Ties break by ascending `album_id`.
+- **Most recent asset first.** An album ranks by the latest effective capture time ([](/design/metadata/#as-imported-and-user-values)) among its assets that are neither hidden nor trashed. An album with no such asset ranks by its own creation time. Ties break by ascending `album_id`.
 - **What ranks.** Albums shared by another owner rank like the user's own, and smart and aggregated albums rank by their members. The system albums (All, Trash) and the Hidden view are listed apart from that order.
 - **The web client is the exception.** It holds no keys in v1, so it cannot read capture times and keeps its key-free order from the sync feed until in-browser decrypt lands.
-- **Derived, never stored.** Recency is a query over the [local index](/design/filesystem/client/#local-index-staleness), so imports, moves, deletes, restores and capture-date edits change it with nothing extra to keep in step.
+- **Derived, never stored.** Recency is a query over the local index ([](/design/filesystem/client/#local-index-staleness)), so imports, moves, deletes, restores and capture-date edits change it with nothing extra to keep in step.
 - **Not on the server.** Capture times are inside the encrypted metadata, so the server cannot compute album recency and is never asked to.
 - **No viewing history.** Albums record no viewing or opening time, synced or on the server, because that would put viewing habits into metadata that leaves the device. Any state a later "recently viewed" view needs is per-device and local only.
 
 ### System & Smart Albums (Views)
 
-Views are computed client-side from the [local index](/design/filesystem/client/#local-index-staleness). A view is **not** an MLS group, holds **no** AMK, owns no assets and is **not** a sharing boundary. The [aggregated federated album](/design/federation/#federated-shared-albums-aggregated-albums) is a view.
+Views are computed client-side from the local index ([](/design/filesystem/client/#local-index-staleness)). A view is **not** an MLS group, holds **no** AMK, owns no assets and is **not** a sharing boundary. The aggregated federated album ([](/design/federation/#federated-shared-albums-aggregated-albums)) is a view.
 
-- **System albums** are **All** (every visible asset, hence the need for a [default album](#the-default-album)) and [Trash](#recycling).
-- **Smart albums** are user-defined predicates over sidecar and AI fields. Membership is **computed, never stored**, so editing a definition or asset moves and re-encrypts nothing. Definitions are carried in the [library-settings document](/design/metadata/#the-library-settings-document); this doc owns their shape.
+- **System albums** are **All** (every visible asset; [](#the-default-album) says why one is needed) and Trash ([](#recycling)).
+- **Smart albums** are user-defined predicates over sidecar and AI fields. Membership is **computed, never stored**, so editing a definition or asset moves and re-encrypts nothing. Definitions are carried in the library-settings document ([](/design/metadata/#the-library-settings-document)); this doc owns their shape.
+- **A saved search is a smart album.** The search grammar compiles into this predicate tree ([](/design/search/#compiling-to-a-predicate)), so saving a search stores the predicate the live search ran, and opening a smart album in search shows it as the same chips.
 
 #### Smart-Album Definition Schema
 
-**Deferred post-v1** with the library-settings document; System views ship in v1. Normative as written.
+**Deferred post-v1** with the library-settings document; System views ship in v1. Normative as written. Today only the `tags_user` `contains` term is evaluated (`capsule-core::sidecar::smart_album`).
 
 The grammar is closed, versioned and declarative: definitions sync to every device, so they must evaluate identically and carry no code, regex or unbounded input.
 
 ```rust
 SmartAlbumDefinition {
   smart_album_id:   UUIDv7,
-  predicate_schema: u16,              // a later value gates evaluation on older clients
+  predicate_schema: u16,              // currently 1; a later value gates evaluation on older clients
   display_name:     Lww<String>,      // ≤ 256 bytes
   predicate:        Predicate,
-  sort:             Option<SortSpec>, // closed key set; default (capture_timestamp, desc)
+  sort:             Option<SortSpec>, // closed key set; default (capture_time, desc)
 }
 
 Predicate =                           // depth ≤ 8, ≤ 64 terms total
@@ -99,24 +100,32 @@ Predicate =                           // depth ≤ 8, ≤ 64 terms total
 Term { field: QueryField, op: Operator, operand: Operand }  // operand shape fixed by (field, op)
 ```
 
+Every field reads the asset's **effective** value: the user's register if written, else the as-imported field ([](/design/metadata/#as-imported-and-user-values)).
+
 | Class | Fields | Valid operators | Operand |
 | --- | --- | --- | --- |
-| temporal | `capture_timestamp`, `import_timestamp` | `before`, `after`, `in_range` | RFC 3339 (half-open `[start, end)` for `in_range`) |
-| enum | `content_type`, `media_kind` (image\|video), `gps.datum` | `eq`, `in` | value(s) from the field's closed enum |
-| numeric | `rating`, `dimensions.width`, `dimensions.height` | `eq`, `gte`, `lte`, `in_range` | `u32` (`[lo, hi]` for `in_range`) |
+| temporal | `capture_time`, `import_time` | `before`, `after`, `in_range` | RFC 3339 full-date or date-time (half-open `[start, end)` for `in_range`). Without an offset it compares the capture's local wall-clock time; with one, the instant |
+| enum | `content_type`, `media_kind` (`photo`\|`video`\|`live`), `media_subtype` ([](/design/metadata/#closed-enum-value-sets)), `gps.datum` | `eq`, `in` | value(s) from the field's closed enum; `content_type` also accepts the named set `raw` |
+| numeric | `rating`, `dimensions.width`, `dimensions.height`, `capture_settings.iso`, `capture_settings.focal_length_35mm` | `eq`, `gte`, `lte`, `in_range` | `u32` (`[lo, hi]` for `in_range`) |
 | trinary/bool | `cull`, `hidden` | `is` | `pick`\|`neutral`\|`reject`; `true`\|`false` |
-| set | `tags_user`, `tags_ai`, `stack_type`, `people_cluster`, `album_id` | `contains`, `contains_any`, `contains_all` | ≤ 64 members, each ≤ 256 bytes |
-| presence | `gps`, `camera_id` | `exists` | `bool` |
+| set | `tags_user`, `tags_ai`, `stack_type`, `people_cluster`, `album_id`, `device_id` | `contains`, `contains_any`, `contains_all` | ≤ 64 members, each ≤ 256 bytes |
+| text | `text` (caption and labels at every level), `camera` (`capture_settings.camera_make`, `camera_id.model`), `lens` (`capture_settings.lens_make`, `capture_settings.lens_model`) | `matches` (substring), `eq` (whole value) | 1–256 bytes |
+| spatial | `gps` | `within`, `near` | `within`: south, west, north, east in WGS-84 degrees (west > east crosses the antimeridian); `near`: a WGS-84 point and a radius of 1 m–20,000 km |
+| presence | `gps`, `caption`, `tags_user`, `camera_id`, `capture_settings` | `exists` | `bool` |
 
-- **Closed.** An unknown `field`/`op` or a mistyped `operand` is a **structural rejection**, not a tolerated unknown. Extending the grammar needs a later `predicate_schema`, plus a [sidecar-schema](/design/metadata/#schema-versioning-rules) bump for a new sidecar field. A newer `predicate_schema` is preserved verbatim and never evaluated.
-- **AI terms.** `tags_ai`/`people_cluster` terms name their `(model_id, model_version)` slot, and a stale slot evaluates as excluded ([AI staleness](/design/ai/#ai-output-containment)).
+- **Closed.** An unknown `field`/`op` or a mistyped `operand` is a **structural rejection**, not a tolerated unknown. Extending the grammar needs a later `predicate_schema`, plus a sidecar-schema bump ([](/design/metadata/#schema-versioning-rules)) for a new sidecar field. A newer `predicate_schema` is preserved verbatim and never evaluated.
+- **No local state.** A term names only synced data. Search resolves names, places and fuzzy matches before saving ([](/design/search/#compiling-to-a-predicate)), so no term refers to a place-name cache, a suggester or an embedding, and semantic similarity is never a term.
+- **Text folding is pinned.** `text`, `camera` and `lens` compare after NFC normalization, Unicode default case folding and diacritic removal, using the tables of the Unicode version that `predicate_schema` names (Unicode 16.0 for schema 1). A newer Unicode version is a new `predicate_schema`, so two devices never fold differently.
+- **Spatial terms are exact and pinned.** `within` and `near` evaluate on the location normalized to WGS-84 ([](/design/places/#the-location-index)), with geodesic distance on the WGS-84 ellipsoid, computed with the pure-Rust `libm` on every target. A GCJ-02 location is normalized approximately and so can sit just inside or outside a boundary, but it does so the same way on every device.
+- **`hidden` is gated.** A definition with a `hidden is true` term is evaluated only in a context that passed the Hidden view's fresh-local-auth gate ([](#hidden-assets)). Elsewhere it matches nothing.
+- **AI terms.** `tags_ai` terms name their `(model_id, model_version)` slot, and a stale slot evaluates as excluded (AI staleness, [](/design/ai/#ai-output-containment)). A `people_cluster` term names a `person_id`, which survives model bumps ([](/design/people/#search-and-smart-albums)).
 - **Convergence.** The whole definition is one LWW register (a stamped `None` deletes it), so there is no partial-predicate merge. Evaluation is a pure function of `(definition, decryptable assets)` in sorted `asset_id` order.
 
 ## Asset Stacking
 
 Stacks group related files (RAW+JPEG, bursts, live photos) by best-effort auto-detection. v1 auto-detects only RAW+JPEG (plus XMP sidecar attachment); manual stacking works for every type.
 
-**Stacking is metadata-only.** A stack edit writes each member's `stack_membership` LWW register (leave = stamped `None`) and emits a `metadata-update` provenance record per asset. It never deletes, rewrites or merges bytes; "best photo" is just `role = primary`. Multi-asset edits are staged and committed atomically ([Atomic Writes](/design/filesystem/maintenance/#atomic-writes-and-crash-recovery), [Atomicity Invariants](/design/threat-model/validation/#atomicity-invariants)).
+**Stacking is metadata-only.** A stack edit writes each member's `stack_membership` LWW register (leave = stamped `None`) and emits a `metadata-update` provenance record per asset. It never deletes, rewrites or merges bytes; "best photo" is just `role = primary`. Multi-asset edits are staged and committed atomically ([](/design/filesystem/maintenance/#atomic-writes-and-crash-recovery), [](/design/threat-model/validation/#atomicity-invariants)).
 
 ### Stack Membership Schema
 
@@ -133,37 +142,59 @@ A new stack type requires a later-dated `protocol_version`; the Rust enum is nor
 
 ### Stack Types
 
-- **Photography & mobile:** RAW + JPEG pair; burst (best photo in front); Live Photo (still + short clip); portrait/depth (image + depth map); smart selection (AI-grouped near-duplicates).
+- **Photography & mobile:** RAW + JPEG pair; burst (best photo in front); Live Photo (still + short clip, including an Android motion photo's extracted clip, [](/design/import/pipeline/)); portrait/depth (image + depth map); smart selection (AI-grouped near-duplicates, [](#near-duplicate-review)); edited copy (an original + an edited file another app saved beside it), which needs a later-dated `protocol_version`.
 - **Technical & creative:** exposure bracketing (HDR); focus stack; pixel shift; panorama.
 - **Video & audio:** proxy/optimized (master + proxy); chaptered video (e.g. `GOPR001.mp4`, `GOPR002.mp4`); dual-system audio (video + external WAV/AIFF).
 
+**Planned auto-detection.** Live Photos (by the platform's pairing identifier, or a motion photo's embedded clip) and edited copies (the platform's edit relationship, else a `-edited`/`_edited` sibling with the same capture time) are stacked at import, under the same metadata-only rule.
+
+## Near-Duplicate Review
+
+Near-duplicates (re-saves, resized copies, near-identical frames) are found from the synced semantic embeddings ([](/design/ai/#synced-embeddings)) and resolved in one review that never loses metadata.
+
+- **Grouping.** Assets of one library within the model's near-duplicate distance form a group. Members of one stack are never grouped against each other. Grouping is a pure function of `(embeddings, model_id, model_version)`.
+- **Keeper suggestion.** The largest original, then the most set user fields, then the earliest import. The user may pick another.
+- **Resolve.** Either stack the group (`smart selection`, keeper as `primary`), or keep one and trash the rest. Trashed copies follow the retention window ([](#retention-window)); the review never purges.
+- **Merge into the keeper.** Before anything is trashed, the keeper receives, in one atomic batch:
+
+| Field | Merge |
+| --- | --- |
+| Container album | Unchanged; the others' albums gain nothing, because a trashed copy's album keeps its own entry until purge |
+| `tags_user`, labels | Union |
+| `rating_lww` | Maximum |
+| `caption_lww` | The keeper's caption; every other distinct caption is appended to `superseded_captions` |
+| `gps_user` | Set only when every member's effective location agrees within 10 m |
+| `capture_timestamp_user` | Unchanged |
+| `hidden` | `true` if any member is hidden |
+| `cull` | Pick if any member is a pick |
+
 ## Labels
 
-Users attach free-form **labels** at four levels. Every level stores labels as an OR-set with [`add_id` binding](/design/metadata/#add-id-binding), so concurrent adds and removes from any number of devices converge deterministically, and every change is a signed `metadata-update`.
+Users attach free-form **labels** at four levels. Every level stores labels as an OR-set with `add_id` binding ([](/design/metadata/#add-id-binding)), so concurrent adds and removes from any number of devices converge deterministically, and every change is a signed `metadata-update`.
 
 | Level | Where the labels live | Readable by |
 | --- | --- | --- |
-| **Asset** | `tags_user` in the asset's [sidecar](/design/metadata/#sidecar-schema-v1) | the asset's album members |
+| **Asset** | `tags_user` in the asset's sidecar ([](/design/metadata/#sidecar-schema-v1)) | the asset's album members |
 | **Region** of an image | `regions` in the asset's sidecar, one OR-set per region | the asset's album members |
 | **Stack** | the stack's `StackDocV1` | the stack's album members |
 | **Album** | the album's `AlbumDocV1` | the album's members |
 
 - **A label** is a Unicode string, NFC-normalized and trimmed, 1–256 bytes, case-preserving. It carries no hierarchy and no type; meaning is the user's.
-- **User and AI labels never mix.** AI suggestions live only in `tags_ai` and reach a user label only by an explicit promote ([Tag Provenance](/design/metadata/#tag-provenance-and-namespacing)).
+- **User and AI labels never mix.** AI suggestions live only in `tags_ai` and reach a user label only by an explicit promote ([](/design/metadata/#tag-provenance-and-namespacing)).
 - **A region** is a circle `{cx, cy, r}` or rectangle `{x, y, w, h}` in coordinates normalized to `[0, 1]` over the original's **display orientation** (after EXIF orientation), so it survives every derivative size. A circle's centre is a fraction of width and height and its radius `r` a fraction of the shorter side, `min(width, height)`, so a circle is round on any aspect ratio. A circle or rectangle lies wholly inside the image. Each region has a UUIDv7 and its own labels OR-set, and deleting a region is a stamped `None` in its LWW register.
-- **Stack and album records.** `StackDocV1` (keyed by `stack_id`) and `AlbumDocV1` (keyed by `album_id`) are signed, versioned documents sealed under the album's current AMK, following the sidecar's rules: version first, unknown keys preserved under the signature, CRDT fields only. `AlbumDocV1` also carries the album's name (LWW), so a restored or newly joined device sees it; the name follows the label rule at creation and at every rename. On the device the records are plaintext at rest like sidecars ([layout](/design/filesystem/client/#desktop-library-layout)). Every member of a stack belongs to the same container album, and moving one member out removes it from the stack.
-- **Privacy.** Region labels can name people, so regions are stripped by default on export and from [share links](/design/share-links/), and kept only when the user opts in for that export ([](/design/metadata/#privacy-on-export)). Asset, stack and album labels follow the same rule as captions.
-- **Search.** Smart-album `contains` predicates over `tags_user` match a label at any level attached to the asset: its own, its live regions', its stack's and its album's. A deleted region's labels never match, and a stack's labels match only while the asset is a current member of that stack.
+- **Stack and album records.** `StackDocV1` (keyed by `stack_id`) and `AlbumDocV1` (keyed by `album_id`) are signed, versioned documents sealed under the album's current AMK, following the sidecar's rules: version first, unknown keys preserved under the signature, CRDT fields only. `AlbumDocV1` also carries the album's name (LWW), so a restored or newly joined device sees it; the name follows the label rule at creation and at every rename. On the device the records are plaintext at rest like sidecars ([](/design/filesystem/client/#desktop-library-layout)). Every member of a stack belongs to the same container album, and moving one member out removes it from the stack.
+- **Privacy.** Region labels can name people, so regions are stripped by default on export and from share links ([](/design/share-links/)), and kept only when the user opts in for that export ([](/design/metadata/#privacy-on-export)). Asset, stack and album labels follow the same rule as captions.
+- **Search.** Smart-album `contains` predicates over `tags_user`, and the `text` term, match a label at any level attached to the asset: its own, its live regions', its stack's and its album's. A deleted region's labels never match, and a stack's labels match only while the asset is a current member of that stack.
 - **Merge.** Asset, stack and album labels merge as OR-sets. A region's register merges as a semilattice: deleting a region is final (its tombstone absorbs any concurrent or later edit, and a region id is never reused), and two live writes keep the later shape and the union of their labels. Album names merge by LWW.
 - **Restore.** A backup artifact carries each album's and stack's record sealed under its AMK, so a restored device recovers album names and labels rather than showing `Recovered album`.
 
 ## Culling
 
-Culling is a **trinary flag per asset**, `pick | neutral | reject`, in the sidecar's `cull` LWW register ([schema](/design/metadata/#sidecar-schema-v1)). `neutral` is the wire-absent default, and the flag is independent of the star `rating`.
+Culling is a **trinary flag per asset**, `pick | neutral | reject`, in the sidecar's `cull` LWW register ([](/design/metadata/#sidecar-schema-v1)). `neutral` is the wire-absent default, and the flag is independent of the star `rating`.
 
-- **Workflow.** Flagging never touches bytes and is reversible. The only destructive step is moving rejects to [trash](#recycling), soft per retention.
-- **Groups.** A stack has no flag of its own; its state is **derived** from members (all-rejected, any-pick, else mixed). Flagging a collapsed stack writes each member atomically like any [stack edit](#asset-stacking).
-- **Sync.** Converges like every LWW field ([grouping convergence](/design/metadata/#grouping-convergence-requirement)).
+- **Workflow.** Flagging never touches bytes and is reversible. The only destructive step is moving rejects to trash ([](#recycling)), soft per retention.
+- **Groups.** A stack has no flag of its own; its state is **derived** from members (all-rejected, any-pick, else mixed). Flagging a collapsed stack writes each member atomically like any stack edit ([](#asset-stacking)).
+- **Sync.** Converges like every LWW field ([](/design/metadata/#grouping-convergence-requirement)).
 
 ### Culling UI
 
@@ -173,19 +204,31 @@ Culling is a high-volume, repetitive pass, so every native client's culling surf
 - **Accessible.** Each verdict is also an accessibility action on the focused asset (VoiceOver and TalkBack custom actions), with no gesture as its only path. The asset's current flag and its position in the pass are announced. Flag state is never shown by colour alone.
 - **Audited before it ships.** A culling surface passes each platform's full automated accessibility audit with no exclusions: `performAccessibilityAudit(for: .all)` on Apple platforms and the Compose UI accessibility checks on Android.
 
+## Import Rules
+
+A rule organizes assets automatically: a **trigger**, a **filter** and one or more **actions**. Rules run on a client; the server never evaluates one.
+
+- **Triggers.** An asset is imported; its embeddings become available ([](/design/ai/#synced-embeddings)); its recognised text becomes available ([](/design/ai/#text-recognition)).
+- **Filter.** A smart-album predicate ([](#smart-album-definition-schema)), evaluated on the triggering asset.
+- **Actions.** Add a label, move to a container album, hide, set a cull flag. Each action is the ordinary signed operation the user could have performed, written by the device that ran the rule.
+- **Never destructive.** No action deletes, trashes or replaces bytes. A run that would act on more than 500 assets pauses and asks.
+- **Preview.** Creating or editing a rule shows what it would do to the existing library as a dry run, and applies to existing assets only when the user confirms.
+- **Once per asset.** A rule acts on an asset once, recorded per `(rule_id, asset_id)` in the local index. Its actions are idempotent, so two devices running the same rule converge on the same state.
+- **Storage.** Rules are a section of the library-settings document ([](/design/metadata/#the-library-settings-document)), one LWW register per `rule_id`.
+
 ## Hidden Assets
 
-A `hidden` asset (sidecar LWW, wire-absent = visible) is excluded from default views (timeline, search, system views) and appears only in the Hidden view behind the fresh-local-auth gate ([Local Gallery — SR1](/design/local-gallery/)). Hiding is view-layer only, neither deletion nor access control: the asset keeps its album and keeps syncing.
+A `hidden` asset (sidecar LWW, wire-absent = visible) is excluded from default views (timeline, search, system views) and appears only in the Hidden view behind the fresh-local-auth gate (SR1 in [](/design/local-gallery/#security-requirements)). Hiding is view-layer only, neither deletion nor access control: the asset keeps its album and keeps syncing.
 
 ## Recycling
 
-Delete defaults to trash, a soft delete synced as a signed `delete` lifecycle record. A hard delete happens only when the user empties trash, retention expires, or the user requests immediate deletion. Deletion is a lifecycle action like any other ([Provenance](/design/cryptography/provenance/#provenance-of-library-modifications), [](/design/authorization/#the-closed-action-set)).
+Delete defaults to trash, a soft delete synced as a signed `delete` lifecycle record. A hard delete happens only when the user empties trash, retention expires, or the user requests immediate deletion. Deletion is a lifecycle action like any other ([](/design/cryptography/provenance/#provenance-of-library-modifications), [](/design/authorization/#the-closed-action-set)).
 
 ### Deletion State Machine
 
 Deletion is owned entirely by `capsule-library`'s `Workspace` and reaches the apps through the FFI as verbs: delete, restore, purge and list trash. An app holds no deletion or retention logic of its own and never writes the index row directly.
 
-Live and Trashed are derived from the asset's signed chain, never stored on their own, so rebuilding the index reproduces them. Purged is recorded as a tombstone only on the evidence [Sync](/design/sync/#discovering-what-changed) names (the retention window seen closed, or a delete entry marked `purged`) or by this device's own purge. Missing bytes are never read as a purge, because a device whose scope is metadata-only holds no bytes for a Trashed asset either.
+Live and Trashed are derived from the asset's signed chain, never stored on their own, so rebuilding the index reproduces them. Purged is recorded as a tombstone only on the evidence [](/design/sync/#discovering-what-changed) names (the retention window seen closed, or a delete entry marked `purged`) or by this device's own purge. Missing bytes are never read as a purge, because a device whose scope is metadata-only holds no bytes for a Trashed asset either.
 
 ```mermaid title="Deletion states"
 stateDiagram-v2
@@ -212,24 +255,24 @@ stateDiagram-v2
 - It never purges on expiry an asset whose `delete` the server has not indexed (a held delete, below), since the server has no window running for it; only the user's own purge removes that asset.
 - A device that cannot drain the feed does not purge on expiry. One that never signed in has no drained feed, so its trash empties only when the user purges.
 
-**Purge** before `retention_until` (emptying the trash, or immediate deletion) first appends the signed shorter-retention re-issue the [retention window](#retention-window) requires, so the chain and the server agree that the purge is due. Purge then removes the original, the sidecar, every derivative and cache entry, and the index row, including its stack memberships. The provenance file stays as the tombstone-with-history ([](/design/filesystem/client/)). That kept chain is the peering tombstone itself: no other file records a purge, whether this device purged by its own decision or on the evidence [Sync](/design/sync/#discovering-what-changed) names, so an index rebuild reproduces Purged from the provenance file alone.
+**Purge** before `retention_until` (emptying the trash, or immediate deletion) first appends the signed shorter-retention re-issue the retention window ([](#retention-window)) requires, so the chain and the server agree that the purge is due. Purge then removes the original, the sidecar, every derivative and cache entry, and the index row, including its stack memberships. The provenance file stays as the tombstone-with-history ([](/design/filesystem/client/)). That kept chain is the peering tombstone itself: no other file records a purge, whether this device purged by its own decision or on the evidence [](/design/sync/#discovering-what-changed) names, so an index rebuild reproduces Purged from the provenance file alone.
 
 **Tombstone.** A kept chain headed by a `delete` with no sidecar and no original beside it is the library's peering tombstone. The workspace reads it back on open, holds the asset at that head, and refuses any backup or peer copy of it. Its head is also the re-issue an early purge must deliver, so a failed delivery is resent from it. A chain with a lost sidecar and any other head is damage, not a purge.
 
-**An upload in flight is redacted.** Deleting an asset whose upload has not finished aborts this device's open upload sessions for it, drops its pending [tiers](/design/transfer/upload/#upload-tiering-staged-uploads), and removes it from this device's upload queue on every server it was queued for. A restore returns it to Live, and so to the queue. Every device redacts the same way: a device that learns of the delete over [peering](/design/peering/#sync) holds the asset Trashed, so it uploads no create of it either. No device uploads an asset in the trash only so that its delete can follow.
+**An upload in flight is redacted.** Deleting an asset whose upload has not finished aborts this device's open upload sessions for it, drops its pending tiers ([](/design/transfer/upload/#upload-tiering-staged-uploads)), and removes it from this device's upload queue on every server it was queued for. A restore returns it to Live, and so to the queue. Every device redacts the same way: a device that learns of the delete over peering ([](/design/peering/#sync)) holds the asset Trashed, so it uploads no create of it either. No device uploads an asset in the trash only so that its delete can follow.
 
 - **Held records.** The server never sees a lifecycle record for an asset it has not indexed ([](/design/peering/#delegation)). A record goes to the server only once the server's feed lists the asset, whichever device uploaded its create. It then goes as every record after the head the server holds, in chain order, so the `delete` supersedes the create and each later record chains onto the one before. Until then it is held and travels to the user's other devices over peering, and any device holding the chain sends it once the create is indexed. If the create never reaches the server, no record after it does either.
 - **An upload carries the create.** The server takes nothing but a `create` through an upload, so whatever an asset's chain holds when it is uploaded, the upload carries its `create` record, and every record after it is a held record, Live asset or Trashed. A push sends them once its own uploads are done and a fresh drain lists the create.
   - The create carries the exact sealed metadata blob it binds, which cannot be sealed again. So the first edit that replaces that blob keeps a copy of it beside the chain, in the capture-month shard, for the asset's life; only a purge removes it. An asset edited before its first upload therefore uploads its create with the create's blob, and its edits follow as held records.
   - A library edited before it kept that copy cannot upload such a create, and the upload is refused before any byte is sent.
   - Where the server already holds the create (the feed lists the asset and holds its original) and an edit has superseded its blob, nothing of it is left to upload, so the push skips it rather than failing and sends only the records after it.
-- **Where held records live.** In the asset's own provenance chain, the only thing any delivery sends from. The [delegation](/design/peering/#delegation) ledger keeps a copy of a delegated asset's stretch only to know which assets wait on a hand-off's custody; once it releases them, they are delivered like any other. Every delivery compares the chain with the head a fresh feed drain names and sends only what the server lacks, so losing the upload queue, the delegation ledger or the index loses nothing, and a stretch one command delivered is not sent again by another. A purge keeps the chain as the tombstone, so a held `delete`, and the shorter-retention re-issue an early purge appends, outlive the purge and are sent from the tombstone if the create is indexed later. The server then purges by that re-issued window.
+- **Where held records live.** In the asset's own provenance chain, the only thing any delivery sends from. The delegation ledger ([](/design/peering/#delegation)) keeps a copy of a delegated asset's stretch only to know which assets wait on a hand-off's custody; once it releases them, they are delivered like any other. Every delivery compares the chain with the head a fresh feed drain names and sends only what the server lacks, so losing the upload queue, the delegation ledger or the index loses nothing, and a stretch one command delivered is not sent again by another. A purge keeps the chain as the tombstone, so a held `delete`, and the shorter-retention re-issue an early purge appends, outlive the purge and are sent from the tombstone if the create is indexed later. The server then purges by that re-issued window.
 - **A restore while the delete is held** is sent after the delete it undoes, in the same delivery. A restore that undoes a held delete whose `retention_until` has passed is never sent, and neither is the delete or anything after them. This is judged by the later of the device's clock and the latest server `changed_at` the drain saw, and it is the case where the server would apply the delete, refuse the restore and purge an asset the user restored in time. The server keeps the asset Live at the head it holds, and the library keeps every record. The chain is hash-linked, so a later delete of the asset never reaches the server either: it stays Live there, and only the library's trash holds it.
 - **Redaction never weakens what keeps data safe.** The local original stays pinned exactly as an unredacted staged upload pins it, until T2 is custody-confirmed or the asset's purge. A restore of an asset whose delete is still held, made before `retention_until` by the device's clock, is never lost because the held records reached the server late.
 
 ### Retention Window
 
-`retention_until` is **signed into the `delete` manifest** at delete time, in its server-visible envelope, so the keyless purge worker enforces it against the server's [trusted clock](/design/filesystem/server/#postgresql-what-the-server-knows). The default is 30 days, extendable per delete or album policy.
+`retention_until` is **signed into the `delete` manifest** at delete time, in its server-visible envelope, so the keyless purge worker enforces it against the server's trusted clock ([](/design/filesystem/server/#postgresql-what-the-server-knows)). The default is 30 days, extendable per delete or album policy.
 
 - The server **cannot accelerate** a purge: a hard purge before `retention_until` is rejected, whatever the server config.
 - The server **cannot delay** a purge beyond a user-issued `trash-restore` or signed shorter-retention re-issue.
@@ -237,6 +280,11 @@ stateDiagram-v2
 - A `trash-restore` the server accepts at or after `retention_until`, by the same trusted clock, is refused `409 error.upload.retention_elapsed` and writes nothing, whether or not the purge has run.
 - A purged asset cannot be restored. A restore that reaches the asset after its purge committed is refused the same way, even if the server accepted it just before the window closed. No restore ever meets a purged row, and a refused one leaves the asset in the trash until the purge.
 
+## Known Gaps
+
+- Auto-detection covers only RAW+JPEG; Live Photo, motion-photo and edited-copy detection are not implemented, and the edited-copy stack type does not exist.
+- Near-duplicate review and import rules are not implemented; both wait on synced embeddings, and rules on the library-settings document.
+
 ## Validation
 
-Each rule above is a unit or smoke test. Notably, under a mocked clock purge is refused before `retention_until` and `trash-restore` at or after it, and smart-album evaluation is byte-identical across platforms.
+Each rule above is a unit or smoke test. Notably, under a mocked clock purge is refused before `retention_until` and `trash-restore` at or after it, and smart-album evaluation is byte-identical across platforms. A near-duplicate resolution applies the merge table before any trash and never purges. An import rule never deletes, pauses past its cap, and acts once per asset however many devices run it.

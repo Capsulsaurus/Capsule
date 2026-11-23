@@ -790,6 +790,9 @@ impl Workspace {
         // Album keys, authorities, and every managed asset come back from disk here.
         // Without this the reopened workspace would hold an unlocked account and nothing else.
         ws.restore_durable_state()?;
+        // After the restore, which is what knows every bundle on disk: index the ones an
+        // interrupted import left without a catalog row.
+        ws.reconcile_index();
         tracing::info!(
             user_id = %user_id,
             albums = ws.albums.len(),
@@ -950,6 +953,85 @@ impl Workspace {
                 "workspace open: sidecars with no provenance chain found; left untouched"
             );
         }
+    }
+
+    /// Index every restored asset the catalog has no `assets` row for.
+    ///
+    /// An import makes its bundle durable — original, sidecar, chain, directory fsync — before
+    /// it writes index rows, and a bulk import commits those rows once per batch, so a crash in
+    /// between leaves bundles this workspace restores but no view can see. This closes that
+    /// window on the next open, through the same per-asset path
+    /// [`rebuild_index`](crate::library::rebuild_index) uses, plus the device-owned original's
+    /// cache row the import would have written.
+    ///
+    /// Cheap when nothing is missing: one key-only `SELECT uuid FROM assets` compared against
+    /// the ids already restored in memory; no file is re-read unless its id is missing. A
+    /// failure is a `warn`, never a failed open — the bundles are intact and the next open
+    /// retries.
+    #[tracing::instrument(skip_all, fields(root = %self.root.display(), restored = self.assets.len()))]
+    pub(super) fn reconcile_index(&self) {
+        let indexed = match self.library.db.asset_ids() {
+            Ok(ids) => ids,
+            Err(e) => {
+                tracing::warn!(error = %e, "reconcile: could not list indexed assets; skipping");
+                return;
+            }
+        };
+        let missing: Vec<&AssetState> = self
+            .assets
+            .values()
+            .filter(|asset| !indexed.contains(&asset.asset_id.to_string()))
+            .collect();
+        if missing.is_empty() {
+            tracing::debug!(
+                indexed = indexed.len(),
+                "reconcile: every restored asset has an index row"
+            );
+            return;
+        }
+        for asset in &missing {
+            tracing::debug!(
+                asset_id = %asset.asset_id,
+                album_id = %asset.album_id,
+                "reconcile: bundle on disk has no index row"
+            );
+        }
+        let sidecars: Vec<PathBuf> = missing.iter().map(|a| self.sidecar_path(a)).collect();
+        let reindexed = match crate::library::rebuild::reindex_sidecars(&self.library, &sidecars) {
+            Ok(ids) => ids.into_iter().collect::<std::collections::HashSet<Uuid>>(),
+            Err(e) => {
+                tracing::warn!(
+                    missing = missing.len(),
+                    error = %e,
+                    "reconcile: re-indexing unindexed bundles failed; the next open retries"
+                );
+                return;
+            }
+        };
+        for asset in missing
+            .iter()
+            .filter(|asset| reindexed.contains(&asset.asset_id))
+        {
+            let bytes = asset
+                .chain
+                .records()
+                .last()
+                .map_or(0, |head| head.manifest.core.plaintext_size);
+            if let Err(e) = self
+                .index_original_representation(asset, usize::try_from(bytes).unwrap_or(usize::MAX))
+            {
+                tracing::warn!(
+                    asset_id = %asset.asset_id,
+                    error = %e,
+                    "reconcile: original's cache row not written; the asset is indexed"
+                );
+            }
+        }
+        tracing::info!(
+            missing = missing.len(),
+            reconciled = reindexed.len(),
+            "reconcile: unindexed bundles re-indexed from their sidecars"
+        );
     }
 
     fn restore_one_asset(&self, provenance_path: &Path, stem: &str) -> Result<AssetState> {

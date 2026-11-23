@@ -8,12 +8,11 @@
 //! step, or two replicas that both read "due, unheld" both pull. So [`PullJobs::claim`] is that
 //! step, and the schedule it reads lives beside the lease it writes. The circuit is the peer's,
 //! not the job's, and is kept here because it is the same kind of fact: volatile, shared by
-//! every replica, and lost harmlessly — a restarted Valkey forgets a back-off, and the worst
-//! that costs is one early pull of a peer that will fail it again.
+//! every replica, and lost harmlessly — a schedule past its retention is forgotten, and the
+//! worst that costs is one early pull of a peer that will fail it again.
 //!
-//! Volatile rather than durable on purpose (Rust Architecture Decisions: upload-session and
-//! authentication state are Valkey's, never PostgreSQL's). Nothing here is a record a restart
-//! must keep: a job with no schedule is due, which is the right answer after a loss.
+//! Expiring rather than durable on purpose: nothing here is a record a restart must keep, and a
+//! job with no schedule is due, which is the right answer after a loss.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -118,7 +117,7 @@ struct Row {
 }
 
 /// The deterministic [`PullJobs`] double: one mutex, so every operation is one critical
-/// section, as each Valkey script is one server-side step.
+/// section, as each Postgres statement is one server-side step.
 #[derive(Debug, Default)]
 pub struct InMemoryPullJobs {
     jobs: Mutex<BTreeMap<JobKey, Row>>,

@@ -9,7 +9,7 @@ paths:
 
 - The public server surface is Kynos REST with an **OpenAPI 3.2** contract, pinned with `openapi_as(SpecVersion::V3_2)`. Do not reintroduce Salvo, GraphQL or gRPC, and never emit or commit a 3.1 or 3.0 contract.
 - Blob storage and the [transfer protocol](../../capsule-docs/src/content/docs/design/transfer/index.md) are Capsule-owned behind narrow ports. Do not add `object_store` or generic CAS or transfer crates.
-- Authentication state and upload-session state are separate ports whose adapters are `redis-rs` (Valkey) and in-memory, never PostgreSQL. PostgreSQL backs the durable ports (asset index, accounts, cohorts, quota). Do not introduce a generic TTL or CAS abstraction.
+- Authentication state and upload-session state are separate ports whose adapters are PostgreSQL and in-memory (ADR-0015). PostgreSQL backs every durable and expiring port; each expiring port keeps its own table with per-row expiry. Do not introduce a generic TTL or CAS abstraction, and do not reintroduce Valkey or another side store.
 - Errors carry a stable `code` from `capsule_i18n::error_codes`; the error-code contract is in [i18n.md](i18n.md).
 - `capsule-server/openapi.json` is generated: regenerate with `mise run openapi-kynos`, never edit by hand (`openapi-check-kynos` fails on drift). The federation pull client in `build.rs` follows the Spargen rule in [capsule-sdk.md](capsule-sdk.md).
 
@@ -53,3 +53,4 @@ Keep current:
 - `capsule-server/openapi.json` (`mise run openapi-kynos`) and the hand-written [API reference overview](../../capsule-docs/src/content/docs/reference/api.md).
 - The module list in the [crate docs](../../capsule-server/src/lib.rs) — a new or renamed top-level module.
 - [Self-hosting guide](../../capsule-docs/src/content/docs/guides/self-hosting.md) — any change to `config`, `cli.rs`, `client_addr`, `compose.yaml`, `.env.example` or the migration procedure.
+- [Troubleshooting](../../capsule-docs/src/content/docs/guides/troubleshooting.md) — the startup refusals, logging (`RUST_LOG`, `LOG_FORMAT`) and the `scrub`/`rebuild` commands it names.

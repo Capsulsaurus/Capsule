@@ -40,6 +40,7 @@ import { fileURLToPath } from 'node:url';
 import { agentRulesCheck } from './check-agent-rules.mjs';
 import { crossLinksCheck } from './check-cross-links.mjs';
 import { endpointCensusCheck } from './check-endpoint-census.mjs';
+import { libraryLinksCheck } from './check-library-links.mjs';
 import { modulePathsCheck } from './check-module-paths.mjs';
 import { sourceLinksCheck } from './check-source-links.mjs';
 
@@ -48,6 +49,7 @@ const CHECKS = [
     agentRulesCheck,
     crossLinksCheck,
     endpointCensusCheck,
+    libraryLinksCheck,
     modulePathsCheck,
     sourceLinksCheck,
 ];

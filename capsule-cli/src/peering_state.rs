@@ -30,16 +30,13 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use capsule_sdk::peering::{DirectoryVersions, PeeringError};
-use entity::{peering_floor, peering_tombstone, synced_asset};
 use jiff::Timestamp;
-use sea_orm::{
-    ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, DbErr, EntityTrait, QueryFilter,
-    Statement,
-};
+use rusqlite::OptionalExtension;
 use thiserror::Error;
 use tracing::instrument;
 use uuid::Uuid;
 
+use crate::db::{DbError, LocalDb};
 use crate::syncstore::{SyncStoreError, decode_id};
 
 /// What the peering store can fail with. Every variant refuses: none is read as an empty floor
@@ -48,7 +45,7 @@ use crate::syncstore::{SyncStoreError, decode_id};
 pub enum PeeringStateError {
     /// A database operation failed.
     #[error("peering state database error: {0}")]
-    Db(#[from] DbErr),
+    Db(#[from] DbError),
     /// A stored value does not decode.
     #[error("peering state is corrupt: {0}")]
     Corrupt(String),
@@ -116,28 +113,30 @@ impl From<PeeringStateError> for PeeringError {
 /// [`PeeringStateError::Db`] when the store cannot be read, [`PeeringStateError::Corrupt`] when
 /// the stored value is negative.
 #[instrument(level = "debug", skip(db), err)]
-pub async fn load_floor<C: ConnectionTrait>(
-    db: &C,
-    device: Uuid,
-) -> Result<u64, PeeringStateError> {
+pub async fn load_floor(db: &LocalDb, device: Uuid) -> Result<u64, PeeringStateError> {
     let floor = stored_floor(db, device).await?.unwrap_or(0);
     tracing::debug!(%device, floor, "peering: the directory floor is loaded");
     Ok(floor)
 }
 
 /// The floor row stored for `device`, `None` when it has never recorded one.
-async fn stored_floor<C: ConnectionTrait>(
-    db: &C,
-    device: Uuid,
-) -> Result<Option<u64>, PeeringStateError> {
-    peering_floor::Entity::find_by_id(device.hyphenated().to_string())
-        .one(db)
-        .await?
-        .map(|row| {
-            u64::try_from(row.directory_version).map_err(|_| {
+async fn stored_floor(db: &LocalDb, device: Uuid) -> Result<Option<u64>, PeeringStateError> {
+    let device_id = device.hyphenated().to_string();
+    let stored: Option<i64> = db
+        .call(move |conn| {
+            conn.query_row(
+                "SELECT directory_version FROM peering_floor WHERE device_id = ?1",
+                [device_id],
+                |row| row.get(0),
+            )
+            .optional()
+        })
+        .await?;
+    stored
+        .map(|directory_version| {
+            u64::try_from(directory_version).map_err(|_| {
                 PeeringStateError::Corrupt(format!(
-                    "the directory floor of device {device} is {}",
-                    row.directory_version
+                    "the directory floor of device {device} is {directory_version}"
                 ))
             })
         })
@@ -152,19 +151,21 @@ async fn stored_floor<C: ConnectionTrait>(
 /// [`PeeringStateError::OutOfRange`] for a version the store cannot hold, or the errors of
 /// [`load_floor`].
 #[instrument(level = "debug", skip(db), err)]
-pub async fn raise_floor<C: ConnectionTrait>(
-    db: &C,
+pub async fn raise_floor(
+    db: &LocalDb,
     device: Uuid,
     version: u64,
 ) -> Result<u64, PeeringStateError> {
     let stored = i64::try_from(version).map_err(|_| PeeringStateError::OutOfRange(version))?;
-    db.execute_raw(Statement::from_sql_and_values(
-        DbBackend::Sqlite,
-        "INSERT INTO peering_floor (device_id, directory_version) VALUES (?, ?) \
-         ON CONFLICT (device_id) DO UPDATE \
-         SET directory_version = MAX(directory_version, excluded.directory_version)",
-        [device.hyphenated().to_string().into(), stored.into()],
-    ))
+    let device_id = device.hyphenated().to_string();
+    db.call(move |conn| {
+        conn.execute(
+            "INSERT INTO peering_floor (device_id, directory_version) VALUES (?1, ?2) \
+             ON CONFLICT (device_id) DO UPDATE \
+             SET directory_version = MAX(directory_version, excluded.directory_version)",
+            rusqlite::params![device_id, stored],
+        )
+    })
     .await?;
     let floor = load_floor(db, device).await?;
     tracing::info!(%device, version, floor, "peering: the directory floor is raised");
@@ -173,14 +174,14 @@ pub async fn raise_floor<C: ConnectionTrait>(
 
 /// A [`DirectoryVersions`] over the CLI database, for one device.
 ///
-/// [`DirectoryVersions`] is synchronous and the database is not, so the floor is admitted
+/// [`DirectoryVersions`] is synchronous and the database is reached asynchronously, so the floor is admitted
 /// through [`admit`](Self::admit), which persists before it returns, and the trait serves the
 /// floor persisted so far. [`record`](DirectoryVersions::record) accepts only a version at or
 /// below it: a raise that has not been persisted is refused, so this adapter never reports a
 /// floor a restart would forget.
 #[derive(Debug)]
 pub struct DbDirectoryVersions {
-    db: DatabaseConnection,
+    db: LocalDb,
     device: Uuid,
     persisted: AtomicU64,
 }
@@ -191,7 +192,7 @@ impl DbDirectoryVersions {
     /// # Errors
     ///
     /// The errors of [`load_floor`]: an unreadable store is refused, never read as zero.
-    pub async fn open(db: DatabaseConnection, device: Uuid) -> Result<Self, PeeringStateError> {
+    pub async fn open(db: LocalDb, device: Uuid) -> Result<Self, PeeringStateError> {
         let floor = load_floor(&db, device).await?;
         Ok(Self {
             db,
@@ -344,23 +345,27 @@ pub fn feed_asset_uuid(id: &[u8]) -> Option<Uuid> {
 /// # Errors
 ///
 /// When a row cannot be written.
-pub async fn record_purged<C: ConnectionTrait>(
-    db: &C,
-    assets: &[Uuid],
-    at: Timestamp,
-) -> Result<(), DbErr> {
+pub async fn record_purged(db: &LocalDb, assets: &[Uuid], at: Timestamp) -> Result<(), DbError> {
     let recorded_at = at.to_string();
+    let owned = assets.to_vec();
+    db.call(move |conn| {
+        let txn = conn.transaction()?;
+        {
+            let mut insert = txn.prepare(
+                "INSERT INTO peering_tombstones (asset_id, recorded_at) VALUES (?1, ?2) \
+                 ON CONFLICT (asset_id) DO NOTHING",
+            )?;
+            for asset in &owned {
+                insert.execute(rusqlite::params![
+                    asset.hyphenated().to_string(),
+                    recorded_at
+                ])?;
+            }
+        }
+        txn.commit()
+    })
+    .await?;
     for asset in assets {
-        db.execute_raw(Statement::from_sql_and_values(
-            DbBackend::Sqlite,
-            "INSERT INTO peering_tombstones (asset_id, recorded_at) VALUES (?, ?) \
-             ON CONFLICT (asset_id) DO NOTHING",
-            [
-                asset.hyphenated().to_string().into(),
-                recorded_at.clone().into(),
-            ],
-        ))
-        .await?;
         tracing::info!(%asset, "peering: purge tombstone recorded");
     }
     Ok(())
@@ -380,23 +385,31 @@ pub async fn record_purged<C: ConnectionTrait>(
 /// [`PeeringStateError::Db`] when the store cannot be read, [`PeeringStateError::Corrupt`] when
 /// a stored id does not decode: the set is refused whole rather than returned with a gap.
 #[instrument(level = "debug", skip(db), err)]
-pub async fn load_tombstones<C: ConnectionTrait>(
-    db: &C,
-) -> Result<BTreeSet<Uuid>, PeeringStateError> {
+pub async fn load_tombstones(db: &LocalDb) -> Result<BTreeSet<Uuid>, PeeringStateError> {
+    let (recorded_ids, live_ids) = db
+        .call(|conn| {
+            let mut stmt = conn.prepare("SELECT asset_id FROM peering_tombstones")?;
+            let recorded = stmt
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut stmt =
+                conn.prepare("SELECT asset_id FROM synced_assets WHERE tombstoned = 0")?;
+            let live = stmt
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((recorded, live))
+        })
+        .await?;
     let mut tombstones = BTreeSet::new();
-    for row in peering_tombstone::Entity::find().all(db).await? {
-        let asset = row.asset_id.parse::<Uuid>().map_err(|_| {
-            PeeringStateError::Corrupt(format!("tombstone asset id {:?}", row.asset_id))
-        })?;
+    for asset_id in recorded_ids {
+        let asset = asset_id
+            .parse::<Uuid>()
+            .map_err(|_| PeeringStateError::Corrupt(format!("tombstone asset id {asset_id:?}")))?;
         tombstones.insert(asset);
     }
     let recorded = tombstones.len();
-    for row in synced_asset::Entity::find()
-        .filter(synced_asset::Column::Tombstoned.eq(false))
-        .all(db)
-        .await?
-    {
-        if let Some(asset) = feed_asset_uuid(&decode_id(&row.asset_id)?)
+    for asset_id in live_ids {
+        if let Some(asset) = feed_asset_uuid(&decode_id(&asset_id)?)
             && tombstones.remove(&asset)
         {
             tracing::warn!(%asset, "peering: a purged asset is live in the sync store; it is not held as a tombstone");

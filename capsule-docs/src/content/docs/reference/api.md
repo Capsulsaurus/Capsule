@@ -14,7 +14,7 @@ verified against the code in CI; why the surface is shaped this way is [](/desig
 - **The server holds no keys.** Every write is sealed on the client, and the sync feed returns
   opaque envelopes, so no endpoint takes a plaintext asset. That is why there is no try-it
   panel: a request a reader could send by hand would teach that the API accepts plaintext. The
-  [command line](/reference/cli/) performs the sealing instead.
+  command line ([](/reference/cli/)) performs the sealing instead.
 - **Each endpoint page** opens with its operations and schemas, then sets each operation beside
   an example request and example responses. The document itself is
   [`/openapi.json`](/openapi.json).

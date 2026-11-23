@@ -127,16 +127,6 @@ subtle = { workspace = true }
 # parameter set rather than the escrow KDF's tiered one — see `auth::credential` for why those
 # are unrelated numbers. The Postgres adapter (#402) uses the same helper.
 argon2 = { workspace = true }
-# The Valkey adapters behind the state ports and the counter port (`store::valkey`,
-# `counter::valkey`; #403). `redis-rs` is the crate the Rust
-# Architecture Decisions name for exactly this; the workspace pin carries `tokio-comp` and
-# `connection-manager`, and two features are added here: `tokio-rustls-comp`, so a `rediss://`
-# URL terminates TLS in rustls and never in native-tls, and `script`, because every multi-key
-# mutation is one Lua script rather than a `WATCH`/`MULTI` round trip a multiplexed connection
-# could not hold. No `bb8`: one `ConnectionManager` is a self-reconnecting multiplexed
-# connection, which is the whole of what a server talking to one Valkey needs. Lua scripts for
-# multi-key writes mean no Redis Cluster. No `object_store` or generic TTL/CAS crate.
-redis = { workspace = true, features = ["tokio-rustls-comp", "script"] }
 # The OIDC relying party's egress: the discovery document, the JWK Set and the
 # form-encoded token exchange, against the configured identity provider and nothing else. The
 # one outbound HTTP client in this crate. Already in the lock file through `capsule-sdk`, so this
@@ -161,22 +151,20 @@ clap = { version = "4.6.1", features = ["derive"] }
 color-eyre = "0.6.5"
 # The Postgres adapters for the durable ports (#402). `default-features = false` is
 # load-bearing rather than tidy: sea-orm's defaults include `with-chrono`, and
-# `cargo xtask architecture-check` makes `cargo tree -i chrono -e no-dev` a review-blocking
-# gate that must keep resolving to `capsule-cli/entity` and sea-orm's own internals. Without a datetime feature
+# `cargo xtask architecture-check` makes `cargo tree -p capsule-server -i chrono -e no-dev` a
+# review-blocking gate: chrono may reach the lock file only through `capsule-server-migration`'s
+# `sea-orm-migration`, a dev-dependency. Without a datetime feature
 # there is no Rust binding for `TIMESTAMPTZ` at all, which is why every instant in the server's
 # schema is a `BIGINT` of epoch microseconds converted in `postgres::time`.
 #
 # Three features and no more: `macros` for the `FromQueryResult` derive the adapters' private row
 # structs use, `sqlx-postgres` for the driver, `runtime-tokio-rustls` because the workspace's TLS
-# rule is rustls only. Already a workspace dependency (ORM for rebuildable indexes only), consumed
-# until now only by `capsule-cli/entity`.
+# rule is rustls only.
 #
-# Spelled out rather than `workspace = true`, and only because cargo forbids the one thing this
-# needs: a member may add features to an inherited dependency but may not turn the workspace's
-# defaults **off**. `capsule-cli` and `capsule-cli/entity` inherit sea-orm *with* its defaults —
-# that is exactly why the chrono gate names `capsule-cli/entity` — so flipping the workspace
-# entry would change their build. The version is the workspace pin, restated; keep the two in
-# step when sea-orm is repinned.
+# Not a workspace pin: this crate is sea-orm's one direct consumer (the CLI's SQLite left it for
+# `rusqlite`), and a member may add features to an inherited dependency but may not turn the
+# workspace's defaults **off**. Keep the version in step with the workspace `sea-orm-migration`
+# pin, which pulls the same sea-orm.
 sea-orm = { version = "2.0.4", default-features = false, features = [
   "macros",
   "sqlx-postgres",
@@ -206,21 +194,18 @@ serde_json = { workspace = true }
 # (`postgres::assert_schema_current`), which is also the safer rollout: a server that migrates on
 # start migrates once per replica during a rolling deploy.
 capsule-server-migration = { path = "migration" }
-# The containers the conformance suites run against: a Postgres for `postgres::testing`, behind
-# `CAPSULE_TEST_POSTGRES=1`, and a Valkey for `tests/valkey.rs`, behind `CAPSULE_TEST_VALKEY=1`
-# (or `CAPSULE_TEST_VALKEY_URL` for a server already running). Both suites run the same cases the
-# in-memory doubles pass, so `mise run test-rust` still needs no podman and `.config/nextest.toml`
-# puts both in the one-thread `containers` group.
+# The container the conformance suites run against: a Postgres for `postgres::testing`, behind
+# `CAPSULE_TEST_POSTGRES=1`. The suites run the same cases the in-memory doubles pass, so
+# `mise run test-rust` still needs no podman, and `.config/nextest.toml` puts them in the
+# one-thread `containers` group.
 #
 # Both crates were pinned at the workspace and consumed by nothing — `xtask`'s
 # `PLANNED_WORKSPACE_DEPENDENCIES` sanctioned them as planned because "no test starts a
 # container yet". These are the tests that start one, so the two entries leave that list.
 # Dev-only: the served binary links neither.
-#
-# `postgres` and `redis` are on the workspace pin; `valkey` is added here because it is the image
-# `capsule-server/compose.yaml` runs and no other member needs it.
+# `postgres`, the only module on the workspace pin, is the image `capsule-server/compose.yaml` runs.
 testcontainers = { workspace = true }
-testcontainers-modules = { workspace = true, features = ["valkey"] }
+testcontainers-modules = { workspace = true }
 
 # Throwaway directories on disk. `tests/binary.rs` gives the spawned server a blob root of its
 # own and deletes it afterwards; `tests/sdk_client.rs` puts a **real** `capsule_library::Workspace`

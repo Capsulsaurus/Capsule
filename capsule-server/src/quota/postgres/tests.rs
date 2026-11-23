@@ -1,23 +1,68 @@
 /// The suite, against a real Postgres.
 mod postgres_conformance {
-    use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement, Value};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use sea_orm::{
+        ConnectionTrait, DatabaseConnection, DbBackend, Statement, TransactionTrait as _, Value,
+    };
 
     use super::super::PostgresQuota;
     use crate::blob::ContentAddress;
     use crate::postgres::testing;
     use crate::quota::QuotaStore;
     use crate::quota::conformance::{self, Harness};
+    use crate::quota::pulled_total::{self, Change};
     use crate::store::{StoreError, StoreFuture, UserId};
 
     /// A ledger over one container, with the connection its pulled holdings are written through.
+    ///
+    /// Its pulled-hold writes stand in for the subscription and pulled-album stores: each writes
+    /// its row and moves the pulled total through [`pulled_total`], in one transaction, exactly as
+    /// those stores do. `raw` turns the total's maintenance off, for the one case that writes
+    /// rows under a schema older than the total.
     #[derive(Debug, Clone)]
     struct PostgresHarness {
         quotas: PostgresQuota,
         connection: DatabaseConnection,
+        raw: Arc<AtomicBool>,
     }
 
     impl PostgresHarness {
         /// Run `sql` with `values`, as conformance setup.
+        /// Run `sql` in a transaction that also moves the pulled total for the rows it
+        /// returned, unless the harness is writing raw rows.
+        async fn write<F, Fut>(
+            &self,
+            sql: &str,
+            values: Vec<Value>,
+            maintain: F,
+        ) -> Result<(), StoreError>
+        where
+            F: FnOnce(sea_orm::DatabaseTransaction, Vec<sea_orm::QueryResult>) -> Fut,
+            Fut: std::future::Future<Output = Result<sea_orm::DatabaseTransaction, StoreError>>,
+        {
+            let failed = |error: sea_orm::DbErr| StoreError::Rejected {
+                store: "quota conformance",
+                detail: error.to_string(),
+            };
+            let transaction = self.connection.begin().await.map_err(failed)?;
+            let rows = transaction
+                .query_all_raw(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    sql,
+                    values,
+                ))
+                .await
+                .map_err(failed)?;
+            let transaction = if self.raw.load(Ordering::SeqCst) {
+                transaction
+            } else {
+                maintain(transaction, rows).await?
+            };
+            transaction.commit().await.map_err(failed)
+        }
+
         async fn run(&self, sql: &str, values: Vec<Value>) -> Result<(), StoreError> {
             self.connection
                 .execute_raw(Statement::from_sql_and_values(
@@ -51,13 +96,25 @@ mod postgres_conformance {
                 let job = || vec![Value::from(peer.to_owned()), Value::from(album.to_owned())];
                 let mut subscription = vec![Value::from(user.as_str().to_owned())];
                 subscription.extend(job());
-                self.run(
+                let subscribed = [(user.as_str().to_owned(), peer.to_owned(), album.to_owned())];
+                self.write(
                     "INSERT INTO federation_subscriptions (subscriber_id, peer_id, album_id, \
                      scope, jti, token, issued_at, expires_at, min_protocol_version, \
                      subscribed_at, updated_at) \
                      VALUES ($1, $2, $3, 'read', 'jti', 'token', 0, 0, '1.0', 0, 0) \
-                     ON CONFLICT DO NOTHING",
+                     ON CONFLICT DO NOTHING RETURNING subscriber_id",
                     subscription,
+                    |transaction, rows| async move {
+                        if !rows.is_empty() {
+                            pulled_total::subscriptions_changed(
+                                &transaction,
+                                &subscribed,
+                                Change::Added,
+                            )
+                            .await?;
+                        }
+                        Ok(transaction)
+                    },
                 )
                 .await?;
                 self.run(
@@ -66,15 +123,26 @@ mod postgres_conformance {
                     job(),
                 )
                 .await?;
+                let size = i64::try_from(size).expect("a test size fits a BIGINT");
                 let mut blob = job();
-                blob.extend([
-                    Value::from(address.as_str().to_owned()),
-                    Value::from(i64::try_from(size).expect("a test size fits a BIGINT")),
-                ]);
-                self.run(
+                blob.extend([Value::from(address.as_str().to_owned()), Value::from(size)]);
+                let claimed = [(
+                    peer.to_owned(),
+                    album.to_owned(),
+                    address.as_str().to_owned(),
+                    size,
+                )];
+                self.write(
                     "INSERT INTO federation_pulled_metadata_blobs (peer_id, album_id, address, \
-                     size) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+                     size) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING RETURNING address",
                     blob,
+                    |transaction, rows| async move {
+                        if !rows.is_empty() {
+                            pulled_total::blobs_changed(&transaction, &claimed, Change::Added)
+                                .await?;
+                        }
+                        Ok(transaction)
+                    },
                 )
                 .await
             })
@@ -87,17 +155,68 @@ mod postgres_conformance {
             album: &'a str,
         ) -> StoreFuture<'a, ()> {
             Box::pin(async move {
-                self.run(
+                let removed = [(user.as_str().to_owned(), peer.to_owned(), album.to_owned())];
+                self.write(
                     "DELETE FROM federation_subscriptions \
-                     WHERE subscriber_id = $1 AND peer_id = $2 AND album_id = $3",
+                     WHERE subscriber_id = $1 AND peer_id = $2 AND album_id = $3 \
+                     RETURNING subscriber_id",
                     vec![
                         Value::from(user.as_str().to_owned()),
                         Value::from(peer.to_owned()),
                         Value::from(album.to_owned()),
                     ],
+                    |transaction, rows| async move {
+                        if !rows.is_empty() {
+                            pulled_total::subscriptions_changed(
+                                &transaction,
+                                &removed,
+                                Change::Removed,
+                            )
+                            .await?;
+                        }
+                        Ok(transaction)
+                    },
                 )
                 .await
             })
+        }
+    }
+
+    impl PostgresHarness {
+        /// Forget a pulled job: its blob rows leave the pulled total, then the job row goes.
+        ///
+        /// What a job-forgetting write path owes the total. The foreign key's cascade would
+        /// delete the blob rows on its own, but nothing would move the total for them.
+        async fn forget_job(&self, peer: &str, album: &str) -> Result<(), StoreError> {
+            let (peer, album) = (peer.to_owned(), album.to_owned());
+            let (forgotten_peer, forgotten_album) = (peer.clone(), album.clone());
+            self.write(
+                "DELETE FROM federation_pulled_metadata_blobs \
+                 WHERE peer_id = $1 AND album_id = $2 RETURNING address, size",
+                vec![Value::from(peer.clone()), Value::from(album.clone())],
+                |transaction, rows| async move {
+                    let mut released = Vec::with_capacity(rows.len());
+                    for row in &rows {
+                        let address: String =
+                            row.try_get("", "address").expect("a deleted address");
+                        let size: i64 = row.try_get("", "size").expect("a deleted size");
+                        released.push((
+                            forgotten_peer.clone(),
+                            forgotten_album.clone(),
+                            address,
+                            size,
+                        ));
+                    }
+                    pulled_total::blobs_changed(&transaction, &released, Change::Removed).await?;
+                    Ok(transaction)
+                },
+            )
+            .await?;
+            self.run(
+                "DELETE FROM federation_pulled_albums WHERE peer_id = $1 AND album_id = $2",
+                vec![Value::from(peer), Value::from(album)],
+            )
+            .await
         }
     }
 
@@ -109,6 +228,7 @@ mod postgres_conformance {
         let harness = PostgresHarness {
             quotas: PostgresQuota::new(database.connection().clone()),
             connection: database.connection().clone(),
+            raw: Arc::new(AtomicBool::new(false)),
         };
         conformance::run_all(&harness).await;
         assert_eq!(
@@ -164,6 +284,8 @@ mod postgres_conformance {
     /// The stored pulled total (#1171) against every write that moves one of its three inputs,
     /// each checked against the derivation it replaced.
     mod materialised {
+        use std::sync::atomic::Ordering;
+
         use jiff::Timestamp;
         use sea_orm::Value;
 
@@ -251,15 +373,10 @@ mod postgres_conformance {
             assert_eq!(used(h, &alice).await, 14);
             assert_no_drift(h, "an expired reservation's release").await;
 
-            h.run(
-                "DELETE FROM federation_pulled_albums WHERE peer_id = $1 AND album_id = $2",
-                vec![Value::from(PEER), Value::from("paths")],
-            )
-            .await
-            .expect("forget the job");
-            assert_eq!(used(h, &alice).await, 0, "the cascade released it");
+            h.forget_job(PEER, "paths").await.expect("forget the job");
+            assert_eq!(used(h, &alice).await, 0, "forgetting the job released it");
             assert_eq!(used(h, &bob).await, 0);
-            assert_no_drift(h, "the job's cascade").await;
+            assert_no_drift(h, "the forgotten job").await;
         }
 
         /// Charges and pulled holds of the same addresses, and subscriptions and blobs of the
@@ -520,6 +637,9 @@ mod postgres_conformance {
             server_migration::Migrator::down(&h.connection, Some(later))
                 .await
                 .expect("roll back the materialised total");
+            // The schema has no pulled total to maintain until `000030` is back, so these rows
+            // are written as an older server wrote them, and the backfill counts them.
+            h.raw.store(true, Ordering::SeqCst);
             let (owner, blob, mine) = (
                 UserId::new("mat-backfill"),
                 address("backfill", 1),
@@ -547,6 +667,7 @@ mod postgres_conformance {
             server_migration::Migrator::up(&h.connection, None)
                 .await
                 .expect("reapply the materialised total");
+            h.raw.store(false, Ordering::SeqCst);
 
             assert_eq!(
                 used(h, &owner).await,

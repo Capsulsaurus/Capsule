@@ -16,7 +16,7 @@
 //! - [`jobs`] — [`PullJobs`], the volatile-state port that holds each job's schedule, the lease
 //!   that keeps two replicas from pulling one job, and each peer's circuit; and
 //!   [`InMemoryPullJobs`], its deterministic double.
-//! - [`valkey`] — [`ValkeyPullJobs`](valkey::ValkeyPullJobs), the production adapter.
+//! - [`postgres`] — [`PostgresPullJobs`](postgres::PostgresPullJobs), the production adapter.
 //! - [`conformance`] — the suite both adapters pass.
 //! - [`worker`] — [`PullWorker`], which drives one round of due jobs through a [`Puller`] and
 //!   applies the failure policy: back-off, the error budget, the circuit, the CPU budget.
@@ -27,7 +27,7 @@
 //! # Times are the caller's
 //!
 //! Every port operation takes the instant it decides at, as the counter port does, so the
-//! double and the Valkey adapter are driven through one suite with absolute instants and no
+//! double and the Postgres adapter are driven through one suite with absolute instants and no
 //! second clock decides anything.
 
 use std::fmt;
@@ -41,12 +41,12 @@ pub mod conformance;
 #[cfg(test)]
 pub(crate) mod fixtures;
 pub mod jobs;
+pub mod postgres;
 pub mod pulled;
 pub mod puller;
 pub mod remote;
 pub mod signer;
 pub mod validate;
-pub mod valkey;
 pub mod worker;
 
 pub use self::jobs::{InMemoryPullJobs, JobState, PullJobs};

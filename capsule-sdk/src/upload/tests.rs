@@ -11,9 +11,9 @@
 //!   the `426` abort-with-upgrade against the real handshake shape.
 //!
 //! These mock-level tests are deterministic and hermetic. The cross-module case —
-//! this client driving the REAL `capsule-api/upload` server (testcontainer
-//! Postgres + Valkey, real protocol gate, real disk) — lives in that crate's
-//! `src/tests/sdk_client.rs`, which dev-depends on `capsule-sdk`.
+//! this client driving the REAL `capsule-server` (real protocol gate, real
+//! disk) — lives in that crate's `tests/sdk_client.rs`, which dev-depends on
+//! `capsule-sdk`.
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
