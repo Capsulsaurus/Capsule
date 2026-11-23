@@ -288,6 +288,17 @@ fn refuses_public_type_kinds_it_does_not_read() {
         "`protocol` `P`",
     );
     refused("enum class E { A }\n", Language::Kotlin, "`class` `E`");
+    // A subclass reaches an open or abstract class's `protected` members, which the scan drops.
+    refused(
+        "open class O {\n    protected fun hook() {}\n}\n",
+        Language::Kotlin,
+        "`class` `O`",
+    );
+    refused(
+        "abstract class A {\n    protected abstract fun hook()\n}\n",
+        Language::Kotlin,
+        "`class` `A`",
+    );
     refused(
         "object O {\n    fun f() {}\n}\n",
         Language::Kotlin,

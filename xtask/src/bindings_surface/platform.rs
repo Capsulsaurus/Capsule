@@ -14,10 +14,10 @@
 //! ## What is kept, and what is refused
 //!
 //! Only what a caller can reach is kept: in Kotlin, anything not `private`, `internal` or
-//! `protected` (the adapters are final, so `protected` reaches no caller); in Swift, anything
-//! `public` or `open`. Every line at a declaration depth is classified by its keyword, and the
-//! scan **fails closed**: a public declaration of a form it does not read (a Kotlin `object` or
-//! `enum class`, a Swift `enum`, `protocol` or `extension` with public members, a nested type,
+//! `protected` (the scan reads only final classes, so `protected` reaches no caller); in Swift,
+//! anything `public` or `open`. Every line at a declaration depth is classified by its keyword,
+//! and the scan **fails closed**: a public declaration of a form it does not read (a Kotlin
+//! `object`, `enum class`, or `open` or `abstract` class, a Swift `enum`, `protocol` or `extension` with public members, a nested type,
 //! a line it cannot classify, a header whose parentheses never balance) is fatal, for the
 //! reason [`super::is_export`] gives: a page that silently lost one still looks complete.
 
@@ -306,8 +306,10 @@ pub(crate) fn scan(source: &str, language: Language) -> Result<Vec<Declaration>>
 }
 
 /// Kotlin class modifiers the scan reads. `enum`, `sealed`, `annotation`, `inner`, `value`
-/// and `inline` classes have a surface it does not.
-const KOTLIN_CLASS_MODIFIERS: &[&str] = &["public", "open", "final", "abstract", "data"];
+/// and `inline` classes have a surface it does not. `open` and `abstract` classes are refused
+/// too: a subclass reaches their `protected` members, which the scan drops as unreachable on
+/// the grounds that every adapter it reads is final.
+const KOTLIN_CLASS_MODIFIERS: &[&str] = &["public", "final", "data"];
 
 /// Fail if the extension body `body` (opened at `lines[at]`) declares anything public at its
 /// first depth, its own or by the extension's `public` default.
