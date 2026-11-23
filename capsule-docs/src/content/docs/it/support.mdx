@@ -1,0 +1,124 @@
+---
+title: Supporto
+description: Dove fare una domanda, segnalare un bug, suggerire una funzionalità o segnalare una vulnerabilità in Capsule, e cosa includere perché si possa intervenire.
+template: splash
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+Capsule è sviluppato e supportato alla luce del sole da volontari. Non esiste un canale di supporto a
+pagamento o privato: ogni domanda, segnalazione e idea passa dal GitHub del progetto, dove chiunque
+può rispondere e la risposta aiuta la persona successiva. Una vulnerabilità è l'unica eccezione, e si
+segnala in privato.
+
+Capsule non ha ancora avuto una release; cosa funziona oggi e cosa arriverà dopo è nella
+[roadmap](https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md).
+
+<a id="before-you-ask"></a>
+
+## Prima di chiedere
+
+La maggior parte delle risposte esiste già. Un minuto qui di solito risparmia un botta e risposta.
+
+1. **Cerca nella documentazione** con la casella di ricerca in cima a ogni pagina, e leggi
+   [](/guides/troubleshooting/), che copre i problemi più comuni e come raccogliere i log.
+2. **Cerca tra le [issue aperte e chiuse](https://github.com/Capsulsaurus/Capsule/issues?q=is%3Aissue)**
+   e nelle [discussioni](https://github.com/Capsulsaurus/Capsule/discussions). Se qualcuno l'ha già
+   segnalato, aggiungi una reazione 👍, o un commento con informazioni nuove, invece di aprire un
+   duplicato.
+3. **Verifica le opzioni esatte di un comando** in [](/reference/cli/).
+
+<a id="get-help"></a>
+
+## Chiedi aiuto
+
+<CardGrid>
+  <Card title="Fai una domanda" icon="comment">
+    Come faccio a…? È normale? Ti serve aiuto per configurare qualcosa? Chiedi in
+    [Discussions › Q&A](https://github.com/Capsulsaurus/Capsule/discussions/categories/q-a). Segna
+    come risposta quella che ha risolto il problema, così la persona successiva la trova.
+  </Card>
+  <Card title="Segnala un bug" icon="warning">
+    Qualcosa si è rotto o si comporta diversamente da quanto dice la documentazione? Apri una
+    [segnalazione di bug](https://github.com/Capsulsaurus/Capsule/issues/new?template=bug_report.yml).
+    Il modulo chiede la versione, la piattaforma, i passaggi per riprodurlo e i log: una segnalazione
+    che li contiene tutti può essere smistata senza continui scambi.
+  </Card>
+  <Card title="Suggerisci una funzionalità" icon="star">
+    Condividi le idee in
+    [Discussions › Ideas](https://github.com/Capsulsaurus/Capsule/discussions/categories/ideas),
+    dove altri possono votarle e perfezionarle. I maintainer trasformano un'idea in una issue una
+    volta accettata, ed è nella issue che si segue il lavoro.
+  </Card>
+  <Card title="Segnala una vulnerabilità" icon="padlock">
+    **Mai in una issue pubblica.** Segnalala in privato tramite un
+    [avviso di sicurezza di GitHub](https://github.com/Capsulsaurus/Capsule/security/advisories/new).
+    La [politica di sicurezza](https://github.com/Capsulsaurus/Capsule/security/policy) indica quali
+    versioni ricevono correzioni.
+  </Card>
+</CardGrid>
+
+<a id="specific-topics"></a>
+
+## Argomenti specifici
+
+<CardGrid>
+  <Card title="Gestire un server" icon="setting">
+    Inizia da [](/guides/self-hosting/), poi [](/guides/troubleshooting/). Sei ancora bloccato?
+    Chiedi in [Q&A](https://github.com/Capsulsaurus/Capsule/discussions/categories/q-a) indicando la
+    versione del server e il suo log di avvio.
+  </Card>
+  <Card title="Foto mancanti o danneggiate" icon="information">
+    Fermati e non eliminare nulla. Leggi
+    [](/guides/troubleshooting/#check-a-librarys-integrity) e
+    [](/design/backup-recovery/#recovery-paths) prima di tentare una soluzione. Se dei dati sono
+    andati persi o danneggiati, segnalalo come bug: proteggere i tuoi dati è la prima priorità del
+    progetto.
+  </Card>
+  <Card title="Traduzioni" icon="translate">
+    Segnala una stringa errata o mancante con un
+    [errore di traduzione](https://github.com/Capsulsaurus/Capsule/issues/new?template=translation-error.md),
+    oppure chiedi una nuova lingua con una
+    [richiesta di lingua](https://github.com/Capsulsaurus/Capsule/issues/new?template=language-request.md).
+    Come vengono realizzate le traduzioni è spiegato in
+    [locales/README.md](https://github.com/Capsulsaurus/Capsule/blob/master/locales/README.md).
+  </Card>
+  <Card title="Passare da Google Foto" icon="external">
+    Segui [](/guides/google-photos-migration/), compreso ciò che lo strumento di importazione non può
+    garantire, prima di segnalare un problema di importazione.
+  </Card>
+</CardGrid>
+
+<a id="get-involved"></a>
+
+## Partecipa
+
+<CardGrid>
+  <Card title="Contribuisci" icon="github">
+    Leggi la
+    [guida per contribuire](https://github.com/Capsulsaurus/Capsule/blob/master/CONTRIBUTING.md),
+    poi scegli una issue con l'etichetta
+    [good first issue](https://github.com/Capsulsaurus/Capsule/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
+    Rispondere alle domande in Discussions aiuta altrettanto.
+  </Card>
+  <Card title="Sponsorizza il progetto" icon="heart">
+    Capsule è gratuito e open source. Se ti è utile,
+    [sponsorizzarne lo sviluppo su GitHub](https://github.com/sponsors/justin13888) aiuta a farlo
+    andare avanti.
+  </Card>
+</CardGrid>
+
+<a id="what-to-expect"></a>
+
+## Cosa aspettarsi
+
+- **Tempo dei volontari.** Alle domande rispondono la community e i maintainer quando il tempo lo
+  permette. Non c'è un tempo di risposta garantito.
+- **Le segnalazioni complete vanno avanti per prime.** Una segnalazione di bug con la versione, i
+  passaggi per riprodurlo e i log può essere confermata e corretta. Una senza resta in attesa di una
+  risposta prima che qualcuno possa intervenire.
+- **Un argomento per discussione.** Due problemi vanno in due segnalazioni, così ognuno può essere
+  seguito e chiuso separatamente.
+- **Pubblico per impostazione predefinita.** Tutto, tranne una segnalazione di vulnerabilità, è
+  pubblico, quindi rimuovi passphrase, segreti di recupero, token, indirizzi del server e percorsi
+  di file personali prima di incollare un log.

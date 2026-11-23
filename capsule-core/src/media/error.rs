@@ -90,15 +90,15 @@ pub enum MediaError {
     /// ever sees a buffer.
     #[error("{pixels} pixels exceeds the {limit}-pixel decode budget")]
     PixelBudgetExceeded {
-        /// The pixel count the header claims. For an AVIF whose AV1 frame dav1d refused from its
-        /// own frame header, which reports no size, `limit + 1`: a lower bound.
+        /// The pixel count the header claims, or, for a frame refused after decode because its
+        /// header understated it, the decoded frame's.
         pixels: u64,
         /// The budget in force.
         limit: u64,
     },
-    /// The decoder's buffer length does not match the dimensions it reported. A `RgbImage` is
-    /// constructible from mismatched parts (`RgbImage::new` validates nothing), so this is
-    /// checked at the boundary rather than assumed.
+    /// The decoder's buffer length does not match the dimensions it reported. `RgbImage`
+    /// validates this itself at the pinned revision; it is rechecked at the boundary rather than
+    /// assumed across bumps of a pre-1.0 dependency.
     #[error(
         "{format} decoder returned {actual} samples for {width}x{height} (expected {expected})"
     )]

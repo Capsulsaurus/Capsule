@@ -1,0 +1,127 @@
+---
+title: Assistance
+description: Où poser une question, signaler un bogue, suggérer une fonctionnalité ou signaler une vulnérabilité dans Capsule, et quoi inclure pour que la demande puisse être traitée.
+template: splash
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+Capsule est développé et soutenu au grand jour par des bénévoles. Il n'existe aucun canal
+d'assistance payant ou privé : chaque question, signalement et idée passe par le GitHub du projet,
+où n'importe qui peut répondre et où la réponse aide la personne suivante. Les vulnérabilités sont
+la seule exception : elles se signalent en privé.
+
+Capsule n'a encore fait l'objet d'aucune version publiée ; ce qui fonctionne aujourd'hui et ce qui
+arrive ensuite figurent dans la
+[feuille de route](https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md).
+
+<a id="before-you-ask"></a>
+
+## Avant de demander
+
+La plupart des réponses existent déjà. Une minute ici évite généralement un aller-retour.
+
+1. **Cherchez dans la documentation** avec le champ de recherche en haut de chaque page, et lisez
+   [](/guides/troubleshooting/), qui couvre les pannes courantes et la façon de collecter les
+   journaux.
+2. **Cherchez dans les [tickets ouverts et fermés](https://github.com/Capsulsaurus/Capsule/issues?q=is%3Aissue)**
+   et dans les [discussions](https://github.com/Capsulsaurus/Capsule/discussions). Si quelqu'un
+   l'a déjà signalé, ajoutez une réaction 👍, ou un commentaire apportant une information
+   nouvelle, plutôt que d'ouvrir un doublon.
+3. **Vérifiez les options exactes d'une commande** dans [](/reference/cli/).
+
+<a id="get-help"></a>
+
+## Obtenir de l'aide
+
+<CardGrid>
+  <Card title="Poser une question" icon="comment">
+    Comment faire… ? Est-ce le comportement attendu ? Besoin d'aide pour configurer quelque chose ?
+    Demandez dans
+    [Discussions › Q&A](https://github.com/Capsulsaurus/Capsule/discussions/categories/q-a).
+    Marquez comme réponse celle qui a résolu le problème, pour que la personne suivante la trouve.
+  </Card>
+  <Card title="Signaler un bogue" icon="warning">
+    Quelque chose est cassé ou se comporte autrement que ce que dit la documentation ? Ouvrez un
+    [rapport de bogue](https://github.com/Capsulsaurus/Capsule/issues/new?template=bug_report.yml).
+    Le formulaire demande la version, la plateforme, les étapes pour reproduire et les journaux :
+    un rapport qui contient tout cela peut être trié sans échanges supplémentaires.
+  </Card>
+  <Card title="Suggérer une fonctionnalité" icon="star">
+    Partagez vos idées dans
+    [Discussions › Ideas](https://github.com/Capsulsaurus/Capsule/discussions/categories/ideas),
+    où d'autres peuvent les soutenir et les affiner. Les mainteneurs transforment une idée en
+    ticket une fois qu'elle est acceptée, et c'est dans ce ticket que le travail est suivi.
+  </Card>
+  <Card title="Signaler une vulnérabilité" icon="padlock">
+    **Jamais dans un ticket public.** Signalez-la en privé au moyen d'un
+    [avis de sécurité GitHub](https://github.com/Capsulsaurus/Capsule/security/advisories/new).
+    La [politique de sécurité](https://github.com/Capsulsaurus/Capsule/security/policy) indique
+    quelles versions reçoivent des correctifs.
+  </Card>
+</CardGrid>
+
+<a id="specific-topics"></a>
+
+## Sujets particuliers
+
+<CardGrid>
+  <Card title="Faire tourner un serveur" icon="setting">
+    Commencez par [](/guides/self-hosting/), puis [](/guides/troubleshooting/). Toujours bloqué ?
+    Demandez dans [Q&A](https://github.com/Capsulsaurus/Capsule/discussions/categories/q-a) en
+    indiquant la version du serveur et son journal de démarrage.
+  </Card>
+  <Card title="Photos manquantes ou endommagées" icon="information">
+    Arrêtez-vous et ne supprimez rien. Lisez
+    [](/guides/troubleshooting/#check-a-librarys-integrity) et
+    [](/design/backup-recovery/#recovery-paths) avant de tenter une réparation. Si des données
+    sont perdues ou corrompues, signalez-le comme un bogue : protéger vos données est la première
+    priorité du projet.
+  </Card>
+  <Card title="Traductions" icon="translate">
+    Signalez une chaîne erronée ou manquante avec une
+    [erreur de traduction](https://github.com/Capsulsaurus/Capsule/issues/new?template=translation-error.md),
+    ou demandez une nouvelle langue avec une
+    [demande de langue](https://github.com/Capsulsaurus/Capsule/issues/new?template=language-request.md).
+    La façon dont les traductions sont réalisées est décrite dans
+    [locales/README.md](https://github.com/Capsulsaurus/Capsule/blob/master/locales/README.md).
+  </Card>
+  <Card title="Quitter Google Photos" icon="external">
+    Suivez [](/guides/google-photos-migration/), y compris ce que l'outil d'import ne peut pas
+    garantir, avant de signaler un problème d'import.
+  </Card>
+</CardGrid>
+
+<a id="get-involved"></a>
+
+## S'impliquer
+
+<CardGrid>
+  <Card title="Contribuer" icon="github">
+    Lisez le
+    [guide de contribution](https://github.com/Capsulsaurus/Capsule/blob/master/CONTRIBUTING.md),
+    puis choisissez un ticket étiqueté
+    [good first issue](https://github.com/Capsulsaurus/Capsule/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
+    Répondre aux questions dans Discussions aide tout autant.
+  </Card>
+  <Card title="Parrainer le projet" icon="heart">
+    Capsule est libre et open source. S'il vous est utile,
+    [parrainer son développement sur GitHub](https://github.com/sponsors/justin13888) aide à le
+    faire vivre.
+  </Card>
+</CardGrid>
+
+<a id="what-to-expect"></a>
+
+## À quoi s'attendre
+
+- **Du temps bénévole.** La communauté et les mainteneurs répondent aux questions selon leur
+  disponibilité. Aucun délai de réponse n'est garanti.
+- **Les rapports complets passent en premier.** Un rapport de bogue avec une version, les étapes
+  pour reproduire et les journaux peut être confirmé et corrigé. Un rapport sans ces éléments
+  attend une réponse avant que quiconque puisse agir.
+- **Un sujet par fil.** Deux problèmes méritent deux rapports, pour que chacun puisse être suivi
+  et clos séparément.
+- **Public par défaut.** Tout, sauf le signalement d'une vulnérabilité, est public : masquez les
+  phrases secrètes, secrets de récupération, jetons, adresses de serveur et chemins de fichiers
+  personnels avant de coller un journal.
