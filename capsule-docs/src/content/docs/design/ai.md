@@ -1,7 +1,7 @@
 ---
 title: AI/ML Integrations
 description: On-device AI architecture, versioned pipelines, the append-only weight registry, the merged feature map, embedding provenance, and AI/user metadata separation
-status: draft
+audit: none
 ---
 
 All ML runs **client-side**, and only after the user opts in. The stable contract is [](#ai-output-containment), [](#pipelines-and-versioning), the [](#weight-registry) and [](#embedding-provenance). The [](#feature-map) and candidate weights are defaults that will move with evaluation.
@@ -26,7 +26,7 @@ This blocks the "AI silently overwrites user data" damage class ([](/design/thre
 
 ## Runtime
 
-**ONNX is the only exported model format.** Every released weight is one ONNX file at a fixed opset, and every platform runs it through ONNX Runtime, linked from the Rust core behind the default-off `inference` feature of `capsule-core` (**Planned**: the feature exists and links nothing yet). A model is therefore exported, quantized and validated once rather than once per platform format, and one known-answer fixture checks it everywhere.
+**ONNX is the only exported model format.** Every released weight is one ONNX file at a fixed opset, and every platform runs it through ONNX Runtime, linked from the Rust core behind the default-off `inference` feature of `capsule-core` (**Planned**: the feature exists and links nothing yet). A model is therefore exported, quantized and validated once rather than once per platform format, and one known-answer fixture checks it everywhere. The one exception is the platform text recogniser ([](#text-recognition)), which Capsule does not ship and which serves only ephemeral output.
 
 The execution provider (EP) is chosen by **output class**, not by platform:
 
@@ -63,6 +63,7 @@ Each release record carries:
 - licence: the weight licence, the training datasets with their licences, and any exception granted under [](/design/licensing/#model-weights-and-datasets);
 - evaluation: the evaluation sets, scores, and the comparison that justified releasing it;
 - readiness: a known-answer input, its reference output, and a tolerance (for deterministic pipelines, the bound inside which a mismatching device may still run on a platform partition);
+- task constants: the fixed parameters a pipeline's postprocessing reads, such as the face-clustering `min_faces` and `max_distance` ([](/design/people/#clustering));
 - device floor: minimum RAM and the tier ([](#feature-map)).
 
 Corrections and withdrawals are **new records** (`supersede`, `yank`) and never edits. The client enforces append-only behaviour: a fetched registry must extend the cached one byte for byte, and one that drops or rewrites a record is refused. This also stops a rollback to an older registry. A delegated registry key signs release records. It is named by root-signed `delegate` records in the same log, which also carries root-signed `checkpoint` records for recovery from a fork. Every client compiles in the two root public keys. [](/design/cryptography/keys/#project-release-keys) owns custody, rotation, compromise and fork recovery. A client that sees a synced AI output whose tuple its snapshot lacks refreshes the registry first. If the tuple is still unknown it refuses the output and keeps the asset's other data.
@@ -98,21 +99,32 @@ Smart-album AI terms follow the current generation ([](/design/organization/#sys
 
 Image and text queries are embedded and compared by distance, and [](#embedding-provenance) governs cross-device comparability. The real ONNX Runtime runner is post-v1. v1 ships the execution path, registry, index and staleness rules against a fixture runner.
 
+### Semantic Search
+
+Semantic search is how a text query reaches this index. The query's free text is embedded with the **semantic embedder** ([](#feature-map)), and its nearest neighbours are taken from the canonical vectors of the current generation ([](#synced-embeddings), [](#generation-cutover)), so stale and unpublished local vectors are excluded structurally. [](/design/search/#semantic-search) owns how the result merges with lexical search.
+
+- **On device, no network.** The query embedding and the scan run locally. A device without the embedder's weights runs lexical search only and says so; it never sends a query anywhere to be embedded.
+- **A ranking, never a stored fact.** Similarity depends on the querying device's text encoder and changes with each model version, so it is never written to a sidecar, never a smart-album term, and never compared across `(model_id, model_version)` tuples ([](#embedding-provenance)).
+- **Filtered before it is ranked.** Structured search terms narrow the candidate set first. When the narrowed set is small, the scan ranks exactly that set rather than taking a global top-*k* and filtering afterwards, which could return nothing.
+- **Explained.** A hit that only semantic search produced is marked as a semantic match in the result.
+
+**Status.** `semantic_search` in `capsule-core::ml` embeds the query, refuses a non-canonical runner and queries the vector index. It is exercised end to end in `capsule-library/tests/model_regen_e2e.rs`, but only against the fixture runner, which hashes its input and so answers nothing meaningful. Real semantic search therefore needs the first real runner. No app or CLI path calls it yet.
+
 ### Image Categorization & Tagging
 
 Semantic embeddings are reused for zero-shot tagging; there is no separate scene or object classifier.
 
 ## Dense Tagging
 
-Face detection and clustering use the face rows of the [](#feature-map). Everything in this section depends on those rows and is **Blocked** with them.
+Face detection and clustering use the face rows of the [](#feature-map). [](/design/people/) owns the clustering contract and the user's corrections. Everything in this section depends on those rows and is **Blocked** with them.
 
 ### Identity Refinement
 
-Known people are **owner-scoped prototype sets**: per person, a set of user-confirmed face (and optionally re-ID) references with a match threshold. They are user input to the clustering view, not the view itself, which stays computed ([](/design/metadata/#grouping-convergence-requirement)). They sync as user metadata in the `people_prototypes` section of the library-settings document ([](/design/metadata/#the-library-settings-document)). It is keyed so that only the owner set reads it, never an album co-member. They store the confirmed crops as an asset id and a rectangle rather than as vectors, so a new release re-embeds them. A model never learns on the device, because per-device weights would break cross-device comparability.
+Known people are the user's **corrections** ([](/design/people/#corrections)): names, merges, splits and "not this person", in the people section of the library-settings document, which only the owner set reads. They are user input to the clustering view, not the view itself, which stays computed ([](/design/metadata/#grouping-convergence-requirement)). A correction is anchored by an asset id and a box rather than by a vector, so a new release re-embeds the faces it names ([](/design/people/#corrections-outlive-models)). A model never learns on the device, because per-device weights would break cross-device comparability.
 
-- **Feedback** (confirm, reject, merge, split) edits prototypes and thresholds, never weights.
+- **Feedback** (confirm, reject, merge, split) writes corrections, never weights. Clustering constants stay per-release, never per-person or per-user ([](/design/people/#clustering)).
 - **Pseudo-labels** from high-confidence matches are AI outputs in the AI namespace, never user labels.
-- **Review queue.** Faces are ordered by margin to their nearest prototype, so the least certain come first.
+- **Review queue.** Unassigned faces are ordered by their distance to the nearest named person's faces, so the least certain come first.
 - **Metric-learning refresh** is a new weight release like any other, and it goes through [](#generation-cutover).
 
 ### Sensitive Content
@@ -123,6 +135,15 @@ A classifier head over the semantic embedding produces a sensitivity flag, which
 - **at import.**
 
 On an adopted asset the flag is the AI-namespaced `sensitivity_ai` sidecar field ([](/design/metadata/#sidecar-schema-v1)). A user who disagrees dismisses it, which writes `flagged: false` with the same `model_id` and `model_version`. Re-runs of that release leave a dismissal alone. A later generation evaluates the asset again. The flag is advisory, never a block, and the server never sees it in plaintext.
+
+## Text Recognition
+
+Text in an image (signs, receipts, documents, screenshots) is recognised on device. It is the first post-v1 task to ship.
+
+- **Runner.** The platform recogniser first (Apple Vision, ML Kit on Android), each a lineage of its own in the [](#weight-registry) whose records name the platform framework and its version in place of weight bytes; an offline ONNX recogniser, released like any other weight, gives the CLI and desktop the same output. Its output is ephemeral-class ([](#runtime)).
+- **AI output.** Recognised text is never a caption or a label. It carries `(model_id, model_version)` ([](#ai-output-containment)) and travels as a model-tagged derivative under the rule in [](#synced-embeddings).
+- **Search.** The text is indexed into the full-text index ([](/design/search/#indexed-axes)), so free text finds it offline.
+- **Rules.** Its arrival is a trigger for import rules ([](/design/organization/#import-rules)).
 
 ## Quality Assessment
 
@@ -139,7 +160,7 @@ Execution mode is chosen per device from available RAM: **horizontal** (model-by
 
 ## Database Indexing and View Generation
 
-Embeddings live in local **SQLite + `sqlite-vec`** and are **derived state**. A lost index is rebuilt by re-running inference over originals, the same path a new release takes.
+Embeddings live in local **SQLite + `sqlite-vec`** and are **derived state**. A lost index is refilled from the synced embedding derivatives ([](#synced-embeddings)) and, for assets that have none, by re-running inference over originals, the same path a new release takes.
 
 ## Embedding Provenance
 
@@ -148,7 +169,18 @@ Every stored embedding (local index, backup, or embedding-class `DerivativeManif
 - The index MUST **refuse inserts** from a `(model_id, model_version)` absent from the client's registry snapshot. Known-but-superseded releases are admitted stale-flagged (the regeneration queue) and excluded from queries.
 - A new release is a new `model_version`. Regeneration writes new entries per asset beside the old ones, and the old ones are deleted only after cutover ([](#generation-cutover)).
 
-**E2EE constraint.** Comparable embeddings need byte-identical inference across devices, so stored-embedding pipelines run only on the deterministic CPU path ([](#runtime)) and must match the release's known-answer output exactly to join the shared index. Core-tier model size is bounded by the lowest-end supported device. A device within tolerance but not bit-exact tags its embeddings with a `platform` discriminator, and they are **never merged** into another platform's index. The worst case is duplicated regeneration, never wrong results (row #14 of [](/design/threat-model/scenarios/#damage-scenario--invariant-map)).
+**One canonical vector per asset.** Image embeddings are computed once and shared ([](#synced-embeddings)), so devices compare the *same* stored vector rather than needing byte-identical inference. Only the text-query encoder runs on every device, and its output is only ever compared against image vectors of the same `(model_id, model_version)`. Stored-embedding pipelines still run only on the deterministic CPU path ([](#runtime)), and a device must match the release's known-answer output exactly ([](#distribution-and-readiness)) before it may **publish** a vector. Core-tier model size is bounded by the lowest-end supported device. A device that is within tolerance but not bit-exact never publishes; its locally computed vectors carry a `platform` discriminator and are **never merged** into the canonical index: the worst case is duplicated regeneration, never wrong results (row #14 of [](/design/threat-model/scenarios/#damage-scenario--invariant-map)).
+
+### Synced Embeddings
+
+An image embedding is stored as an `embedding`-role derivative ([](/design/cryptography/provenance/#derivative-provenance)) carrying its `(model_id, model_version)`, sealed and chained like every other derivative. It is the asset's canonical vector for that model.
+
+- **Fetch before compute.** The indexing queue first fetches the asset's embedding derivative for the current model. It runs inference only when none exists, or when the existing one names a model the device does not know.
+- **Publish once.** A device that computes a vector, passes the known-answer check and holds the album's write tier publishes it as the first link of the `(asset_id, embedding)` chain. A device that finds a chain head already present for the same `(model_id, model_version)` discards its own vector and adopts the head; it never publishes a competing link. A model bump is a `derivative-replace` naming the new tuple, so both tuples never mix ([](#embedding-provenance)).
+- **Shared with readers.** Album co-members open the derivative with the album key like any thumbnail, so a reader-tier member never re-indexes an album it can see but cannot write.
+- **Faces ride the same rule.** Face boxes and face embeddings ([](#dense-tagging)) are published as derivatives of the same model-tagged form once their role is added to the closed role set, which is a `protocol_version` change ([](/design/threat-model/schema-rules/)).
+- **Quota.** Embedding derivatives count as derivative bytes against the asset holder ([](/design/quota/#accounting-model)).
+- **Leaks nothing new.** The server sees one more sealed blob per asset per model, of a size fixed by the model; a vector's contents are never visible to it.
 
 ## Models and Algorithms
 
@@ -177,7 +209,8 @@ The publishing gate refuses to sign a release record that would push its tier ov
 | Face identity, clustering | Face embedder | None admissible known; train in-project | Core | **Blocked** (licence) |
 | Object and person boxes, region tags | Object detector | RT-DETR / D-FINE class (Apache-2.0) | Optional | Planned |
 | Person re-ID without a face | Re-ID embedder | OSNet class | Optional | Post-v1 |
-| Alt-text, captions, OCR | Captioner | Florence-2 class | Optional | Post-v1 |
+| Text recognition (OCR) | Platform recogniser, else a text recogniser ([](#text-recognition)) | Apple Vision, ML Kit; offline candidate not chosen | Optional | Post-v1 |
+| Alt-text, captions | Captioner | Florence-2 class | Optional | Post-v1 |
 | Chat about an image and its metadata | Small VLM | SmolVLM / Moondream class, quantized | Large | Post-v1 |
 | Speech captions for video | ASR | Whisper class | Large (batch on Optional) | Post-v1 |
 | Video shot boundaries | Shot detector | TransNet v2 class | Optional | Post-v1 |
@@ -220,10 +253,12 @@ Datasets are used for **evaluation**, and for **training** only where no accepta
   - `capsule-core::ml::pipeline`, `capsule-core::ml::weights` and `capsule-sdk::ml`;
   - the ONNX Runtime runner behind `inference`;
   - release-key delegation ([](/design/cryptography/keys/#project-release-keys)), the tier-ceiling gate, and generation cutover;
-  - the `sensitivity_ai` sidecar field, the `people_prototypes` library-settings section, and the `drop_sensitive` alert class.
+  - the `sensitivity_ai` sidecar field and the `drop_sensitive` alert class;
+  - text recognition, which has no runner, no derivative role and no index;
+  - synced embeddings ([](#synced-embeddings)): the index is filled only by local inference, and no device publishes or fetches an `embedding`-role derivative.
 
   Today `model_version` is a free string, not yet the monotonic release number.
-- **Blocked:** the face rows and everything that depends on them ([](#dense-tagging), expression search), until admissible weights exist.
+- **Blocked:** the face rows and everything that depends on them ([](#dense-tagging), expression search, [](/design/people/)), until admissible weights exist.
 
 ## Validation
 
@@ -238,6 +273,7 @@ Datasets are used for **evaluation**, and for **training** only where no accepta
 - **Provenance round-trip (unit).** The tuple and `pipeline_version` survive insert and query.
 - **Namespace separation (unit).** Promotion creates a user-scoped entry with a fresh `add_id`; the AI entry stays separate.
 - **Inference parity (smoke, per platform).** Stored-embedding pipelines: the same fixture gives byte-identical vectors, or the platform partition engages. Ephemeral pipelines: every EP is within the release's tolerance of the CPU reference.
+- **Synced embeddings (unit).** A present chain head for the current tuple suppresses inference; a device failing the known-answer check never publishes; a second device's vector for the same tuple is discarded, never chained; an unknown tuple triggers local inference.
 - **Algorithms (smoke).** Expected keyframes and Re-ID labels.
 - **Thermal / batching (smoke).** Pause past threshold, resume after cooldown, no OOM on a low-memory testbed.
 

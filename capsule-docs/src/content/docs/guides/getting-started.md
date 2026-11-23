@@ -1,7 +1,7 @@
 ---
 title: Getting Started
 description: How to start using Capsule
-status: draft
+audit: none
 ---
 
 Capsule is an end-to-end encrypted photo and media library. No release has been published yet, so
@@ -17,3 +17,6 @@ You can run your own server ([](/guides/self-hosting/)). For a public instance, 
 [discussion #81](https://github.com/Capsulsaurus/Capsule/discussions/81).
 
 Every command and option is in the CLI reference ([](/reference/cli/)).
+
+Once a release is out, [](/downloads/) lists the prebuilt command line, server and apps for each
+platform.

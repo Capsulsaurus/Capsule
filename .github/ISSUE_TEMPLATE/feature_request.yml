@@ -1,0 +1,47 @@
+name: Feature Request
+description: Propose a change that has been discussed, or one that is small and well defined
+labels: [enhancement, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        New ideas start in [Discussions › Ideas](https://github.com/Capsulsaurus/Capsule/discussions/categories/ideas), where others can upvote and refine them. Open an issue here when an idea has been accepted there, or when the change is small and well defined.
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Before you file
+      options:
+        - label: I searched the [existing issues](https://github.com/Capsulsaurus/Capsule/issues?q=is%3Aissue) and [ideas](https://github.com/Capsulsaurus/Capsule/discussions/categories/ideas), and this is not a duplicate.
+          required: true
+        - label: This was accepted in Ideas (linked below), or it is a small, well-defined change.
+          required: true
+  - type: input
+    id: discussion
+    attributes:
+      label: Ideas discussion
+      description: Link to the discussion where this was accepted, if there is one.
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: What problem does this solve, and for whom? Describe the situation rather than the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How it could work. Note any alternatives you considered.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      multiple: true
+      options:
+        - CLI / TUI
+        - Server
+        - Android app
+        - iOS / macOS app
+        - Web app
+        - Documentation
+        - Other / not sure

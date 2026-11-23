@@ -43,6 +43,15 @@
 //! - Swift and Kotlin declare the same top-level names and the same methods (Kotlin spells a
 //!   Rust error type `…Exception` where Swift keeps `…Error`); and
 //! - each language yields at least one declaration.
+//!
+//! ## The platform adapters
+//!
+//! Each language's surface also carries `platform`: the hand-written adapters in
+//! `capsule-core-kotlin` and `capsule-core-swift` that implement the callback interfaces over
+//! each platform's key store, read by [`platform`]. They are committed sources, so `--check`
+//! catches a change to one as it does a change to the generated bindings. No parity is asserted
+//! between them: the platforms ship different adapters (the Secure Enclave key agreement has
+//! no Android counterpart yet).
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -53,6 +62,8 @@ use eyre::{Context, ContextCompat, Result, bail};
 use regex::Regex;
 use serde::Serialize;
 use tracing::{debug, info};
+
+mod platform;
 
 /// Repo-relative directory `gen-bindings` writes the unformatted sources to.
 pub(crate) const SOURCES: &str = "target/bindings-surface";
@@ -158,6 +169,14 @@ pub(crate) struct Languages {
 pub(crate) struct Surface {
     source: &'static str,
     declarations: Vec<Declaration>,
+    platform: Platform,
+}
+
+/// One language's hand-written platform adapters (see [`platform`]).
+#[derive(Debug, Serialize)]
+pub(crate) struct Platform {
+    source: &'static str,
+    declarations: Vec<Declaration>,
 }
 
 /// One declaration, in the shape `gen-reference.mjs` renders.
@@ -184,10 +203,15 @@ pub(crate) fn run(root: &Path, check: bool) -> Result<()> {
     let swift = scan_swift(&read(SWIFT_SOURCE)?)?;
     let kotlin = scan_kotlin(&read(KOTLIN_SOURCE)?)?;
     assert_surface(&swift, &kotlin)?;
+    let swift_platform = platform::scan_dir(root, platform::SWIFT_DIR, platform::Language::Swift)?;
+    let kotlin_platform =
+        platform::scan_dir(root, platform::KOTLIN_DIR, platform::Language::Kotlin)?;
     debug!(
         swift = swift.len(),
         kotlin = kotlin.len(),
-        "scanned the generated binding sources"
+        swift_platform = swift_platform.len(),
+        kotlin_platform = kotlin_platform.len(),
+        "scanned the generated binding sources and the platform adapters"
     );
 
     let dump = Dump {
@@ -200,10 +224,18 @@ pub(crate) fn run(root: &Path, check: bool) -> Result<()> {
             swift: Surface {
                 source: "capsule_sdk.swift",
                 declarations: swift,
+                platform: Platform {
+                    source: platform::SWIFT_DIR,
+                    declarations: swift_platform,
+                },
             },
             kotlin: Surface {
                 source: "uniffi/capsule_sdk/capsule_sdk.kt",
                 declarations: kotlin,
+                platform: Platform {
+                    source: platform::KOTLIN_DIR,
+                    declarations: kotlin_platform,
+                },
             },
         },
     };

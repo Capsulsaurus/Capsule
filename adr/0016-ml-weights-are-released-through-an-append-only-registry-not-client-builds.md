@@ -65,7 +65,7 @@ Rejected:
 - **A model manifest compiled into each client.** It keeps weights tied to the client release cycle, which is the problem being solved.
 - **A single compiled-in signing key.** Every rotation, routine or not, would need a client release.
 - **A CI-held signing key.** A compromise of the repository or CI could publish weights.
-- **On-device fine-tuning** for identity refinement. Per-device weights break cross-device comparability. Feedback edits user-scoped prototypes instead.
+- **On-device fine-tuning** for identity refinement. Per-device weights break cross-device comparability. Feedback writes the owner's people corrections instead ([People — Corrections](../capsule-docs/src/content/docs/design/people.md#corrections)).
 
 ## Consequences
 

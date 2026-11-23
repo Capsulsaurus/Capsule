@@ -53,3 +53,4 @@ Keep current:
 - `capsule-server/openapi.json` (`mise run openapi-kynos`) and the hand-written [API reference overview](../../capsule-docs/src/content/docs/reference/api.md).
 - The module list in the [crate docs](../../capsule-server/src/lib.rs) — a new or renamed top-level module.
 - [Self-hosting guide](../../capsule-docs/src/content/docs/guides/self-hosting.md) — any change to `config`, `cli.rs`, `client_addr`, `compose.yaml`, `.env.example` or the migration procedure.
+- [Troubleshooting](../../capsule-docs/src/content/docs/guides/troubleshooting.md) — the startup refusals, logging (`RUST_LOG`, `LOG_FORMAT`) and the `scrub`/`rebuild` commands it names.

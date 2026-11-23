@@ -1,0 +1,106 @@
+---
+title: Capsule
+description: مكتبة صور مفتوحة المصدر تنظّم صور العمر كله على أجهزتك أنت، وتُبقي كل صورة مشفّرة من طرف إلى طرف، وقد صُمّمت للمشاركة عبر الخوادم.
+audit: none
+template: splash
+hero:
+  title: صور العمر كله، منظّمة وخاصة
+  tagline: ينظّم Capsule مكتبتك كاملةً على أجهزتك أنت، ويحفظ كل صورة مشفّرة من طرف إلى طرف على خادم لا يحتفظ بأي مفتاح أبدًا، وقد صُمّم للمشاركة عبر الخوادم.
+  image:
+    # Raw HTML rather than `file`: Starlight's hero sizes `file` images to a
+    # 400x400 square, which crops a portrait screenshot.
+    html: |
+      <img class="hero-shot hero-shot-light" src="/images/hero-light.webp" width="800" height="1538" alt="Capsule على iPhone، ويظهر فيه الخط الزمني للمكتبة" />
+      <img class="hero-shot hero-shot-dark" src="/images/hero-dark.webp" width="800" height="1538" alt="Capsule على iPhone، ويظهر فيه الخط الزمني للمكتبة" />
+  actions:
+    - text: ابدأ الآن
+      link: /guides/getting-started/
+      icon: right-arrow
+    - text: اقرأ وثائق التصميم
+      link: /design/
+      variant: secondary
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+import Feature from '../../../components/Feature.astro';
+import FeatureGrid from '../../../components/FeatureGrid.astro';
+import StatusStrip from '../../../components/StatusStrip.astro';
+
+<StatusStrip
+  text="يجري العمل على تحقيق استقرار تطبيقات الأجهزة المحمولة وصقلها قبل توزيعها على مختبري النسخة التجريبية."
+  href="https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md"
+  linkLabel="خارطة الطريق"
+/>
+
+<a id="what-sets-capsule-apart"></a>
+
+## ما الذي يميّز Capsule
+
+<FeatureGrid>
+  <Feature icon="random" title="تنظيم على أي نطاق" href="/features/smart-albums/" linkLabel="الألبومات الذكية">
+    صُمّم البحث والألبومات الذكية والتصنيف التلقائي لتعمل على أجهزتك، فوق فهرس محلي كامل،
+    فتبقى مكتبة من ملايين الصور سهلة التصفح دون أن يضطر أحد إلى فرزها يدويًا.
+  </Feature>
+  <Feature icon="padlock" title="خادم بلا مفاتيح" href="/design/cryptography/" linkLabel="تصميم التشفير">
+    يخزّن الخادم النص المشفّر ولا يحتفظ بأي مفتاح أبدًا. لا يستطيع قراءة صورة أو تعليق أو
+    عنوان ألبوم، ومع ذلك يوقّع إيصال حفظ لكل عملية رفع يقبلها.
+  </Feature>
+  <Feature icon="server" title="مشاركة عبر الخوادم" href="/design/federation/" linkLabel="تصميم الاتحاد">
+    تكمن الثقة في التشفير لا في الخادم، ولذلك صُمّم Capsule ليتمكّن الأشخاص على خوادم Capsule
+    مختلفة من مشاركة الألبومات فيما بينهم، دون أي خدمة مركزية في المنتصف.
+  </Feature>
+  <Feature icon="laptop" title="مكتبتك كاملة دون اتصال" href="/features/offline-library/" linkLabel="المكتبة دون اتصال">
+    صُمّم كل تطبيق أصيل ليحتفظ بفهرس كامل لكل صورة احتفظت بها، فيمكن تصفّحها كلها والبحث فيها
+    وتنظيمها دون أي اتصال.
+  </Feature>
+  <Feature icon="approve-check-circle" title="سجل قابل للتحقق" href="/design/cryptography/provenance/" linkLabel="تصميم سجل المصدر">
+    يحمل كل عنصر سلسلة مصدر موقّعة لا تقبل إلا الإضافة، فيُتحقَّق من الشخص والجهاز اللذين
+    استورداه أو حرّراه بدلًا من الوثوق بذلك.
+  </Feature>
+  <Feature icon="database" title="قابل للاسترداد بطبيعة تصميمه" href="/design/backup-recovery/" linkLabel="النسخ الاحتياطي والاسترداد">
+    يُقرن كل عنصر بملف مرافق موقّع للبيانات الوصفية، فتبقى المكتبة قابلة للقراءة دون قاعدة
+    بيانات ويمكن إعادة بنائها بعد تلف جزئي.
+  </Feature>
+</FeatureGrid>
+
+<a id="everything-you-would-expect"></a>
+
+## كل ما تتوقعه
+
+نسخ أصلية محفوظة بجودتها الكاملة وقابلة للاستعادة بايتًا ببايت. RAW والفيديو تنسيقات من الدرجة
+الأولى. تطبيقات أصيلة مبنية بعناصر التحكم الخاصة بكل منصة. وواجهتا CLI وTUI تستطيعان كل ما
+تستطيعه التطبيقات؛ راجع [](/reference/cli/).
+
+<a id="why-it-is-built-this-way"></a>
+
+## لماذا بُني بهذه الطريقة
+
+تجبرك معظم خدمات الصور على الاختيار بين الميزات التي يقدّمها الخادم حين يقرأ مكتبتك، والخصوصية
+التي تحصل عليها حين لا يستطيع ذلك. يختار Capsule الخصوصية، ثم يعيد بناء تلك الميزات على أجهزتك،
+فوق بيانات لا يستطيع فكّ تشفيرها سواها.
+
+لهذا الاختيار ثمن، ووثائق التصميم تصرّح به ولا تخفيه: ما الذي يستطيع خادم بلا مفاتيح أن يخبرك
+به وما لا يستطيع ([](/design/notifications/))، وما الذي يحدث عند فقدان مفتاح
+([](/design/backup-recovery/#recovery-paths))، وما الذي يُمنع عميل معيب أو معادٍ من فعله
+([](/design/threat-model/)).
+
+<a id="get-started"></a>
+
+## البدء
+
+<CardGrid>
+  <Card title="استضف خادمًا" icon="server">
+    شغّل Capsule على أجهزتك الخاصة. [](/guides/self-hosting/)
+  </Card>
+  <Card title="استخدم Capsule" icon="open-book">
+    استورد مكتبتك ونظّمها وتصفّحها. [](/guides/user-guide/)
+  </Card>
+  <Card title="أحضر مكتبتك" icon="cloud-download">
+    استورد ملف Google Photos Takeout مع بياناته الوصفية.
+    [](/guides/google-photos-migration/)
+  </Card>
+  <Card title="ساهم في بناء Capsule" icon="code-branch">
+    كل سطر مفتوح المصدر ويُطوَّر علنًا.
+    [](/development/local-development/)
+  </Card>
+</CardGrid>

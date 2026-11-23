@@ -28,12 +28,16 @@
     "target": "- **Serverübergreifend teilen.** Menschen auf unterschiedlichen Servern teilen Alben miteinander, so wie E-Mail zwischen verschiedenen Anbietern funktioniert. Niemand muss Ihrem Server beitreten, und kein Unternehmen sitzt dazwischen."
   },
   {
-    "source": "- **Your whole library, even offline.** Every app keeps an index of everything you have ever kept, so you can browse, search and organize all of it on a plane, at the border, or far from any signal.",
-    "target": "- **Ihre ganze Bibliothek, auch offline.** Jede App führt einen Index von allem, was Sie je aufbewahrt haben, sodass Sie alles im Flugzeug, an der Grenze oder fernab jedes Empfangs durchblättern, durchsuchen und ordnen können."
+    "source": "- **Your whole library, even offline.** Every app keeps an index of everything you have ever kept, so you can browse, search and organize all of it, place names included\\*, on a plane, at the border, or far from any signal.",
+    "target": "- **Ihre ganze Bibliothek, auch offline.** Jede App führt einen Index von allem, was Sie je aufbewahrt haben, sodass Sie alles, Ortsnamen inklusive\\*, im Flugzeug, an der Grenze oder fernab jedes Empfangs durchblättern, durchsuchen und ordnen können."
   },
   {
     "source": "- **Straight from the camera.** Pull photos over Wi-Fi or cable directly from your camera, with every file checksummed on arrival.",
     "target": "- **Direkt von der Kamera.** Übertragen Sie Fotos per WLAN oder Kabel direkt von Ihrer Kamera, wobei jede Datei beim Eintreffen per Prüfsumme kontrolliert wird."
+  },
+  {
+    "source": "- **Hand off huge uploads\\*.** On slow Wi-Fi, your phone hands a sealed bundle to your laptop, which uploads it as sealed bytes and never decrypts it.",
+    "target": "- **Große Uploads weiterreichen\\*.** Bei langsamem WLAN übergibt Ihr Smartphone ein versiegeltes Paket an Ihren Laptop, der es als versiegelte Bytes hochlädt und nie entschlüsselt."
   },
   {
     "source": "- **A library that outlives Capsule.** Every photo sits beside a signed sidecar in an open format, so your library stays readable without the app, without the database, and without us.",
@@ -56,16 +60,16 @@
     "target": "- Alben, dazu Ihre Originale, Byte für Byte samt Metadaten aufbewahrt und exakt so wiederherstellbar, wie sie hineingekommen sind"
   },
   {
-    "source": "- Search by date, place, camera, lens, rating and label, run on your device",
-    "target": "- Suche nach Datum, Ort, Kamera, Objektiv, Bewertung und Label, ausgeführt auf Ihrem Gerät"
+    "source": "- Search by date and type on your device, and by place, rating and label with typo-tolerant suggestions from your own library and `@people` and `@tag` shortcuts\\*",
+    "target": "- Suche nach Datum und Typ auf Ihrem Gerät sowie nach Ort, Bewertung und Label mit tippfehlertoleranten Vorschlägen aus Ihrer eigenen Bibliothek und Kürzeln mit `@people` und `@tag`\\*"
   },
   {
     "source": "- Ratings, picks and rejects for culling a shoot; labels and captions",
     "target": "- Bewertungen sowie Auswahl- und Ablehnungsmarkierungen zum Sichten eines Shootings; Labels und Bildunterschriften"
   },
   {
-    "source": "- A map of where every photo was taken, with location fixes that keep the original",
-    "target": "- Eine Karte, die zeigt, wo jedes Foto aufgenommen wurde, mit Standortkorrekturen, die das Original erhalten"
+    "source": "- Location fixes that keep the original, and a map of where every photo was taken with pins clustered at every zoom\\*",
+    "target": "- Standortkorrekturen, die das Original erhalten, und eine Karte, die zeigt, wo jedes Foto aufgenommen wurde, mit Pins, die auf jeder Zoomstufe gruppiert werden\\*"
   },
   {
     "source": "- Share links anyone can open in a browser, and upload links that let guests add their photos to yours",
@@ -74,6 +78,14 @@
   {
     "source": "- Backups that resume where they stopped, and device-to-device sync over your local network",
     "target": "- Backups, die dort weiterlaufen, wo sie unterbrochen wurden, und Synchronisation von Gerät zu Gerät über Ihr lokales Netzwerk"
+  },
+  {
+    "source": "- Export albums of any size to folders or ZIP, with your edits or the originals and their metadata\\*",
+    "target": "- Export von Alben jeder Größe in Ordner oder als ZIP, mit Ihren Bearbeitungen oder als Originale samt Metadaten\\*"
+  },
+  {
+    "source": "- Shortcuts and share-sheet integration on iPhone and Android\\*",
+    "target": "- Integration in Kurzbefehle und Teilen-Menü auf iPhone und Android\\*"
   },
   {
     "source": "- Trash with a recovery window, hidden photos, and account recovery if you lose a device",

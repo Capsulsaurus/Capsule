@@ -1,7 +1,7 @@
 ---
 title: Licensing
 description: Capsule's outbound licence, the inbound dependency-licence policy, and the linkage rules that keep both enforceable
-status: draft
+audit: none
 ---
 
 This doc owns Capsule's licensing position. Admitting a licence not already permitted requires
@@ -40,8 +40,6 @@ a `NOTICE` entry.
 | Crate | Licence | Why it is bounded |
 | --- | --- | --- |
 | `tzf-rel` | `ODbL-1.0` | Share-alike binds the database only; embedded unmodified, no derivative database. |
-| `jpeg-encoder` | `(MIT OR Apache-2.0) AND IJG` | IJG requires only a fixed notice. |
-| `libfuzzer-sys` | `(MIT OR Apache-2.0) AND NCSA` | Attribution only; reached only via rav1e's `cfg(fuzzing)`, so no artefact compiles it. |
 | Geist, Geist Mono | `OFL-1.1` | Font files the docs site vendors unmodified; the licence binds the fonts, never the pages using them. Not a crate, so outside `deny.toml`. |
 
 ### Forbidden

@@ -1,7 +1,7 @@
 ---
 title: Local Development
 description: The mise task graph, the services a local server needs, and which gates actually run on a developer machine.
-status: draft
+audit: none
 ---
 
 Every command runs through **mise**. `mise.toml` pins the toolchain and defines the task graph, with
@@ -13,7 +13,7 @@ what CI runs. The Rust toolchain is pinned in `rust-toolchain.toml` and Swift to
 ## First-time setup
 
 ```bash
-mise install           # pinned tools (hk, convco, cargo-nextest, wasm-bindgen-cli, ...)
+mise install           # pinned tools (hk, convco, cargo-nextest, shellcheck, actionlint, ...)
 mise run setup         # bun install in capsule-web + capsule-docs
 mise run hooks-install # git hooks (hk)
 ```
@@ -28,6 +28,7 @@ mise run hooks-install # git hooks (hk)
 | `mise run check-docs` | Docs format, lint, Astro build (a broken internal link fails it) |
 | `mise run check-md` | markdownlint over every `.md` |
 | `mise run check-kotlin` | Kotlin format and lint |
+| `mise run lint-check-shell` | shellcheck over the shell scripts in `mise-tasks/`, `scripts/` and every `*.sh`, then actionlint over `.github/workflows/`; part of `lint-check` and pre-push |
 
 Frequently used tasks:
 
@@ -36,8 +37,16 @@ Frequently used tasks:
 - `test-rust-containers`: see [](#the-container-tiers).
 - `test-web`: builds the WASM glue and KAT fixtures first.
 - `i18n` and `openapi-kynos`.
+- `audit-docs -- <page.md>...`: stamps docs pages as audited at HEAD
+  ([](/design/principles/#audit-status)).
 - For FFI, `targets-add`, then `build-ffi` and `gen-bindings`. On macOS, `setup-swift` builds the
   xcframework and the Xcode workspace.
+- `check-targets`: `cargo check` of the FFI for every Tier-1 and Tier-2 cross target (Apple,
+  Android, Windows, aarch64 Linux) from a macOS or Linux host. The C that build scripts compile goes through
+  `zig cc` (`scripts/cross/zig-cc`), so no Xcode, NDK or MSVC is needed. Narrow it with
+  `--target TRIPLE`, `--tier 1|2` or `--apple`. The `build-apple`, `build-android`,
+  `build-windows` and `build-linux-cross` tasks produce real linked artifacts, so they need each
+  platform's native toolchain. Off macOS, `build-apple` falls back to `check-targets --apple`.
 
 ## Running a server locally
 

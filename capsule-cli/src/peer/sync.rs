@@ -299,8 +299,9 @@ pub struct PullSummary {
     /// Assets that failed to restore or arrived without the metadata their manifest commits to.
     pub incomplete: Vec<Uuid>,
     /// What failed: an asset the ingest applied that could not be written (`not_written`), an
-    /// artifact that could not be pulled or opened, no peer before the listen timeout, or a
-    /// listener that failed before a peer was verified.
+    /// artifact that could not be pulled or opened, no peer before the listen timeout, a
+    /// verified session that did not open (no listing), or a listener that failed before a peer
+    /// was verified.
     pub failed: Vec<PeerFailure>,
     /// The connections refused while listening (off the local network, over the handshake
     /// budget, or a handshake that failed), one entry per source address and kind.
@@ -534,9 +535,16 @@ fn admitted_client<T>(
 }
 
 /// Admit one verified session on `listener`, open it with `offer`, and pull every artifact its
-/// peer lists, then end it. `None` when no session was verified before the listener's timeout (recorded in
-/// `summary`). A session is not resumed by a later one: each session seals its artifact under
-/// its own secret, so a new session offers a new artifact.
+/// peer lists, then end it. `None` when no session was verified before the listener's timeout,
+/// or the verified session did not open (recorded in `summary`). A session is not resumed by a
+/// later one: each session seals its artifact under its own secret, so a new session offers a
+/// new artifact.
+///
+/// The listen timeout bounds the wait for a connection and its handshake, and nothing after: a
+/// verified peer cuts and seals its artifact once it has read the offer, and that build is
+/// bounded by the channel's listing allowance
+/// ([`capsule_sdk::peering::channel::LISTING_BUILD_ALLOWANCE`]), not by what is left of the listen
+/// timeout. Opening inside the admission would drop a verified session whose build outlasts it.
 async fn session(
     listener: &PeerListener,
     local: LocalPeer<'_>,
@@ -551,20 +559,35 @@ async fn session(
     let limiter = &limiter;
     let deadline = tokio::time::Instant::now() + listener.timeout;
     let handshake = |tcp: TcpStream, source: std::net::SocketAddr| async move {
-        let client = match capsule_sdk::peering::accept(tcp, local, limiter).await {
-            Ok(channel) => PeerClient::open_offering(channel, offer).await,
-            Err(error) => Err(error),
-        };
-        (source, client)
+        (
+            source,
+            capsule_sdk::peering::accept(tcp, local, limiter).await,
+        )
     };
     let mut admission = Admission::new();
     let admitted = admission
         .next_session(&listener.listener, &subject, deadline, &handshake)
         .await;
-    let client = admitted_client(admitted, &subject, summary);
+    let channel = admitted_client(admitted, &subject, summary);
     summary.refused.extend(admission.into_refusals());
-    let client = client?;
-    tracing::info!(peer = %client.peer().device_id, "peer pull: verified session");
+    let channel = channel?;
+    let peer = channel.peer().device_id;
+    tracing::info!(%peer, "peer pull: verified session");
+    // Boxed, as the admission's handshake futures are: inline, the opening's state would grow
+    // every future that awaits a pull.
+    let client = match Box::pin(PeerClient::open_offering(channel, offer)).await {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::warn!(%peer, %error, "peer pull: the verified session did not open");
+            summary.peer = Some(peer);
+            summary.failed.push(PeerFailure::new(
+                peer.to_string(),
+                error.kind(),
+                error.to_string(),
+            ));
+            return None;
+        }
+    };
 
     let mut artifacts = Vec::new();
     for offered in client.listing().to_vec() {

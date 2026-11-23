@@ -1,0 +1,118 @@
+---
+title: الدعم
+description: أين تطرح سؤالًا، أو تبلّغ عن خطأ، أو تقترح ميزة، أو تبلّغ عن ثغرة أمنية في Capsule، وما الذي ينبغي تضمينه ليمكن التصرّف بناءً عليه.
+template: splash
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+يُبنى Capsule ويُدعَم علنًا على أيدي متطوعين. لا توجد قناة دعم مدفوعة أو خاصة: كل سؤال وبلاغ
+وفكرة يمرّ عبر GitHub الخاص بالمشروع، حيث يستطيع أي شخص الإجابة، وتفيد الإجابة الشخص التالي.
+الاستثناء الوحيد هو الثغرة الأمنية، إذ يُبلَّغ عنها بشكل خاص.
+
+لم يصدر Capsule أي إصدار بعد؛ وما يعمل اليوم وما هو قادم موجود في
+[خارطة الطريق](https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md).
+
+<a id="before-you-ask"></a>
+
+## قبل أن تسأل
+
+معظم الإجابات موجودة بالفعل. دقيقة هنا توفّر عليك غالبًا جولة كاملة من الأخذ والرد.
+
+1. **ابحث في الوثائق** باستخدام مربع البحث أعلى كل صفحة، واقرأ
+   [](/guides/troubleshooting/)، التي تغطي الأعطال الشائعة وطريقة جمع السجلات.
+2. **ابحث في [المشكلات المفتوحة والمغلقة](https://github.com/Capsulsaurus/Capsule/issues?q=is%3Aissue)**
+   وفي [النقاشات](https://github.com/Capsulsaurus/Capsule/discussions). إذا كان أحدهم قد
+   أبلغ عنها بالفعل، فأضف تفاعل 👍 أو تعليقًا بمعلومات جديدة، بدلًا من فتح بلاغ مكرر.
+3. **تحقّق من الخيارات الدقيقة التي يقبلها الأمر** في [](/reference/cli/).
+
+<a id="get-help"></a>
+
+## احصل على المساعدة
+
+<CardGrid>
+  <Card title="اطرح سؤالًا" icon="comment">
+    كيف أفعل…؟ هل هذا متوقع؟ تحتاج مساعدة في إعداد شيء ما؟ اسأل في
+    [Discussions › Q&A](https://github.com/Capsulsaurus/Capsule/discussions/categories/q-a).
+    حدّد الرد الذي حلّ المشكلة على أنه الإجابة، ليجده الشخص التالي.
+  </Card>
+  <Card title="أبلغ عن خطأ" icon="warning">
+    هل تعطّل شيء ما أو يتصرف على نحو يخالف الوثائق؟ افتح
+    [بلاغ خطأ](https://github.com/Capsulsaurus/Capsule/issues/new?template=bug_report.yml).
+    يطلب النموذج الإصدار والمنصة وخطوات إعادة إنتاج المشكلة والسجلات: والبلاغ الذي يتضمنها
+    جميعًا يمكن فرزه دون أخذ ورد.
+  </Card>
+  <Card title="اقترح ميزة" icon="star">
+    شارك أفكارك في
+    [Discussions › Ideas](https://github.com/Capsulsaurus/Capsule/discussions/categories/ideas)،
+    حيث يمكن للآخرين التصويت لها وتحسينها. يحوّل المشرفون الفكرة إلى مشكلة (issue) بعد قبولها،
+    وفي تلك المشكلة يُتابَع العمل.
+  </Card>
+  <Card title="أبلغ عن ثغرة أمنية" icon="padlock">
+    **ليس في مشكلة عامة أبدًا.** أبلغ عنها بشكل خاص عبر
+    [GitHub security advisory](https://github.com/Capsulsaurus/Capsule/security/advisories/new).
+    توضّح [سياسة الأمان](https://github.com/Capsulsaurus/Capsule/security/policy) الإصدارات التي
+    تتلقى الإصلاحات.
+  </Card>
+</CardGrid>
+
+<a id="specific-topics"></a>
+
+## موضوعات محددة
+
+<CardGrid>
+  <Card title="تشغيل خادم" icon="setting">
+    ابدأ بـ [](/guides/self-hosting/)، ثم [](/guides/troubleshooting/). ما زلت عالقًا؟ اسأل في
+    [Q&A](https://github.com/Capsulsaurus/Capsule/discussions/categories/q-a) مع ذكر إصدار
+    الخادم وسجل بدء تشغيله.
+  </Card>
+  <Card title="صور مفقودة أو تالفة" icon="information">
+    توقّف ولا تحذف أي شيء. اقرأ
+    [](/guides/troubleshooting/#check-a-librarys-integrity) و
+    [](/design/backup-recovery/#recovery-paths) قبل أن تجرّب أي إصلاح. إذا فُقدت بيانات أو
+    تلفت، فأبلغ عن ذلك كخطأ: فحماية بياناتك هي الأولوية الأولى للمشروع.
+  </Card>
+  <Card title="الترجمات" icon="translate">
+    أبلغ عن نص خاطئ أو ناقص عبر
+    [translation error](https://github.com/Capsulsaurus/Capsule/issues/new?template=translation-error.md)،
+    أو اطلب لغة جديدة عبر
+    [language request](https://github.com/Capsulsaurus/Capsule/issues/new?template=language-request.md).
+    طريقة إعداد الترجمات موضّحة في
+    [locales/README.md](https://github.com/Capsulsaurus/Capsule/blob/master/locales/README.md).
+  </Card>
+  <Card title="الانتقال من Google Photos" icon="external">
+    اتبع [](/guides/google-photos-migration/)، بما في ذلك ما لا تستطيع أداة الاستيراد ضمانه، قبل
+    أن تبلّغ عن مشكلة في الاستيراد.
+  </Card>
+</CardGrid>
+
+<a id="get-involved"></a>
+
+## شارك معنا
+
+<CardGrid>
+  <Card title="ساهم" icon="github">
+    اقرأ
+    [دليل المساهمة](https://github.com/Capsulsaurus/Capsule/blob/master/CONTRIBUTING.md)،
+    ثم اختر مشكلة تحمل التصنيف
+    [good first issue](https://github.com/Capsulsaurus/Capsule/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
+    والإجابة عن الأسئلة في Discussions مفيدة بالقدر نفسه.
+  </Card>
+  <Card title="ادعم المشروع ماليًا" icon="heart">
+    Capsule مجاني ومفتوح المصدر. إن كان مفيدًا لك، فإن
+    [رعاية تطويره على GitHub](https://github.com/sponsors/justin13888) تساعد على استمراره.
+  </Card>
+</CardGrid>
+
+<a id="what-to-expect"></a>
+
+## ما الذي تتوقعه
+
+- **وقت المتطوعين.** يجيب المجتمع والمشرفون عن الأسئلة متى سمح الوقت. لا يوجد وقت استجابة
+  مضمون.
+- **البلاغات الكاملة تتقدّم أولًا.** بلاغ الخطأ الذي يتضمن الإصدار وخطوات إعادة الإنتاج
+  والسجلات يمكن تأكيده وإصلاحه. أما البلاغ الذي يفتقر إليها فينتظر ردًا قبل أن يتمكن أحد من
+  التصرف فيه.
+- **موضوع واحد لكل سلسلة.** مشكلتان تستحقان بلاغين، ليُتابَع كل منهما ويُغلق على حدة.
+- **علني افتراضيًا.** كل شيء علني باستثناء بلاغات الثغرات الأمنية، لذا احذف عبارات المرور
+  وأسرار الاسترداد والرموز المميزة وعناوين الخوادم ومسارات الملفات الشخصية قبل أن تلصق أي سجل.

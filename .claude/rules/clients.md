@@ -25,6 +25,8 @@ Follow:
 - [Clients](../../capsule-docs/src/content/docs/design/clients.md) — tiers, client validation duties, reading state from a newer client, the sandboxed decoder, benchmark tooling.
 - [Architecture](../../capsule-docs/src/content/docs/development/architecture.md) — data flow through `capsule-core-swift` / `capsule-core-kotlin` (the UniFFI harnesses over `capsule_sdk`).
 - [Versioning](../../capsule-docs/src/content/docs/design/versioning.md) — why native clients stay lenient.
+- [Platform integrations](../../capsule-docs/src/content/docs/design/platform-integrations.md) — share, view and pick intents, Shortcuts and App Intents, system pickers, OS backup exclusion, Photos-parity layout.
+- [Performance](../../capsule-docs/src/content/docs/development/performance.md) — the upload-to-preview metrics native code stamps, the Developer → Live metrics page's data, and the measured-A/B rule for any optimisation.
 - `capsule-web/src/components/lazy-image.tsx` → [Thumbnails](../../capsule-docs/src/content/docs/design/thumbnails.md) (Chromahash LQIP); share and guest-upload routes → [Share links](../../capsule-docs/src/content/docs/design/share-links.md) and [Web upload](../../capsule-docs/src/content/docs/design/web-upload.md).
 
 Keep current:

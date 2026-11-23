@@ -38,19 +38,20 @@
 //!
 //! | Build | Tiers | Formats |
 //! | --- | --- | --- |
-//! | `media-linked-codecs` (the CLI) | thumbnail, preview | **lossy** JXL (libjxl), AVIF (ravif) |
-//! | `media` alone (mobile FFI, cross targets) | thumbnail | **lossless** JXL (`zune-jpegxl`) |
+//! | `media-linked-codecs` (the CLI) | thumbnail, preview | **lossy** JXL (libjxl), AVIF (gamut) |
+//! | `media` alone (mobile FFI, cross targets) | thumbnail | AVIF (gamut) |
 //!
-//! Without the feature the pure-Rust backend is `zune-jpegxl`'s `JxlSimpleEncoder`, which is
-//! lossless, so the tier's `q=50` is passed through and ignored and a thumbnail costs more bytes
-//! than the table intends — and the preview tier is not generated, since a source-resolution
-//! lossless still would rival the original in size.
+//! The AVIF encoder is gamut's pure-Rust AV1 intra encoder, so every `media` build writes the
+//! AVIF variant at the tier's quality. The only JPEG XL encoder `rawshift-image` has is libjxl,
+//! a C++ build, so without the feature the JXL master is not written at all and is recorded as a
+//! deferral until upstream has a pure-Rust JXL encoder (visualcommons/rawshift#80). The preview
+//! tier stays with the linked build: it encodes at source resolution, which a phone pays for in
+//! a slow pure-Rust AV1 encode of every original, and its master format is the JXL that build
+//! alone writes.
 //!
-//! WebP — the table's last-resort delivery variant — is **not available in either build**:
-//! `rawshift-image` 0.1.1's WebP module does not compile for aarch64 (it passes `*const i8`
-//! where `libwebp-sys` declares `*const c_char`, and `c_char` is `u8` there), and every mobile
-//! target Capsule ships is aarch64. Each missing pair is recorded as a per-`(tier, format)`
-//! deferral on
+//! WebP — the table's last-resort delivery variant — is **not enabled in either build**:
+//! `rawshift-image`'s WebP is now pure-Rust gamut, but turning it on is its own change. Each
+//! missing pair is recorded as a per-`(tier, format)` deferral on
 //! [`StillDerivatives::deferred`] and warned once, so the gap is countable rather than
 //! invisible.
 //!
@@ -60,15 +61,12 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use rawshift_image::core::image::RgbImage;
 use rawshift_image::core::metadata::ImageMetadata;
-use rawshift_image::core::{BitDepth, ColorSpace, MetadataEmbedOptions};
+use rawshift_image::core::{BitDepth, ColorDescription, MetadataEmbedOptions, RgbImage};
 use rawshift_image::formats::encode_rgb_image_to_vec;
-#[cfg(not(feature = "media-linked-codecs"))]
-use rawshift_image::formats::export::ZuneJxlEncodeConfig;
-use rawshift_image::formats::export::{CommonEncodeOptions, EncodeOptions};
 #[cfg(feature = "media-linked-codecs")]
-use rawshift_image::formats::export::{LibjxlEncodeConfig, RavifEncodeConfig};
+use rawshift_image::formats::export::JxlEncodeConfig;
+use rawshift_image::formats::export::{AvifEncodeConfig, CommonEncodeOptions, EncodeOptions};
 use uuid::Uuid;
 
 use super::decode::DecodedImage;
@@ -90,19 +88,19 @@ pub enum DerivativeTier {
     /// Grid display: long edge capped at 256 px, q=50.
     Thumbnail,
     /// Lightbox / single-asset view: source resolution, q=70. **Generated only under
-    /// `media-linked-codecs`** — a source-resolution derivative is only worth its bytes in a
-    /// *lossy* codec, and the pure-Rust JXL encoder is lossless, so without libjxl a preview
-    /// would rival the original in size.
+    /// `media-linked-codecs`** — its master format is JXL, which only libjxl writes, and a
+    /// source-resolution pure-Rust AV1 encode of every original is too costly for the mobile
+    /// builds that lack it (see the module docs).
     Preview,
 }
 
 impl DerivativeTier {
-    /// The tiers this build actually generates: both with a lossy master codec linked
-    /// (`media-linked-codecs`), the thumbnail alone without one.
+    /// The tiers this build actually generates: both with the JXL master codec linked
+    /// (`media-linked-codecs`), the thumbnail alone without it.
     #[cfg(feature = "media-linked-codecs")]
     pub const GENERATED: &'static [Self] = &[Self::Thumbnail, Self::Preview];
-    /// The tiers this build actually generates: both with a lossy master codec linked
-    /// (`media-linked-codecs`), the thumbnail alone without one.
+    /// The tiers this build actually generates: both with the JXL master codec linked
+    /// (`media-linked-codecs`), the thumbnail alone without it.
     #[cfg(not(feature = "media-linked-codecs"))]
     pub const GENERATED: &'static [Self] = &[Self::Thumbnail];
 
@@ -373,10 +371,10 @@ pub fn generate_still_derivatives(
             // stage name makes a caught unwind attributable to the encoder rather than to the
             // decoder that ran before it.
             //
-            // A refusal here is **this pair's** failure, not the asset's: rav1e rejects a frame
-            // edge over 65535 px, which the decode budget admits (a wide panorama), so the
-            // source-resolution preview AVIF can fail while the thumbnail JXL beside it encodes
-            // fine. The pair is recorded as a deferral — backfillable like any other — and the
+            // A refusal here is **this pair's** failure, not the asset's: an AV1 encoder rejects
+            // a frame edge over 65535 px, which the decode budget admits (a wide panorama), so
+            // the source-resolution preview AVIF can fail while the JXL beside it encodes fine.
+            // The pair is recorded as a deferral — backfillable like any other — and the
             // tier's remaining formats still run. Only a call that produced nothing at all
             // reports the failure, below, so an asset with no renderable derivative is still
             // counted as one somebody should look at.
@@ -445,37 +443,26 @@ fn encode(
         bit_depth: BitDepth::Eight,
     };
     let options = match format {
-        // The lossy master: libjxl with the tier's JPEG-style quality, which libjxl maps onto
-        // a Butteraugli distance itself. `lossless: false` is explicit rather than defaulted
-        // because it is the whole point of this backend. Effort 7 is libjxl's own default.
+        // The lossy master: libjxl, at the Butteraugli distance libjxl's own
+        // `JxlEncoderDistanceFromQuality` gives the tier's JPEG-style quality (`jxl_distance`).
+        // `lossless: false` is explicit rather than defaulted because it is the whole point of
+        // this backend. Effort 7 is libjxl's own default.
         #[cfg(feature = "media-linked-codecs")]
-        DerivativeFormat::Jxl => EncodeOptions::JxlLibjxl(LibjxlEncodeConfig {
+        DerivativeFormat::Jxl => EncodeOptions::Jxl(JxlEncodeConfig {
             common,
-            quality: Some(tier.quality()),
             lossless: false,
+            distance: jxl_distance(tier.quality()),
             effort: 7,
-            ..LibjxlEncodeConfig::default()
+            ..JxlEncodeConfig::default()
         }),
-        #[cfg(not(feature = "media-linked-codecs"))]
-        DerivativeFormat::Jxl => EncodeOptions::JxlZune(ZuneJxlEncodeConfig {
+        // The AVIF delivery variant, through gamut's pure-Rust AV1 intra encoder, so every
+        // `media` build writes it. `quality` is the same 0..=100 scale, so the tier's value
+        // converts exactly (50 and 70); `lossless: false` because the encoder's default is
+        // lossless.
+        DerivativeFormat::Avif => EncodeOptions::Avif(AvifEncodeConfig {
             common,
-            // The tier table's number, passed through as declared even though the backend
-            // ignores it: `JxlSimpleEncoder` is lossless, so in this build it is advisory. The
-            // lossy libjxl arm above takes the same value, so the two builds differ in backend
-            // and never in the quality decision.
-            quality: tier.quality(),
-            // Encoder effort, 1..=9; the simple encoder may ignore this too. 7 is the crate's
-            // own default and there is no reason to differ.
-            effort: 7,
-        }),
-        // The AVIF delivery variant. `quality` is the same 0..=100 scale, so the tier's value
-        // converts exactly (50 and 70). Speed 6 is ravif's own default: the preview tier encodes
-        // at source resolution, and a slower preset multiplies that cost for a small gain.
-        #[cfg(feature = "media-linked-codecs")]
-        DerivativeFormat::Avif => EncodeOptions::AvifRavif(RavifEncodeConfig {
-            common,
+            lossless: false,
             quality: tier.quality() as u8,
-            speed: 6,
         }),
         // Unreachable: `is_encodable` gates the call, and `Original` never routes here at all
         // (it carries no bytes). Kept as a typed refusal rather than a panic so a future
@@ -484,7 +471,7 @@ fn encode(
         // `StillFormat` and there is no still format at fault here — the caller asked for a
         // *derivative* format this build cannot write, and the message has to say which.
         #[cfg(not(feature = "media-linked-codecs"))]
-        DerivativeFormat::Avif => {
+        DerivativeFormat::Jxl => {
             return Err(MediaError::Encode {
                 format,
                 detail: "this build links no encoder for this derivative format".to_string(),
@@ -498,7 +485,7 @@ fn encode(
         }
     };
 
-    let rgb = to_rgb_u16(frame);
+    let rgb = to_rgb_u16(frame, format)?;
     encode_rgb_image_to_vec(&rgb, &ImageMetadata::default(), &options).map_err(|e| {
         MediaError::Encode {
             format,
@@ -507,19 +494,44 @@ fn encode(
     })
 }
 
+/// The Butteraugli distance libjxl's `JxlEncoderDistanceFromQuality` gives a JPEG-style
+/// `quality`, since `JxlEncodeConfig` takes a distance where the 0.1.1 backend took a quality
+/// and mapped it the same way. q=50 is 4.6 and q=70 is 2.8; the result is clamped into the
+/// `(0.0, 25.0]` range the config accepts.
+#[cfg(feature = "media-linked-codecs")]
+pub(super) fn jxl_distance(quality: f32) -> f32 {
+    let distance = if quality >= 100.0 {
+        0.0
+    } else if quality >= 30.0 {
+        0.1 + (100.0 - quality) * 0.09
+    } else {
+        53.0 / 3000.0 * quality * quality - 23.0 / 20.0 * quality + 25.0
+    };
+    distance.clamp(0.01, 25.0)
+}
+
 /// Widen packed RGBA8 to the interleaved RGB `u16` the encoders take, dropping alpha.
 ///
 /// `v * 257` is the crate's own widening, and the encoders narrow it back with `v >> 8`, so an
 /// 8-bit frame reaches the codec bit-for-bit. Alpha is dropped because the decode path already
 /// flattened it — every frame here is opaque.
-fn to_rgb_u16(frame: &RgbaImage) -> RgbImage {
+///
+/// # Errors
+/// [`MediaError::Encode`] when `RgbImage` refuses the buffer, which it does only for a zero
+/// dimension; [`generate_still_derivatives`] refuses those before it encodes anything.
+fn to_rgb_u16(frame: &RgbaImage, format: DerivativeFormat) -> Result<RgbImage, MediaError> {
     let mut data = Vec::with_capacity(frame.rgba.len() / 4 * 3);
     for px in frame.rgba.chunks_exact(4) {
         data.push(u16::from(px[0]) * 257);
         data.push(u16::from(px[1]) * 257);
         data.push(u16::from(px[2]) * 257);
     }
-    RgbImage::with_color_space(frame.width, frame.height, data, ColorSpace::Srgb)
+    RgbImage::with_color(frame.width, frame.height, data, ColorDescription::SRGB).map_err(|e| {
+        MediaError::Encode {
+            format,
+            detail: e.to_string(),
+        }
+    })
 }
 
 /// Build, sign and chain one derivative manifest.

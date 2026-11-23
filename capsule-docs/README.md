@@ -14,6 +14,12 @@ in a client or server artifact.
 
 - **Astro + `@astrojs/starlight`:** one chrome for every page, generated reference included.
 - **`starlight-blog`:** posts are docs pages under `blog/`; MIT.
+- **`starlight-llms-txt`:** emits `/llms.txt` and its plain-text bundles from the content
+  collection; topic sets are `src/lib/llms-sets.mjs`. Build-time only. Refused: a hand-written
+  endpoint beside `robots.txt.ts`, which would mean maintaining MDX-to-Markdown flattening here. MIT.
+- **`micromatch` (dev):** the matcher `starlight-llms-txt` filters pages with, so
+  `src/lib/llms-sets.test.mjs` proves each topic-set glob the way the build reads it;
+  `node:path` `matchesGlob` disagrees on `x/**` matching `x`. Already in the tree through the plugin.
 - **Web fonts:** no font package. Upstream Geist 1.9 variable files are vendored in
   `src/assets/fonts/`, so text never waits on a third-party origin; OFL-1.1 (see the
   licensing design doc).

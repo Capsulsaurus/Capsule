@@ -1,0 +1,113 @@
+---
+title: Capsule
+description: Una libreria fotografica open source che organizza le foto di una vita sui tuoi dispositivi, le mantiene tutte cifrate end-to-end ed è pensata per la condivisione tra server.
+audit: none
+template: splash
+hero:
+  title: Le foto di una vita, organizzate e private
+  tagline: Capsule organizza tutta la tua libreria sui tuoi dispositivi, mantiene ogni foto cifrata end-to-end su un server che non possiede mai una chiave ed è pensato per la condivisione tra server.
+  image:
+    # Raw HTML rather than `file`: Starlight's hero sizes `file` images to a
+    # 400x400 square, which crops a portrait screenshot.
+    html: |
+      <img class="hero-shot hero-shot-light" src="/images/hero-light.webp" width="800" height="1538" alt="Capsule su iPhone, con la timeline della Libreria" />
+      <img class="hero-shot hero-shot-dark" src="/images/hero-dark.webp" width="800" height="1538" alt="Capsule su iPhone, con la timeline della Libreria" />
+  actions:
+    - text: Per iniziare
+      link: /guides/getting-started/
+      icon: right-arrow
+    - text: Leggi la progettazione
+      link: /design/
+      variant: secondary
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+import Feature from '../../../components/Feature.astro';
+import FeatureGrid from '../../../components/FeatureGrid.astro';
+import StatusStrip from '../../../components/StatusStrip.astro';
+
+<StatusStrip
+  text="I client mobile sono in fase di stabilizzazione e rifinitura prima di arrivare ai beta tester."
+  href="https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md"
+  linkLabel="Roadmap"
+/>
+
+<a id="what-sets-capsule-apart"></a>
+
+## Cosa distingue Capsule
+
+<FeatureGrid>
+  <Feature icon="random" title="Organizzata a qualsiasi scala" href="/features/smart-albums/" linkLabel="Album smart">
+    Ricerca, album smart e tag automatici sono progettati per funzionare sui tuoi
+    dispositivi, su un indice locale completo, così una libreria di milioni di foto resta
+    facile da esplorare senza che nessuno debba riordinarla a mano.
+  </Feature>
+  <Feature icon="padlock" title="Un server senza chiavi" href="/design/cryptography/" linkLabel="Progettazione crittografica">
+    Il server memorizza testo cifrato e non possiede mai una chiave. Non può leggere una
+    foto, una didascalia o il titolo di un album, eppure firma una ricevuta di custodia per
+    ogni caricamento che accetta.
+  </Feature>
+  <Feature icon="server" title="Condivisione tra server" href="/design/federation/" linkLabel="Progettazione della federazione">
+    La fiducia risiede nella crittografia anziché nel server, così persone su server
+    Capsule diversi possono condividere album tra loro, senza alcun servizio centrale nel
+    mezzo.
+  </Feature>
+  <Feature icon="laptop" title="Tutta la tua libreria, offline" href="/features/offline-library/" linkLabel="Libreria offline">
+    Ogni app nativa è pensata per mantenere un indice completo di tutte le foto che hai
+    conservato, così puoi sfogliarle, cercarle e organizzarle anche senza connessione.
+  </Feature>
+  <Feature icon="approve-check-circle" title="Cronologia verificabile" href="/design/cryptography/provenance/" linkLabel="Progettazione della provenienza">
+    Ogni elemento porta con sé una catena di provenienza firmata e di sola aggiunta, così
+    la persona e il dispositivo che l'hanno importato o modificato sono verificati, non
+    dati per scontati.
+  </Feature>
+  <Feature icon="database" title="Recuperabile per costruzione" href="/design/backup-recovery/" linkLabel="Backup e ripristino">
+    Ogni elemento è affiancato da un file sidecar di metadati firmato, così una libreria
+    resta leggibile senza un database e può essere ricostruita dopo danni parziali.
+  </Feature>
+</FeatureGrid>
+
+<a id="everything-you-would-expect"></a>
+
+## Tutto ciò che ti aspetti
+
+Originali conservati alla massima qualità e ripristinabili byte per byte. RAW e video
+come formati di prima classe. App native realizzate con i controlli propri di ogni
+piattaforma. Una CLI e una TUI che fanno tutto ciò che fanno le app; vedi
+[](/reference/cli/).
+
+<a id="why-it-is-built-this-way"></a>
+
+## Perché è fatto così
+
+La maggior parte dei servizi fotografici ti costringe a scegliere tra le funzioni che un
+server ottiene leggendo la tua libreria e la privacy che hai quando non può farlo.
+Capsule sceglie la privacy e ricostruisce le funzioni sui tuoi dispositivi, su dati che
+solo loro possono decifrare.
+
+Questa scelta ha dei costi, e i documenti di progettazione li dichiarano anziché
+nasconderli: cosa un server senza chiavi può e non può dirti
+([](/design/notifications/)), cosa succede quando si perde una chiave
+([](/design/backup-recovery/#recovery-paths)) e cosa viene impedito a un client
+difettoso od ostile ([](/design/threat-model/)).
+
+<a id="get-started"></a>
+
+## Per iniziare
+
+<CardGrid>
+  <Card title="Ospita un server" icon="server">
+    Esegui Capsule sul tuo hardware. [](/guides/self-hosting/)
+  </Card>
+  <Card title="Usa Capsule" icon="open-book">
+    Importa, organizza e sfoglia la tua libreria. [](/guides/user-guide/)
+  </Card>
+  <Card title="Porta la tua libreria" icon="cloud-download">
+    Importa un'esportazione di Google Takeout con i suoi metadati.
+    [](/guides/google-photos-migration/)
+  </Card>
+  <Card title="Sviluppa Capsule" icon="code-branch">
+    Ogni riga è open source e sviluppata alla luce del sole.
+    [](/development/local-development/)
+  </Card>
+</CardGrid>
