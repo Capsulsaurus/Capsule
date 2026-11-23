@@ -15,13 +15,16 @@
 //!
 //! For each file it runs what the import path runs before a thumbnail is encoded: probe, the
 //! guarded full decode, the downscale to the thumbnail tier's long edge, and the embedded-preview
-//! read and decode.
+//! read and decode. A file whose raw image uses a variant the reader has no codec for (an ARW in
+//! Sony's lossy compression, 32767) defers its full decode as `UnsupportedFormat`, and then its
+//! embedded preview must thumbnail instead; a pre-open refusal (`MediaError::Decode`) fails.
+//! Run with `--nocapture` to see which path each file took.
 
 use std::path::PathBuf;
 
 use capsule_core::media::{
-    Decoder as _, DerivativeTier, RawshiftDecoder, StillFormat, decode_embedded_preview,
-    decode_guarded, downscale_rgba8, extract_embedded_preview,
+    DecodedImage, Decoder as _, DerivativeTier, MediaError, RawshiftDecoder, StillFormat,
+    decode_embedded_preview, decode_guarded, downscale_rgba8, extract_embedded_preview,
 };
 
 /// The file `var` names. Panics rather than skipping, so `--ignored` without the files fails
@@ -43,33 +46,60 @@ fn assert_thumbnails(var: &str, ext: &str, format: StillFormat) {
         .unwrap_or_else(|e| panic!("{at}: probe: {e}"));
     assert_eq!(probed.format, format, "{at}");
 
-    let decoded = decode_guarded(&RawshiftDecoder, &bytes, ext)
-        .unwrap_or_else(|e| panic!("{at}: decode: {e}"));
-    assert_eq!(
-        (decoded.width(), decoded.height()),
-        probed.upright_dimensions(),
-        "{at}: the decoded frame is the size the probe read"
-    );
-
     let cap = DerivativeTier::Thumbnail
         .max_long_edge()
         .expect("the thumbnail tier caps its long edge");
-    let thumbnail = downscale_rgba8(&decoded.image, cap);
-    assert_eq!(thumbnail.width.max(thumbnail.height), cap, "{at}");
+    let thumbnail = |frame: &DecodedImage, source: &str| {
+        let small = downscale_rgba8(&frame.image, cap);
+        assert_eq!(small.width.max(small.height), cap, "{at}: {source}");
+        eprintln!(
+            "{at}: {source} {}x{} -> thumbnail {}x{}",
+            frame.width(),
+            frame.height(),
+            small.width,
+            small.height
+        );
+    };
 
+    // A pre-open refusal is `MediaError::Decode`; a variant the reader has no codec for is
+    // `UnsupportedFormat` and is deferred, never refused. Only the second is a pass.
+    let decoded = decode_guarded(&RawshiftDecoder, &bytes, ext);
+    match &decoded {
+        Ok(frame) => {
+            assert_eq!(
+                (frame.width(), frame.height()),
+                probed.upright_dimensions(),
+                "{at}: the decoded frame is the size the probe read"
+            );
+            thumbnail(frame, "decoded");
+        }
+        Err(MediaError::UnsupportedFormat { .. }) => {
+            eprintln!("{at}: no codec for its raw image here; deferred");
+        }
+        Err(e) => panic!("{at}: decode: {e}"),
+    }
+
+    // The preview read opens the file behind the same bounds. Where the full decode deferred,
+    // the embedded preview is the file's thumbnail, so it must be there.
     let preview =
         extract_embedded_preview(&bytes, ext).unwrap_or_else(|e| panic!("{at}: preview read: {e}"));
-    if let Some(preview) = preview {
-        let frame =
-            decode_embedded_preview(&preview).unwrap_or_else(|e| panic!("{at}: preview: {e}"));
-        assert!(frame.width() > 0 && frame.height() > 0, "{at}");
+    match preview {
+        Some(preview) => {
+            let frame =
+                decode_embedded_preview(&preview).unwrap_or_else(|e| panic!("{at}: preview: {e}"));
+            thumbnail(&frame, "embedded preview");
+        }
+        None => assert!(
+            decoded.is_ok(),
+            "{at}: neither decodes nor carries a preview"
+        ),
     }
 }
 
 #[test]
 #[ignore = "needs camera files: CAPSULE_TEST_DNG=… CAPSULE_TEST_ARW=… cargo test -p capsule-core \
             --test raw_camera_files -- --ignored"]
-fn a_camera_dng_and_arw_decode_to_a_thumbnail() {
+fn a_camera_dng_and_arw_reach_a_thumbnail() {
     assert_thumbnails("CAPSULE_TEST_DNG", "dng", StillFormat::Dng);
     assert_thumbnails("CAPSULE_TEST_ARW", "arw", StillFormat::Arw);
 }
