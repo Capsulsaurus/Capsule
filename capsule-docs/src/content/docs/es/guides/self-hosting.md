@@ -1,7 +1,7 @@
 ---
 title: Autoalojamiento
 description: Cómo ejecutar capsule-server sobre PostgreSQL y un almacén de blobs en el sistema de archivos
-status: draft
+audit: none
 ---
 
 Todavía no se ha publicado ninguna versión, así que el servidor se compila desde el código fuente.

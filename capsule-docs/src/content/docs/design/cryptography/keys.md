@@ -1,7 +1,7 @@
 ---
 title: Key Management
 description: Capsule's key hierarchy, device coordination, and write authorization
-status: draft
+audit: none
 ---
 
 One hierarchy with one backed-up root, implemented in `capsule-core/src/crypto/keys/`. Every signer sits behind one seam, so software and hardware keys are interchangeable.

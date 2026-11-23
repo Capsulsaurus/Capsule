@@ -1,7 +1,7 @@
 ---
 title: Filesystem
 description: How Capsule structures files on disk — server vs client, and what they share
-status: draft
+audit: none
 ---
 
 The **server** stores only opaque, content-addressed ciphertext and never holds a key. **Clients** hold keys, so a client stores plaintext media, signed sidecars, and rebuildable caches. The on-disk layouts are part of the contract.

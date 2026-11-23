@@ -1,7 +1,7 @@
 ---
 title: Server Filesystem
 description: The server's blob store layout, Postgres index, and required services
-status: draft
+audit: none
 ---
 
 The server holds ciphertext blobs and a key-free index mapping assets to blobs. It holds no key, so it never decodes, extracts metadata or generates thumbnails. The layout below is a contract: rebuilding the index from blob bytes depends on it.

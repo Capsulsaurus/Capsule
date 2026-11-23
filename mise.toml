@@ -678,6 +678,10 @@ run = "bun run build"
 description = "Prove every file, route, and anchor the docs name actually exists"
 run = "bun capsule-docs/scripts/docs-truth.mjs"
 
+[tasks.audit-docs]
+description = "Stamp docs pages as audited at HEAD: mise run audit-docs -- <page.md>..."
+run = "bun capsule-docs/scripts/audit-page.mjs"
+
 # ── Kotlin ───────────────────────────────────────────────────────────────────
 
 [tasks.format-kotlin]

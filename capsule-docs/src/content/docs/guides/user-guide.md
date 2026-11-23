@@ -1,7 +1,7 @@
 ---
 title: User Guide
 description: Day-to-day use of a Capsule library with the capsule CLI — import, back up, verify, organize, and delete safely.
-status: draft
+audit: none
 ---
 
 This guide covers the `capsule` CLI, the reference client. Commands marked *(planned)* are on

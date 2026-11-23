@@ -1,7 +1,7 @@
 ---
 title: Thumbnails and Previews
 description: Format inventory, LQIP scheme, and derivative provenance for photo and video derivatives
-status: draft
+audit: none
 ---
 
 This page is the single source of truth for the LQIP scheme and the derivative formats; other docs link here rather than restate them. The format table is a contract: a receiver, including a federated peer, MUST reject a `DerivativeManifest.format` value not listed here.

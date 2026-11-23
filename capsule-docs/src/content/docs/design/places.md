@@ -1,7 +1,7 @@
 ---
 title: Places
 description: The location index, map clusters per zoom level computed in Rust, per-cell place names, and the requirements on the external offline geocoder
-status: draft
+audit: none
 ---
 
 Places is the map of a library and the names of where its photos were taken. Everything on this

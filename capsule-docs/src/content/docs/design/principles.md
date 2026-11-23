@@ -1,7 +1,7 @@
 ---
 title: Core Principles
 description: The core principles that guide the design and development of Capsule
-status: draft
+audit: none
 ---
 
 These principles bind every Capsule component, client and server. The rules after them bind every
@@ -90,9 +90,28 @@ Design docs are not templated, but each must answer four questions: **where it l
 
 A doc naming an implementing module states per surface whether it is **Implemented** (module exists, its tier runs in CI), **Planned** (contract designed, no code) or **Blocked** (planned, with a named external blocker). A planned contract is written in normative present tense but must not claim the code exists. Every module a doc names that does not exist yet must be listed in `capsule-docs/planned-modules.txt`.
 
-### Review Status
+### Audit Status
 
-Every authored page carries a required `status` frontmatter field tracking human review: `draft` (not re-reviewed since the last substantive change) or `stable` (signed off; a substantive edit flips it back). Drafts still publish, and the docs site badges every non-stable page in its navigation ([](/development/visual-language/#docs-site)). Generated reference pages carry no status: they track their artifact, not a review. A splash page such as the support page has no sidebar to badge, so it may carry none.
+Every authored page carries a required `audit` frontmatter field pinning its last human audit. It holds either `audit: none`, an explicit statement that the page has never been audited, or a stamp:
+
+```yaml
+audit:
+  commit: <40-hex sha>     # the commit whose copy of the page was audited
+  date: YYYY-MM-DD         # when, in UTC
+  digest: sha256:<64-hex>  # of the page with this field removed
+```
+
+The status a reader sees is never written down. The site computes it by comparing the stamped digest with the page as it is now:
+
+| Status | When | Shown |
+| --- | --- | --- |
+| Audited | The digest matches: the page is exactly what was audited. | "Audited as of `<commit>` on `<date>`" |
+| Changed since audit | The page has changed since its stamp. | "Last audited as of `<commit>` on `<date>`" |
+| Unaudited | `audit: none` | "Unaudited" |
+
+Any edit after an audit therefore shows at once, with no one having to remember to flip a flag, and the computation needs no git history. An auditor commits their edits, reviews the page as committed, then stamps it with `mise run audit-docs -- <page>` (`bun run audit-page <page>` inside `capsule-docs`) and commits the stamp. The tool refuses a page that differs from HEAD, so the pinned commit always holds the audited text. `test-docs` fails on a missing or malformed field, and wherever the stamped commit is in local history it checks that the digest matches that commit's copy of the page.
+
+Unaudited and changed pages still publish, and the docs site badges each of them in its navigation ([](/development/visual-language/#docs-site)). A translation is audited on its own. A locale route with no translation shows the English page and that page's status. Generated reference pages carry no audit: they track their artifact, not a review. A splash page such as the support page has no sidebar to badge, so it may leave the field out.
 
 ## Validation Tiers
 

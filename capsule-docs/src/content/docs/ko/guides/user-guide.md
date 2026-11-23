@@ -1,7 +1,7 @@
 ---
 title: 사용자 가이드
 description: capsule CLI로 Capsule 라이브러리를 일상적으로 사용하는 방법 — 가져오기, 백업, 검증, 정리, 안전한 삭제.
-status: draft
+audit: none
 ---
 
 이 가이드는 레퍼런스 클라이언트인 `capsule` CLI를 다룹니다. *(예정)* 표시가 붙은 명령은

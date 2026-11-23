@@ -1,7 +1,7 @@
 ---
 title: Share Links
 description: Non-registered-account share link generation, permission model, and public-share serving
-status: draft
+audit: none
 ---
 
 A share link grants view access to an album or asset to someone without a Capsule account, a non-registered account ([](/design/authentication/#account-types)) with no master key, IK or MLS membership. [](/design/cryptography/keys/#non-registered-accounts) owns the key material and this doc owns the rest. Code: `capsule-core::sharing`, `capsule-server::share`, `capsule-server::routes::share`.

@@ -1,7 +1,7 @@
 ---
 title: Performance
 description: The upload-to-preview metrics, on-device measurement with no telemetry, the rule that no optimisation lands without a measured A/B, and the scale targets that back the README's claims.
-status: draft
+audit: none
 ---
 
 This page owns how Capsule measures speed and memory: the metrics on the path from starting an import to seeing processed content, where each one is measured, the benchmark harnesses, the policy that decides when an optimisation may land, and the scale targets. It defers the responsiveness parity benchmark and its frame bounds to [](/design/clients/#responsiveness), the hidden metrics page every client carries to [](/design/clients/#developer-live-metrics), the pipeline stages to [](/design/import/pipeline/), and the render ladder to [](/design/transfer/download/#render-ladder).

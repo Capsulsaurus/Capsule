@@ -1,7 +1,7 @@
 ---
 title: Peering
 description: Direct device-to-device sync and upload delegation between one user's own devices
-status: draft
+audit: none
 ---
 
 Peering connects **one user's own devices** directly; server-to-server sharing is [](/design/federation/). It has two uses:

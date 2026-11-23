@@ -1,7 +1,7 @@
 ---
 title: Import Pipeline
 description: How Capsule scans, plans, and executes a local import on a single device
-status: draft
+audit: none
 ---
 
 The import pipeline runs entirely client-side in `capsule-library::import`, over the pure grouping, scope and upload-policy half in `capsule-core::import`. No server is contacted until bytes are handed to the upload protocol ([](/design/transfer/upload/)). Every import is **deterministic**, **idempotent** and resumable by *import id*. The planner is pure, so most of the pipeline is testable without I/O.

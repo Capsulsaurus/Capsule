@@ -1,7 +1,7 @@
 ---
 title: Import — Camera Import
 description: Tethered and wireless in-camera import over PTP/IP
-status: draft
+audit: none
 ---
 
 The adapter is `capsule-library::import::camera`. Cameras expose storage over **PTP/IP** (ISO 15740), spoken through the in-house `ptpip-rs` crate, which is pure Rust and portable to mobile, unlike LGPL [libgphoto2](https://github.com/gphoto/libgphoto2). Vendor extensions stay behind that crate: one is chosen from the camera's `DeviceInfo` and runs once after `OpenSession`, Sony first. A camera no extension claims speaks standard PTP only.

@@ -1,7 +1,7 @@
 ---
 title: Smart Albums
 description: Albums defined by a query rather than a membership list
-status: draft
+audit: none
 ---
 
 A **smart album** is a saved query. Its contents are whatever currently matches, so nothing is

@@ -1,7 +1,7 @@
 ---
 title: Library Maintenance and Atomic Writes
 description: How Capsule keeps client and server storage consistent, repairs what it can, and writes atomically
-status: draft
+audit: none
 ---
 
 A client library sits on consumer hardware and is edited by a process that can be killed mid-write, so a client never assumes its library is consistent: it periodically proves it, repairs what is safe and surfaces the rest. The server runs an equivalent integrity scrub ([](#server-side-integrity-scrub)). All routines are conservative: irreplaceable data MUST NOT be removed without explicit user confirmation.
