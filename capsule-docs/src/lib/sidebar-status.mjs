@@ -48,3 +48,27 @@ export function badgeSidebar(entries, statusByRoute) {
         return badge ? { ...entry, badge } : entry;
     });
 }
+
+/**
+ * `statusByRoute` with every locale's untranslated routes added: Starlight
+ * serves an English page at each locale's route (`ja/design`) when the locale
+ * has no translation of it, so the sidebar there badges it with the English
+ * page's status. A translated page keeps its own.
+ *
+ * @param {ReadonlyMap<string, string>} statusByRoute Keyed by {@link routeKey}.
+ * @param {readonly string[]} locales Locale keys (route prefixes).
+ * @returns {Map<string, string>}
+ */
+export function withLocaleFallbacks(statusByRoute, locales) {
+    const prefixes = locales.map((locale) => `${locale}/`);
+    const result = new Map(statusByRoute);
+    for (const [route, status] of statusByRoute) {
+        if (locales.includes(route)) continue;
+        if (prefixes.some((prefix) => route.startsWith(prefix))) continue;
+        for (const locale of locales) {
+            const localized = route === '' ? locale : `${locale}/${route}`;
+            if (!result.has(localized)) result.set(localized, status);
+        }
+    }
+    return result;
+}

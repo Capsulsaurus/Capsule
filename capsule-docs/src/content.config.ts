@@ -15,7 +15,8 @@ export const collections = {
                     // and author pages) render through <StarlightPage> with no
                     // frontmatter of their own. Every authored page must still set
                     // it: scripts/page-status.test.mjs, part of `test-docs`, fails
-                    // on any page that does not. A generated page carries
+                    // on any page that does not, bar a splash page, which has no
+                    // sidebar to badge. A generated page carries
                     // none: it tracks its artifact, not a review, and
                     // PageTitle.astro refuses one that sets both.
                     status: z.enum(['draft', 'stable']).optional(),
@@ -39,5 +40,10 @@ export const collections = {
     // Overrides of UI strings, keyed as in Starlight and its plugins. The blog
     // plugin's metadata strings carry their own " - " separators; the post
     // header supplies its own (src/styles/global.css), so these drop them.
+    // zh-Hans.json and zh-Hant.json are Starlight's own zh-CN and zh-TW
+    // strings: Starlight finds its built-in dictionary by language and
+    // region, so a script-tagged language (src/lib/locales.mjs) would
+    // otherwise render its interface in English. src/lib/locales.test.mjs
+    // keeps them in step with Starlight.
     i18n: defineCollection({ loader: i18nLoader(), schema: i18nSchema() }),
 };

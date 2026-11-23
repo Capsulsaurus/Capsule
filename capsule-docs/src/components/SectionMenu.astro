@@ -1,0 +1,170 @@
+---
+// The header's section links below 72rem, where the row of links does not
+// fit: one pill naming the current section (or "Sections" outside them) that
+// discloses the same list (HeaderNav.astro, `menu`). It is in the header, so
+// it is on every page whatever its template, the splash front page included,
+// and holds still through a page transition with the rest of the bar.
+//
+// A native popover: the browser opens it from the button with no script,
+// closes it on Escape or a click outside, returns focus to the button and
+// exposes the button's expanded state. Drawn like the version switcher, the
+// site's other disclosure. On a page with no sidebar, and so no mobile menu,
+// it also carries the preferences the narrow header has no room for.
+// The contract is development/visual-language.md (Docs Site, Header).
+import LanguageSelect from 'virtual:starlight/components/LanguageSelect';
+import SocialIcons from 'virtual:starlight/components/SocialIcons';
+import ThemeSelect from 'virtual:starlight/components/ThemeSelect';
+import { normalizeBase, stripBase } from '../lib/docs-version.mjs';
+import { localizeLabel } from '../lib/nav-labels.mjs';
+import { currentLink, headerLinks } from '../lib/site-nav.mjs';
+import HeaderNav from './HeaderNav.astro';
+import VersionSelect from './VersionSelect.astro';
+
+// Set in astro.config.mjs from src/lib/blog-posts.mjs.
+declare const __BLOG_IS_LIVE__: boolean;
+
+const base = normalizeBase(import.meta.env.BASE_URL);
+const pathname = stripBase(Astro.url.pathname, base);
+const { hasSidebar, locale } = Astro.locals.starlightRoute;
+const current = currentLink(
+    headerLinks({ blogIsLive: __BLOG_IS_LIVE__, locale }),
+    pathname,
+);
+const sections = localizeLabel('Sections', locale);
+---
+
+<div class="section-menu">
+  <button
+    type="button"
+    id="capsule-section-toggle"
+    class="trigger"
+    popovertarget="capsule-section-menu"
+  >
+    {current && <span class="sr-only">{sections}:</span>}
+    <span class="label">{current?.label ?? sections}</span>
+    <svg
+      class="chevron"
+      aria-hidden="true"
+      viewBox="0 0 16 16"
+      width="12"
+      height="12"
+    >
+      <path
+        d="m4 6 4 4 4-4"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.75"
+        stroke-linecap="round"
+        stroke-linejoin="round"></path>
+    </svg>
+  </button>
+  <div id="capsule-section-menu" class="panel" popover>
+    <HeaderNav variant="menu" />
+    {
+      !hasSidebar && (
+        <div class="preferences">
+          <SocialIcons />
+          <span class="spacer" />
+          <VersionSelect />
+          <ThemeSelect />
+          <LanguageSelect />
+        </div>
+      )
+    }
+  </div>
+</div>
+
+<style>
+  /* A pill the height of the controls beside it. */
+  .trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    height: var(--capsule-control-size);
+    padding-inline: 0.875rem 0.75rem;
+    border: 1px solid var(--capsule-control-border);
+    border-radius: var(--capsule-radius-pill);
+    background: transparent;
+    color: var(--sl-color-white);
+    font: inherit;
+    font-size: var(--sl-text-sm);
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+    anchor-name: --capsule-section-toggle;
+  }
+
+  .chevron {
+    transition: transform 150ms ease;
+  }
+
+  .section-menu:has(:popover-open) .chevron {
+    transform: rotate(180deg);
+  }
+
+  .trigger:hover,
+  .trigger:focus-visible,
+  .section-menu:has(:popover-open) .trigger {
+    border-color: var(--capsule-control-border-hover);
+    background: var(--sl-color-gray-6);
+  }
+
+  /* The popup: a raised card in the page's colours under the header, its
+     edge in line with the pill where the browser can anchor it there and
+     the window has room, otherwise at the header's padding. */
+  @position-try --capsule-section-menu-inset {
+    inset-inline-start: var(--sl-nav-pad-x);
+  }
+
+  .panel {
+    position: fixed;
+    inset: auto;
+    top: calc(var(--sl-nav-height) - 0.25rem);
+    inset-inline-start: var(--sl-nav-pad-x);
+    width: min(18rem, calc(100vw - 2 * var(--sl-nav-pad-x)));
+    margin: 0;
+    padding: 0.25rem;
+    border: 1px solid var(--sl-color-hairline-light);
+    border-radius: var(--capsule-radius-card);
+    background: var(--sl-color-bg);
+    color: var(--sl-color-white);
+    box-shadow: var(--sl-shadow-md);
+  }
+
+  @supports (anchor-name: --a) {
+    .panel {
+      position-anchor: --capsule-section-toggle;
+      top: calc(anchor(bottom) + 0.375rem);
+      inset-inline-start: anchor(start);
+      position-try-fallbacks: --capsule-section-menu-inset;
+    }
+  }
+
+  .preferences {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 0.25rem;
+    padding: 0.75rem 0.5rem 0.5rem;
+    border-top: 1px solid var(--sl-color-hairline);
+  }
+
+  .spacer {
+    flex: 1;
+  }
+
+  /* From 50rem the header shows the preferences itself. */
+  @media (min-width: 50rem) {
+    .preferences {
+      display: none;
+    }
+  }
+
+  /* From 72rem the header shows the links in a row instead. */
+  @media (min-width: 72rem) {
+    .section-menu {
+      display: none;
+    }
+  }
+</style>

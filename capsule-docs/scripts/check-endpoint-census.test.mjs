@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
     checkEndpointCensus,
     endpointCitations,
+    originalOf,
 } from './check-endpoint-census.mjs';
 
 let root;
@@ -129,6 +130,23 @@ describe('checkEndpointCensus', () => {
         expect(findings).toEqual([]);
     });
 
+    it("checks a translation, which shares its English page's exemptions", () => {
+        const translation = 'capsule-docs/src/content/docs/ja/design/x.md';
+        const { findings, checked } = checkEndpointCensus(
+            repo(
+                {
+                    [DOC]: '`POST /v1/auth/validate`\n',
+                    [translation]: '`POST /v1/auth/validate` `GET /v1/gone`\n',
+                    'capsule-docs/endpoint-census-allowlist.txt': `${DOC}\tPOST /v1/auth/validate\tdeliberately not ported\n`,
+                },
+                { '/v1/upload': { post: {} } },
+            ),
+        );
+        expect(checked).toBe(3);
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toContain(`${translation}:1  GET /v1/gone`);
+    });
+
     it('reports an allowlist entry whose citation is gone', () => {
         const { findings } = checkEndpointCensus(
             repo(
@@ -147,5 +165,19 @@ describe('checkEndpointCensus', () => {
         root = mkdtempSync(join(tmpdir(), 'capsule-endpoint-census-'));
         const { findings } = checkEndpointCensus(root);
         expect(findings[0]).toContain('is missing');
+    });
+});
+
+describe('originalOf', () => {
+    it('maps a translation to the English page and leaves the rest alone', () => {
+        expect(
+            originalOf('capsule-docs/src/content/docs/pt-br/guides/a.md'),
+        ).toBe('capsule-docs/src/content/docs/guides/a.md');
+        expect(originalOf(DOC)).toBe(DOC);
+        // Only a configured locale is a prefix.
+        expect(originalOf('capsule-docs/src/content/docs/xx/a.md')).toBe(
+            'capsule-docs/src/content/docs/xx/a.md',
+        );
+        expect(originalOf('README.md')).toBe('README.md');
     });
 });

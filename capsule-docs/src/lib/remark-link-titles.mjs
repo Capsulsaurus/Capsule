@@ -16,18 +16,32 @@
 // they label symbol links with the symbol. Links off the site, and site paths
 // that are not docs pages (/rustdoc/, /openapi.json), keep their text.
 //
+// On a translated page (src/content/docs/<locale>/, src/lib/locales.mjs) a
+// link stays in the page's locale: `[](/guides/x/)` points at
+// `/<locale>/guides/x/` and renders that page's title, translated where the
+// locale has the page and English where Starlight serves the English page as
+// the locale's fallback. Translations write the English anchors; one that
+// names a heading of the English page maps to the heading in the same place
+// of a translation whose headings are laid out alike. When they are not, the
+// link goes to the English page, which has that heading, rather than failing.
+// See `localizeUrl`.
+//
 // A label renders as `a.xref` holding `span.xref-page`, `span.xref-sep` and
 // `span.xref-heading`, styled in global.css (Cross-references). The
 // convention is a contract of the Visual Language doc
 // (development/visual-language.md).
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { isAbsolute, join, relative, sep } from 'node:path';
 import GithubSlugger from 'github-slugger';
 import { fromMarkdown } from 'mdast-util-from-markdown';
 import { toString as textOf } from 'mdast-util-to-string';
 import { visit } from 'unist-util-visit';
 import { stripFrontmatter } from '../../scripts/lib/markdown.mjs';
-import { contentFileForRoute } from '../../scripts/lib/routes.mjs';
+import {
+    contentFileForRoute,
+    servingFileForRoute,
+} from '../../scripts/lib/routes.mjs';
+import { localizePath, splitLocale } from './locales.mjs';
 
 /** Separates a page title from a heading on another page. */
 export const SEPARATOR = ' — ';
@@ -38,6 +52,8 @@ export const SEPARATOR = ' — ';
  * @typedef {object} PageOutline
  * @property {string} title
  * @property {Map<string, string>} headings Anchor slug to heading text.
+ * @property {number[]} [depths] Each heading's depth, in document order:
+ *   the layout a translation's headings are matched against.
  */
 
 /**
@@ -74,16 +90,100 @@ export function headingsOf(tree) {
 }
 
 /**
+ * Each heading's depth (2 for `##`), in document order.
+ *
+ * @param {import('mdast').Root} tree
+ * @returns {number[]}
+ */
+export function headingDepths(tree) {
+    const depths = [];
+    visit(tree, 'heading', (node) => {
+        depths.push(node.depth);
+    });
+    return depths;
+}
+
+/**
  * The title and headings of a Markdown source.
  *
  * @param {string} source
  * @returns {PageOutline}
  */
 export function outlineOf(source) {
+    const tree = fromMarkdown(stripFrontmatter(source));
     return {
         title: frontmatterTitle(source) ?? '',
-        headings: headingsOf(fromMarkdown(stripFrontmatter(source))),
+        headings: headingsOf(tree),
+        depths: headingDepths(tree),
     };
+}
+
+/**
+ * The anchor of the heading in `to` that sits where `anchor` sits in `from`:
+ * the English page's heading and its translation's. Only when both pages lay
+ * their headings out alike (the same depths, in the same order); otherwise,
+ * or when `from` has no such heading, null.
+ *
+ * @param {string} anchor
+ * @param {PageOutline} from
+ * @param {PageOutline} to
+ * @returns {string | null}
+ */
+export function mapAnchor(anchor, from, to) {
+    const index = [...from.headings.keys()].indexOf(anchor);
+    if (index === -1 || !from.depths || !to.depths) return null;
+    const alike =
+        from.depths.length === to.depths.length &&
+        from.depths.every((depth, i) => depth === to.depths[i]);
+    return alike ? ([...to.headings.keys()][index] ?? null) : null;
+}
+
+/**
+ * Where a site link on a page in `locale` points. Off any locale (English),
+ * and for a link that is not to a docs page or that names another locale, the
+ * link as written. Otherwise the page under the locale's prefix, where
+ * Starlight serves its translation or, failing one, the English page with
+ * its fallback notice. An anchor the translation lacks maps to its heading in
+ * the same place (`mapAnchor`); one that cannot map goes to the English page,
+ * which has it. A same-page anchor maps the same way from the page's English
+ * original. A link that resolves nowhere is returned as written, for
+ * `labelParts` to report.
+ *
+ * @param {string} url `/route/`, `/route/#anchor` or `#anchor`.
+ * @param {object} context
+ * @param {string | undefined} context.locale The page's locale key.
+ * @param {(route: string) => PageOutline | null} context.ownOutlineFor
+ *   Outline of the file that serves exactly `route`, no fallback.
+ * @param {PageOutline} context.here The page the link is on.
+ * @param {PageOutline | null} context.original The English page this page
+ *   translates, or null.
+ * @returns {string}
+ */
+export function localizeUrl(url, { locale, ownOutlineFor, here, original }) {
+    if (!locale) return url;
+    const hashAt = url.indexOf('#');
+    const route = hashAt === -1 ? url : url.slice(0, hashAt);
+    const hash = hashAt === -1 ? '' : url.slice(hashAt);
+    const { anchor } = splitUrl(url);
+
+    if (route === '') {
+        if (!anchor || here.headings.has(anchor) || !original) return url;
+        const mapped = mapAnchor(anchor, original, here);
+        return mapped === null ? url : `#${mapped}`;
+    }
+
+    const { locale: linked, path } = splitLocale(route);
+    if (linked !== undefined && linked !== locale) return url;
+    const english = ownOutlineFor(path);
+    if (!english) return url;
+    const target = localizePath(path, locale);
+    const translated = ownOutlineFor(target);
+    if (!translated || !anchor || translated.headings.has(anchor)) {
+        return `${target}${hash}`;
+    }
+    const mapped = mapAnchor(anchor, english, translated);
+    if (mapped !== null) return `${target}#${mapped}`;
+    return english.headings.has(anchor) ? `${path}${hash}` : url;
 }
 
 /**
@@ -185,20 +285,24 @@ function labelNodes({ page, heading }) {
  *   directory, `src/content/docs`.
  */
 export default function remarkLinkTitles({ contentDir }) {
-    /** @type {Map<string, PageOutline | null>} */
-    const cache = new Map();
-    const outlineFor = (route) => {
-        if (!cache.has(route)) {
-            const rel = contentFileForRoute(contentDir, route);
-            cache.set(
-                route,
-                rel === null
-                    ? null
-                    : outlineOf(readFileSync(join(contentDir, rel), 'utf8')),
+    /** @type {Map<string, PageOutline>} Keyed by content file. */
+    const files = new Map();
+    const outlineOfFile = (rel) => {
+        if (rel === null) return null;
+        if (!files.has(rel)) {
+            files.set(
+                rel,
+                outlineOf(readFileSync(join(contentDir, rel), 'utf8')),
             );
         }
-        return cache.get(route);
+        return files.get(rel);
     };
+    /** The page Starlight renders at `route`, a locale's fallback included. */
+    const outlineFor = (route) =>
+        outlineOfFile(servingFileForRoute(contentDir, route));
+    /** The file at exactly `route`: a locale's own translation, no fallback. */
+    const ownOutlineFor = (route) =>
+        outlineOfFile(contentFileForRoute(contentDir, route));
 
     /** True when a site link's target is a docs page (or this page). */
     const isDocsTarget = (url) => {
@@ -210,7 +314,19 @@ export default function remarkLinkTitles({ contentDir }) {
     return (tree, file) => {
         const where = file.path ?? 'a docs page';
         const generated = isGeneratedPage(file);
+        // The page's locale and the English page it translates, from where
+        // it sits in the collection.
+        const rel = file.path
+            ? (isAbsolute(file.path)
+                  ? relative(contentDir, file.path)
+                  : file.path
+              )
+                  .split(sep)
+                  .join('/')
+            : '';
+        const { locale, path: originalRel } = splitLocale(rel);
         let here = null;
+        let original;
         visit(tree, 'link', (node) => {
             if (!isSiteLink(node)) return;
             const text = textOf(node).trim();
@@ -226,14 +342,30 @@ export default function remarkLinkTitles({ contentDir }) {
                     frontmatterTitle(String(file.value ?? '')) ??
                     '',
                 headings: headingsOf(tree),
+                depths: headingDepths(tree),
             };
+            original ??=
+                locale === undefined
+                    ? null
+                    : outlineOfFile(
+                          existsSync(join(contentDir, originalRel))
+                              ? originalRel
+                              : null,
+                      );
+            const written = node.url;
             try {
+                node.url = localizeUrl(written, {
+                    locale,
+                    ownOutlineFor,
+                    here,
+                    original,
+                });
                 node.children = labelNodes(
                     labelParts(node.url, outlineFor, here),
                 );
             } catch (error) {
                 throw new Error(
-                    `${where}: empty link [](${node.url}) cannot be labelled: ${error.message}`,
+                    `${where}: empty link [](${written}) cannot be labelled: ${error.message}`,
                 );
             }
             node.data = {

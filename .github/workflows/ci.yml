@@ -235,13 +235,9 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
       # `--workspace` builds capsule-cli, which enables capsule-core's `media-linked-codecs`
-      # (#437): rav1e's x86_64 assembly needs nasm. cmake, a C++ compiler and libclang (for
-      # libjxl and its bindgen bindings) are already on the runner image. It also enables
-      # `media-avif-decode` (#588), whose `dav1d-sys` links the system libdav1d through
-      # pkg-config and has no vendored build, so the headers and `dav1d.pc` come from
-      # libdav1d-dev.
-      - name: Install nasm and libdav1d
-        run: sudo apt-get update && sudo apt-get install -y nasm libdav1d-dev
+      # (#437): libjxl's build needs cmake and a C++ compiler, both already on the runner
+      # image. Its AVIF decode (`media-avif-decode`) goes through rawshift's gamut codecs
+      # (#1320) and links no system codec library, so neither libdav1d nor nasm is installed.
       # check-rust runs the verify-examples smoke via nextest.
       - name: Install nextest
         uses: taiki-e/install-action@v2
@@ -324,10 +320,6 @@ jobs:
         run: rustup toolchain install
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-      # nasm for rav1e's x86_64 assembly (#437) and libdav1d for AVIF decode (#588); see the
-      # `rust` job.
-      - name: Install nasm and libdav1d
-        run: sudo apt-get update && sudo apt-get install -y nasm libdav1d-dev
       - name: Install nextest
         uses: taiki-e/install-action@v2
         with:
@@ -378,10 +370,6 @@ jobs:
         run: rustup toolchain install
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-      # nasm and libdav1d: capsule-e2e links capsule-cli's codecs through capsule-library, as
-      # in the `rust` job.
-      - name: Install nasm and libdav1d
-        run: sudo apt-get update && sudo apt-get install -y nasm libdav1d-dev
       - name: Install nextest
         uses: taiki-e/install-action@v2
         with:
@@ -415,9 +403,6 @@ jobs:
         run: rustup toolchain install
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-      # nasm and libdav1d: capsule-cli's codecs, as in the `rust` job.
-      - name: Install nasm and libdav1d
-        run: sudo apt-get update && sudo apt-get install -y nasm libdav1d-dev
       - name: Install nextest
         uses: taiki-e/install-action@v2
         with:
@@ -462,9 +447,6 @@ jobs:
         run: rustup toolchain install
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-      # nasm and libdav1d: capsule-cli's codecs, as in the `rust` job.
-      - name: Install nasm and libdav1d
-        run: sudo apt-get update && sudo apt-get install -y nasm libdav1d-dev
       - name: Install nextest
         uses: taiki-e/install-action@v2
         with:
