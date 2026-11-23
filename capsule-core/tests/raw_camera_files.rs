@@ -30,9 +30,10 @@ use capsule_core::media::{
 /// The file `var` names. Panics rather than skipping, so `--ignored` without the files fails
 /// instead of passing on nothing.
 fn camera_file(var: &str) -> (PathBuf, Vec<u8>) {
-    let path = std::env::var_os(var)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| panic!("set {var} to a camera-written file"));
+    let path = std::env::var_os(var).map_or_else(
+        || panic!("set {var} to a camera-written file"),
+        PathBuf::from,
+    );
     let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     (path, bytes)
 }
