@@ -51,8 +51,8 @@ flowchart TB
 An arrow points from a component to what it depends on, through the path that carries the
 architecture: each app reaches the shared Rust through a binding for its platform (the accent
 nodes), the CLI directly, and the server is a separate binary the SDK reaches only over REST. Shorter links that skip a step
-(the CLI and the Apple binding also linking `capsule-library` directly, everything Rust using
-`capsule-i18n`) are left out. One link is a build step rather than a dependency: Spargen generates
+(the CLI and the Apple binding also linking `capsule-library` directly, and the SDK, the CLI, the server and
+`xtask` using `capsule-i18n`) are left out. One link is a build step rather than a dependency: Spargen generates
 the SDK's REST client from the OpenAPI document the server emits, so the client cannot drift from
 the contract.
 
