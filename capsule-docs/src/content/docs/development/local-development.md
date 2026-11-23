@@ -38,6 +38,12 @@ Frequently used tasks:
 - `i18n` and `openapi-kynos`.
 - For FFI, `targets-add`, then `build-ffi` and `gen-bindings`. On macOS, `setup-swift` builds the
   xcframework and the Xcode workspace.
+- `check-targets`: `cargo check` of the FFI for every Tier-1 and Tier-2 cross target (Apple,
+  Android, Windows, aarch64 Linux) from a macOS or Linux host. The C that build scripts compile goes through
+  `zig cc` (`scripts/cross/zig-cc`), so no Xcode, NDK or MSVC is needed. Narrow it with
+  `--target TRIPLE`, `--tier 1|2` or `--apple`. The `build-apple`, `build-android`,
+  `build-windows` and `build-linux-cross` tasks produce real linked artifacts, so they need each
+  platform's native toolchain. Off macOS, `build-apple` falls back to `check-targets --apple`.
 
 ## Running a server locally
 

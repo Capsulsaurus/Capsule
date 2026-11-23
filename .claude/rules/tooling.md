@@ -3,6 +3,8 @@ paths:
   - "xtask/**"
   - "mise.toml"
   - "mise-tasks/**"
+  - "scripts/**"
+  - "Cross.toml"
   - "hk.pkl"
   - ".github/workflows/**"
   - ".config/**"

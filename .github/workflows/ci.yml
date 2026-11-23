@@ -46,6 +46,7 @@ jobs:
               - 'Cross.toml'
               - 'mise.toml'
               - 'mise-tasks/**'
+              - 'scripts/cross/**'
               - '.config/nextest.toml'
               - 'hk.pkl'
               - '.cargo/**'
@@ -490,6 +491,33 @@ jobs:
           cat "$RUNNER_TEMP/capsule-server.log" || true
           docker compose -f capsule-server/compose.yaml --profile oidc logs dex || true
 
+  # Type-check the FFI for every Tier-1 and Tier-2 cross target from ONE Linux runner, exactly
+  # as a developer runs it locally (`mise run check-targets`, C through zig). This is the proof
+  # that the cross-target gate does not need each platform's runner. Tier 1 gates; Tier 2 is
+  # best-effort, matching `rust-cross` below.
+  rust-cross-check:
+    name: Rust cross check (Linux host)
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: cross-check
+      - name: Set up mise (task runner + zig)
+        uses: jdx/mise-action@v2
+        with:
+          install_args: zig
+      - name: Check Tier 1 targets
+        run: mise run check-targets --tier 1
+      - name: Check Tier 2 targets (best-effort)
+        continue-on-error: true
+        run: mise run check-targets --tier 2
+
   # Verify the app FFI — capsule-sdk with `--features ffi`, plus the capsule-core-ffi
   # umbrella on Apple, both linking capsule-core — cross-compiles to the formally
   # supported targets (mobile + desktop). Tier 1 (Apple, Android) gates; Tier 2 (Windows MSVC, aarch64 Linux)
@@ -544,12 +572,12 @@ jobs:
         if: matrix.name == 'android'
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-ndk
+          tool: cargo-ndk@4.1.2 # matches the mise.toml pin
       - name: Install cross
         if: matrix.name == 'linux-arm64'
         uses: taiki-e/install-action@v2
         with:
-          tool: cross
+          tool: cross@0.2.5 # matches the mise.toml pin
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
@@ -742,12 +770,14 @@ jobs:
   # `rust-advisories`, unfiltered, #507), and `changes` is checked ahead of it under a stricter rule,
   # because "skipped" is only trustworthy when the filter that skipped it ran.
   # A job in `needs` but absent from both checks is a gate that cannot fail.
+  # `rust-cross-check` gates on purpose (#1310): a Tier-1 target that no longer type-checks
+  # through `mise run check-targets` blocks the merge, as a Tier-1 `rust-cross` failure does.
   required:
     name: required
     if: always()
     # TODO(track:deferred): re-add `kotlin` and `swift` here and to the loop below when mobile
     # resumes — see #389 (Android) and #391–#393 (Apple). Both jobs are disabled (`if: false`).
-    needs: [changes, commit-lint, rust, rust-advisories, rust-test, rust-containers, rust-kill-anywhere, rust-oidc, rust-cross, web, docs, docs-truth, markdown]
+    needs: [changes, commit-lint, rust, rust-advisories, rust-test, rust-containers, rust-kill-anywhere, rust-oidc, rust-cross-check, rust-cross, web, docs, docs-truth, markdown]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs succeeded
@@ -769,7 +799,7 @@ jobs:
                    "${{ needs.rust-advisories.result }}" \
                    "${{ needs.rust-test.result }}" "${{ needs.rust-containers.result }}" \
                    "${{ needs.rust-kill-anywhere.result }}" \
-                   "${{ needs.rust-oidc.result }}" "${{ needs.rust-cross.result }}" \
+                   "${{ needs.rust-oidc.result }}" "${{ needs.rust-cross-check.result }}" "${{ needs.rust-cross.result }}" \
                    "${{ needs.web.result }}" \
                    "${{ needs.docs.result }}" "${{ needs.docs-truth.result }}" \
                    "${{ needs.markdown.result }}"; do
