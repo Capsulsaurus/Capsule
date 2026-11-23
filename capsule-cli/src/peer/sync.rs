@@ -573,7 +573,9 @@ async fn session(
     let channel = channel?;
     let peer = channel.peer().device_id;
     tracing::info!(%peer, "peer pull: verified session");
-    let client = match PeerClient::open_offering(channel, offer).await {
+    // Boxed, as the admission's handshake futures are: inline, the opening's state would grow
+    // every future that awaits a pull.
+    let client = match Box::pin(PeerClient::open_offering(channel, offer)).await {
         Ok(client) => client,
         Err(error) => {
             tracing::warn!(%peer, %error, "peer pull: the verified session did not open");
