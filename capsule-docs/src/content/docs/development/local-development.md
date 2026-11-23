@@ -13,7 +13,7 @@ what CI runs. The Rust toolchain is pinned in `rust-toolchain.toml` and Swift to
 ## First-time setup
 
 ```bash
-mise install           # pinned tools (hk, convco, cargo-nextest, wasm-bindgen-cli, ...)
+mise install           # pinned tools (hk, convco, cargo-nextest, shellcheck, actionlint, ...)
 mise run setup         # bun install in capsule-web + capsule-docs
 mise run hooks-install # git hooks (hk)
 ```
@@ -28,6 +28,7 @@ mise run hooks-install # git hooks (hk)
 | `mise run check-docs` | Docs format, lint, Astro build (a broken internal link fails it) |
 | `mise run check-md` | markdownlint over every `.md` |
 | `mise run check-kotlin` | Kotlin format and lint |
+| `mise run lint-check-shell` | shellcheck over the shell scripts in `mise-tasks/`, `scripts/` and every `*.sh`, then actionlint over `.github/workflows/`; part of `lint-check` and pre-push |
 
 Frequently used tasks:
 
