@@ -392,10 +392,13 @@ async fn an_offer_to_another_device_than_named_sends_nothing() {
 /// the listing after it is the channel's to bound
 /// ([`capsule_sdk::peering::channel::LISTING_BUILD_ALLOWANCE`]).
 /// The offering side stands in for a slow artifact build (a large library, or a loaded host) by
-/// waiting several listen timeouts between reading the offer and listing.
+/// waiting one full listen timeout after reading the offer before it lists. The receiver started
+/// its listen deadline before it sent that offer, so the wait always ends past the deadline
+/// however long the handshake took; and the listen timeout is seconds, so admitting the
+/// handshake does not race it on a loaded host.
 #[tokio::test]
 async fn a_listing_built_past_the_listen_timeout_is_still_pulled() {
-    const LISTEN: Duration = Duration::from_millis(200);
+    const LISTEN: Duration = Duration::from_secs(10);
     let scratch = Scratch::new();
     let mut pair = pair(&scratch);
     let listener = PeerListener::bind("127.0.0.1:0".parse().expect("an address"), LISTEN)
@@ -415,7 +418,7 @@ async fn a_listing_built_past_the_listen_timeout_is_still_pulled() {
     let slow_offer = async {
         let mut channel = dial(&address, local_a).await.expect("verified");
         let offer = channel.receive_offer().await.expect("the offer reads");
-        tokio::time::sleep(LISTEN * 5).await;
+        tokio::time::sleep(LISTEN).await;
         let offering = Offering::new();
         let served = serve(&mut channel, &offering, &pair.trust, &a_versions, |_| {
             Err(DelegationError::AckMismatch)
