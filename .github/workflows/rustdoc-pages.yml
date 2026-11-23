@@ -36,7 +36,7 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
       - name: Set up mise (task runner)
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v4
         with:
           install: false
       - name: Render the published rustdoc

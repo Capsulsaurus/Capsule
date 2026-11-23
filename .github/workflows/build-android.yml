@@ -93,7 +93,7 @@ jobs:
       # stage-bindings.sh (invoked by the :core stageUniffiBindings task) shells out to
       # `mise run gen-bindings`, so mise must be on PATH — but install nothing implicitly.
       - name: Set up mise (exec shim)
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v4
         with:
           install: false
 
@@ -121,7 +121,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up mise (exec shim)
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v4
         with:
           install: false
 

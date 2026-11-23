@@ -56,7 +56,7 @@ jobs:
       # `mise run bench-apps` needs mise on PATH, and the `-Pcapsule.wireFfi` staging shells
       # out to `mise run gen-bindings` - but install nothing implicitly, as build-android.yml.
       - name: Set up mise (exec shim)
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v4
         with:
           install: false
 
@@ -93,7 +93,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up mise
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v4
         with:
           working_directory: capsule-swift
           install_args: tuist xcbeautify
