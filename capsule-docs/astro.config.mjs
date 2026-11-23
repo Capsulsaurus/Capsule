@@ -12,6 +12,7 @@ import { referenceSidebar } from './scripts/reference-groups.mjs';
 import baseLinks from './src/lib/base-links.mjs';
 import { BLOG_AUTHORS, hasPublishedPost } from './src/lib/blog-posts.mjs';
 import { resolveBuildCommit } from './src/lib/build-commit.mjs';
+import { pluginLanguageLabel } from './src/lib/code-language.mjs';
 import { versionFromBranch } from './src/lib/docs-version.mjs';
 import {
     LLMS_DETAILS,
@@ -117,6 +118,8 @@ export default defineConfig({
                 baseUrl:
                     'https://github.com/Capsulsaurus/Capsule/tree/master/capsule-docs',
             },
+            // Every code block names its language in its corner.
+            expressiveCode: { plugins: [pluginLanguageLabel()] },
             components: {
                 // Renders the computed audit status as a title badge, with the
                 // commit and date of the page's last audit.
