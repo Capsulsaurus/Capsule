@@ -95,7 +95,18 @@ export function auditPages(files, io = REAL_IO) {
             );
             continue;
         }
-        stamps.push({ file, path, source });
+        // Stamp in memory here, so a page stampAudit cannot stamp (no YAML
+        // frontmatter, say) is refused before any page is written.
+        let stamped;
+        try {
+            stamped = stampAudit(source, { commit, date });
+        } catch (error) {
+            problems.push(
+                `${file}: ${error instanceof Error ? error.message : error}`,
+            );
+            continue;
+        }
+        stamps.push({ file, path, source, stamped });
     }
     if (problems.length > 0) {
         for (const problem of problems) {
@@ -104,9 +115,9 @@ export function auditPages(files, io = REAL_IO) {
         throw new Error(`nothing stamped:\n${problems.join('\n')}`);
     }
 
-    return stamps.map(({ file, path, source }) => {
+    return stamps.map(({ file, path, source, stamped }) => {
         const previous = parseAudit(source).state;
-        io.write(path, stampAudit(source, { commit, date }));
+        io.write(path, stamped);
         const record = {
             file,
             commit,

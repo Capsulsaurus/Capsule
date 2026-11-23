@@ -83,6 +83,21 @@ describe('auditPages', () => {
         expect(logs.at(-1)).toMatchObject({ event: 'audit.refused' });
     });
 
+    it('refuses every page, writing none, when one has no frontmatter', () => {
+        // Listed after a stampable page, so a check deferred to the write
+        // loop would already have written a.md.
+        const bare = '# No frontmatter\n\nBody.\n';
+        const { io, written, logs } = fakeIo({
+            head: { 'a.md': PAGE, 'b.md': bare },
+            disk: { 'a.md': PAGE, 'b.md': bare },
+        });
+        expect(() =>
+            auditPages([resolve(ROOT, 'a.md'), resolve(ROOT, 'b.md')], io),
+        ).toThrow(/b\.md: page has no YAML frontmatter/);
+        expect(written.size).toBe(0);
+        expect(logs.at(-1)).toMatchObject({ event: 'audit.refused' });
+    });
+
     it('refuses a page whose trailing newlines differ from HEAD', () => {
         // The digest covers every byte, so the pinned commit must hold them.
         const { io, written } = fakeIo({
