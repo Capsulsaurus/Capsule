@@ -33,9 +33,11 @@
 #
 # - inside the window, the push must reach verified custody for the one asset and the restore
 #   must return the fixture byte for byte;
-# - outside it, every write must be refused with `error.protocol.version_unsupported` (the `426`
-#   gate), and nothing may be lost: the fixture is untouched and the local library still holds the
-#   imported asset (versioning invariants 3 and 5).
+# - outside it, register and login must be refused with `error.protocol.version_unsupported` (the
+#   `426` gate); the push must fail with that refusal too, or, since the refused login left no
+#   session, with the CLI's no-session error before it sends any request; and nothing may be lost:
+#   the fixture is untouched and the local library still holds the imported asset (versioning
+#   invariants 3 and 5).
 #
 # Every wait is bounded: the server's readiness probe retries for 60 s, and every CLI run is cut
 # at CLI_TIMEOUT seconds. Each process's output is kept under the work directory, which is
@@ -45,6 +47,7 @@ set -euo pipefail
 readonly TARGET=x86_64-unknown-linux-gnu
 readonly PRIMITIVES=capsule-core/src/crypto/primitives.rs
 readonly REFUSAL_CODE=error.protocol.version_unsupported
+readonly NO_SESSION_MESSAGE="Not authenticated. Run 'capsule auth login' first."
 readonly PASSWORD='prev-release-compat password 1'
 readonly PASSPHRASE='prev-release-compat passphrase 1'
 # The published example key from capsule-server/.env.example, as `mise run serve-memory` uses:
@@ -318,6 +321,13 @@ refused_by_gate() {
 	grep -qF -e "$REFUSAL_CODE" -e "$refusal_message" "$1/$2.stdout" "$1/$2.stderr"
 }
 
+# Whether a failed step stopped for want of a session: the CLI's no-session error, which it
+# prints before sending any request (`NOT_AUTHENTICATED` in capsule-cli/src/lib.rs, not a catalog
+# entry).
+no_session() {
+	grep -qF -e "$NO_SESSION_MESSAGE" "$1/$2.stdout" "$1/$2.stderr"
+}
+
 # The English message a client renders the refusal code as, from that client's catalog on stdin.
 refusal_message_of() {
 	jq -er --arg code "$REFUSAL_CODE" '.[$code].message'
@@ -378,14 +388,24 @@ run_flow() {
 		local asset
 		asset=$(jq -er '.outcomes[0].asset_id' "$dir/import.stdout") ||
 			step_failed "$dir" import "the report names no imported asset"
+		# The gate refused login, so the client holds no session and its push stops before any
+		# request with the no-session error. A push that does reach the server must carry the
+		# gate's refusal. Any other failure (a crash, a timeout) is not a refusal and fails here.
+		local push_refusal
 		if cli_run "$dir" push "$PASSPHRASE"$'\n' push --library "$library" --passphrase-stdin --json; then
 			step_failed "$dir" push "a client outside the window pushed"
+		elif refused_by_gate "$dir" push; then
+			push_refusal="refused with $REFUSAL_CODE"
+		elif no_session "$dir" push; then
+			push_refusal="stopped before any request with the no-session error, as login was refused"
+		else
+			step_failed "$dir" push "failed, but neither with $REFUSAL_CODE nor with the no-session error ($NO_SESSION_MESSAGE)"
 		fi
 		cli_run "$dir" show "$PASSPHRASE"$'\n' show "$asset" --library "$library" --passphrase-stdin ||
 			step_failed "$dir" show "the imported asset no longer opens after the refused push"
 		[ "$(sha256sum "$fixture" | cut -d' ' -f1)" = "$fixture_sum" ] ||
 			die "$label: the fixture changed"
-		log "  $label: every write refused with $REFUSAL_CODE; nothing lost"
+		log "  $label: register and login refused with $REFUSAL_CODE; push $push_refusal; the imported asset still opens and the fixture is unchanged"
 	else
 		cli_run "$dir" register "$PASSWORD"$'\n' auth register --email "$email" --password-stdin ||
 			step_failed "$dir" register "register failed"
