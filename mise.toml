@@ -43,6 +43,11 @@ hk = "1.48.0"
 zig = "0.15.2"
 "cargo:cargo-ndk" = "4.1.2"
 "cargo:cross" = "0.2.5"
+# The shell and workflow gate (`lint-check-shell`, mise-tasks/lint-check-shell): shellcheck over
+# the bash task scripts and scripts/, actionlint over .github/workflows/ (it also runs shellcheck
+# over every `run:` block). actionlint below 1.7.12 rejects the `macos-26` runner label.
+shellcheck = "0.11.0"
+actionlint = "1.7.12"
 
 [env]
 # Curated clippy lint set, applied `--workspace` so every crate gets identical rules
@@ -70,7 +75,7 @@ depends = ["lint-rust", "lint-web", "lint-docs", "lint-kotlin", "lint-swift", "l
 
 [tasks.lint-check]
 description = "Verify lints, every toolchain"
-depends = ["lint-check-rust", "lint-check-web", "lint-check-docs", "lint-check-kotlin", "lint-check-swift", "lint-check-md", "check-docs-truth"]
+depends = ["lint-check-rust", "lint-check-web", "lint-check-docs", "lint-check-kotlin", "lint-check-swift", "lint-check-md", "lint-check-shell", "check-docs-truth"]
 
 [tasks.test]
 description = "Run tests (rust + web + kotlin + swift + docs)"
