@@ -30,6 +30,7 @@ jobs:
       docs: ${{ steps.filter.outputs.docs }}
       docs-truth: ${{ steps.filter.outputs.docs-truth }}
       markdown: ${{ steps.filter.outputs.markdown }}
+      shell: ${{ steps.filter.outputs.shell }}
       kotlin: ${{ steps.filter.outputs.kotlin }}
       swift: ${{ steps.filter.outputs.swift }}
     steps:
@@ -177,6 +178,15 @@ jobs:
               - 'mise.toml'
               - 'mise-tasks/**'
               - '.github/workflows/ci.yml'
+            # What `lint-check-shell` reads, plus mise.toml for the shellcheck and
+            # actionlint pins. Same set as hk.pkl's `lint-check-shell` glob; keep the
+            # two in step.
+            shell:
+              - 'mise-tasks/**'
+              - 'scripts/**'
+              - '**/*.sh'
+              - '.github/workflows/**'
+              - 'mise.toml'
             swift:
               - 'capsule-swift/**'
               - 'capsule-core-swift/**'
@@ -699,6 +709,22 @@ jobs:
       - name: Check (markdown lint)
         run: mise run check-md
 
+  # shellcheck over the shell scripts and actionlint over every workflow (#1343). The two
+  # tools are [tools] pins, and MISE_AUTO_INSTALL is off, so they are asked for by name.
+  shell:
+    name: Shell + workflows (shellcheck + actionlint)
+    needs: changes
+    if: ${{ needs.changes.outputs.shell == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up mise (task runner + shellcheck + actionlint)
+        uses: jdx/mise-action@v2
+        with:
+          install_args: shellcheck actionlint
+      - name: Check (shellcheck + actionlint)
+        run: mise run lint-check-shell
+
   kotlin:
     name: Kotlin (ktlint + detekt)
     needs: changes
@@ -765,19 +791,20 @@ jobs:
   # Single aggregated status check. Mark THIS ("CI / required") as the required
   # check in branch protection — path-filtered jobs report "skipped", which this
   # treats as a pass. Every job in `needs` is verified below: the loop covers the
-  # eleven gates (`rust-test` included — see the
+  # fourteen gates (`rust-test` included — see the
   # note on that job — `rust-containers`, blocking from the start, #514, `rust-oidc`, #640, and
   # `rust-advisories`, unfiltered, #507), and `changes` is checked ahead of it under a stricter rule,
   # because "skipped" is only trustworthy when the filter that skipped it ran.
   # A job in `needs` but absent from both checks is a gate that cannot fail.
   # `rust-cross-check` gates on purpose (#1310): a Tier-1 target that no longer type-checks
   # through `mise run check-targets` blocks the merge, as a Tier-1 `rust-cross` failure does.
+  # `shell` (#1343) gates every shell script and workflow, this file included.
   required:
     name: required
     if: always()
     # TODO(track:deferred): re-add `kotlin` and `swift` here and to the loop below when mobile
     # resumes — see #389 (Android) and #391–#393 (Apple). Both jobs are disabled (`if: false`).
-    needs: [changes, commit-lint, rust, rust-advisories, rust-test, rust-containers, rust-kill-anywhere, rust-oidc, rust-cross-check, rust-cross, web, docs, docs-truth, markdown]
+    needs: [changes, commit-lint, rust, rust-advisories, rust-test, rust-containers, rust-kill-anywhere, rust-oidc, rust-cross-check, rust-cross, web, docs, docs-truth, markdown, shell]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs succeeded
@@ -802,7 +829,7 @@ jobs:
                    "${{ needs.rust-oidc.result }}" "${{ needs.rust-cross-check.result }}" "${{ needs.rust-cross.result }}" \
                    "${{ needs.web.result }}" \
                    "${{ needs.docs.result }}" "${{ needs.docs-truth.result }}" \
-                   "${{ needs.markdown.result }}"; do
+                   "${{ needs.markdown.result }}" "${{ needs.shell.result }}"; do
             if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
               echo "A required job did not pass (result: $r)."
               exit 1

@@ -73,6 +73,10 @@ hooks {
 
       ["lint-check-md"]       { glob = "**/*.md"; check = "mise run lint-check-md" }
 
+      // shellcheck + actionlint. The glob is the set the task reads (mise-tasks/lint-check-shell);
+      // it mirrors the `shell` paths filter in ci.yml, which adds mise.toml for the tool pins.
+      ["lint-check-shell"]    { glob = List("mise-tasks/**", "scripts/**", "**/*.sh", ".github/workflows/**"); check = "mise run lint-check-shell" }
+
       // Verify-only (no fixer), so pre-push rather than pre-commit. Mirrors the
       // `docs-truth` paths filter in ci.yml — astro.config.mjs is in it because
       // that is where the published origin comes from. The claim to mirror
