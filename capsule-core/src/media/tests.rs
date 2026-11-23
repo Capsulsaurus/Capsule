@@ -34,9 +34,8 @@ use rawshift_image::formats::export::{
 use uuid::Uuid;
 
 use super::decode::{
-    BoundedRawDecoder, Decoder, RawshiftDecoder, check_decoded_budget, decode_embedded_preview,
-    decode_guarded, embedded_preview_within, extract_bounded_embedded_preview,
-    extract_embedded_preview, probe_raw, standard_error,
+    Decoder, RawshiftDecoder, check_decoded_budget, decode_embedded_preview, decode_guarded,
+    embedded_preview_within, extract_embedded_preview, probe_raw, standard_error,
 };
 #[cfg(feature = "media-linked-codecs")]
 use super::derivative::jxl_distance;
@@ -44,10 +43,13 @@ use super::derivative::{
     DerivativeContext, DerivativeSealer, DerivativeTier, SealedDerivative, StillDerivatives,
     generate_still_derivatives,
 };
-use super::detect::{BOUNDED_RAW_FORMATS, MAX_DECODE_PIXELS, SUPPORTED_STILL_FORMATS, StillFormat};
+use super::detect::{MAX_DECODE_PIXELS, SUPPORTED_STILL_FORMATS, StillFormat};
 use super::error::{FormatOp, MediaError};
 use super::resize::{capped_dimensions, downscale_rgba8};
-use super::tiff_bounds::{IfdRefusal, MAX_IFD_DEPTH, OversizedEntry, TooDeep, check_ifd_bounds};
+use super::tiff_bounds::{
+    Budget, Exhausted, IfdRefusal, MAX_BLACK_LEVEL_REPEAT, MAX_IFD_DEPTH, MAX_IFD_POINTERS,
+    OversizedEntry, TooDeep, Unbounded, check_ifd_bounds,
+};
 use crate::crypto::encryption::encrypt_asset_rekey;
 use crate::crypto::hash::Hash32;
 use crate::crypto::keys::{Amk, AmkVersion, HybridSigningKey};
@@ -511,16 +513,14 @@ fn is_decodable_matches_the_supported_table() {
     for format in SUPPORTED_STILL_FORMATS {
         assert!(format.is_decodable(), "{format} is in the supported table");
     }
-    // No RAW family decodes on the import path (issue #1323): ARW and DNG, the two the RAW
-    // pipeline covers, are held out until issue #1324 re-enables them.
-    assert!(
-        SUPPORTED_STILL_FORMATS.iter().all(|f| !f.is_raw()),
-        "no RAW family is decodable"
-    );
-    assert_eq!(
-        BOUNDED_RAW_FORMATS.to_vec(),
-        vec![StillFormat::Arw, StillFormat::Dng]
-    );
+    // ARW and DNG are the only RAW families that decode (issue #589), and they decode in every
+    // `media` build because their reader is pure Rust.
+    let decodable_raw: Vec<StillFormat> = SUPPORTED_STILL_FORMATS
+        .iter()
+        .copied()
+        .filter(|f| f.is_raw())
+        .collect();
+    assert_eq!(decodable_raw, vec![StillFormat::Arw, StillFormat::Dng]);
     // AVIF is a decode case exactly where the opt-in feature is on (issue #588), and the default
     // — what the mobile FFI and the cross builds compile — never claims it.
     assert_eq!(
@@ -537,6 +537,8 @@ fn is_decodable_matches_the_supported_table() {
                 StillFormat::Jxl,
                 StillFormat::Tiff,
                 StillFormat::Gif,
+                StillFormat::Arw,
+                StillFormat::Dng,
                 StillFormat::Avif,
             ]
         } else {
@@ -546,19 +548,18 @@ fn is_decodable_matches_the_supported_table() {
                 StillFormat::Jxl,
                 StillFormat::Tiff,
                 StillFormat::Gif,
+                StillFormat::Arw,
+                StillFormat::Dng,
             ]
         },
         "the supported table is pinned per build"
     );
     // HEIC never decodes, under any feature: libheif and libde265 are LGPL-3.0 (issue #588).
-    // ARW and DNG are deferred (issue #1323); the `raw-incomplete` RAW families stay refused
-    // (issue #589).
+    // The `raw-incomplete` RAW families stay refused (issue #589).
     for format in [
         StillFormat::Ppm,
         StillFormat::WebP,
         StillFormat::Heic,
-        StillFormat::Arw,
-        StillFormat::Dng,
         StillFormat::Cr2,
         StillFormat::Cr3,
         StillFormat::Crw,
@@ -1091,6 +1092,7 @@ enum TiffTag {
     GPSInfoIFDPointer = 0x8825,
     DNGVersion = 0xC612,
     UniqueCameraModel = 0xC614,
+    BlackLevelRepeatDim = 0xC619,
     BlackLevel = 0xC61A,
     WhiteLevel = 0xC61D,
     DefaultCropOrigin = 0xC61F,
@@ -1099,6 +1101,7 @@ enum TiffTag {
     AsShotNeutral = 0xC628,
     CalibrationIlluminant1 = 0xC65A,
     ActiveArea = 0xC68D,
+    OpcodeList2 = 0xC741,
 }
 
 /// The camera profile every DNG fixture carries, which gamut's DNG reader requires: a camera
@@ -1560,7 +1563,7 @@ fn half_means(image: &RgbaImage) -> (u32, u32, u32, u32) {
     )
 }
 
-/// ARW and DNG decode through the RAW pipeline, behind its pre-open bounds, to upright, opaque
+/// ARW and DNG are in the coverage table and decode through the RAW pipeline to upright, opaque
 /// RGBA8 that still shows the scene: the bright half stays brighter, and grey stays grey.
 #[test]
 fn arw_and_dng_decode_through_the_raw_pipeline() {
@@ -1591,7 +1594,7 @@ fn arw_and_dng_decode_through_the_raw_pipeline() {
         ),
     ];
     for (bytes, ext, format, bit_depth) in cases {
-        let probed = BoundedRawDecoder
+        let probed = RawshiftDecoder
             .probe(&bytes, ext)
             .unwrap_or_else(|e| panic!("probing the .{ext} fixture: {e}"));
         assert_eq!(probed.format, format);
@@ -1603,7 +1606,7 @@ fn arw_and_dng_decode_through_the_raw_pipeline() {
             "the fixture carries no orientation tag"
         );
 
-        let decoded = decode_guarded(&BoundedRawDecoder, &bytes, ext)
+        let decoded = decode_guarded(&RawshiftDecoder, &bytes, ext)
             .unwrap_or_else(|e| panic!("decoding the .{ext} fixture: {e}"));
         assert_eq!(decoded.format, format);
         assert_eq!((decoded.width(), decoded.height()), (width, height));
@@ -1660,12 +1663,12 @@ fn a_raw_orientation_is_applied_exactly_once() {
         |_| {},
     );
     for (bytes, ext) in [(dng, "dng"), (arw, "arw")] {
-        let probed = BoundedRawDecoder.probe(&bytes, ext).expect("probe");
+        let probed = RawshiftDecoder.probe(&bytes, ext).expect("probe");
         assert_eq!(probed.orientation, Some(6));
         assert_eq!(probed.stored_dimensions, (width, height));
         assert_eq!(probed.upright_dimensions(), (height, width));
 
-        let decoded = BoundedRawDecoder.decode(&bytes, ext).expect("decode");
+        let decoded = RawshiftDecoder.decode(&bytes, ext).expect("decode");
         assert_eq!(decoded.orientation_applied, 6);
         assert_eq!(
             (decoded.width(), decoded.height()),
@@ -1694,9 +1697,9 @@ fn a_dng_default_crop_is_the_stored_frame() {
             set_entry(e, IfdEntry::longs(TiffTag::DefaultCropSize, &[10, 4]));
         },
     );
-    let probed = BoundedRawDecoder.probe(&dng, "dng").expect("probe");
+    let probed = RawshiftDecoder.probe(&dng, "dng").expect("probe");
     assert_eq!(probed.stored_dimensions, (10, 4));
-    let decoded = BoundedRawDecoder.decode(&dng, "dng").expect("decode");
+    let decoded = RawshiftDecoder.decode(&dng, "dng").expect("decode");
     assert_eq!((decoded.width(), decoded.height()), (10, 4));
 }
 
@@ -1706,7 +1709,7 @@ fn a_dng_default_crop_is_the_stored_frame() {
 fn a_linear_raw_dng_decodes_from_its_jpeg_xl_tile() {
     let frame = quadrants(16, 16);
     let dng = dng_linear_jxl((16, 16), &frame);
-    let decoded = BoundedRawDecoder.decode(&dng, "dng").expect("decode");
+    let decoded = RawshiftDecoder.decode(&dng, "dng").expect("decode");
     assert_eq!(decoded.format, StillFormat::Dng);
     assert_eq!((decoded.width(), decoded.height()), (16, 16));
     let (tl, tr, bl, br) = quadrant_means(&decoded.image);
@@ -1734,8 +1737,8 @@ fn an_oversized_raw_frame_is_refused_before_decoding() {
         set_entry(e, IfdEntry::long(TiffTag::ImageWidth, 20_000));
         set_entry(e, IfdEntry::long(TiffTag::ImageLength, 20_000));
     });
-    assert_eq!(BoundedRawDecoder.probe(&sensor, "dng"), Err(over.clone()));
-    assert_eq!(BoundedRawDecoder.decode(&sensor, "dng"), Err(over.clone()));
+    assert_eq!(RawshiftDecoder.probe(&sensor, "dng"), Err(over.clone()));
+    assert_eq!(RawshiftDecoder.decode(&sensor, "dng"), Err(over.clone()));
 
     // The active area: a small sensor whose crop tags claim a frame the demosaic would
     // allocate at 20000x20000.
@@ -1752,8 +1755,8 @@ fn an_oversized_raw_frame_is_refused_before_decoding() {
             );
         },
     );
-    assert_eq!(BoundedRawDecoder.probe(&active, "arw"), Err(over.clone()));
-    assert_eq!(BoundedRawDecoder.decode(&active, "arw"), Err(over));
+    assert_eq!(RawshiftDecoder.probe(&active, "arw"), Err(over.clone()));
+    assert_eq!(RawshiftDecoder.decode(&active, "arw"), Err(over));
 
     // The budget is the caller's: the same small file is refused under a limit it exceeds and
     // probes under one it does not.
@@ -1790,15 +1793,15 @@ fn a_long8_raw_frame_is_refused_before_decoding() {
         check_ifd_bounds(&image).map(|w| w.max_image),
         Ok((20_000, 20_000))
     );
-    assert_eq!(BoundedRawDecoder.probe(&image, "dng"), Err(over.clone()));
-    assert_eq!(BoundedRawDecoder.decode(&image, "dng"), Err(over.clone()));
+    assert_eq!(RawshiftDecoder.probe(&image, "dng"), Err(over.clone()));
+    assert_eq!(RawshiftDecoder.decode(&image, "dng"), Err(over.clone()));
 
     let codestream = jxl_bytes(&gradient(16, 16), None);
     let tile = dng_linear_jxl_with(&codestream, (16, 16), |e, _, _| {
         set_entry(e, IfdEntry::long8s(TiffTag::TileWidth, &[20_000]));
         set_entry(e, IfdEntry::long8s(TiffTag::TileLength, &[20_000]));
     });
-    assert_eq!(BoundedRawDecoder.probe(&tile, "dng"), Err(over.clone()));
+    assert_eq!(RawshiftDecoder.probe(&tile, "dng"), Err(over.clone()));
 
     // The oversized raw image in a SubIFD that IFD0 points at through a one-element `LONG8`
     // list: 8 bytes, so stored out of line in classic TIFF and read at 8 bytes, not 4.
@@ -1830,7 +1833,7 @@ fn a_long8_raw_frame_is_refused_before_decoding() {
         check_ifd_bounds(&nested).map(|w| (w.ifds, w.max_image)),
         Ok((2, (20_000, 20_000)))
     );
-    assert_eq!(BoundedRawDecoder.probe(&nested, "dng"), Err(over));
+    assert_eq!(RawshiftDecoder.probe(&nested, "dng"), Err(over));
 }
 
 /// A DNG whose IFD0 is a 4x4 CFA raw over 32 stored bytes and whose `SubIFDs` lists `extra`
@@ -1904,8 +1907,8 @@ fn a_dng_is_held_to_the_budget_across_every_image_it_decodes() {
         check_ifd_bounds(&many).map(|w| (w.ifds, w.max_image, w.decode_pixels)),
         Ok((12, (4000, 3000), over_pixels(&over)))
     );
-    assert_eq!(BoundedRawDecoder.probe(&many, "dng"), Err(over.clone()));
-    assert_eq!(BoundedRawDecoder.decode(&many, "dng"), Err(over));
+    assert_eq!(RawshiftDecoder.probe(&many, "dng"), Err(over.clone()));
+    assert_eq!(RawshiftDecoder.decode(&many, "dng"), Err(over));
 
     // The sum is the bound, and a file within it opens: the 4x4 raw and two 8x8 sub-images.
     let two = dng_with_shared_strip_images(2, (8, 8));
@@ -1952,7 +1955,7 @@ fn a_dng_chunk_is_bounded_before_the_reader_decompresses_it() {
 
     let fits = lossless(&stream);
     assert_eq!(check_ifd_bounds(&fits).map(|w| w.ljpeg_overrun), Ok(None));
-    let decoded = BoundedRawDecoder
+    let decoded = RawshiftDecoder
         .decode(&fits, "dng")
         .expect("a lossless-JPEG DNG decodes");
     assert_eq!((decoded.width(), decoded.height()), (4, 4));
@@ -1976,13 +1979,10 @@ fn a_dng_chunk_is_bounded_before_the_reader_decompresses_it() {
         op: FormatOp::Decode,
     });
     assert_eq!(
-        BoundedRawDecoder.probe(&deflate, "dng").map(|_| ()),
+        RawshiftDecoder.probe(&deflate, "dng").map(|_| ()),
         defers.clone()
     );
-    assert_eq!(
-        BoundedRawDecoder.decode(&deflate, "dng").map(|_| ()),
-        defers
-    );
+    assert_eq!(RawshiftDecoder.decode(&deflate, "dng").map(|_| ()), defers);
 }
 
 /// The lossless-JPEG header scan is held to a budget of the file's length, so a strip list that
@@ -2035,8 +2035,8 @@ fn a_dng_whose_strips_overlap_exhausts_the_header_scan_budget() {
 /// Assert `bytes` probes and decodes as a `format` decode failure whose detail holds `needle`.
 fn assert_raw_decode_failure(bytes: &[u8], ext: &str, format: StillFormat, needle: &str) {
     for (stage, result) in [
-        ("probe", BoundedRawDecoder.probe(bytes, ext).map(|_| ())),
-        ("decode", BoundedRawDecoder.decode(bytes, ext).map(|_| ())),
+        ("probe", RawshiftDecoder.probe(bytes, ext).map(|_| ())),
+        ("decode", RawshiftDecoder.decode(bytes, ext).map(|_| ())),
     ] {
         match result {
             Err(MediaError::Decode {
@@ -2086,7 +2086,7 @@ fn a_raw_file_cannot_list_more_work_than_its_sensor_holds() {
             IfdEntry::longs(TiffTag::TileByteCounts, &[length, length]),
         );
     });
-    let probed = BoundedRawDecoder
+    let probed = RawshiftDecoder
         .probe(&two_across, "dng")
         .expect("a full grid probes");
     assert_eq!(probed.stored_dimensions, (32, 16));
@@ -2120,7 +2120,7 @@ fn a_raw_file_cannot_list_more_work_than_its_sensor_holds() {
         set_entry(e, IfdEntry::long(TiffTag::TileLength, 20_000));
     });
     assert_eq!(
-        BoundedRawDecoder.probe(&huge_tile, "dng").map(|_| ()),
+        RawshiftDecoder.probe(&huge_tile, "dng").map(|_| ()),
         Err(MediaError::PixelBudgetExceeded {
             pixels: 400_000_000,
             limit: MAX_DECODE_PIXELS,
@@ -2169,7 +2169,7 @@ fn a_raw_layout_with_nothing_to_decode_is_refused() {
         set_entry(e, IfdEntry::long(TiffTag::ImageWidth, 0));
     });
     assert_eq!(
-        BoundedRawDecoder.probe(&zero, "dng").map(|_| ()),
+        RawshiftDecoder.probe(&zero, "dng").map(|_| ()),
         Err(MediaError::ZeroDimension {
             width: 0,
             height: 8,
@@ -2200,9 +2200,9 @@ fn a_dng_active_area_is_the_stored_frame_and_must_fit_the_sensor() {
     let inside = dng_cfa(width, height, &samples, |e| {
         set_entry(e, IfdEntry::longs(TiffTag::ActiveArea, &[0, 2, 8, 14]));
     });
-    let probed = BoundedRawDecoder.probe(&inside, "dng").expect("probe");
+    let probed = RawshiftDecoder.probe(&inside, "dng").expect("probe");
     assert_eq!(probed.stored_dimensions, (12, 8));
-    let decoded = BoundedRawDecoder.decode(&inside, "dng").expect("decode");
+    let decoded = RawshiftDecoder.decode(&inside, "dng").expect("decode");
     assert_eq!((decoded.width(), decoded.height()), (12, 8));
 
     let outside = dng_cfa(width, height, &samples, |e| {
@@ -2224,10 +2224,10 @@ fn a_raw_reader_failure_is_a_decode_failure() {
     );
     arw[8..10].copy_from_slice(&[0, 0]);
     assert!(
-        BoundedRawDecoder.probe(&arw, "arw").is_ok(),
+        RawshiftDecoder.probe(&arw, "arw").is_ok(),
         "the layout is sound"
     );
-    match BoundedRawDecoder.decode(&arw, "arw") {
+    match RawshiftDecoder.decode(&arw, "arw") {
         Err(MediaError::Decode { format, detail }) => {
             assert_eq!(format, StillFormat::Arw);
             assert!(detail.starts_with("RAW process: "), "{detail}");
@@ -2244,7 +2244,7 @@ fn a_raw_layout_outside_its_file_is_a_decode_failure() {
     let past_the_end = dng_cfa(16, 8, &samples, |e| {
         set_entry(e, IfdEntry::long(TiffTag::StripByteCounts, 1_000_000));
     });
-    match BoundedRawDecoder.probe(&past_the_end, "dng") {
+    match RawshiftDecoder.probe(&past_the_end, "dng") {
         Err(MediaError::Decode { format, detail }) => {
             assert_eq!(format, StillFormat::Dng);
             assert!(detail.contains("image data out of bounds"), "{detail}");
@@ -2262,7 +2262,7 @@ fn a_raw_layout_outside_its_file_is_a_decode_failure() {
             set_entry(e, IfdEntry::longs(TiffTag::DefaultCropSize, &[16, 8]));
         },
     );
-    match BoundedRawDecoder.decode(&outside, "arw") {
+    match RawshiftDecoder.decode(&outside, "arw") {
         Err(MediaError::Decode { format, detail }) => {
             assert_eq!(format, StillFormat::Arw);
             assert!(detail.contains("outside"), "{detail}");
@@ -2292,22 +2292,22 @@ fn an_unsupported_raw_variant_defers() {
         |e| set_entry(e, IfdEntry::short(TiffTag::Compression, 32767)),
     );
     assert!(
-        BoundedRawDecoder.probe(&lossy, "arw").is_ok(),
+        RawshiftDecoder.probe(&lossy, "arw").is_ok(),
         "the layout is sound"
     );
     assert_eq!(
-        BoundedRawDecoder.decode(&lossy, "arw").map(|_| ()),
+        RawshiftDecoder.decode(&lossy, "arw").map(|_| ()),
         defers(StillFormat::Arw)
     );
 
     let bare_tiff = b"II\x2A\x00\x08\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
     for (ext, format) in [("arw", StillFormat::Arw), ("dng", StillFormat::Dng)] {
         assert_eq!(
-            BoundedRawDecoder.probe(bare_tiff, ext).map(|_| ()),
+            RawshiftDecoder.probe(bare_tiff, ext).map(|_| ()),
             defers(format)
         );
         assert_eq!(
-            BoundedRawDecoder.decode(bare_tiff, ext).map(|_| ()),
+            RawshiftDecoder.decode(bare_tiff, ext).map(|_| ()),
             defers(format)
         );
     }
@@ -2324,78 +2324,68 @@ fn assert_refused_raw_family(bytes: &[u8], ext: &str, format: StillFormat) {
         format,
         op: FormatOp::Decode,
     });
-    assert_eq!(BoundedRawDecoder.probe(bytes, ext).map(|_| ()), refused);
-    assert_eq!(BoundedRawDecoder.decode(bytes, ext).map(|_| ()), refused);
+    assert_eq!(RawshiftDecoder.probe(bytes, ext).map(|_| ()), refused);
+    assert_eq!(RawshiftDecoder.decode(bytes, ext).map(|_| ()), refused);
 }
 
 /// A decodable ARW, for [`assert_refused_raw_family`] to rename.
 fn decodable_arw() -> Vec<u8> {
     let arw = sony_arw(16, 8, &split_cfa(16, 8, 12_000, 1_200), |_| {}, |_| {});
     assert!(
-        BoundedRawDecoder.decode(&arw, "arw").is_ok(),
+        RawshiftDecoder.decode(&arw, "arw").is_ok(),
         "the control decodes"
     );
     arw
 }
 
-/// **Issue #1323's acceptance case.** The production decoder defers every ARW and DNG at the
-/// gate, `DeferredNoCodec`, without handing it to `RawFile::open`: probe, decode and the
-/// embedded-preview read all refuse it as [`MediaError::UnsupportedFormat`].
-///
-/// Each file is paired with what the RAW pipeline makes of it, so the refusal is provably the
-/// gate's: a sound ARW and DNG that the pipeline decodes, a DNG whose raw image the reader's
-/// eager decode at open fails on, a few-KB DNG stating 1.5 TB of samples, and a DNG named
-/// `.arw`, which the reader opens (and so decodes) as a DNG before the pipeline sees it is not an
-/// ARW. Had any reached `open`, it would have decoded or failed as [`MediaError::Decode`] rather
-/// than deferred.
+/// **Issue #1324's acceptance case.** The production decoder opens ARW and DNG again, behind the
+/// pre-open bounds: probe, decode, the unwind guard and the embedded-preview read all take a
+/// sound ARW and DNG (and a DNG named `.arw`, which the reader opens as the DNG it is), and all
+/// refuse as [`MediaError::Decode`] a DNG whose raw image the reader's eager decode at open
+/// fails on and a few-KB DNG stating 1.5 TB of samples.
 #[test]
-fn arw_and_dng_defer_without_reaching_the_raw_reader() {
+fn arw_and_dng_decode_on_the_import_path_behind_the_bounds() {
     let samples = split_cfa(16, 8, 50_000, 5_000);
-    let dng = dng_cfa(16, 8, &samples, |_| {});
+    let jpeg = preview_jpeg();
+    let dng = dng_cfa_previewed(16, 8, &samples, &jpeg, |_, _, _| {});
+    let arw = sony_arw_previewed(16, 8, &samples, &jpeg, |_| {}, |_| {});
     let garbage = dng_linear_jxl_with(&[0x5A; 64], (16, 16), |_, _, _| {});
     let wide = dng_cfa(4, 4, &[0; 16], |e| {
         set_entry(e, IfdEntry::long(TiffTag::ImageWidth, 4000));
         set_entry(e, IfdEntry::long(TiffTag::ImageLength, 3000));
         set_entry(e, IfdEntry::short(TiffTag::SamplesPerPixel, 65535));
     });
-    let cases: [(&[u8], &str, StillFormat, bool); 5] = [
-        (&decodable_arw(), "arw", StillFormat::Arw, true),
-        (&dng, "dng", StillFormat::Dng, true),
-        (&garbage, "dng", StillFormat::Dng, false),
-        (&wide, "dng", StillFormat::Dng, false),
-        (&dng, "arw", StillFormat::Arw, false),
-    ];
-    for (bytes, ext, format, pipeline_decodes) in cases {
-        let bounded = BoundedRawDecoder.decode(bytes, ext).map(|_| ());
-        if pipeline_decodes {
-            assert_eq!(
-                bounded,
-                Ok(()),
-                "the RAW pipeline decodes the .{ext} control"
-            );
-        } else {
+    for (bytes, ext) in [(&arw, "arw"), (&dng, "dng"), (&dng, "arw")] {
+        let probed = RawshiftDecoder.probe(bytes, ext).expect("probe");
+        assert_eq!(probed.stored_dimensions, (16, 8), ".{ext}");
+        let decoded = decode_guarded(&RawshiftDecoder, bytes, ext).expect("decode");
+        assert_eq!((decoded.width(), decoded.height()), (16, 8), ".{ext}");
+        let preview = extract_embedded_preview(bytes, ext)
+            .expect("preview read")
+            .expect("a preview");
+        assert_eq!(preview.jpeg, jpeg, ".{ext}");
+    }
+    for (bytes, ext) in [(&garbage, "dng"), (&wide, "dng"), (&wide, "arw")] {
+        for (stage, result) in [
+            ("probe", RawshiftDecoder.probe(bytes, ext).map(|_| ())),
+            (
+                "decode",
+                decode_guarded(&RawshiftDecoder, bytes, ext).map(|_| ()),
+            ),
+        ] {
             assert!(
-                matches!(bounded, Err(MediaError::Decode { .. })),
-                "the RAW pipeline refuses the crafted .{ext}: {bounded:?}"
+                matches!(result, Err(MediaError::Decode { .. })),
+                "{stage} refuses the crafted .{ext}: {result:?}"
             );
         }
-
-        let deferred = Err(MediaError::UnsupportedFormat {
-            format,
-            op: FormatOp::Decode,
-        });
-        assert_eq!(RawshiftDecoder.probe(bytes, ext).map(|_| ()), deferred);
-        assert_eq!(RawshiftDecoder.decode(bytes, ext).map(|_| ()), deferred);
-        assert_eq!(
-            decode_guarded(&RawshiftDecoder, bytes, ext).map(|_| ()),
-            deferred
-        );
-        assert_eq!(
-            extract_embedded_preview(bytes, ext).map(|_| ()),
-            deferred,
-            "the preview read opens the file too, so it defers with it"
-        );
     }
+    assert!(
+        matches!(
+            extract_embedded_preview(&wide, "dng"),
+            Err(MediaError::Decode { .. })
+        ),
+        "the preview read opens the file, so it is held to the same bounds"
+    );
 }
 
 #[test]
@@ -2449,7 +2439,7 @@ fn a_raw_embedded_preview_is_extracted_with_its_dimensions() {
         ),
     ];
     for (bytes, ext) in cases {
-        let preview = extract_bounded_embedded_preview(&bytes, ext)
+        let preview = extract_embedded_preview(&bytes, ext)
             .expect("extracts")
             .expect("the fixture carries a preview");
         assert_eq!(preview.jpeg, jpeg, "{ext}: the JPEG exactly as carried");
@@ -2476,7 +2466,7 @@ fn an_untagged_embedded_preview_takes_the_raw_orientation() {
         |ifd0| set_entry(ifd0, IfdEntry::short(TiffTag::Orientation, 6)),
         |_| {},
     );
-    let preview = extract_bounded_embedded_preview(&arw, "arw")
+    let preview = extract_embedded_preview(&arw, "arw")
         .expect("extracts")
         .expect("carried");
     assert_eq!(preview.orientation, 6);
@@ -2500,7 +2490,7 @@ fn a_tagged_embedded_preview_keeps_its_own_orientation() {
         |ifd0| set_entry(ifd0, IfdEntry::short(TiffTag::Orientation, 3)),
         |_| {},
     );
-    let preview = extract_bounded_embedded_preview(&arw, "arw")
+    let preview = extract_embedded_preview(&arw, "arw")
         .expect("extracts")
         .expect("carried");
     assert_eq!(preview.orientation, 8);
@@ -2513,14 +2503,11 @@ fn a_tagged_embedded_preview_keeps_its_own_orientation() {
 /// RAW at all.
 #[test]
 fn a_still_without_an_embedded_preview_has_none() {
-    assert_eq!(
-        extract_bounded_embedded_preview(&decodable_arw(), "arw"),
-        Ok(None)
-    );
+    assert_eq!(extract_embedded_preview(&decodable_arw(), "arw"), Ok(None));
     let jpeg = preview_jpeg();
-    assert_eq!(extract_bounded_embedded_preview(&jpeg, "jpg"), Ok(None));
+    assert_eq!(extract_embedded_preview(&jpeg, "jpg"), Ok(None));
     assert_eq!(
-        extract_bounded_embedded_preview(b"not an image", "txt"),
+        extract_embedded_preview(b"not an image", "txt"),
         Err(MediaError::NotAStillImage)
     );
 }
@@ -2538,7 +2525,7 @@ fn an_undecodable_raw_family_has_no_embedded_preview_here() {
         |_| {},
     );
     assert_eq!(
-        extract_bounded_embedded_preview(&arw, "nef"),
+        extract_embedded_preview(&arw, "nef"),
         Err(MediaError::UnsupportedFormat {
             format: StillFormat::Nef,
             op: FormatOp::Decode,
@@ -2564,7 +2551,7 @@ fn an_embedded_preview_longer_than_its_file_is_refused_before_the_reader_allocat
     let walk = check_ifd_bounds(&bytes).expect("nothing the IFD reader allocates is oversized");
     assert_eq!(walk.max_jpeg_length, u64::from(u32::MAX));
     for ext in ["arw", "dng"] {
-        match extract_bounded_embedded_preview(&bytes, ext) {
+        match extract_embedded_preview(&bytes, ext) {
             Err(MediaError::Decode { detail, .. }) => assert!(
                 detail.contains("embedded preview claims 4294967295 bytes"),
                 "{ext}: {detail}"
@@ -2612,7 +2599,7 @@ fn an_embedded_preview_that_is_not_a_jpeg_is_a_decode_failure() {
         |_| {},
         |_| {},
     );
-    match extract_bounded_embedded_preview(&arw, "arw") {
+    match extract_embedded_preview(&arw, "arw") {
         Err(MediaError::Decode { detail, .. }) => {
             assert!(detail.contains("not a JPEG"), "{detail}");
         }
@@ -2828,7 +2815,7 @@ fn the_ifd_walk_passes_what_would_not_allocate() {
     cycle[next..].copy_from_slice(&8u32.to_le_bytes());
     assert_eq!(check_ifd_bounds(&cycle).map(|w| w.ifds), Ok(1));
     for (ext, format) in [("arw", StillFormat::Arw), ("dng", StillFormat::Dng)] {
-        match BoundedRawDecoder.probe(&cycle, ext) {
+        match RawshiftDecoder.probe(&cycle, ext) {
             Err(MediaError::Decode { detail, .. }) => {
                 assert!(!detail.contains("IFD bounds"), "{detail}");
             }
@@ -2891,6 +2878,235 @@ fn too_deep(refusal: IfdRefusal) -> TooDeep {
     }
 }
 
+// ── RAW pre-open work budgets (issue #1324) ──────────────────────────────────
+
+/// The budget a refusal names, failing the test where the walk refused otherwise.
+fn exhausted(refusal: IfdRefusal) -> Exhausted {
+    match refusal {
+        IfdRefusal::Exhausted(exhausted) => exhausted,
+        other => panic!("expected a work budget refusal, got {other:?}"),
+    }
+}
+
+/// The unbounded value a refusal names, failing the test where the walk refused otherwise.
+fn unbounded(refusal: IfdRefusal) -> Unbounded {
+    match refusal {
+        IfdRefusal::Unbounded(unbounded) => unbounded,
+        other => panic!("expected an unbounded value, got {other:?}"),
+    }
+}
+
+/// `RawFile::open` reads any TIFF whose IFD0 states `DNGVersion` through the eager DNG reader,
+/// whatever its extension, so the DNG bounds follow `DNGVersion`, not the name: a crafted DNG
+/// named `.arw` is refused the way it is as `.dng`, a Deflate one defers, and a sound one decodes
+/// like any DNG. An ARW states no `DNGVersion` and is walked as one.
+#[test]
+fn a_dng_named_arw_is_held_to_the_dng_bounds() {
+    assert_eq!(check_ifd_bounds(&decodable_arw()).map(|w| w.dng), Ok(false));
+    let dng = dng_cfa(16, 8, &split_cfa(16, 8, 50_000, 5_000), |_| {});
+    assert_eq!(check_ifd_bounds(&dng).map(|w| w.dng), Ok(true));
+    let decoded = RawshiftDecoder
+        .decode(&dng, "arw")
+        .expect("a sound DNG named .arw decodes");
+    assert_eq!((decoded.width(), decoded.height()), (16, 8));
+
+    // 1.5 TB of samples over a 32-byte strip, named .arw.
+    let wide = dng_cfa(4, 4, &[0; 16], |e| {
+        set_entry(e, IfdEntry::long(TiffTag::ImageWidth, 4000));
+        set_entry(e, IfdEntry::long(TiffTag::ImageLength, 3000));
+        set_entry(e, IfdEntry::short(TiffTag::SamplesPerPixel, 65535));
+    });
+    assert_raw_decode_failure(&wide, "arw", StillFormat::Arw, "65535 samples per pixel");
+    assert!(
+        matches!(
+            extract_embedded_preview(&wide, "arw"),
+            Err(MediaError::Decode { .. })
+        ),
+        "the preview read opens it as a DNG too"
+    );
+
+    let deflate = dng_cfa(4, 4, &[0; 16], |e| {
+        set_entry(e, IfdEntry::short(TiffTag::Compression, 8));
+    });
+    assert_eq!(
+        RawshiftDecoder.decode(&deflate, "arw").map(|_| ()),
+        Err(MediaError::UnsupportedFormat {
+            format: StillFormat::Arw,
+            op: FormatOp::Decode,
+        })
+    );
+}
+
+/// gamut's readers hold every value of every directory they parse, several times over, so the
+/// directories and values a file states are held to twice its length: an IFD whose entries each
+/// name most of the file passes the per-entry bound but not the total (at 65535 entries over a
+/// 1 MB file it would be 65 GB). One such entry is within it.
+#[test]
+fn overlapping_values_exhaust_the_structure_budget() {
+    let values = |entries: u16| {
+        let table: Vec<HandEntry> = (0..entries)
+            .map(|i| (0x9000 + i, T_UNDEFINED, 200, 8))
+            .collect();
+        let mut bytes = hand_tiff(&[&table]);
+        bytes.resize(bytes.len().max(208), 0);
+        bytes
+    };
+    assert!(check_ifd_bounds(&values(1)).is_ok());
+
+    let many = values(30);
+    let refused = exhausted(check_ifd_bounds(&many).expect_err("30 overlapping values"));
+    assert_eq!(
+        (refused.budget, refused.at, refused.limit),
+        (Budget::Structure, 8, 2 * many.len() as u64)
+    );
+    assert_raw_decode_failure(&many, "dng", StillFormat::Dng, "directory tables");
+    assert_raw_decode_failure(&many, "arw", StillFormat::Arw, "directory tables");
+}
+
+/// gamut's DNG reader copies every strip of an uncompressed image, and every chunk of an image it
+/// cannot decode, so the strips and tiles a file lists are held to twice its length: one strip a
+/// row, each naming the whole image's bytes, lists sixteen times them.
+#[test]
+fn a_strip_listed_many_times_exhausts_the_chunk_budget() {
+    let (width, height) = (32u32, 16u32);
+    let samples = split_cfa(width, height, 50_000, 5_000);
+    let once = dng_cfa(width, height, &samples, |_| {});
+    assert!(RawshiftDecoder.decode(&once, "dng").is_ok());
+
+    let repeated = dng_cfa_with(width, height, &samples, |e, offset, length| {
+        set_entry(e, IfdEntry::long(TiffTag::RowsPerStrip, 1));
+        let rows = height as usize;
+        set_entry(
+            e,
+            IfdEntry::longs(TiffTag::StripOffsets, &vec![offset; rows]),
+        );
+        set_entry(
+            e,
+            IfdEntry::longs(TiffTag::StripByteCounts, &vec![length; rows]),
+        );
+    });
+    let refused = exhausted(check_ifd_bounds(&repeated).expect_err("sixteen copies"));
+    assert_eq!(
+        (refused.budget, refused.limit),
+        (Budget::Chunks, 2 * repeated.len() as u64)
+    );
+    assert_raw_decode_failure(&repeated, "dng", StillFormat::Dng, "strips or tiles");
+}
+
+/// gamut-dng and `rawshift-image` keep the SubIFD offsets they have visited in a list they scan
+/// linearly, so a file is held to [`MAX_IFD_POINTERS`] pointer elements: a million of them would
+/// cost the readers a trillion comparisons. At the limit the walk passes.
+#[test]
+fn a_pointer_flood_exhausts_the_pointer_budget() {
+    let flood = |elements: u32| {
+        let list = hand_ifd_offset(&[1], 1);
+        let mut bytes = hand_tiff(&[&[(TiffTag::SubIFDs.as_u16(), T_LONG, elements, list)]]);
+        // Each element points past the end of the file, so no IFD is read for it.
+        for _ in 0..elements {
+            bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        }
+        // Room for the 8 bytes a SubIFDs element is held to by the per-entry bound.
+        bytes.resize(8 * elements as usize + 64, 0);
+        bytes
+    };
+    let limit = MAX_IFD_POINTERS as u32;
+    assert!(check_ifd_bounds(&flood(limit)).is_ok());
+
+    let over = flood(limit + 1);
+    let refused = exhausted(check_ifd_bounds(&over).expect_err("one pointer past the limit"));
+    assert_eq!(
+        (refused.budget, refused.limit),
+        (Budget::Pointers, MAX_IFD_POINTERS)
+    );
+    assert_raw_decode_failure(&over, "dng", StillFormat::Dng, "pointers");
+}
+
+/// gamut-dng allocates `rows * columns * SamplesPerPixel` black levels from
+/// `BlackLevelRepeatDim` before it reads `BlackLevel`, so 65535 by 65535 asks for 137 GB. Each
+/// side is held to the DNG SDK's limit of eight, and a pattern within it decodes.
+#[test]
+fn a_black_level_pattern_past_the_sdk_limit_is_refused() {
+    let samples = split_cfa(16, 8, 50_000, 5_000);
+    let pattern = |rows: u16, columns: u16| {
+        dng_cfa(16, 8, &samples, |e| {
+            set_entry(
+                e,
+                IfdEntry::shorts(TiffTag::BlackLevelRepeatDim, &[rows, columns]),
+            );
+        })
+    };
+    assert!(RawshiftDecoder.decode(&pattern(2, 2), "dng").is_ok());
+    assert!(check_ifd_bounds(&pattern(8, 8)).is_ok());
+
+    let huge = pattern(65535, 65535);
+    let refused = unbounded(check_ifd_bounds(&huge).expect_err("65535 x 65535"));
+    assert_eq!(
+        (refused.tag, refused.stated, refused.limit),
+        (
+            TiffTag::BlackLevelRepeatDim.as_u16(),
+            65535,
+            MAX_BLACK_LEVEL_REPEAT
+        )
+    );
+    assert_raw_decode_failure(&huge, "dng", StillFormat::Dng, "black-level pattern");
+    let tall = pattern(9, 1);
+    assert!(check_ifd_bounds(&tall).is_err(), "one side past eight");
+}
+
+/// An opcode list in the big-endian container: `opcodes` as `(id, parameters)`.
+fn opcode_list(opcodes: &[(u32, Vec<u8>)]) -> Vec<u8> {
+    let mut out = (opcodes.len() as u32).to_be_bytes().to_vec();
+    for (id, params) in opcodes {
+        out.extend_from_slice(&id.to_be_bytes());
+        out.extend_from_slice(&[1, 3, 0, 0]); // DNG 1.3
+        out.extend_from_slice(&0u32.to_be_bytes()); // flags
+        out.extend_from_slice(&(params.len() as u32).to_be_bytes());
+        out.extend_from_slice(params);
+    }
+    out
+}
+
+/// `FixBadPixelsList` parameters stating `points` and `rects` and carrying `carried` points.
+fn fix_bad_pixels(points: u32, rects: u32, carried: usize) -> Vec<u8> {
+    let mut params = points.to_be_bytes().to_vec();
+    params.extend_from_slice(&rects.to_be_bytes());
+    params.extend(std::iter::repeat_n(0, 8 * carried));
+    params
+}
+
+/// `rawshift-image` reserves a `FixBadPixelsList`'s stated points and rectangles before it reads
+/// one, so a list stating four billion points over none would ask for 32 GB when a LinearRaw DNG
+/// is processed. The counts are held to the parameter bytes that carry them, in every opcode
+/// list; a list whose counts fit passes, and so does every other opcode.
+#[test]
+fn an_opcode_list_stating_more_bad_pixels_than_it_carries_is_refused() {
+    let with_list = |list: &[u8]| {
+        dng_cfa(16, 8, &split_cfa(16, 8, 50_000, 5_000), |e| {
+            set_entry(
+                e,
+                IfdEntry::new(TiffTag::OpcodeList2, T_UNDEFINED, list.len(), list.to_vec()),
+            );
+        })
+    };
+    let fits = with_list(&opcode_list(&[
+        (9, vec![0; 4]),
+        (5, fix_bad_pixels(2, 0, 2)),
+    ]));
+    assert!(check_ifd_bounds(&fits).is_ok());
+
+    let bomb = with_list(&opcode_list(&[(5, fix_bad_pixels(u32::MAX, 0, 0))]));
+    let refused = unbounded(check_ifd_bounds(&bomb).expect_err("four billion points"));
+    assert_eq!(
+        (refused.tag, refused.stated, refused.limit),
+        (TiffTag::OpcodeList2.as_u16(), u64::from(u32::MAX) * 8, 0)
+    );
+    assert_raw_decode_failure(&bomb, "dng", StillFormat::Dng, "FixBadPixelsList");
+
+    // One rectangle too many past the points it carries.
+    let rects = with_list(&opcode_list(&[(5, fix_bad_pixels(1, 1, 1))]));
+    assert!(check_ifd_bounds(&rects).is_err());
+}
+
 // ── RAW IFD nesting depth (issue #647) ───────────────────────────────────────
 
 /// A classic little-endian TIFF whose IFD0 holds one inline `SubIFDs` offset to IFD1, IFD1 one
@@ -2925,7 +3141,7 @@ fn an_ifd_nest_at_the_depth_bound_passes_the_walk() {
     assert_eq!(walk.depth, MAX_IFD_DEPTH);
     assert_eq!(walk.ifds, MAX_IFD_DEPTH as usize + 1);
     for ext in ["arw", "dng"] {
-        if let Err(MediaError::Decode { detail, .. }) = BoundedRawDecoder.probe(&at_bound, ext) {
+        if let Err(MediaError::Decode { detail, .. }) = RawshiftDecoder.probe(&at_bound, ext) {
             assert!(!detail.contains("IFD bounds"), "{ext}: {detail}");
         }
     }
