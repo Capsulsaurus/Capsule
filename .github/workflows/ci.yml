@@ -770,6 +770,8 @@ jobs:
   # `rust-advisories`, unfiltered, #507), and `changes` is checked ahead of it under a stricter rule,
   # because "skipped" is only trustworthy when the filter that skipped it ran.
   # A job in `needs` but absent from both checks is a gate that cannot fail.
+  # `rust-cross-check` gates on purpose (#1310): a Tier-1 target that no longer type-checks
+  # through `mise run check-targets` blocks the merge, as a Tier-1 `rust-cross` failure does.
   required:
     name: required
     if: always()
