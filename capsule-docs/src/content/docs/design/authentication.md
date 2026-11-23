@@ -9,18 +9,28 @@ The server can prove a request comes from a session it issued, not who the user 
 ## Account Types
 
 - **Registered accounts** have a unique identity and their own master key, and sign in with password (+ optional TOTP) or OIDC ([](#choosing-an-auth-path)).
-- **Delegated/sponsored accounts** have keys derived from a registered account's master key and no identity of their own. The sponsor authenticates and manages them and has full access ([](/design/cryptography/keys/#delegatedsponsored-accounts)).
+- **Delegated/sponsored accounts** have their own keys, wrapped under a random per-sponsoree KEK that the sponsor's master key wraps, and no recovery path of their own. The sponsor authenticates and manages them and has full access ([](/design/cryptography/keys/#delegatedsponsored-accounts)).
 - **Non-registered accounts** have no identity or master key: share links ([](/design/share-links/)) encapsulate keys to the link secret, and web-upload links ([](/design/web-upload/)) let a guest seal to a link-scoped key with no read access.
 
 ## Creating an Account
 
-Registration takes **an address and a password, nothing else**, and signs the caller in with a token pair.
+Registration takes **an address, a password and the account's identity anchor**, and signs the caller in with a token pair.
 
-- No display name, username or invitation code: the server stores as little about a person as it can.
+- No display name, username or invitation code: the server stores as little about a person as it can. The anchor is a public key the device directory publishes anyway, not a fact about the person.
 - Passwords have a 12-character floor and no composition rule, because they guard a session, not the master key.
-- A taken address is `409 error.auth.user_already_exists`, an account oracle by decision, bounded per source. Every attempt whose body parses, refused ones included, is charged 10/hour against the resolved client address (IPv6 per /64, through `TRUSTED_PROXIES`/`TRUSTED_PROXY_HOPS`). A spent budget is `429 error.auth.rate_limited` and a full limiter partition is `429 error.auth.registration_at_capacity`, both with `Retry-After`. The limiter fails closed: an unreachable counter store is `500`, never an admission. Behind an unconfigured proxy every registrant shares the proxy's budget, as with the share and drop source limiters.
-- A new account has **no device directory and therefore cannot write**. Invariant 7's floor is the writing device's `added_at` in the published directory, with no account-creation fallback, so the client's first act is publishing a directory.
+- A taken address is `409 error.auth.user_already_exists`, an account oracle by decision, bounded by the per-source registration budget ([](/design/authorization/#rate-limits)). Every attempt whose body parses, refused ones included, is charged, so probing costs the prober whatever the answer.
+- **Open registration needs a default quota.** The server refuses to start with password registration enabled and no default quota limit, unless the operator sets the default to `unlimited` explicitly ([](/design/quota/#thresholds-and-states)), so accounts minted for free cannot fill the disk.
+- A new account has **no device directory and therefore cannot write** (invariant 7 of [](/design/threat-model/validation/#server-side-validation-invariants)), so the client publishes its first directory immediately after registering ([](/design/device-enrollment/#first-device-enrollment)).
 - There is no token introspection, since the session ledger is read on every request and validation *is* the request. There is no password reset, since the server cannot re-wrap a master key it never saw; recovery is the escrow blob ([](/design/backup-recovery/)).
+
+### The Identity Anchor
+
+The anchor is the User IK public key ([](/design/cryptography/keys/#user-identity-keys-user-iks)) that every directory publish and every global sign-out verifies under ([](/design/cryptography/keys/#device-directory)). Whoever sets it owns the account's write identity for the account's life, so no credential the server verifies may set or change it after the fact.
+
+- **A password account is anchored at registration.** The request carries the IK public key and an IK signature over a domain-separated message naming the address and this server's origin (proof of possession). A bad proof is `400`, and nothing is created. There is no window between creating the account and pinning its anchor in which a phished password can pin a different one.
+- **An OIDC account is anchored by its first directory publish.** Its first sign-in creates it before any client key exists. The window is accepted because squatting it requires the identity-provider credential, and on that path the provider is the account's root by decision ([](#choosing-an-auth-path)).
+- **No sign-in credential and no operator command replaces an anchor.** Neither a password, a second factor nor a provider assertion can, because the anchor exists so that a password holder cannot replace it. It changes only by a recovery-signed identity rotation ([](/design/cryptography/keys/#identity-rotation)), which needs the one secret no device or server holds. The first directory publish, which must verify under the anchor, pins the recovery verification key beside it.
+- **An account that never publishes a directory is swept 7 days after registration.** It cannot have written anything, so deleting it loses nothing and frees the address. The client persists the master key and IK before it registers, so a crash between registering and publishing resumes ("finishing setup") rather than orphaning the anchor.
 
 ### Passkeys Are Not in v1
 
@@ -31,10 +41,13 @@ No passkey surface ships. Building one is new work and reopens the `rustls`-only
 TOTP is the local path's second factor.
 
 - **Login with a confirmed factor answers `202 Accepted` with a challenge.** No session, cohort or refresh token exists until it completes. Clients read the `202` from the status, and the SDK returns a `LoginOutcome`, never a challenge shaped like a failure.
-- **Verifying the challenge opens the session**, so the advisory `cohort_hash`/`device_id` ride that request. The budget is 5 attempts per **challenge**, not per account, because a per-account budget lets anyone lock an owner out.
-- **Enrollment gates nothing until confirmed.** It issues a secret and an `otpauth://` URI, is refused over a confirmed factor and replaces a pending one. The confirming code is **spent** into the replay ledger.
+- **Verifying the challenge opens the session**, so the advisory `cohort_hash`/`device_id` ride that request.
+- **A challenge is single-use.** The session it opens burns it; a completed challenge is never re-armed for another code inside its 5-minute life.
+- **Every route that checks a code is charged twice, before the code is checked**: once per challenge and once per account ([](/design/authorization/#rate-limits)). The routes are verify-login, verify-enrollment and disable. The challenge is the login challenge, the pending enrollment, or the session presenting the disable. The per-challenge counter bounds one ceremony. The per-account counter bounds the loop of minting fresh challenges, which would otherwise give the holder of a password five guesses per sign-in without end. The per-account counter cannot be spent by a stranger, because every route that reaches it requires the password or a live session first.
+- **Enrollment requires a fresh credential** ([](/design/authorization/#freshness-gated-operations)) and gates nothing until confirmed. It issues a secret and an `otpauth://` URI, is refused over a confirmed factor and replaces a pending one. The confirming code is **spent** into the replay ledger. Without the freshness gate, a stolen access token could bind the thief's authenticator and lock the owner out of every new sign-in.
 - **Disabling requires a live code**, not just a session, so a stolen access token cannot switch off the control.
 - **A code is accepted at most once** (RFC 6238 §5.2) by compare-and-set on the highest step used. Parameters are fixed: SHA-1, 6 digits, 30 s step, ±1 step drift.
+- **The secret is sealed at rest** under a dedicated server key, so a database or backup leak yields no second factor. The key is independent of the token key ([](#session-and-access-tokens)), so rotating the token key after a leak never strands a factor.
 - **A store outage fails sign-in closed.**
 - Reauthentication takes a password alone, because an existing session has already passed the factor.
 
@@ -42,8 +55,20 @@ TOTP is the local path's second factor.
 
 - **The profile is the caller's own** id, address, optional display name and creation time: the whole of what the server stores about a person. The route has no `{user_id}` segment, so reading another's profile is unrepresentable; other accounts' public facts are the device directory ([](/design/cryptography/keys/#device-directory)).
 - **Only the display name is editable.** An absent key leaves it unchanged and an explicit `null` clears it. It is trimmed and ≤128 chars, and control characters are **refused**, not rewritten.
-- **A password change authenticates with the current password** through the sign-in path, so lockout applies. It closes **every** session of the account, then re-opens the caller's. A wrong current password is `403`, never `401`.
+- **A password change authenticates with the current password** and is charged as a re-authentication ([](#sign-in-limits)). It closes **every** session of the account, then re-opens the caller's. A wrong current password is `403`, never `401`.
 - **The login address is immutable.** Changing it without proof of control of the new address is an account takeover, so the port has no method for it until such proof exists.
+
+## Sign-In Limits
+
+Password guessing is bounded by counting, never by locking. An account is **never locked**: a lock that a stranger can trigger is a denial of service against the owner, and the owner is the one person the limit exists to protect. The budgets are in [](/design/authorization/#rate-limits).
+
+- **Per source.** Login, re-authentication and registration are charged against the resolved client address (IPv4 address, IPv6 `/64`) on every attempt whose body parses, before Argon2 runs. This bounds both guessing and the CPU a source can spend.
+- **Per address, a soft delay.** Failed sign-ins against one presented address are free up to a small allowance. After that, each failure sets a not-before instant that doubles up to a cap, and the run decays after a quiet period; the numbers are in [](/design/authorization/#rate-limits). An attempt before the instant is answered `429 error.auth.rate_limited` with `Retry-After`, without verifying the password and without being charged, so waiting is never punished. The run clears on a success or a password change.
+- **Keyed on the address as presented, never on the account.** The key is a keyed hash of the address string, so the counter store holds no addresses, and an unknown address is slowed exactly as a known one is. Keying on the account would make the delay itself the enumeration oracle that a single answer for "no such account" and "wrong password" exists to deny.
+- **A known device is exempt from the address delay.** Every successful sign-in also returns a **sign-in device token**: server-signed, bound to the keyed hash of the address, and valid for 365 days. A later sign-in presenting it for the same address is charged against that token's own small failure budget instead of the address delay. A stranger flooding an address therefore slows only devices that have never signed in to it. A thief who holds a device token for an address and is guessing its password is bounded by the token's budget.
+- **Re-authentication and password change are charged per session**, not against the address delay. They are performed by a session, so a stranger's failures at the sign-in door cannot block an owner's re-prove, and a stolen session's guesses are bounded by that session's budget.
+- **The answer is one shape.** A slowed address, an unknown address and a wrong password differ only in status (`429` vs `401`), and the `429` depends on the presented string alone.
+- **Residual risk, accepted.** An attacker who knows an address and keeps the delay at its cap from many sources can slow the first sign-in of a brand-new device to one attempt per delay cap. Refused sign-ins on an existing account reach its activity log, coalesced ([](/design/activity-log/)).
 
 ## Choosing an Auth Path
 
@@ -59,15 +84,18 @@ Authorization code + PKCE, plus the device grant ([](#signing-in-without-a-brows
 **Ceremony.** Authorize takes the client's `redirect_uri` and `binding_challenge` and answers the provider URL, `state` and a 10-minute deadline; the client receives the redirect itself. The callback takes `state`, `code` and `binding_verifier` and answers exactly as password login does (token pair or `202` TOTP challenge), through the same session code.
 
 - **Redirect allow-list.** Exactly `OIDC_REDIRECT_URL`, or, only when `OIDC_ALLOW_LOOPBACK_REDIRECT` is on (default off), `http` on `127.0.0.1`/`[::1]` at any port (RFC 8252 §7.3; `localhost` refused per §8.3). The redirect is stored with the ceremony and replayed byte-for-byte to the token endpoint. Refusal is `400 error.auth.oidc_redirect_invalid`.
-- **Begin is rate-bounded** as an unauthenticated write: 60/min per admitted redirect host (`429 error.auth.rate_limited`) and the ceremony store's capacity (`503 error.auth.oidc_at_capacity`). The limiter key is chosen **after** redirect validation and all refusals share one deployment-wide bucket, so a caller cannot mint counter keys. Limiter ceilings are partitioned per key kind so a flood on one surface cannot starve another.
+- **Begin is rate-bounded** as an unauthenticated write ([](/design/authorization/#rate-limits)). It is charged per source first, so one caller cannot spend the deployment-wide buckets behind it. Then it is charged per admitted redirect host (`429 error.auth.rate_limited`), and finally against the ceremony store's capacity (`503 error.auth.oidc_at_capacity`). The host key is chosen **after** redirect validation and all refusals share one deployment-wide bucket, so a caller cannot mint counter keys. Limiter ceilings are partitioned per key kind so a flood on one surface cannot starve another.
+- **The callback is charged per source** before `state` is looked up, so the number of provider token exchanges a single source can drive is bounded even before `state` stops it.
 - **`state` is single-use**, burned on the first callback whatever the outcome. Unknown, spent and expired are one answer, `401 error.auth.oidc_state_invalid`.
 - **Client binding defends against login CSRF.** `binding_challenge` is the S256 hash (43-char unpadded base64url) of a ≥256-bit client secret; a malformed one is `400 error.request.malformed` before any budget is charged. The callback compares `binding_verifier` in constant time **after** burning `state` and **before** contacting the provider; a mismatch is the same `401 error.auth.oidc_state_invalid`. The SDK also refuses a foreign `state` locally (RFC 6749 §10.12).
 - **ID-token checks:** alg ∈ {RS256, ES256, EdDSA}, never `none` or HMAC; signature against the provider JWKS; `iss` exactly `OIDC_ISSUER`; `aud` contains the client id; `azp` if present; `exp`/`nbf`/`iat` with 60 s skew; `nonce` matches; bounded `sub`. Every failure is one wire code, `401 error.auth.oidc_token_invalid`, with detail in the log. A provider refusing the exchange is `401 error.auth.oidc_exchange_failed`; an unreachable one is `500 error.auth.oidc_unavailable`, distinct from `error.auth.unavailable`.
 - **Discovery is lazy**: first use, cached 1 day, so an IdP outage never blocks local auth. It is refused if its `issuer` differs from the configured one (mix-up defence). Endpoints must be `https` unless the issuer is a loopback IP literal, in which case plain-HTTP endpoints must also be loopback. JWKS is refetched on an unknown `kid` at most once a minute, and unconditionally after an hour to drop revoked keys. `OIDC_CA_BUNDLE` adds trust anchors.
 - **Accounts are keyed on `(issuer, subject)`, never linked by address.** First sign-in creates a password-less account. A **verified** IdP email already held by any account is `409 error.auth.oidc_address_taken`; unverified emails reserve and collide with nothing. Explicit linking is a separate, out-of-scope ceremony.
-- **A federated account is a row in the one account table with a null credential.** Registering over its verified address is `409 error.auth.user_already_exists`. A null credential never authenticates and is never charged to lockout. A profile with no verified address omits `email`.
-- **OIDC ignores the password lockout**, or password guessing could lock a person out of SSO too.
+- **A federated account is a row in the one account table with a null credential.** Registering over its verified address is `409 error.auth.user_already_exists`. A null credential never authenticates and is never charged to a sign-in budget. A profile with no verified address omits `email`.
+- **OIDC ignores the password sign-in delay** ([](#sign-in-limits)), or password guessing could slow a person's SSO too.
 - **A confirmed TOTP factor is honoured**: the callback answers the same `202` challenge.
+- **A session's credential instant is the provider's.** A session opened through the provider records the ID token's `auth_time` as `authenticated_at` when the token carries it, and the callback instant otherwise. An identity-provider session cookie therefore never counts as a fresh credential.
+- **Re-authentication through the provider.** Authorize takes an optional re-authentication flag on an authenticated request. The flag sends `max_age=0` (OpenID Connect Core §3.1.2.1). Its callback MUST carry an `auth_time` inside the freshness window ([](/design/authorization/#freshness-gated-operations)) and name the session's own `(issuer, subject)`. It then refreshes that session's `authenticated_at` instead of opening a new session. Any other outcome is `401 error.auth.oidc_token_invalid`.
 - **Scopes are fixed at `openid email`.** `profile` is not requested.
 - **`server-info` publishes `auth.oidc: { authorize, callback }` or `null`**, endpoints only, never issuer or client id. Unconfigured, the OIDC routes answer `404 error.auth.oidc_not_configured`.
 
@@ -78,9 +106,9 @@ Authorization code + PKCE, plus the device grant ([](#signing-in-without-a-brows
 `PASSWORD_AUTH_DISABLED` (default off) narrows the audited surface to the identity provider.
 
 - **`serve` refuses it without `OIDC_ISSUER`**, since a server with neither door admits nobody.
-- **Register, login and reauthenticate answer `403 error.auth.password_disabled`** before anything else: no rate-limit charge, body validation, directory lookup or Argon2. A malformed body, an unknown address and a locked account get the same answer.
+- **Register, login and reauthenticate answer `403 error.auth.password_disabled`** before anything else: no rate-limit charge, body validation, directory lookup or Argon2. A malformed body, an unknown address and a slowed address get the same answer.
 - **Every local account is refused**, including one created before the switch. There is no break-glass account: a named exception keeps a password door open on the account an attacker most wants, and the operator's recovery is turning the switch off.
-- **Existing sessions are not revoked.** A password session lives out its sliding and hard expiry but cannot re-authenticate with a password, so freshness-gated operations are closed to it.
+- **Existing sessions are not revoked.** A password session lives out its sliding and hard expiry but cannot re-authenticate with a password, so freshness-gated operations are closed to it. A session opened through the provider re-proves through the provider ([](#signing-in-through-an-identity-provider)).
 - **`server-info` publishes `auth.password_disabled: true`** beside `auth.oidc`, so a client hides its password form. Absent means `false`, as on a server predating the switch.
 
 #### Signing In From the CLI
@@ -114,7 +142,7 @@ Headless clients use the device authorization grant (RFC 8628): `capsule auth lo
 - **`binding_verifier` is checked in constant time on every poll** before the provider is asked; a mismatch burns the ceremony.
 - A session, TOTP challenge, refused ID token or taken address also burns the ceremony. It is burned before the session opens, so racing polls open one.
 - **No grant support** (no `device_authorization_endpoint`, or `unauthorized_client`/`unsupported_grant_type`) is `404 error.auth.oidc_device_unsupported`; other device-endpoint refusals are `500 error.auth.oidc_unavailable`. `verification_uri` is held to the endpoint scheme rule, and `user_code` to ≤64 chars with no control characters.
-- **Begin checks** binding shape first, then one deployment-wide 60/min budget, then store capacity. Polls are bounded by the begin budget × one provider call per interval.
+- **Begin checks** binding shape first, then the per-source begin budget, then one deployment-wide budget, then store capacity ([](/design/authorization/#rate-limits)). Polls are bounded by the begin budget × one provider call per interval.
 - The CLI prints the address and code, never opens a browser, and gives up at `expires_by`.
 
 ## Identity and Discovery
@@ -149,17 +177,29 @@ No server can forge a migration, because the IK signs the move.
 
 ## Session and Access Tokens
 
+Both tokens are **EdDSA JWTs** signed with the server's Ed25519 token key (`JWT_ED25519_DER`). They are classical only, per the operational-signature carve-out ([](/design/cryptography/primitives/#signature-scheme)). Each names its kind (`access`, `refresh`, or the half-finished `second_factor`), and every verifier takes the kind it expects, so one kind is never accepted as another.
+
 ### Session ID
 
-A server-generated UUIDv7 identifying the session record.
+A server-generated UUIDv7 identifying the session record. It is **not a secret**: the record carries its creation time in the clear beside it.
 
 ### Session Token
 
-An opaque **128-bit** bearer secret (not a JWT) stored on the client, used only to obtain access tokens ([](#access-token)).
+The **refresh token**: a JWT naming the account, the session id and the session's lineage ([](#token-lineage-and-reuse)). It is stored on the client and presented only to obtain a new pair. Its expiry is the session's remaining life ([](#session-expiry-and-revocation)).
+
+**What the server stores is not a credential.** The session ledger holds session ids, lineages and timestamps, never a bearer secret. A leaked database, replica or backup therefore yields no live session on its own. The token key is the one secret that turns such a leak into every live session, so it is held as the deployment's most sensitive secret ([](/guides/self-hosting/)). Rotating it signs every device out.
 
 ### Access Token
 
-A short-lived **EdDSA JWT** signed with the server's Ed25519 key and issued against the session token. Classical only, per the operational-signature carve-out ([](/design/cryptography/primitives/#signature-scheme)).
+A **15-minute** JWT issued against the session token, presented as the bearer credential on every authenticated request. The lifetime is fixed, not configurable: it bounds what a *lost* access token buys, not what a *revoked* one does ([](#explicit-revocation)).
+
+### Token Lineage and Reuse
+
+A **lineage** is the chain of sessions one sign-in produces through refreshes. A refresh closes the presented session and opens its successor in the same lineage, so a refresh token is good once. The lineage id is minted at sign-in, carried in every refresh token and never moved, as the hard cap's sign-in instant is ([](#hard-expiry)).
+
+- **Reuse revokes the lineage** (refresh-token rotation with reuse detection, RFC 9700 §4.14.2). A refresh token whose session is closed while its lineage still has a live session is a stolen or replayed token. The server closes every session of that lineage and records the event in the account's activity log. The legitimate device and the thief both re-authenticate. Only the one who holds the password and factor gets back in.
+- **A lost response is retried, not punished.** A client that retries a refresh within 60 s of the rotation receives a fresh pair for the same successor session, provided that successor has not itself been refreshed. Outside that window the retry is reuse.
+- **Refreshes are budgeted per lineage** ([](/design/authorization/#rate-limits)), so a stolen token cannot rotate a lineage faster than an honest client ever does.
 
 ## Session Expiry and Revocation
 
@@ -194,9 +234,10 @@ Revoke-all is two requests. An authenticated `POST /v1/auth/logout/all/challenge
 Invariants:
 
 - **Revocation is immediate.** The bearer scheme reads the ledger on every authenticated request, so an in-flight access token is refused on next use. The access-token lifetime bounds a *lost* token, not a *revoked* one.
-- **An unreadable ledger refuses** (fail closed). It currently renders `401`, and `POST /v1/auth/refresh` returns `error.auth.unavailable` so clients can tell outage from expiry. Open: the honest `503`.
+- **An unreadable ledger refuses** (fail closed) with `503 error.auth.unavailable` and `Retry-After`, never `401`. A client that read an outage as an expiry would discard a live session and send its user to a sign-in that cannot succeed until the store is back ([](/design/authorization/#when-the-counter-store-fails)).
 - **Last-used is coarse**: at most one write per minute per session.
-- **The server MUST NOT revoke sessions on its own initiative.** Doing so bypasses the user-initiated audit trail and is a bug.
+- **Nothing revokes a session automatically except reuse.** The server never revokes on a heuristic, because that bypasses the user-initiated audit trail. The one automatic revocation is a lineage whose refresh token was replayed ([](#token-lineage-and-reuse)), recorded in the account's activity log.
+- **An operator can revoke, and it is recorded.** On a confirmed server-side compromise the operator has two levers. One is a maintenance command that revokes every session of one account or of all accounts, recording an operator-revocation event in each affected account's activity log. The other is rotating the token key, which invalidates every token at once. Neither touches keys, directories or data, so the user's own revoke-all remains the only path that proves master-key possession.
 
 ## Device Cohorts
 
@@ -234,13 +275,26 @@ The input is canonical CBOR ([](/design/metadata/#canonical-cbor-encoding)) with
 - It appears only in the session listing. There is no filter by cohort and no "revoke cohort" verb; revocation names a `session_id`.
 - The UX asserts ("a device you've used before, last seen *date*") with no "not my device" toggle. Disputes go through a support report bundling `{cohort_hash, [(device_id, session_id, first_seen, last_seen)]}`.
 
+## Known Gaps
+
+- The server still locks an account after repeated failed sign-ins: `AccountLocked` answers `423` (`capsule-server/src/routes/auth.rs:436`), charged against the per-account `LOGIN_ATTEMPTS` budget of 5 failures in 15 minutes (`capsule-server/src/counter/budgets.rs:21`). The per-address delay and the sign-in device token that replace it are not implemented.
+- Refresh rotation detects no reuse: no lineage claim or reuse check exists in `capsule-server/src`, so a replayed refresh token is not caught and no lineage is revoked ([](#token-lineage-and-reuse)).
+- An unreadable session ledger is not answered `503` with `Retry-After`; the server answers `500` or `401` today ([](/design/authorization/#when-the-counter-store-fails)).
+- TOTP enrolment and the escrow `PUT` carry no freshness gate ([](/design/authorization/#freshness-gated-operations)), and TOTP secrets are stored as plaintext base32 (`capsule-server/src/auth/totp/postgres.rs:136`) rather than sealed at rest.
+- The operator session-revoke maintenance command does not exist.
+- Registration carries no identity key or proof of possession, and no sweep removes accounts that never publish ([](#the-identity-anchor); invariant 37 in [](/design/threat-model/validation/)).
+
 ## Validation
 
 - **Token round-trip (unit):** session token → access JWT → verify; after key rotation, old JWTs verify within their grace window.
 - **Expiry (unit, mock clock):** sliding refreshes on each issuance, hard does not and survives rotation; rejection happens at access-token issuance.
 - **Revoke-all (unit):** rejected without master-key proof; with it, every other session is invalidated.
 - **Revocation immediacy (unit):** a revoked session's live access token is refused on next use.
-- **TOTP:** `202` on a confirmed factor; code replay refused; per-challenge attempt cap; store outage fails closed.
+- **TOTP:** `202` on a confirmed factor; code replay refused; per-challenge and per-account caps on verify-login, verify-enrollment and disable; a completed challenge cannot open a second session; enrollment refused on a stale session; the stored secret is not its base32 plaintext; store outage fails closed.
+- **Identity anchor (integration):** registration without a valid proof creates nothing; a publish under a different IK after registration is `403`; an account with no directory is swept after its window and one with a directory never is.
+- **Sign-in limits (unit, mock clock):** the per-source budget trips before Argon2 runs; the address delay doubles to its cap, refuses without verifying or charging, decays and clears on success; a known and an unknown address are slowed identically and answer byte for byte alike; a valid device token for the address bypasses the delay and one for another address does not; re-authentication failures never slow the address; a parallel burst is admitted at most the allowance.
+- **Lineage (unit):** a replayed refresh token closes every session of its lineage; a retry inside the grace window returns the same successor; a retry after the successor rotated is reuse.
+- **OIDC freshness (integration):** a callback whose `auth_time` is outside the window does not make a session fresh; re-authentication for another `(issuer, subject)` is refused.
 - **OIDC (integration):** an in-process loopback mock provider (offline, container-free) covers key rotation, the refetch floor, a wrong PKCE verifier, every claim refusal, binding mismatch and each device-grant answer; gated round trips run against dex (`CAPSULE_TEST_DEX=1`).
 - **Account portability (smoke, post-v1):** moved certificate from A; B registers the same IK; peers follow the move.
 - **Cohort:** cross-language known-answer vectors; the same `primary_id` under two `user_id`s gives distinct hashes; absent, malformed and colliding values behave identically; a tripwire asserts no signed schema has a cohort field; the durable map outlives sessions.

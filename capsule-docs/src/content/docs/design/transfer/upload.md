@@ -60,7 +60,7 @@ Every endpoint requires a bearer token and the protocol handshake ([](/design/th
 
 Strictness covers the transport: JSON bodies (unknown fields rejected) and headers. Inside signed CBOR, unknown keys are preserved ([](/design/principles/#postels-law-asymmetric)).
 
-A session's bytes sit on a **4 KiB grid**, a protocol constant. A chunk is a contiguous range of whole grid blocks whose length the client picks per request and may change between requests without changing any address. Sending ranges in order is one valid schedule among many: reordering is the client choosing which range to send next, never a change of layout. These bounds are protocol surface:
+A session's bytes are the whole blob, its header included: the declared `size` and `hash`, every offset and the quota charge count from the header's first byte ([](/design/cryptography/encryption/#content-address)). They sit on a **4 KiB grid**, a protocol constant. A chunk is a contiguous range of whole grid blocks whose length the client picks per request and may change between requests without changing any address. Sending ranges in order is one valid schedule among many: reordering is the client choosing which range to send next, never a change of layout. These bounds are protocol surface:
 
 - A `PATCH` body MUST be `application/octet-stream` and non-empty.
 - `X-Capsule-Offset` names the range's first byte and MUST be a multiple of 4 KiB. The range's length MUST be a multiple of 4 KiB, except a range ending exactly at the declared `size`. A chunk is at most 16 MiB.
@@ -91,8 +91,8 @@ The server is friendly to a correct client and assumes any client may be broken,
 
 - **A session never wedges.** Admission to one session is serialised; admitted disjoint ranges are written concurrently. A failed or partial write (I/O error, full disk, dropped connection mid-body) releases its claim and commits nothing, so the retry of the same range succeeds.
 - **No request waits on finalization.** The completing `PATCH` and every `HEAD` answer with the status as it stands and never hold the request open for a re-hash, so a slow disk never turns a large upload into a proxy timeout.
-- **Disk full is the client's to wait out, not a server fault.** `ENOSPC` is `507 error.upload.storage_full`; a blob store or index outage is `503 error.upload.unavailable` with `Retry-After`. `500 error.upload.storage_inconsistent` is reserved for a state the server cannot explain and is logged at `ERROR`.
-- **Bounded per client.** Session creation and chunk writes are rate-limited per account and per source address (`429` with `Retry-After`), and live sessions per account are capped. The source address is the client the deployment's trusted proxies resolve, never a forwarding header taken on its word. The account's budget is charged first, so a request it refuses spends nothing of the address's budget, which other accounts behind that address share.
+- **Disk full is the client's to wait out, not a server fault.** The blob root keeps a free-space reserve ([](/design/quota/#enforcement-points)): below it, session creation and chunk writes answer `507 error.upload.storage_full` with `Retry-After`, and finalization still runs, so no client's traffic can fail another's finalization midway. A blob store or index outage, or a blob root marked degraded, is `503 error.upload.unavailable` with `Retry-After`. A failed flush is `500 error.upload.storage_failed` and fails its session ([](/design/transfer/#failure-model)). `500 error.upload.storage_inconsistent` is reserved for a state the server cannot explain. Both `500` codes are logged at `ERROR`.
+- **Bounded per client.** Session creation and chunk writes are rate-limited per account and per source address (`429` with `Retry-After`), and live sessions per account are capped; the budgets and the cap are in [](/design/authorization/#rate-limits). The source address is the client the deployment's trusted proxies resolve, never a forwarding header taken on its word. The account's budget is charged first, so a request it refuses spends nothing of the address's budget, which other accounts behind that address share.
 - **Bounded per connection.** Header and idle timeouts close a connection that sends too slowly. A chunk body is cut when it **stalls** (no bytes for the stall bound) or falls below a minimum sustained rate, never for its total duration, so a link sustaining the minimum rate finishes any chunk. A cut chunk is `408 error.upload.chunk_timeout` and commits nothing. A request body is never buffered beyond the chunk maximum.
 - **Requests never panic.** Every reachable failure is a typed rejection. A handler panic is a bug, caught at the router and answered `500` without leaking state.
 - **Foreign is unknown.** Another account's session is the same `404` as one that never existed, and only the uploader may write to a session. An upload id is never authority on its own: every request also carries the uploader's credential. A session is bound to its uploader's account, never to an access token, so refreshing a token never ends an upload.
@@ -143,8 +143,12 @@ Each session owns one staged file, sized to the declared `size` and written posi
 - A record the session store loses is a range the client sends again. The finalize re-hash, not the record, admits bytes to a content address.
 - Recording a range MAY therefore commit without waiting for its write-ahead log to be flushed (PostgreSQL's `synchronous_commit = off`), so a chunk costs one blob `fsync`, not two. A crash may forget the last ranges recorded; the client's next `HEAD` reports them uncommitted and it sends them again. Creating, claiming, failing and discarding a session commit synchronously.
 - A discarded or deleted session takes no further record.
+- **A failed flush fails the session.** When the `fsync` of a range returns an error, the range is not recorded, the session moves to `FailedProcessing` with `error.upload.storage_failed`, and its stage is deleted. The flush is never retried, because a retry after a failed flush can report success for pages the kernel already dropped ([](/design/transfer/#failure-model)).
+- **One flush per chunk.** Every acknowledged range is on disk, so a crash never loses a range the server acknowledged and the client has forgotten. That costs one `fsync` per chunk (at least 64 per GiB at the 16 MiB maximum). The bound stands until a measurement shows the flush, not the network or the hash, limits a real upload; moving the flush would weaken invariant 3 and is a protocol change.
 
-Hashing runs off the async reactor. Total in-flight bytes are bounded by the cache limit, with the discard window as the relief valve.
+**Hashing runs off the async reactor.** Every SHA-256 the server computes over upload bytes (the per-chunk checksum and the finalize re-hash) runs on a blocking worker pool sized to the host's cores, never on an async worker thread, so a 16 MiB checksum or a multi-gigabyte re-hash never stalls the requests that share that thread. Total in-flight bytes are bounded by the cache limit, with the discard window as the relief valve.
+
+**Known gap: hashing runs on async workers.** The implementation still hashes inline: the chunk checksum in the chunk route (`capsule-server/src/routes/upload.rs`) and the finalize re-hash's read loop (`capsule-server::upload::finalize`) both run on the async runtime's worker threads. The rule above stands; the code is out of step with it.
 
 ## Finalization and Integrity
 
@@ -152,8 +156,8 @@ Order is the contract (`capsule-server::upload::finalize`):
 
 1. **Claim** — compare-and-set into `WaitingForProcessing`. A loser is not an error: its chunk was accepted and it answers `204`; the outcome is read from `HEAD` or the session list.
 2. **Re-hash** the staged file against the declared hash. A mismatch is `FailedProcessing` with `error.upload.content_hash_mismatch`.
-3. **Envelope checks** re-run against the current clock and authority, so a device revoked or an album closed since creation does not slip through (`error.upload.envelope_rejected`). A provenance blob is then admitted only as the canonical encoding of a manifest that agrees with the session's envelope and whose `device_sig` verifies under the key the uploader's published directory holds for the unrevoked device it names. The server cannot tell the signing device from another device of the account, so this runs on every provenance blob, delegated or not; a failure is `error.upload.envelope_rejected`.
-4. **Commit** — `BlobStore::commit`: atomic rename onto the content address, then directory fsync.
+3. **Envelope checks** re-run against the current clock and authority, including the keyless check that each blob's header agrees with the manifest that names it ([](/design/cryptography/encryption/#header-and-manifest-agreement)), so a device revoked or an album closed since creation does not slip through (`error.upload.envelope_rejected`). A provenance blob is then admitted only as the canonical encoding of a manifest that agrees with the session's envelope and whose `device_sig` verifies under the key the uploader's published directory holds for the unrevoked device it names. The server cannot tell the signing device from another device of the account, so this runs on every provenance blob, delegated or not; a failure is `error.upload.envelope_rejected`.
+4. **Commit** — `BlobStore::commit`: atomic rename onto the content address, then directory fsync. When a file already sits at the address, the verified stage is renamed **over** it rather than discarded, so a copy nobody has re-read since it was written never displaces bytes this finalization just verified. From this step until the index transaction commits, the address is held against the collector ([](/design/filesystem/server/#deletion-and-garbage-collection)).
 5. **Ledger** — append and fsync the owner ledger entry ([](/design/filesystem/server/#the-owner-ledger)).
 6. **Record and receipt** — in **one** PostgreSQL transaction, write the blob's index rows (minting the asset's next sequence number) and sign and log the custody receipt ([](/design/transfer/durability/#custody-receipts)). Both commit or neither does, so there is never an indexed blob without a receipt or a receipt without custody. A failure fails the session and leaves the committed blob unreferenced and collectable. A retry is idempotent: a retry of a write that already committed returns the receipt it has. A `replace` member other than its manifest writes no index row, because the manifest applies the whole bundle, so its receipt is the transaction's only write.
 7. `Completed`.
@@ -166,7 +170,7 @@ A claim is driven to `Completed` or `FailedProcessing` independent of the reques
 - A session holding every declared byte that nobody claimed (its process died between recording the last chunk and claiming) is claimed by the first request that meets it: a duplicate of any of its ranges, the client's duplicate `create`, or its `HEAD`. Each starts finalization detached and answers `waiting_for_processing`.
 - A `create` whose session finalization refused opens a fresh session for the bytes.
 - **Boot recovery.** Before the listener accepts a request, the server drives every `WaitingForProcessing` session through the same steps, and finalizes every session left full and unclaimed through the claim, so a client reaching one first is not raced. If the stage was already committed, the committed blob is re-hashed in place of the stage and step 4 is skipped; the later steps are idempotent. A claim with neither a stage nor a committed blob fails.
-- There is no claim lease: one process serves a blob root, so every claim listed before it serves belongs to a process that is gone.
+- There is no claim lease. Exactly one process serves a blob root, and it holds the root's exclusive lock for its lifetime ([](/design/filesystem/server/#blob-root-ownership)), so every claim listed before it serves belongs to a process that is gone. A lease would let a second finalizer take over a claim whose holder is only slow, and nothing would order the two terminal writes.
 
 The server can verify only ciphertext; the client verifies plaintext on download through STREAM's per-chunk tags. `Completed` is a one-time acknowledgement; standing durability is `/storage/verify` ([](/design/transfer/durability/)).
 
@@ -189,11 +193,13 @@ Client recovery matrix (`capsule-sdk::upload`):
 | a lost answer (reset, or no response within the response wait) | Read `HEAD` before sending anything again, then re-plan from its committed set |
 | a session gone (`404` on `HEAD`) before finalization | Re-create the session, restart the blob |
 | `error.upload.checksum_mismatch` | Re-send the same chunk |
+| `error.upload.storage_failed` (on a chunk or `HEAD`) | Back off per `Retry-After` (else the retry engine's backoff), then re-create the session and restart the blob, charging the transfer's recovery budget |
 | `error.upload.chunk_timeout` (`408`) | Re-send the same offset with a shorter range ([](#adaptive-chunk-sizing)) |
 | `error.upload.session_not_found` | Re-create the session, restart the blob |
 | `error.upload.duplicate_blob` | Resolve as a merge ([](#deduplication-and-merge)) |
 | `error.upload.replace_incomplete` | Upload the rest of the bundle, retry the manifest |
 | `error.upload.stale_revival` | Re-read the asset and rebase |
+| `error.upload.handoff_closed` | Courier only: stop uploading the hand-off, keep the copy, and drop it once it fetches custody of every member itself ([](/design/peering/#delegation)) |
 | `error.request.too_early` (`425`) | Re-send the same request once the handshake completes, outside early data ([](/design/networking/#http-transport)) |
 | `error.protocol.version_unsupported` (`426`) | Stop; prompt to update |
 | `error.quota.exceeded` | Pause; surface the remediable state |
@@ -227,13 +233,13 @@ Clients branch on `error.*` codes ([](/design/i18n/#server-error-codes)), never 
 | `403` | `album_access_denied`, `device_not_authorized`, `owner_not_permitted`, `error.quota.exceeded` |
 | `404` | `session_not_found` |
 | `408` | `chunk_timeout` |
-| `409` | `duplicate_blob`, `range_conflict`, `too_fragmented`, `too_many_in_flight`, `session_not_active`, `receipt_not_available`, `replace_incomplete`, `stale_revival` |
+| `409` | `duplicate_blob`, `range_conflict`, `too_fragmented`, `too_many_in_flight`, `session_not_active`, `receipt_not_available`, `replace_incomplete`, `stale_revival`, `handoff_closed` |
 | `413` | `file_too_large`, `chunk_too_large` |
 | `415` | `unsupported_media_type` |
 | `425` | `error.request.too_early` |
 | `426` | `error.protocol.version_unsupported` |
 | `429` | `rate_limited` |
-| `500` | `storage_inconsistent` |
+| `500` | `storage_inconsistent`, `storage_failed` |
 | `503` | `unavailable` |
 | `507` | `storage_full` |
 
@@ -246,7 +252,7 @@ The server performs the link. A `create` whose hash another asset of the same ow
 - a retry of the same asset, which already names the blob;
 - a `replace` member, whose manifest records the whole bundle;
 - a signed manifest, which names its own asset;
-- bytes the store no longer holds, for which the create opens an ordinary session so they can be uploaded again.
+- bytes the store no longer holds, including an address recorded as lost ([](/design/transfer/#repairing-a-lost-or-corrupt-blob)), for which the create opens an ordinary session so they can be uploaded again.
 
 An adoption that would re-point a singular role the asset already holds is `400 error.upload.envelope_mismatch`, the same answer finalization gives.
 
@@ -257,7 +263,7 @@ Duplicates already in a library are collapsed by intra-library deduplication ([]
 - An upload is charged to `upload_user_id` (the uploader), distinct from `owner_id`, and uploading for another owner requires a verified relationship. Quota is reserved for the declared `size` at session creation, after the duplicate check, and released when the session is deleted, discarded, expired or ends in `FailedProcessing` ([](/design/quota/)).
 - Adding to an album requires write-tier access. Asset uploads always carry a concrete `album_id` (the user's choice or the default album, [](/design/organization/#the-default-album)), because the bytes are encrypted under that album's key.
 - Only the uploader may `PATCH`. The uploader or owner may `HEAD` or `DELETE`; to anyone else the session does not exist (`404`).
-- The uploading device need not be the manifest's signing device: any device of the same account may upload a bundle another device sealed and signed ([](/design/peering/#delegation)). The signature is verified against the signer, never the uploader.
+- The uploading device need not be the manifest's signing device: any device of the same account may upload a bundle another device sealed and signed ([](/design/peering/#delegation)). The signature is verified against the signer, never the uploader. A create that names a registered hand-off is additionally refused `409 error.upload.handoff_closed` once that hand-off is forfeited, withdrawn or expired ([](/design/peering/#hand-off-registration)).
 
 ## Upload Tiering (Staged Uploads)
 
@@ -292,6 +298,11 @@ The upload queue is the client's, not the server's, and holds every tier a devic
 - **Fair scheduling.** Lanes are served round-robin, and a lane always serves its lowest tier first and never skips its own head, so the tier order ([](#upload-tiering-staged-uploads)) holds per server and one lane's T0 work is never starved by another's T2 originals.
 - **Rebuildable state.** On resume, each lane re-derives what remains from the local index (the Live assets that should reach that server, with this device's own upload of a trashed asset kept redacted, [](/design/organization/#deletion-state-machine)) and from its own server's truth (held roles on its feed plus its `GET /v1/upload/sessions`), as a single-server queue does. No lane's queue is derived from another server's, and losing the queue loses no work.
 
-With one server the queue is one lane.
+With one server the queue is one lane. Every lane's requests are admitted by the client's one transfer scheduler ([](/design/transfer/download/#transfer-scheduler)): index-tier and preview-tier sessions run in its `sync` class and originals and backup artifacts in its `backup` class, so a visible thumbnail is never queued behind an original's upload on the same link.
 
-A delegation hand-off ([](/design/peering/#delegation)) is not a lane: the delegate pulls the bundle over the peer channel and uploads it from its own queue. Every album has exactly one home server, which takes every write to it, and multi-writer albums across servers are not part of v1 ([](/design/federation/)). An asset is therefore only ever queued for its album's home server.
+A delegation hand-off ([](/design/peering/#delegation)) is not a lane: the courier receives the bundle over the peer channel or as a file and uploads it from its own queue, each create naming the registered hand-off it serves. Every album has exactly one home server, which takes every write to it, and multi-writer albums across servers are not part of v1 ([](/design/federation/)). An asset is therefore only ever queued for its album's home server.
+
+## Known Gaps
+
+- **No root lock.** No `.server/lock` is taken anywhere in `capsule-server/src` ([](/design/filesystem/server/#known-gaps)), so the claim rule's "every claim listed at boot belongs to a process that is gone" ([](#finalization-and-integrity)) holds only while operators run one `serve` per root.
+- **Commit discards the stage when the address exists.** `BlobStore::commit` deletes the verified stage and keeps the file already at the address (`capsule-server/src/blob/fs.rs:501-511`), instead of renaming the stage over it.

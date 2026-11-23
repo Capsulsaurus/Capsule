@@ -1,0 +1,112 @@
+---
+title: Capsule
+description: Une bibliothèque photo open source qui organise une vie entière de photos sur vos propres appareils, chiffre chacune de bout en bout et est conçue pour partager entre serveurs.
+status: draft
+template: splash
+hero:
+  title: Une vie entière de photos, organisée et privée
+  tagline: Capsule organise toute votre bibliothèque sur vos propres appareils, chiffre chaque photo de bout en bout sur un serveur qui ne détient jamais aucune clé, et est conçu pour partager entre serveurs.
+  image:
+    # Raw HTML rather than `file`: Starlight's hero sizes `file` images to a
+    # 400x400 square, which crops a portrait screenshot.
+    html: |
+      <img class="hero-shot hero-shot-light" src="/images/hero-light.webp" width="800" height="1538" alt="Capsule sur iPhone, affichant la chronologie de la bibliothèque" />
+      <img class="hero-shot hero-shot-dark" src="/images/hero-dark.webp" width="800" height="1538" alt="Capsule sur iPhone, affichant la chronologie de la bibliothèque" />
+  actions:
+    - text: Pour commencer
+      link: /guides/getting-started/
+      icon: right-arrow
+    - text: Lire la conception
+      link: /design/
+      variant: secondary
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+import Feature from '../../../components/Feature.astro';
+import FeatureGrid from '../../../components/FeatureGrid.astro';
+import StatusStrip from '../../../components/StatusStrip.astro';
+
+<StatusStrip
+  text="Les clients mobiles sont en cours de stabilisation et de finition avant d'être confiés aux bêta-testeurs."
+  href="https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md"
+  linkLabel="Feuille de route"
+/>
+
+<a id="what-sets-capsule-apart"></a>
+
+## Ce qui distingue Capsule
+
+<FeatureGrid>
+  <Feature icon="random" title="Organisé à toute échelle" href="/features/smart-albums/" linkLabel="Albums intelligents">
+    La recherche, les albums intelligents et l'étiquetage automatique sont conçus pour
+    s'exécuter sur vos appareils, à partir d'un index local complet, si bien qu'une
+    bibliothèque de millions de photos reste navigable sans que personne ne la trie à la main.
+  </Feature>
+  <Feature icon="padlock" title="Un serveur sans clés" href="/design/cryptography/" linkLabel="Conception cryptographique">
+    Le serveur stocke du texte chiffré et ne détient jamais aucune clé. Il ne peut lire ni une
+    photo, ni une légende, ni un titre d'album, et signe pourtant un reçu de conservation pour
+    chaque téléversement qu'il accepte.
+  </Feature>
+  <Feature icon="server" title="Partager entre serveurs" href="/design/federation/" linkLabel="Conception de la fédération">
+    La confiance repose sur la cryptographie plutôt que sur le serveur : des personnes sur
+    différents serveurs Capsule doivent pouvoir partager des albums entre elles, sans service
+    central entre les deux.
+  </Feature>
+  <Feature icon="laptop" title="Toute votre bibliothèque, hors ligne" href="/features/offline-library/" linkLabel="Bibliothèque hors ligne">
+    Chaque application native est conçue pour garder un index complet de toutes les photos que
+    vous avez conservées, afin de pouvoir tout parcourir, rechercher et organiser sans connexion.
+  </Feature>
+  <Feature icon="approve-check-circle" title="Un historique vérifiable" href="/design/cryptography/provenance/" linkLabel="Conception de la provenance">
+    Chaque élément porte une chaîne de provenance signée, en ajout seul : quelle personne et quel
+    appareil l'ont importé ou modifié est vérifié, et non pris sur parole.
+  </Feature>
+  <Feature icon="database" title="Récupérable par construction" href="/design/backup-recovery/" linkLabel="Sauvegarde et récupération">
+    Chaque élément est associé à un fichier annexe de métadonnées signé, si bien qu'une
+    bibliothèque reste lisible sans base de données et peut être reconstruite après des
+    dommages partiels.
+  </Feature>
+</FeatureGrid>
+
+<a id="everything-you-would-expect"></a>
+
+## Tout ce que vous attendez
+
+Des originaux conservés en pleine qualité et restaurables octet pour octet. Le RAW et la vidéo
+comme formats à part entière. Des applications natives construites avec les contrôles propres à
+chaque plateforme. Une CLI et une TUI qui peuvent faire tout ce que font les applications ;
+voir [](/reference/cli/).
+
+<a id="why-it-is-built-this-way"></a>
+
+## Pourquoi cette conception
+
+La plupart des services photo vous obligent à choisir entre les fonctionnalités qu'un serveur
+obtient en lisant votre bibliothèque et la confidentialité dont vous bénéficiez lorsqu'il ne le
+peut pas. Capsule choisit la confidentialité et reconstruit les fonctionnalités sur vos appareils,
+à partir de données qu'eux seuls peuvent déchiffrer.
+
+Ce choix a un coût, et les documents de conception l'exposent plutôt que de le cacher : ce qu'un
+serveur sans clé peut ou ne peut pas vous dire ([](/design/notifications/)), ce qui se passe
+quand une clé est perdue ([](/design/backup-recovery/#recovery-paths)), et ce qu'un client
+défectueux ou malveillant est empêché de faire ([](/design/threat-model/)).
+
+<a id="get-started"></a>
+
+## Pour commencer
+
+<CardGrid>
+  <Card title="Héberger un serveur" icon="server">
+    Faites tourner Capsule sur votre propre matériel. [](/guides/self-hosting/)
+  </Card>
+  <Card title="Utiliser Capsule" icon="open-book">
+    Importez, organisez et parcourez votre bibliothèque. [](/guides/user-guide/)
+  </Card>
+  <Card title="Apporter votre bibliothèque" icon="cloud-download">
+    Importez un export Google Takeout de Google Photos avec ses métadonnées.
+    [](/guides/google-photos-migration/)
+  </Card>
+  <Card title="Développer Capsule" icon="code-branch">
+    Chaque ligne est open source et développée au grand jour.
+    [](/development/local-development/)
+  </Card>
+</CardGrid>

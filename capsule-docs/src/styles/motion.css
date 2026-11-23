@@ -35,6 +35,16 @@ header.header {
     view-transition-name: site-header;
 }
 
+/* Starlight's mobile menu button sits over the header's right end, but it is
+   a fixed element inside the sidebar's <nav>, not the header. Unnamed, it
+   travels in the root snapshot, under the header's: the header's glass covers
+   it and the content's fade takes it out and back on every navigation. Named,
+   it holds still with the header. (Wider than 50rem it is not displayed, so
+   not captured.) */
+button.sl-menu-button {
+    view-transition-name: site-menu-button;
+}
+
 @media (min-width: 50rem) {
     .sidebar-pane {
         view-transition-name: site-sidebar;
@@ -70,11 +80,27 @@ header.header {
         --capsule-page-in-y: -10px;
     }
 
-    /* The bar is the same on both sides of a navigation. */
+    /* The bar is the same on both sides of a navigation, and so is the menu
+       button over it. */
     ::view-transition-group(site-header),
     ::view-transition-old(site-header),
-    ::view-transition-new(site-header) {
+    ::view-transition-new(site-header),
+    ::view-transition-group(site-menu-button),
+    ::view-transition-old(site-menu-button),
+    ::view-transition-new(site-menu-button) {
         animation: none;
+    }
+
+    /* Only one side has a sidebar (to or from the front page): the button
+       leaves or arrives with the content instead. */
+    ::view-transition-old(site-menu-button):only-child {
+        animation: capsule-fade-out var(--capsule-page-out)
+            var(--capsule-page-ease-in) both;
+    }
+
+    ::view-transition-new(site-menu-button):only-child {
+        animation: capsule-fade-in var(--capsule-page-in)
+            var(--capsule-page-ease-out) var(--capsule-page-in-delay) both;
     }
 
     /* Sidebar: the same links on both sides, so a short crossfade changes

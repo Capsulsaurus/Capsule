@@ -34,9 +34,7 @@ fn png() -> Vec<u8> {
     use rawshift_image::core::metadata::ImageMetadata;
     use rawshift_image::core::{BitDepth, MetadataEmbedOptions};
     use rawshift_image::formats::encode_rgb_image_to_vec;
-    use rawshift_image::formats::export::{
-        CommonEncodeOptions, EncodeOptions, ZunePngEncodeConfig,
-    };
+    use rawshift_image::formats::export::{CommonEncodeOptions, EncodeOptions, PngEncodeConfig};
 
     let (w, h) = (512u32, 384u32);
     let mut data = Vec::with_capacity((w * h * 3) as usize);
@@ -47,20 +45,22 @@ fn png() -> Vec<u8> {
             data.push((((x + y) * 255 / (w + h)) as u16) * 257);
         }
     }
-    let frame = rawshift_image::core::image::RgbImage::with_color_space(
+    let frame = rawshift_image::core::RgbImage::with_color(
         w,
         h,
         data,
-        rawshift_image::core::ColorSpace::Srgb,
-    );
+        rawshift_image::core::ColorDescription::SRGB,
+    )
+    .expect("the fixture frame has non-zero dimensions");
     encode_rgb_image_to_vec(
         &frame,
         &ImageMetadata::default(),
-        &EncodeOptions::PngZune(ZunePngEncodeConfig {
+        &EncodeOptions::Png(PngEncodeConfig {
             common: CommonEncodeOptions {
                 metadata: MetadataEmbedOptions::none(),
                 bit_depth: BitDepth::Eight,
             },
+            ..PngEncodeConfig::default()
         }),
     )
     .expect("the fixture PNG encodes")

@@ -103,11 +103,18 @@ one is designed.
   is one even pane of tinted glass from its top edge to its bottom edge, the page blurred beneath
   it, so text scrolling under it fades uniformly rather than showing through at the edges. The bar
   is laid out by the window's width alone, so it is identical on every page, the front page
-  included, and a navigation in a browser with view transitions keeps it in place. The section
-  links need a wide window (72rem, where the table of contents also appears); narrower, the sidebar
-  carries the sections, and below 50rem the menu carries the section links and the switcher.
-  Splash pages such as the front page have no menu, so there the sections are reached through the
-  page's own links.
+  included, and a navigation in a browser with view transitions keeps it in place, the mobile menu
+  button with it. The row of section links needs a wide window (72rem, where the table of contents
+  also appears); narrower, it folds into one pill beside the wordmark, named for the current
+  section ("Sections" outside one) and drawn like the version switcher, that opens the same links
+  as a list. It is part of the bar, so every page has it, splash pages included. A pill rather than
+  a scrolling strip of tabs: it fits the bar's single row at any width, and a strip would need a
+  second row under the glass or hide sections off its edge. Below 50rem the switcher, GitHub
+  button and theme toggle move into the menu, or on a splash page, which has no menu, into the
+  section pill's list. On a translated route (`/ja/…`) every header, footer and front-page link
+  stays in that language, with the section labels translated, and a page with no translation
+  shows the English page with Starlight's fallback notice. The language picker sits in the bar on
+  wide windows and in the menu, or the section pill's list on a splash page, on narrow ones.
 - **Page transitions.** Moving between pages animates the content, never the chrome: the header
   holds still, the sidebar crossfades so only its current-page pill changes, and the content and
   table of contents fade out as the new page's fade in, the content leaving from where the reader
@@ -120,9 +127,9 @@ one is designed.
   covers it, the header's glass blurs it away, and it is not printed. It stays put while a page
   scrolls; a page transition carries it with the content, so it settles with the new page.
 - **Status badges.** Every authored page carries a review `status`
-  ([](/design/principles/#review-status)). The page title always shows
-  it. The sidebar shows it only for a page that is not `stable`, so the navigation lists exactly what
-  still awaits review.
+  ([](/design/principles/#review-status)), except a splash page such as the support page, which has no
+  sidebar and may carry none. The page title always shows it. The sidebar shows it only for a page
+  that is not `stable`, so the navigation lists exactly what still awaits review.
 - **Sidebar.** The same surface as the page, divided from it by a hairline; the current page is an
   accent-tinted pill. Where the table of contents appears beside it, the two columns are the same
   width and the content is centred between them, so the text has equal space on each side at every
@@ -131,8 +138,8 @@ one is designed.
   a one-line status, the differentiators with a link named for the doc behind each, the
   table-stakes tier, why Capsule is built this way, and where to start.
 - **Footer.** On every page, centred: links to the documentation, the blog (once it is live), the
-  roadmap, discussions and the source, then the copyright holder, the licence line and the commit
-  the site was built from, linked to that commit. On a page shorter than the window it rests on
+  roadmap, discussions, the downloads page, the support page and the source, then the copyright
+  holder, the licence line and the commit the site was built from, linked to that commit. On a page shorter than the window it rests on
   the window's bottom edge; on a longer one it follows the content.
 - **Generated reference.** A generated page says so under its title: the surface (REST API, CLI,
   an SDK), a dashed "Generated" tag and its source, and for REST a download of the OpenAPI

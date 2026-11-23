@@ -1,35 +1,89 @@
 ---
 title: Threat Model
-description: How Capsule contains damage from faulty, malicious, or version-mismatched clients
+description: What Capsule assumes, who can attack it, where its trust boundaries lie, and how it contains damage from faulty, malicious, or version-mismatched clients
 status: draft
 ---
 
-The server holds no keys and clients write canonical state, so the design must bound what a client can break.
+The server holds no keys and clients write canonical state, so the design must bound what a client can break, and must say plainly what it trusts in order to do so.
 
 **Invariant:** a faulty, malicious, or version-mismatched client MUST NOT cause **irreparable** damage (lost original bytes, lost audit trail, undetected overwrite of user intent). It may cause only **transient** damage: a quarantined asset, a rejected write with a clear error, a detected-and-reconciled divergence.
 
-This doc covers write-path harm; key loss is in [](/design/backup-recovery/#recovery-paths). Primitives and per-structure rules are declared once in their owner docs and only linked here.
+This doc covers write-path harm and the assumptions under it; key loss is in [](/design/backup-recovery/#recovery-paths). Primitives and per-structure rules are declared once in their owner docs and only linked here.
 
 | Sub-doc | Concern |
 | --- | --- |
 | [](/design/threat-model/scenarios/) | Damage → defense map, quarantine surfaces, provenance immutability |
 | [](/design/threat-model/validation/) | Server and client refuse-by-default checks, handshake, idempotency, atomicity |
 | [](/design/threat-model/schema-rules/) | Schema evolution, forbidden client behaviors, deprecation policy |
+| [](/design/threat-model/risks/) | Implementation faults that the checks above cannot see, and the tests that must catch them |
+
+## Assumptions
+
+Each defense in this model holds only while these hold. A broken assumption is not a bug in a defense; it moves the line of what Capsule can promise, so each one names what breaks.
+
+| # | Assumption | If it fails |
+| --- | --- | --- |
+| A1 | **An enrolled device is the account.** Every device of an account holds the master key and the User IK in memory while unlocked (`Account` in `capsule-core/src/crypto/keys/keystore.rs`), and through them every album key the account holds. | A compromised device reads everything the account can and signs as the account. Containment is the master-key compromise response ([](/design/cryptography/keys/#master-key-compromise)): rotate the IK from the recovery secret, revoke, re-key. Ciphertext already taken stays readable. |
+| A2 | **The server is untrusted for confidentiality and authorization**, and trusted only to be available. Durability is checked, not trusted ([](/design/transfer/durability/#verify-before-destroy)). | Nothing breaks: this is the design point. A hostile server can withhold, delay and lie about state, which clients detect ([](/design/transfer/durability/#proof-of-loss)). |
+| A3 | **Server-served code is honest** for every browser surface. A browser viewer or guest runs code the server serves ([](/design/clients/#web-client)). | A hostile server serves code that reads a share link's fragment, a passphrase or a drop's plaintext. Share links and drops are server-blind only within this bound ([](/design/share-links/#security-contract), [](/design/web-upload/#two-confidentiality-properties)). Native clients open links themselves and do not depend on it. |
+| A4 | **The server's clock is right** and is the only clock that decides anything ([](/design/filesystem/server/#server-clock)). Client clocks decide nothing: `timestamp` and `ts` are audit-only ([](/design/threat-model/schema-rules/#timestamp-grammar)). | A clock ahead purges trash before its retention ends, which is irreparable; a clock behind keeps sessions, links and counters alive too long. The server's boot and runtime checks catch backward steps only. |
+| A5 | **A completed `fsync` is durable** on the server's storage ([](/design/transfer/#assumptions)). | Acknowledged bytes and custody receipts can name bytes that never reached the disk. The `deep` verify and the scrub detect it after the fact. |
+| A6 | **The reverse proxy is configured as documented** ([](/guides/self-hosting/#reverse-proxy)): the deployment names its trusted hops, and the proxy passes content codings through ([](/design/networking/#compression)). | Naming no hop puts every client in the proxy's one per-source bucket, so one caller spends everyone's sign-in, share and drop budgets. Trusting a hop that does not append its own forwarding field lets a caller choose its source key and escape per-source limits ([](/design/authorization/#rate-limits)). A proxy that compresses on its own reopens BREACH on the excluded routes. |
+| A7 | **The shared implementation is correct.** Where the server re-checks a client value with the same `capsule_core` code the client used, the check is not independent: finalization recomputes the content address with the client's own `Sha256Hasher` (`capsule-server/src/upload/finalize.rs`). | A bug both sides share passes every server check and every custody gate. [](/design/threat-model/risks/) names each such fault and the independent test that must catch it. |
+| A8 | **Dependencies and build inputs are not hostile** ([](/development/supply-chain/)). | A hostile dependency in a client process is a compromised device (A1) on every install. One in the server is a hostile server (A2), except that it also controls the code browsers run (A3). |
+| A9 | **The OS and platform services see no plaintext** unless the user exports it ([](/design/platform-integrations/#the-plaintext-boundary)). | An OS cloud backup of the library root puts the plaintext library and its decrypted index in a provider's cloud ([](/design/filesystem/client/#mobile-clients)). A map renderer tells its tile provider which regions, at which zoom, the user views ([](/design/places/#renderers-and-basemap-privacy)). |
+| A10 | **A secure element protects only the classical half** of a device key. The ML-DSA half and the MLS leaf key are software keys sealed under hardware-protected material ([](/design/cryptography/keys/#device-keys)). | Reading a device's sandbox lets an attacker sign MLS group operations as that device until it is removed, and is in any case A1. |
 
 ## Client Class Taxonomy
 
-No class is trusted to enforce its own correctness.
+No class is trusted to enforce its own correctness. A class names a device's behavior, not its key material: every enrolled device holds the same account keys (A1).
 
 | Class | Holds | Stopped by |
 | --- | --- | --- |
-| **Honest** | Session + access token, device DSK, epoch write-tier key | Baseline |
-| **Faulty** | Same real keys; buggy writes | Server structural checks ([](/design/threat-model/validation/#server-side-validation-invariants)), client `verify_asset` ([](/design/cryptography/keys/#write-authorization)), quarantine |
-| **Malicious** | A current DSK and the epoch write-tier key | Immutable provenance chain, soft-delete, per-album/per-event compartments, signed audit trail |
+| **Honest** | Session and access token; the master key and User IK; its DSK and DEK; the AMKs of its albums; each epoch's write-tier key where it is a writer | Baseline |
+| **Faulty** | Same real keys; buggy writes | Server structural checks ([](/design/threat-model/validation/#server-side-validation-invariants)), client `verify_asset` ([](/design/cryptography/keys/#write-authorization)), quarantine. A bug the server shares is not stopped by the server ([](/design/threat-model/risks/)). |
+| **Malicious** | Everything an honest device holds: the account's master key and IK, every AMK and write-tier key the account holds, and the ability to enroll more devices | Nothing stops its reads. Its writes are never silent: immutable provenance chain, soft-delete, per-album and per-event compartments, signed audit trail. Recovery is IK rotation rooted in the recovery secret, revocation and re-keying ([](/design/cryptography/keys/#master-key-compromise)). |
 | **Old** | Real keys; `X-Capsule-Protocol` below the server window | Protocol handshake ([](/design/threat-model/validation/#protocol-and-capability-negotiation)): `426` before any state is written |
 | **New** | Real keys; version/suite/schema above the receiver's max | Refuse-by-default on unknown enums, schemas and versions ([](/design/threat-model/schema-rules/)) |
 | **Web guest** | Only an upload-link capability ([](/design/web-upload/)); no keys, no manifest | Drops land only in the owner's inbox, quarantined by construction ([](/design/threat-model/scenarios/#quarantine-surfaces)), under per-link caps, quota and rate limits, and enter the library only via trusted adoption ([](/design/web-upload/#drop-and-adoption-lifecycle)) |
 
 Confidentiality and authentication cannot stop a malicious key-holder, so the goal is that it can do nothing **silently**: every write is a signed provenance record, deletes are soft by default, and history is append-only.
+
+## Other Actors
+
+| Actor | Can | Cannot | Owner |
+| --- | --- | --- | --- |
+| **Holder of a stolen session token** | Read the escrow blobs and attack them offline against the ≥128-bit recovery secret; read what the session reads | Replace an escrow, enroll a device or a second factor (each needs a fresh credential or a signature), disable TOTP, or sign anyone out | [](/design/authorization/#freshness-gated-operations), [](/design/backup-recovery/#master-key-escrow) |
+| **Hostile server** | Withhold, delay, reorder and replay; lie about sizes and state; serve hostile browser code (A3); send oversized or decompression-bomb bodies | Read sealed bytes, forge a signed manifest, or roll back a directory, epoch or chain a client has seen. Clients cap every decoded body and trust no size the server states ([](/design/networking/#http-transport)). | [](/design/cryptography/keys/#write-authorization) |
+| **Hostile peer server** | Serve bad entries and flood hints and reports | Write into this server; exceed its error and byte budgets | [](/design/federation/) |
+| **Delegation courier** | Read every asset, because it is a device of the same account (A1); withhold or delay a hand-off | Forge or alter the origin's signed bytes, or make the origin release an original without custody the origin fetched itself | [](/design/peering/#threat-analysis) |
+| **Network attacker** | Observe sizes, timing and endpoints | Read or alter traffic (TLS; sealed payloads) | [](/design/networking/#transport-security) |
+| **Misconfigured proxy** | Collapse or spoof per-source limits; compress excluded routes (A6) | See plaintext beyond TLS-terminated metadata | [](/guides/self-hosting/#reverse-proxy) |
+| **Supply-chain attacker** | Run code in every process that links the dependency (A8) | Bypass the gates on admission, pinning and advisories unnoticed | [](/development/supply-chain/) |
+| **Platform services and map providers** | See what the user exports or opts in to; learn viewed map regions (A9) | See library content that stays inside the plaintext boundary | [](/design/platform-integrations/#the-plaintext-boundary) |
+
+## Trust Boundaries
+
+| Boundary | What crosses it | What the inside trusts | Owner |
+| --- | --- | --- | --- |
+| Client ↔ server | Ciphertext, signed records, key-free facts | Nothing the server says about authorization; the server's clock for deadlines, sent as durations | [](/design/filesystem/server/#postgresql-what-the-server-knows) |
+| Proxy ↔ server | Source address, content coding | Only the hops the deployment names | [](/design/authorization/#rate-limits) |
+| Server ↔ browser | Code and ciphertext | The served code (A3) | [](/design/clients/#web-client) |
+| App ↔ OS | Exports, opt-in indexes, backups, tile requests | Nothing: crossing is an export | [](/design/platform-integrations/#the-plaintext-boundary) |
+| Device ↔ device of one account | Sealed bundles, sync artifacts | The peer's directory entry; it holds the same keys (A1) | [](/design/peering/#trust-model) |
+| Server ↔ peer server | Capabilities, pulled entries | Signatures and pinned keys, never peer order | [](/design/federation/) |
+| Implementation ↔ implementation | Hashes, ciphertext, encodings, derived keys | Independent known-answer vectors, never a second copy of the same code (A7) | [](/design/threat-model/risks/) |
+| Build ↔ dependencies | Third-party code | Admission, pinning and advisory gates (A8) | [](/development/supply-chain/) |
+
+## Not Defended
+
+Stated so nobody relies on them:
+
+- Reads by a compromised device, and every ciphertext it took before re-keying (A1).
+- A hostile server's browser code (A3), beyond publishing a reproducible web-bundle hash.
+- Traffic analysis: sizes, timing, and which addresses a client fetches.
+- Availability against a hostile or failed server.
+- Decoder exploits in v1: the sandboxed decoder is post-v1, so remote-origin bytes, guest drops included, are decoded in process, and drops only by the memory-safe core codecs ([](/design/clients/#sandboxed-decoder), [](/design/web-upload/#security-contract)).
 
 ## Damage Containment Layers
 
@@ -42,5 +96,5 @@ A bug or compromise on one side of a shell cannot cross it.
 | Per-event | Each lifecycle action is its own signed, chained record | [](/design/cryptography/provenance/#provenance-of-library-modifications) |
 | Per-user | Owner Group Key; sponsored-account isolation | [](/design/cryptography/keys/#owner-group-keys-ogks) |
 | Per-peer (federation) | Capability tokens, error budgets, new-peer quarantine | [](/design/federation/) |
-| Per-device (peering) | Device directory enforced in the TLS handshake | [](/design/peering/#establishing-the-channel) |
+| Per-device (peering) | Device directory enforced in the TLS handshake; identity only, since every device holds the account's keys | [](/design/peering/#establishing-the-channel) |
 | Per-link (web upload) | Link caps + inbox isolation | [](/design/web-upload/#security-contract) |

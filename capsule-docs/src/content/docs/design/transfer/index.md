@@ -9,7 +9,7 @@ The **transfer protocol** moves blob bytes between a client and its home server 
 | Page | Covers |
 | --- | --- |
 | [](/design/transfer/upload/) | Resumable upload sessions, chunk rules, finalization, staged tiers T0/T1/T2, error codes |
-| [](/design/transfer/download/) | Tiered and ranged fetch, blob access scoping, the fallback ladder, prefetch |
+| [](/design/transfer/download/) | Tiered and ranged fetch, blob access scoping, the fallback ladder, the transfer scheduler |
 | [](/design/transfer/durability/) | Storage verification, deep re-hash, custody receipts, releasing local originals |
 
 *What* changed, the metadata feed a client reads before deciding what to fetch, is [](/design/sync/), not this protocol. Implementations: `capsule-server::upload`, `capsule-server::blob`, `capsule-server::verify`, `capsule-server::attestation`, `capsule-sdk::upload`, `capsule-sdk::fetch`, `capsule-sdk::verify`, `capsule-sdk::staged`. Wire shapes are the OpenAPI contract ([](/reference/api/)); these pages fix the semantics the schema cannot express.
@@ -49,3 +49,70 @@ flowchart TB
     store -->|"GET /v1/blob/{hash}<br/>(ranged, per tier)"| other
     bundle -->|"POST /v1/storage/verify<br/>+ receipt"| release
 ```
+
+## Failure Model
+
+The invariants above hold only under stated assumptions about the hardware and filesystems underneath. This section states those assumptions, what each side does when one breaks, and how the break is found. The rule throughout is the system invariant: a fault may refuse a write or cost a re-transfer, and never silently loses or corrupts data ([](/design/versioning/#system-invariants)). Where a fault has already destroyed a copy, the design's job is to **detect it, say so, and repair from any copy that survives**.
+
+### Assumptions
+
+- **A completed `fsync` is durable.** Once `fsync` (or `fdatasync`) returns success on a file or directory, its data survives power loss and a kernel crash. Storage that acknowledges a flush from a volatile cache breaks every durability claim on this page, and no software check can prove the opposite. The server's blob root and PostgreSQL's data directory MUST sit on storage that honours flushes: no volatile write cache, or one with power-loss protection, and no mount option that disables barriers. The blob root's full contract, with the checks the server makes at boot, is [](/design/filesystem/server/#blob-root-filesystem-contract); the operator's proof is a power-cut drill on the deployed hardware ([](/guides/self-hosting/#blob-directory)).
+- **The server is the durable copy, and it is still checked.** Server data is assumed durable ([](/design/principles/#principles)), so a client may release its original on server custody. The assumption is enforced rather than trusted: every original is re-read from storage before a client may release its copy ([](/design/transfer/durability/#verify-before-destroy)), and every blob is re-read on the scrub's rolling cadence afterwards ([](/design/filesystem/maintenance/#server-side-integrity-scrub)).
+- **Client storage is losable.** A phone or laptop can lose its disk, fill it or be wiped at any time. Nothing a client holds is assumed to survive except what it has not yet handed to the server, which it keeps until custody.
+
+### Faults and Responses
+
+| Fault | Where | Response |
+| --- | --- | --- |
+| **`fsync` returns `EIO`** | Server, staged chunk | The range is not recorded and the whole session fails (`FailedProcessing`, `error.upload.storage_failed`). `fsync` is **never retried**: after a failed flush the kernel may have dropped the dirty pages and marked them clean, so a second `fsync` can report success for bytes that never reached the disk. The stage is deleted, and the client re-creates the session onto a fresh file. |
+| | Server, finalization commit or directory sync | Finalization fails with `error.upload.storage_failed` and writes no index row. A file the rename already placed is an unreferenced orphan, and a later commit of the same address replaces it with a freshly verified stage ([](/design/filesystem/server/#blob-store-layout)). |
+| | Server, owner-ledger append | The segment is sealed: the process appends nothing more to it, the finalization fails, and the owner's writes are refused until a restart re-verifies the tail against the anchor ([](/design/filesystem/server/#anchor)). |
+| | Server, any of the above | The blob root is marked **degraded**: new sessions answer `503 error.upload.unavailable`, sessions in flight fail at their next write, reads continue, and the condition is logged at `ERROR`. Only a restart, which re-runs the boot checks, clears it. A disk that failed one flush is not trusted with the next. |
+| | Client, download or bundle file | The temporary file is deleted, never landed, and the transfer is retried from the start once; a second failure ends it as a local storage fault shown to the user. |
+| **Torn write** (crash mid-write) | Server, staged chunk | Bytes outside the committed set are garbage by definition ([](/design/transfer/upload/#chunk-rules-and-strictness)); the range is sent again. |
+| | Server, blob | Impossible by construction: a blob reaches its address only by renaming a file already fsynced whole. |
+| | Server, ledger tail | A short or zeroed frame after the last whole entry is cut; damage followed by an entry refuses appends ([](/design/filesystem/server/#the-owner-ledger)). |
+| | Client, partial download | On resume the client re-checks the held prefix before extending it: with the key, chunk by chunk against the STREAM tags, truncating at the first chunk that fails; without a key (a courier), by the final content-address check, which discards the partial and fetches again on a mismatch ([](/design/transfer/download/#resumption-and-verification)). |
+| | Client, library files | Temp file and rename throughout ([](/design/filesystem/maintenance/#atomic-writes-and-crash-recovery)). |
+| **Disk full (`ENOSPC`)** | Server | The blob root keeps a free-space **reserve**. Below it, session creation and chunk writes answer `507 error.upload.storage_full` with `Retry-After`, while finalization, ledger appends, deletes, purges and garbage collection still run in the reserve, so an upload whose bytes are all on the server is never failed midway by other traffic ([](/design/quota/#enforcement-points)). |
+| | Client, download | A download that cannot be written keeps its partial for resume and pauses its class. The client runs a cache sweep ([](/design/filesystem/client/#automatic-cache-management)) and resumes once space is back. It never evicts a device-owned original, a canonical library file or a pinned representation to make room. Below the client's free-space floor only the `visible` class runs ([](/design/transfer/download/#transfer-scheduler)). |
+| | Client, staging and bundles | A write that cannot complete leaves the previous file in place (temp and rename), the asset stays queued, and the user is told the device is full. No original is released to make room for an upload's own staging. |
+| **Bit rot** (bytes at an address no longer hash to it) | Server | Found by a `deep` verify, by the rolling scrub, or by a read error while serving; repaired as in [](#repairing-a-lost-or-corrupt-blob). |
+| | Client original | Found by scheduled content validation; re-fetched from the server if it holds the asset, surfaced loudly if not ([](/design/filesystem/maintenance/#repair)). |
+| **The server loses committed blobs** (disk loss, a restore from an old backup, operator error) | Server | Found by the scrub's row → blob check, a `stored = false` verdict or a failed fetch. A committed row naming a missing blob is never deleted to hide it; it is repaired as in [](#repairing-a-lost-or-corrupt-blob). |
+| **The server loses its database** | Server | The index is rebuilt from the ledger and blobs, and clients re-announce what a rebuild could not prove ([](/design/filesystem/server/#recovering-the-index-from-blobs-alone)). |
+
+### Repairing a Lost or Corrupt Blob
+
+A content address names exactly one byte string, so any device that can produce bytes hashing to the address can restore it, and the server checks the repair without a key.
+
+1. **Detect.** A `deep` re-hash, a scrub pass, or a read of a committed blob that fails with an I/O error or comes up short. A read error first queues a re-hash of that blob, since one `EIO` is evidence, not proof.
+2. **Quarantine.** A blob that fails its re-hash, or cannot be read at all, is moved to `quarantine/` with a reason and recorded as **lost**. Its index rows stay: they record what should be there. From that moment `stored`, `retrievable` and therefore `durable` are `false` for every asset naming it, a fetch answers as for an address the store does not hold, and the asset's sync-feed entry is re-emitted with that role no longer held. Each loss is logged at `ERROR` with the address, owner and roles.
+3. **Re-upload.** A client that sees a role it had seen held become unheld, or a `durable = false` verdict for an asset it holds a receipt for, re-uploads the blob **if it can produce the exact bytes**: a held copy of the ciphertext, or a deterministic re-seal of the plaintext original under the manifest's file key and nonce prefix, checked against the address before a byte is sent. The header and every chunk are deterministic in the key, nonce and plaintext ([](/design/cryptography/encryption/#blob-header)), so re-sealing identical plaintext reproduces identical bytes and puts no second plaintext under a nonce. A derivative is not repaired; it is regenerated as a fresh derivative chain ([](/design/thumbnails/)). The upload is an ordinary session, because a lost address is not a duplicate ([](/design/transfer/upload/#deduplication-and-merge)).
+4. **Restore.** Finalization re-hashes the bytes, commits them to the address, clears the loss record, issues a fresh custody receipt and re-emits the feed entry. The quarantined copy stays for the operator until its retention ends ([](/design/filesystem/server/#quarantine-retention)).
+5. **Unrepairable.** When no device can produce the bytes, the loss stays recorded and visible, and the client's receipt is its proof of loss ([](/design/transfer/durability/#proof-of-loss)). The server never fabricates, substitutes or silently drops the row.
+
+### Client–Server Divergence
+
+Client state is a cache of server truth plus the work the client has not yet handed over (invariant 8). Every divergence below is detected by a read the client already makes. It resolves toward the server for what the server holds, and toward the client for what only the client holds.
+
+| Client believes | Server holds | Detected by | Resolution |
+| --- | --- | --- | --- |
+| A chunk is committed | No record of it (an asynchronously committed record lost in a crash) | `HEAD` reports less than was acknowledged | Re-send the range; each loss charges the transfer's recovery budget ([](/design/transfer/upload/#idempotency-and-resumption)) |
+| A session is live | Nothing (expired, discarded), or a session failed on a storage fault | `404 error.upload.session_not_found`, or `FailedProcessing` on `HEAD` | Re-create the session and restart the blob |
+| Nothing (it crashed after create) | A live session | `GET /v1/upload/sessions` on resume | Resume it from `HEAD`, or cancel it if the asset was deleted |
+| Finalization is pending (its answer was lost) | `Completed` or `FailedProcessing` | `HEAD` or the session list | Take the terminal outcome |
+| The asset is safely stored (it holds a receipt) | The blob is lost or quarantined | The feed entry re-emitted with the role unheld; `durable = false`; a failed fetch | Re-upload if it can produce the bytes ([](#repairing-a-lost-or-corrupt-blob)); otherwise keep the receipt as proof of loss |
+| Its sync cursor is valid | A rebuilt index in a new sync epoch | `error.sync.cursor_stale` | Resync from zero, discard nothing, re-announce held manifests ([](/design/filesystem/server/#sync-epoch-and-client-re-announce)) |
+| A blob is cached on disk | — | The file is missing, or fails its hash when read | Evict the entry and fetch again |
+| Its upload queue | — | The queue was lost with the app's data | Rebuild it from the local index, held roles on the feed and the session list; no work is lost |
+| A trashed asset is restorable | Its retention window has closed on the server's clock | `410` on fetch; the restore is refused | Degrade to the held representation ([](/design/transfer/download/#fallback-ladder)); the server's clock decides |
+| Its quota admits an upload | The account is hard-exceeded | `error.quota.exceeded` at create | Pause and surface; `GET /v1/quota` is the truth |
+| A courier is uploading its hand-off (origin) | The hand-off forfeited, or never started | The hand-off's state, read with the origin's own session | Re-queue the upload ([](/design/peering/#delegation)) |
+| Its hand-off copy is still owed to the server (courier) | Custody of every member | A receipt the courier fetched itself | Drop the copy |
+
+No row is resolved by a client discarding something only it holds, and no row is resolved by the server inventing state. Wall-clock disagreement is never a divergence: every deadline the server states travels as a duration and is judged on the server's clock ([](/design/transfer/upload/#session-lifetime-and-discard)).
+
+## Known Gaps
+
+- **A failed staged `fsync` does not fail the session.** `write_durably` (`capsule-server/src/blob/fs.rs:69`) returns the error, and `write_staged` logs it and answers a storage error (`capsule-server/src/blob/fs.rs:388-392`) with the session still live, so a retry of the same range can be acknowledged after a second `fsync` that reports success for pages the kernel dropped. `error.upload.storage_failed` does not exist.

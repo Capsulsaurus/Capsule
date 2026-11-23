@@ -28,7 +28,8 @@ is generated from it. Day-to-day use is covered by the
 
 - `cargo run -p capsule-cli -- <args>` runs the CLI.
 - `cargo nextest run -p capsule-cli` runs its tests, which spawn the real binary.
-- Building needs cmake, a C++17 compiler, libclang and, on x86_64, nasm, for the linked image
-  codecs (`media-linked-codecs`).
+- Building needs cmake and a C++17 compiler, for libjxl in the linked image codecs
+  (`media-linked-codecs`). AVIF decode goes through rawshift's
+  gamut codecs and links no system codec library (no libdav1d, no nasm).
 - `mise run cli-surface` regenerates `cli-surface.json` after a command-tree change;
   `mise run cli-surface-check` gates drift.

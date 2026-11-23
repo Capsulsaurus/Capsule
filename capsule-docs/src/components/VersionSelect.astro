@@ -11,7 +11,13 @@
 // controls rather than the browser's native dropdown, which no page style
 // reaches. Each item is a real link to the same page in that version, so it
 // can be opened in a new tab.
-import { currentLabel } from '../lib/version-menu.mjs';
+//
+// The list is cached for the tab session (VERSIONS_CACHE_KEY): a page builds
+// its menu from the cached copy and refreshes it in the background, so a
+// release published mid-session appears on the next navigation. An inline
+// script reserves the chevron's width before the first paint when a menu is
+// expected, so the pill keeps its size across navigations.
+import { currentLabel, reserveScript } from '../lib/version-menu.mjs';
 
 // Set in astro.config.mjs: the release this build is, or null for Latest.
 declare const __DOCS_VERSION__: string | null;
@@ -40,10 +46,16 @@ const current = __DOCS_VERSION__;
   </button>
   <ul class="menu" hidden></ul>
 </capsule-version-select>
+<script is:inline set:html={reserveScript()} />
 
 <script>
   import { normalizeBase } from '../lib/docs-version.mjs';
-  import { menuEntries, moveFocus, placement } from '../lib/version-menu.mjs';
+  import {
+    menuEntries,
+    moveFocus,
+    placement,
+    versionsForMenu,
+  } from '../lib/version-menu.mjs';
 
   /** The check mark beside the version being read. */
   const CHECK =
@@ -56,14 +68,24 @@ const current = __DOCS_VERSION__;
       const trigger = this.querySelector<HTMLButtonElement>('.trigger');
       const menu = this.querySelector<HTMLUListElement>('.menu');
       if (!trigger || !menu) return;
-      let json: unknown;
+      let storage: Storage | null = null;
       try {
+        storage = window.sessionStorage;
+      } catch {
+        // Storage refused: fetch on every page.
+      }
+      // The cached copy builds the menu at once; the refresh it starts
+      // updates the cache for the next page.
+      const json = await versionsForMenu(storage, async () => {
         // Absolute: production serves the list to every version.
         const response = await fetch('/versions.json', { cache: 'no-cache' });
-        json = await response.json();
-      } catch {
+        if (!response.ok) throw new Error(`versions.json: ${response.status}`);
+        return response.json();
+      });
+      if (json === undefined) {
         // No list (offline, or a preview without it): the switcher keeps
         // naming this build's version and offers nothing to switch to.
+        delete this.dataset.expectMenu;
         return;
       }
       const fromBase = normalizeBase(import.meta.env.BASE_URL);
@@ -74,7 +96,10 @@ const current = __DOCS_VERSION__;
         fromBase,
       );
       // Nothing to switch to: it stays a label, not a control.
-      if (entries.length === 0) return;
+      if (entries.length === 0) {
+        delete this.dataset.expectMenu;
+        return;
+      }
 
       menu.id = `capsule-version-menu-${++instances}`;
       menu.replaceChildren(
@@ -213,6 +238,17 @@ const current = __DOCS_VERSION__;
 
   .trigger:disabled .chevron {
     display: none;
+  }
+
+  /* Until a list that will make it a menu is read, the chevron's room is
+     kept, so the pill does not grow when it becomes a control. */
+  capsule-version-select[data-expect-menu] .trigger:disabled {
+    padding-inline: 0.875rem 0.75rem;
+  }
+
+  capsule-version-select[data-expect-menu] .trigger:disabled .chevron {
+    display: inline;
+    visibility: hidden;
   }
 
   .chevron {

@@ -155,6 +155,29 @@
     font-size: var(--sl-text-sm);
 }
 
+/* A member's permalink is its name: no underline until hovered, and the
+   target lands below the sticky header. */
+.sl-markdown-content .sdk-anchor {
+    color: inherit;
+    text-decoration: none;
+    scroll-margin-top: calc(var(--sl-nav-height) + 1rem);
+}
+
+.sl-markdown-content a.sdk-anchor:hover {
+    text-decoration: underline;
+}
+
+/* The documented types a signature names, linked beneath it. */
+.sl-markdown-content .sdk-types {
+    margin-block-start: 0.25rem;
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-3);
+}
+
+.sl-markdown-content div.sdk-types > p {
+    margin: 0;
+}
+
 /* ── DocC (Swift): a quiet eyebrow, a large abstract, Topics as a heading ─ */
 
 .sl-markdown-content [data-tool="docc"] .sdk-kind {

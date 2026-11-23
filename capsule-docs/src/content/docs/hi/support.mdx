@@ -1,0 +1,125 @@
+---
+title: सहायता
+description: Capsule के बारे में सवाल कहाँ पूछें, बग कहाँ रिपोर्ट करें, कोई सुविधा कहाँ सुझाएँ या कोई सुरक्षा कमज़ोरी कहाँ रिपोर्ट करें, और उसमें क्या शामिल करें ताकि उस पर कार्रवाई हो सके।
+template: splash
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+Capsule को स्वयंसेवक खुले में बनाते हैं और खुले में ही उसकी सहायता करते हैं। कोई सशुल्क या
+निजी सहायता चैनल नहीं है: हर सवाल, रिपोर्ट और विचार प्रोजेक्ट के GitHub से होकर जाता है,
+जहाँ कोई भी उसका जवाब दे सकता है और वह जवाब अगले व्यक्ति के काम आता है। इसका एकमात्र
+अपवाद सुरक्षा कमज़ोरी है, जिसे निजी तौर पर रिपोर्ट किया जाता है।
+
+Capsule का अभी तक कोई रिलीज़ नहीं हुआ है; आज क्या काम करता है और आगे क्या आने वाला है, यह
+[रोडमैप](https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md) में है।
+
+<a id="before-you-ask"></a>
+
+## पूछने से पहले
+
+ज़्यादातर जवाब पहले से मौजूद हैं। यहाँ लगाया गया एक मिनट अक्सर एक पूरा सवाल-जवाब बचा देता है।
+
+1. **दस्तावेज़ों में खोजें**, हर पेज के ऊपर दिए गए सर्च बॉक्स से, और
+   [](/guides/troubleshooting/) पढ़ें, जिसमें आम समस्याएँ और लॉग इकट्ठा करने का तरीका है।
+2. **[खुले और बंद issues](https://github.com/Capsulsaurus/Capsule/issues?q=is%3Aissue)** और
+   [discussions](https://github.com/Capsulsaurus/Capsule/discussions) में खोजें। अगर किसी ने
+   पहले ही इसकी रिपोर्ट कर दी है, तो डुप्लिकेट खोलने के बजाय 👍 प्रतिक्रिया दें, या नई
+   जानकारी के साथ टिप्पणी करें।
+3. **किसी कमांड के सटीक फ़्लैग** [](/reference/cli/) में जाँचें।
+
+<a id="get-help"></a>
+
+## मदद पाएँ
+
+<CardGrid>
+  <Card title="सवाल पूछें" icon="comment">
+    मैं… कैसे करूँ? क्या ऐसा होना अपेक्षित है? कुछ सेट अप करने में मदद चाहिए?
+    [Discussions › Q&A](https://github.com/Capsulsaurus/Capsule/discussions/categories/q-a) में
+    पूछें। जिस जवाब से समस्या हल हुई, उसे उत्तर के रूप में चिह्नित करें, ताकि अगला व्यक्ति उसे
+    ढूँढ सके।
+  </Card>
+  <Card title="बग रिपोर्ट करें" icon="warning">
+    कुछ टूट गया है या दस्तावेज़ों से अलग व्यवहार कर रहा है? एक
+    [बग रिपोर्ट](https://github.com/Capsulsaurus/Capsule/issues/new?template=bug_report.yml)
+    खोलें। फ़ॉर्म में वर्शन, प्लेटफ़ॉर्म, समस्या दोहराने के चरण और लॉग माँगे जाते हैं: जिस
+    रिपोर्ट में ये सब हों, उसे बिना आगे-पीछे पूछताछ के ट्राइएज किया जा सकता है।
+  </Card>
+  <Card title="कोई सुविधा सुझाएँ" icon="star">
+    अपने विचार
+    [Discussions › Ideas](https://github.com/Capsulsaurus/Capsule/discussions/categories/ideas)
+    में साझा करें, जहाँ दूसरे लोग उन्हें अपवोट कर सकते हैं और निखार सकते हैं। विचार स्वीकार
+    होने पर मेंटेनर उसे एक issue में बदल देते हैं, और काम उसी issue में ट्रैक होता है।
+  </Card>
+  <Card title="सुरक्षा कमज़ोरी रिपोर्ट करें" icon="padlock">
+    **कभी भी सार्वजनिक issue में नहीं।** इसे
+    [GitHub security advisory](https://github.com/Capsulsaurus/Capsule/security/advisories/new)
+    के ज़रिए निजी तौर पर रिपोर्ट करें।
+    [सुरक्षा नीति](https://github.com/Capsulsaurus/Capsule/security/policy) बताती है कि किन
+    वर्शनों को सुधार मिलते हैं।
+  </Card>
+</CardGrid>
+
+<a id="specific-topics"></a>
+
+## विशेष विषय
+
+<CardGrid>
+  <Card title="सर्वर चलाना" icon="setting">
+    [](/guides/self-hosting/) से शुरू करें, फिर [](/guides/troubleshooting/) देखें। फिर भी
+    अटके हैं? सर्वर के वर्शन और उसके स्टार्टअप लॉग के साथ
+    [Q&A](https://github.com/Capsulsaurus/Capsule/discussions/categories/q-a) में पूछें।
+  </Card>
+  <Card title="गायब या खराब फ़ोटो" icon="information">
+    रुकें और कुछ भी डिलीट न करें। कोई सुधार आज़माने से पहले
+    [](/guides/troubleshooting/#check-a-librarys-integrity) और
+    [](/design/backup-recovery/#recovery-paths) पढ़ें। अगर डेटा खो गया है या खराब हो गया है,
+    तो इसे बग के रूप में रिपोर्ट करें: आपके डेटा की सुरक्षा प्रोजेक्ट की पहली प्राथमिकता है।
+  </Card>
+  <Card title="अनुवाद" icon="translate">
+    किसी गलत या छूटी हुई स्ट्रिंग की रिपोर्ट
+    [translation error](https://github.com/Capsulsaurus/Capsule/issues/new?template=translation-error.md)
+    से करें, या
+    [language request](https://github.com/Capsulsaurus/Capsule/issues/new?template=language-request.md)
+    से नई भाषा का अनुरोध करें। अनुवाद कैसे बनते हैं, यह
+    [locales/README.md](https://github.com/Capsulsaurus/Capsule/blob/master/locales/README.md)
+    में है।
+  </Card>
+  <Card title="Google Photos से आना" icon="external">
+    इम्पोर्ट से जुड़ी कोई समस्या रिपोर्ट करने से पहले [](/guides/google-photos-migration/)
+    का पालन करें, जिसमें यह भी शामिल है कि इम्पोर्टर किन बातों की गारंटी नहीं दे सकता।
+  </Card>
+</CardGrid>
+
+<a id="get-involved"></a>
+
+## जुड़ें
+
+<CardGrid>
+  <Card title="योगदान दें" icon="github">
+    [योगदान गाइड](https://github.com/Capsulsaurus/Capsule/blob/master/CONTRIBUTING.md) पढ़ें,
+    फिर
+    [good first issue](https://github.com/Capsulsaurus/Capsule/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+    लेबल वाला कोई issue चुनें। Discussions में सवालों के जवाब देना भी उतना ही मददगार है।
+  </Card>
+  <Card title="प्रोजेक्ट को प्रायोजित करें" icon="heart">
+    Capsule मुफ़्त और ओपन सोर्स है। अगर यह आपके काम का है, तो
+    [GitHub पर इसके विकास को प्रायोजित करना](https://github.com/sponsors/justin13888) इसे
+    आगे बढ़ाते रहने में मदद करता है।
+  </Card>
+</CardGrid>
+
+<a id="what-to-expect"></a>
+
+## क्या उम्मीद करें
+
+- **स्वयंसेवकों का समय।** सवालों के जवाब समुदाय और मेंटेनर समय मिलने पर देते हैं। जवाब के
+  समय की कोई गारंटी नहीं है।
+- **पूरी रिपोर्टें पहले आगे बढ़ती हैं।** वर्शन, दोहराने के चरणों और लॉग वाली बग रिपोर्ट की
+  पुष्टि की जा सकती है और उसे ठीक किया जा सकता है। इनके बिना वाली रिपोर्ट तब तक जवाब का
+  इंतज़ार करती है, जब तक कोई उस पर कार्रवाई न कर सके।
+- **हर थ्रेड में एक विषय।** दो समस्याओं के लिए दो रिपोर्टें होनी चाहिए, ताकि हर एक को अलग से
+  ट्रैक और बंद किया जा सके।
+- **डिफ़ॉल्ट रूप से सार्वजनिक।** सुरक्षा कमज़ोरी की रिपोर्ट को छोड़कर सब कुछ सार्वजनिक है,
+  इसलिए लॉग पेस्ट करने से पहले उसमें से पासफ़्रेज़, रिकवरी सीक्रेट, टोकन, सर्वर पते और निजी
+  फ़ाइल पाथ हटा दें।

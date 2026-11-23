@@ -13,6 +13,8 @@ Every native app is a **complete local gallery first** and a synced client secon
 - **FR3** — Import ([](/design/import/pipeline/)) is local; streaming import ([](/design/import/pipeline/#import-upload-streaming-mode)) is the one server-requiring exception.
 - **FR4** — An unavailable remote representation degrades along the fetch ladder ([](/design/transfer/download/#tiered-on-demand-fetch)); no offline condition removes an asset, album, or index entry.
 - **FR5** — A damaged index rebuilds from local sidecars ([](/design/filesystem/maintenance/)) without network.
+- **FR6** — An asset's info page is complete with only its thumbnail on the device and no network. Every row comes from the sidecar and the catalog ([](/design/clients/#asset-info-page)).
+- **FR7** — Going offline or onto a metered path never blocks a local action. Network work the path holds waits visibly and resumes by itself ([](/design/networking/#admission-and-priority)), and only work the user started can raise a prompt.
 
 ## Security Requirements
 
@@ -29,4 +31,4 @@ Every native app is a **complete local gallery first** and a synced client secon
 
 ## Validation
 
-Unit tests cover the gated-view policy and cache placement; smoke tests cover NFR1, FR2 and FR5 offline.
+Unit tests cover the gated-view policy and cache placement; smoke tests cover NFR1, FR2, FR5 and FR6 offline.
