@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The camera the enrollment scanner opens.
+
+    Declared by the feature that raises the prompt rather than by the application module, so the
+    permission and the screen explaining it live together.
+
+    The hardware itself is `required="false"`: a device with no camera is a device that types the
+    numeric fallback in, and that path is always on screen beside the viewfinder rather than
+    hidden behind it — so the app must stay installable without one.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+</manifest>

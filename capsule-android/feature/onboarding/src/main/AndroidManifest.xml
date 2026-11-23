@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The media permissions the onboarding primer asks for.
+
+    Declared by the feature that raises the prompt rather than by the application module, so
+    that the permission and the screen explaining it live together and neither can be removed
+    without the other becoming obviously wrong.
+
+    READ_MEDIA_VISUAL_USER_SELECTED is the Android 14 grant behind "select photos"; without it
+    the system offers only all-or-nothing, and the partial state the primer renders would be
+    unreachable.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+</manifest>
