@@ -42,7 +42,11 @@ maintained by hand.
 
 - **Binding dump.** uniffi offers no stable machine-readable description of a namespace, so the
   dump is this repository's format: the declarations the native clients consume, as the generated
-  sources spell them. It fails when one is missing.
+  sources spell them. It fails when one is missing. It also carries each language's
+  hand-written platform adapters (`capsule-core-kotlin`, `capsule-core-swift`: the StrongBox,
+  Secure Enclave and software key stores an app constructs), which the pages render after the
+  generated declarations. Those sources are committed, so the same check catches their drift,
+  and the Rust CI filter lists them.
 - **Browser digest.** The caller-facing half of the declaration file wasm-bindgen emits, kept
   verbatim. Its check runs in the web gate, the only job that installs wasm-bindgen.
 - **Rustdoc is the one exception to one chrome.** The workspace is `publish = false`, so docs.rs

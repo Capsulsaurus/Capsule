@@ -21,6 +21,7 @@ import {
     docProse,
     exampleFor,
     generate,
+    nativeDocLinks,
     OPENAPI_DOCUMENT,
     OPENAPI_DOWNLOAD,
     operationAnchor,
@@ -36,6 +37,7 @@ import {
     renderWasmPage,
     resolveRustPath,
     sdkLinkTargets,
+    supertypesOf,
     tsSignature,
     WASM_SURFACE,
 } from './gen-reference.mjs';
@@ -856,6 +858,10 @@ describe('the SDK pages', () => {
         empty.languages.kotlin.declarations = [];
         writeSdk(empty);
         expect(() => readBindingsSurface(root)).toThrow(/no kotlin/);
+        const platform = structuredClone(MINIMAL_BINDINGS);
+        platform.languages.swift.platform = { source: 'x', declarations: {} };
+        writeSdk(platform);
+        expect(() => readBindingsSurface(root)).toThrow(/swift platform/);
     });
 
     it('puts the generated conventions page right after the REST overview', () => {
@@ -1328,6 +1334,263 @@ describe('SDK member permalinks and signature types', () => {
     it('lists no types for a signature that names none on the page', () => {
         const page = renderBindingsPage(kotlin, MINIMAL_BINDINGS);
         expect(page).not.toContain('Types:');
+    });
+});
+
+/** LINKED_BINDINGS with the callback interfaces and the adapters that implement them. */
+const PLATFORM_BINDINGS = (() => {
+    const dump = structuredClone(LINKED_BINDINGS);
+    const signerDoc = {
+        enroll: 'Create the key under `key_alias`, as [`Self::classical_public_key`] returns it.',
+        assertNonExportable: '',
+    };
+    dump.languages.kotlin.declarations.push(
+        {
+            kind: 'interface',
+            name: 'FfiHardwareSigner',
+            signature: 'interface FfiHardwareSigner',
+            doc: 'A platform key store.',
+            members: [
+                {
+                    kind: 'fun',
+                    name: 'enroll',
+                    signature:
+                        'fun enroll(keyAlias: kotlin.String): kotlin.ByteArray',
+                    doc: signerDoc.enroll,
+                    members: [],
+                },
+                {
+                    kind: 'fun',
+                    name: 'classicalPublicKey',
+                    signature:
+                        'fun classicalPublicKey(keyAlias: kotlin.String): kotlin.ByteArray',
+                    doc: '',
+                    members: [],
+                },
+            ],
+        },
+        {
+            kind: 'sealed class',
+            name: 'FfiHardwareSignerException',
+            signature:
+                'sealed class FfiHardwareSignerException: kotlin.Exception()',
+            doc: '',
+            members: [
+                {
+                    kind: 'variant',
+                    name: 'Exportable',
+                    signature:
+                        'class Exportable(): FfiHardwareSignerException()',
+                    doc: '',
+                    members: [],
+                },
+            ],
+        },
+    );
+    dump.languages.kotlin.platform = {
+        source: 'capsule-core-kotlin/src/main/kotlin/com/justin13888/capsule/hardware',
+        declarations: [
+            {
+                kind: 'class',
+                name: 'SoftwareSigner',
+                signature:
+                    'class SoftwareSigner(seed: ByteArray) : FfiHardwareSigner',
+                doc: 'Software [FfiHardwareSigner]: [assertNonExportable] throws [FfiHardwareSignerException.Exportable]; seeded from [seed].',
+                members: [
+                    {
+                        kind: 'constructor',
+                        name: 'SoftwareSigner',
+                        signature: 'constructor(seed: ByteArray)',
+                        doc: '',
+                        members: [],
+                    },
+                    {
+                        kind: 'fun',
+                        name: 'enroll',
+                        signature:
+                            'override fun enroll(keyAlias: String): ByteArray',
+                        doc: '',
+                        members: [],
+                    },
+                    {
+                        kind: 'fun',
+                        name: 'assertNonExportable',
+                        signature:
+                            'override fun assertNonExportable(keyAlias: String)',
+                        doc: 'Always throws.',
+                        members: [],
+                    },
+                ],
+            },
+        ],
+    };
+    dump.languages.swift.declarations.push({
+        kind: 'protocol',
+        name: 'FfiHardwareSigner',
+        signature: 'public protocol FfiHardwareSigner: AnyObject, Sendable',
+        doc: '',
+        members: [
+            {
+                kind: 'func',
+                name: 'assertNonExportable',
+                signature: 'func assertNonExportable(keyAlias: String) throws',
+                doc: '',
+                members: [],
+            },
+        ],
+    });
+    dump.languages.swift.platform = {
+        source: 'capsule-core-swift/Sources/CapsuleHardware',
+        declarations: [
+            {
+                kind: 'class',
+                name: 'SoftwareSigner',
+                signature:
+                    'public final class SoftwareSigner: FfiHardwareSigner, @unchecked Sendable',
+                doc: 'A software ``FfiHardwareSigner``; see ``assertNonExportable(keyAlias:)``.',
+                members: [
+                    {
+                        kind: 'func',
+                        name: 'assertNonExportable',
+                        signature:
+                            'public func assertNonExportable(keyAlias: String) throws',
+                        doc: '',
+                        members: [],
+                    },
+                ],
+            },
+        ],
+    };
+    return dump;
+})();
+
+describe('the platform adapters on the binding pages', () => {
+    const swift = SDK_PAGES.find((page) => page.slug === 'swift');
+    const kotlin = SDK_PAGES.find((page) => page.slug === 'kotlin');
+
+    it('follows the generated declarations with the adapters, named as hand-written', () => {
+        const page = renderBindingsPage(kotlin, PLATFORM_BINDINGS);
+        const section = page.indexOf('## Platform adapters');
+        expect(section).toBeGreaterThan(page.indexOf('## Classes'));
+        expect(page.slice(section)).toContain(
+            'Hand-written in `capsule-core-kotlin/src/main/kotlin/com/justin13888/capsule/hardware`',
+        );
+        expect(page.slice(section)).toContain('### `SoftwareSigner`');
+        // The index lists them too, under their own label.
+        const index = page.slice(0, page.indexOf('</nav>'));
+        expect(index).toContain('<p class="sdk-label">Platform adapters</p>');
+        expect(index).toContain('[`SoftwareSigner`](#softwaresigner)');
+    });
+
+    it('resolves KDoc links, the enclosing class’s members included', () => {
+        const page = renderBindingsPage(kotlin, PLATFORM_BINDINGS);
+        expect(page).toContain(
+            'Software [`FfiHardwareSigner`](#ffihardwaresigner): [`assertNonExportable`](#softwaresigner-assertnonexportable) throws [`FfiHardwareSignerException.Exportable`](#ffihardwaresignerexception-exportable); seeded from `seed`.',
+        );
+    });
+
+    it('leaves Markdown links and reference definitions alone', () => {
+        expect(
+            nativeDocLinks(
+                '[a](https://x.invalid) [b][c]\n[c]: https://y.invalid',
+            ),
+        ).toBe('[a](https://x.invalid) [b][c]\n[c]: https://y.invalid');
+        expect(nativeDocLinks('See [Type.member]: it.')).toBe(
+            'See [`Type.member`]: it.',
+        );
+    });
+
+    it('leaves code, indexes and task-list boxes alone', () => {
+        expect(nativeDocLinks('Reads `keys[keyAlias]` and out[i].')).toBe(
+            'Reads `keys[keyAlias]` and out[i].',
+        );
+        expect(
+            nativeDocLinks('```kotlin\nval x = arr[index]\n```\nSee [A].'),
+        ).toBe('```kotlin\nval x = arr[index]\n```\nSee [`A`].');
+        expect(nativeDocLinks('- [x] done\n- [ ] not\n1. [x] first')).toBe(
+            '- [x] done\n- [ ] not\n1. [x] first',
+        );
+    });
+
+    it('takes supertypes from after the colon, never from constructor parameters', () => {
+        expect(
+            supertypesOf(
+                'class A(tier: FfiDeviceTier) : FfiHardwareSigner, B<T>',
+            ),
+        ).toEqual(['FfiHardwareSigner', 'B']);
+        expect(
+            supertypesOf(
+                'public final class A: FfiHardwareSigner, @unchecked Sendable',
+            ),
+        ).toEqual(['FfiHardwareSigner', 'Sendable']);
+        expect(supertypesOf('class A(seed: ByteArray)')).toEqual([]);
+        expect(
+            supertypesOf(
+                'public final class A<T: Equatable>: FfiHardwareSigner',
+            ),
+        ).toEqual(['FfiHardwareSigner']);
+        expect(
+            supertypesOf(
+                'class A<T : Any>(x: (T) -> Unit) : FfiHardwareSigner',
+            ),
+        ).toEqual(['FfiHardwareSigner']);
+    });
+
+    it('never inherits a doc from a constructor parameter’s type', () => {
+        const bindings = structuredClone(PLATFORM_BINDINGS);
+        const adapter = bindings.languages.kotlin.platform.declarations[0];
+        // FfiWorkspace has a `create`; the adapter's `create` implements nothing of it.
+        adapter.signature =
+            'class SoftwareSigner(workspace: FfiWorkspace) : FfiHardwareSigner';
+        adapter.members.push({
+            kind: 'fun',
+            name: 'create',
+            signature: 'fun create()',
+            doc: '',
+            members: [],
+        });
+        const page = renderBindingsPage(kotlin, bindings);
+        const create = page.slice(page.indexOf('id="softwaresigner-create"'));
+        expect(create).not.toContain('Create one');
+    });
+
+    it('resolves DocC symbol links', () => {
+        const page = renderBindingsPage(swift, PLATFORM_BINDINGS);
+        expect(page).toContain(
+            'A software [`FfiHardwareSigner`](#ffihardwaresigner); see [`assertNonExportable(keyAlias:)`](#softwaresigner-assertnonexportable).',
+        );
+    });
+
+    it('shows an undocumented override the doc of the member it implements', () => {
+        const page = renderBindingsPage(kotlin, PLATFORM_BINDINGS);
+        const enroll = page.slice(
+            page.indexOf('id="softwaresigner-enroll"'),
+            page.indexOf('id="softwaresigner-assertnonexportable"'),
+        );
+        // The interface's own `Self` is the interface: its member, not the adapter's.
+        expect(enroll).toContain(
+            'Create the key under `key_alias`, as [`Self::classical_public_key`](#ffihardwaresigner-classicalpublickey) returns it.',
+        );
+        expect(enroll).toContain(
+            'From [`FfiHardwareSigner.enroll`](#ffihardwaresigner-enroll).',
+        );
+        // A documented override keeps its own doc.
+        expect(page).toContain('Always throws.');
+        expect(page).not.toMatch(/Always throws\.\s+From/);
+    });
+
+    it('adds nothing to a page whose dump carries no adapters', () => {
+        expect(renderBindingsPage(kotlin, MINIMAL_BINDINGS)).not.toContain(
+            'Platform adapters',
+        );
+    });
+
+    it('refuses an adapter named like a generated declaration', () => {
+        const clash = structuredClone(PLATFORM_BINDINGS);
+        clash.languages.kotlin.platform.declarations[0].name = 'FfiWorkspace';
+        expect(() => renderBindingsPage(kotlin, clash)).toThrow(
+            /share the anchor #ffiworkspace/,
+        );
     });
 });
 
@@ -2047,6 +2310,17 @@ describe('the committed artifacts', () => {
                 ]),
             );
         }
+        // The adapters the apps construct, beside the interfaces they implement.
+        const adapters = (language) =>
+            bindings.languages[language].platform.declarations.map(
+                (declaration) => declaration.name,
+            );
+        expect(adapters('kotlin')).toEqual(
+            expect.arrayContaining(['StrongBoxSigner', 'SoftwareSigner']),
+        );
+        expect(adapters('swift')).toEqual(
+            expect.arrayContaining(['SecureEnclaveSigner', 'SoftwareSigner']),
+        );
         const wasm = readWasmSurface(repoRoot).map(
             (declaration) => declaration.name,
         );

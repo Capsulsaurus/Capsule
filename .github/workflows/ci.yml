@@ -60,6 +60,11 @@ jobs:
               - 'capsule-wasm/**'
               - 'ptpip-rs/**'
               - 'xtask/**'
+              # `gen-bindings --check` also dumps the hand-written platform
+              # adapters into capsule-sdk/bindings-surface.json, so a change to
+              # one alone must still pay the Rust gate to catch the dump's drift.
+              - 'capsule-core-kotlin/src/main/**'
+              - 'capsule-core-swift/Sources/**'
               # `check-rust` reads the catalogs directly: `i18n-check` and
               # `i18n-guard` are `cargo run -p xtask -- i18n …` over `locales/`,
               # so a catalog-only change must still pay the Rust gate. The
