@@ -33,6 +33,6 @@
         "@biomejs/biome": "^2.5.1",
         "micromatch": "^4.0.8",
         "vitest": "^4.1.11",
-        "wrangler": "^4.151.1"
+        "wrangler": "^4.166.0"
     }
 }
