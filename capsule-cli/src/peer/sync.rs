@@ -543,7 +543,7 @@ fn admitted_client<T>(
 /// The listen timeout bounds the wait for a connection and its handshake, and nothing after: a
 /// verified peer cuts and seals its artifact once it has read the offer, and that build is
 /// bounded by the channel's listing allowance
-/// ([`capsule_sdk::peering::LISTING_BUILD_ALLOWANCE`]), not by what is left of the listen
+/// ([`capsule_sdk::peering::channel::LISTING_BUILD_ALLOWANCE`]), not by what is left of the listen
 /// timeout. Opening inside the admission would drop a verified session whose build outlasts it.
 async fn session(
     listener: &PeerListener,

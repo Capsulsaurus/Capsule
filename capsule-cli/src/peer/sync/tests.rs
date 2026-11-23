@@ -389,7 +389,8 @@ async fn an_offer_to_another_device_than_named_sends_nothing() {
 
 /// A peer that connects and verifies inside the listen timeout keeps its session while it cuts
 /// its artifact past that timeout: the listen timeout bounds the wait for a verified peer, and
-/// the listing after it is the channel's to bound ([`capsule_sdk::peering::LISTING_BUILD_ALLOWANCE`]).
+/// the listing after it is the channel's to bound
+/// ([`capsule_sdk::peering::channel::LISTING_BUILD_ALLOWANCE`]).
 /// The offering side stands in for a slow artifact build (a large library, or a loaded host) by
 /// waiting several listen timeouts between reading the offer and listing.
 #[tokio::test]
