@@ -8,8 +8,8 @@
 #
 # `--resolve-only` resolves the previous release as below and prints its tag, or nothing when no
 # release older than HEAD exists, and exits 0 either way; a failed listing still exits 1. CI runs
-# it first, so the flow's job is skipped, not red, until the first release exists, and runs on
-# its own from the first release on.
+# it first, so until the first release exists the flow's job is not red but runs only as a
+# self-test (`--prev-dir` set to the new build), and from the first release on runs against it.
 #
 # NEW_BIN_DIR holds `capsule` and `capsule-server` built from the commit under test. Without
 # `--prev-dir`, the previous release is resolved and downloaded: the newest published, non-draft,
@@ -177,7 +177,7 @@ trap cleanup EXIT
 if [ -z "$prev_dir" ]; then
 	release_tags=$(list_release_tags)
 	if ! prev_tag=$(resolve_release "$release_tags"); then
-		die "no published release is older than $(git rev-parse --short HEAD). This flow cannot pass before the first release exists; CI resolves the release with --resolve-only first and skips the flow until one does (#761)."
+		die "no published release is older than $(git rev-parse --short HEAD). This flow cannot pass before the first release exists; CI resolves the release with --resolve-only first and, until one does, runs the flow only as a self-test with --prev-dir (#761)."
 	fi
 	version=${prev_tag#v}
 	asset="capsule-v${version}-${TARGET}.tar.gz"
