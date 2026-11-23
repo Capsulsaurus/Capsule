@@ -43,7 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Gradle 8.11.1 supports JDK 21, not the JDK 26 on some dev machines — this pin
       # is the de-facto fix for the documented local Gradle break (see
@@ -118,7 +118,7 @@ jobs:
     runs-on: [self-hosted, android, strongbox]
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up mise (exec shim)
         uses: jdx/mise-action@v2
