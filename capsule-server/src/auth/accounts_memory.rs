@@ -218,6 +218,15 @@ impl InMemoryAccounts {
         self.held().by_email_mut(email).map(|held| held.failures)
     }
 
+    /// Hold every verification this directory starts until the hold is dropped.
+    ///
+    /// Test-only: [`Credentials::hold_verification`] on the verifier this directory was built
+    /// over, so a test can cancel an attempt that is certainly still verifying.
+    #[cfg(test)]
+    pub(crate) fn hold_verification(&self) -> super::credential::VerificationHold {
+        self.credentials.hold_verification()
+    }
+
     /// Take the lock, recovering rather than propagating a poisoned one.
     ///
     /// The same choice [`crate::store::memory`] makes: a panic in one request must not turn

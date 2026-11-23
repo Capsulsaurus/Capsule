@@ -4,7 +4,7 @@ use jiff::SignedDuration;
 
 use super::{Harness, run_all};
 use crate::auth::accounts_memory::{InMemoryAccounts, MAX_FAILED_ATTEMPTS};
-use crate::auth::credential::Credentials;
+use crate::auth::credential::{Credentials, VerificationHold};
 use crate::auth::directory::AccountDirectory;
 use crate::auth::oidc::FederatedAccounts;
 use crate::auth::profile::{AccountProfiles, PasswordChange};
@@ -60,6 +60,10 @@ impl Harness for MemoryHarness {
 
     fn recorded_failures<'a>(&'a self, address: &'a str) -> StoreFuture<'a, Option<u32>> {
         Box::pin(async move { Ok(self.accounts.recorded_failures(address)) })
+    }
+
+    fn hold_verification(&self) -> VerificationHold {
+        self.accounts.hold_verification()
     }
 }
 
