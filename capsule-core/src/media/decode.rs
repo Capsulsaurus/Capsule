@@ -20,15 +20,6 @@
 //!
 //! # RAW: the same five steps through a different reader
 //!
-//! **Not on the import path today (issue #1323).** `RawFile::open` decodes a DNG eagerly, with no
-//! caller budget on its allocations or its work, and opens any TIFF whose IFD0 states
-//! `DNGVersion` through that reader whatever its extension (visualcommons/rawshift#82, #83).
-//! Every review of the pre-open bounds below found another crafted file that exhausted memory or
-//! time before them, so [`RawshiftDecoder`] and [`extract_embedded_preview`] refuse ARW and DNG
-//! at the gate as [`MediaError::UnsupportedFormat`], `DeferredNoCodec`, before any rawshift RAW
-//! code runs. The pipeline described here is kept, and reached only by this module's tests,
-//! until issue #1324 re-enables it behind those bounds.
-//!
 //! ARW and DNG (issue #589) do not go through `decode_standard_image`. They go through
 //! `rawshift-image`'s `RawFile::open(..)` and `process(..)`, which runs black level, white
 //! balance, demosaic, colour matrix, tone mapping, the file's default crop **and the EXIF
@@ -53,7 +44,11 @@
 //!   allocates for it (visualcommons/rawshift#82). Before either is opened, a no-allocation
 //!   walk of the IFD chain (`tiff_bounds`, issue #644) refuses as [`MediaError::Decode`] any
 //!   entry whose value needs more bytes than the file holds, and (issue #647) any IFD nested
-//!   deeper than a recursive reader can safely follow.
+//!   deeper than a recursive reader can safely follow. The same walk (issue #1324) holds the
+//!   directories and values, the strips and tiles, and the pointers a file states to work
+//!   budgets proportional to its length, and refuses a black-level pattern or a bad-pixel list
+//!   stating more than a reader can hold it to. The DNG bounds apply to every file whose IFD0
+//!   states `DNGVersion`, because the reader opens any such file as a DNG whatever its name.
 //! - **Orientation** is applied by `process`, so it is reported in `orientation_applied` and
 //!   never applied a second time here.
 //! - **Unsupported variants defer.** Upstream decodes Sony lossless-JPEG ARW and uncompressed,
@@ -105,7 +100,7 @@ use rawshift_image::formats::{
 use rawshift_image::processing::{BayerAlgorithm, DemosaicMethod, ProcessingOptions};
 use rawshift_image::transforms::orientation::apply_orientation;
 
-use super::detect::{BOUNDED_RAW_FORMATS, MAX_DECODE_PIXELS, StillFormat};
+use super::detect::{MAX_DECODE_PIXELS, StillFormat};
 use super::error::{FormatOp, MediaError};
 use super::tiff_bounds::{IfdRefusal, IfdWalk, MAX_IFD_DEPTH, check_ifd_bounds};
 use crate::lqip::{Gamut, RgbaImage};
@@ -217,135 +212,95 @@ pub trait Decoder {
 }
 
 /// The `rawshift-image`-backed [`Decoder`] — the only production implementation.
-///
-/// Defers ARW and DNG at the gate without opening them (issue #1323; see the module docs).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RawshiftDecoder;
 
 impl Decoder for RawshiftDecoder {
     #[tracing::instrument(level = "debug", skip_all, fields(bytes = bytes.len(), ext))]
     fn probe(&self, bytes: &[u8], ext: &str) -> Result<MediaMetadata, MediaError> {
-        probe_still(bytes, ext, RawOpen::Defer)
+        let format = gate(bytes, ext, FormatOp::Decode)?;
+        if format.is_raw() {
+            return open_raw(bytes, format).map(|(_, metadata)| metadata);
+        }
+        let probe = probe_standard_image(bytes).map_err(|e| MediaError::Decode {
+            format,
+            detail: format!("header probe: {e}"),
+        })?;
+        let (width, height) = (probe.size.width, probe.size.height);
+        if width == 0 || height == 0 {
+            return Err(MediaError::ZeroDimension { width, height });
+        }
+        let pixels = u64::from(width) * u64::from(height);
+        if pixels > MAX_DECODE_PIXELS {
+            tracing::warn!(
+                %format,
+                width,
+                height,
+                pixels,
+                limit = MAX_DECODE_PIXELS,
+                "media: refusing an oversized still before the decoder allocates"
+            );
+            return Err(MediaError::PixelBudgetExceeded {
+                pixels,
+                limit: MAX_DECODE_PIXELS,
+            });
+        }
+        let metadata = MediaMetadata {
+            format,
+            stored_dimensions: (width, height),
+            orientation: orientation_of(bytes, format),
+            bit_depth: probe.bit_depth,
+            gamut: gamut_of(probe.color_space),
+        };
+        tracing::debug!(
+            %format,
+            width,
+            height,
+            orientation = ?metadata.orientation,
+            bit_depth = ?metadata.bit_depth,
+            gamut = ?metadata.gamut,
+            "media: probed a still"
+        );
+        Ok(metadata)
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(bytes = bytes.len(), ext))]
     fn decode(&self, bytes: &[u8], ext: &str) -> Result<DecodedImage, MediaError> {
-        decode_still(bytes, ext, RawOpen::Defer)
-    }
-}
-
-/// Whether the gate lets a RAW family the RAW pipeline covers through to `RawFile::open`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RawOpen {
-    /// Refuse every RAW family as [`MediaError::UnsupportedFormat`] before rawshift sees it:
-    /// what production does (issue #1323).
-    Defer,
-    /// Open the [`BOUNDED_RAW_FORMATS`] behind the pre-open bounds. Only the tests pass it, so
-    /// the RAW pipeline stays compiled and exercised until issue #1324 re-enables it.
-    Bounded,
-}
-
-/// A [`Decoder`] that opens ARW and DNG through the RAW pipeline behind its pre-open bounds, as
-/// production did before issue #1323, so the tests keep driving those bounds for issue #1324.
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, Default)]
-pub(super) struct BoundedRawDecoder;
-
-#[cfg(test)]
-impl Decoder for BoundedRawDecoder {
-    fn probe(&self, bytes: &[u8], ext: &str) -> Result<MediaMetadata, MediaError> {
-        probe_still(bytes, ext, RawOpen::Bounded)
-    }
-
-    fn decode(&self, bytes: &[u8], ext: &str) -> Result<DecodedImage, MediaError> {
-        decode_still(bytes, ext, RawOpen::Bounded)
-    }
-}
-
-/// [`Decoder::probe`] with the RAW policy as a parameter.
-fn probe_still(bytes: &[u8], ext: &str, raw: RawOpen) -> Result<MediaMetadata, MediaError> {
-    let format = gate(bytes, ext, FormatOp::Decode, raw)?;
-    if format.is_raw() {
-        return open_raw(bytes, format).map(|(_, metadata)| metadata);
-    }
-    let probe = probe_standard_image(bytes).map_err(|e| MediaError::Decode {
-        format,
-        detail: format!("header probe: {e}"),
-    })?;
-    let (width, height) = (probe.size.width, probe.size.height);
-    if width == 0 || height == 0 {
-        return Err(MediaError::ZeroDimension { width, height });
-    }
-    let pixels = u64::from(width) * u64::from(height);
-    if pixels > MAX_DECODE_PIXELS {
-        tracing::warn!(
-            %format,
-            width,
-            height,
-            pixels,
-            limit = MAX_DECODE_PIXELS,
-            "media: refusing an oversized still before the decoder allocates"
-        );
-        return Err(MediaError::PixelBudgetExceeded {
-            pixels,
-            limit: MAX_DECODE_PIXELS,
-        });
-    }
-    let metadata = MediaMetadata {
-        format,
-        stored_dimensions: (width, height),
-        orientation: orientation_of(bytes, format),
-        bit_depth: probe.bit_depth,
-        gamut: gamut_of(probe.color_space),
-    };
-    tracing::debug!(
-        %format,
-        width,
-        height,
-        orientation = ?metadata.orientation,
-        bit_depth = ?metadata.bit_depth,
-        gamut = ?metadata.gamut,
-        "media: probed a still"
-    );
-    Ok(metadata)
-}
-
-/// [`Decoder::decode`] with the RAW policy as a parameter.
-fn decode_still(bytes: &[u8], ext: &str, raw: RawOpen) -> Result<DecodedImage, MediaError> {
-    let format = gate(bytes, ext, FormatOp::Decode, raw)?;
-    if format.is_raw() {
-        return decode_raw(bytes, format);
-    }
-    let probed = probe_still(bytes, ext, raw)?;
-    let format = probed.format;
-    let mut rgb = decode_standard_image(bytes, standard_format(format))
-        .map_err(|e| standard_error(format, e))?;
-    check_rgb_buffer(&rgb, format)?;
-    // The probe held the header's size to the budget, but a header can understate its frame
-    // (an AVIF's `ispe` is only a claim about its AV1 frame), so the decoded frame is held to
-    // it too before Capsule copies or resamples it.
-    check_frame_budget(format, rgb.width(), rgb.height(), MAX_DECODE_PIXELS)?;
-
-    let orientation = probed.orientation.unwrap_or(ORIENTATION_NORMAL);
-    if orientation != ORIENTATION_NORMAL {
-        apply_orientation(&mut rgb, orientation);
+        let format = gate(bytes, ext, FormatOp::Decode)?;
+        if format.is_raw() {
+            return decode_raw(bytes, format);
+        }
+        let probed = self.probe(bytes, ext)?;
+        let format = probed.format;
+        let mut rgb = decode_standard_image(bytes, standard_format(format))
+            .map_err(|e| standard_error(format, e))?;
         check_rgb_buffer(&rgb, format)?;
-    }
+        // The probe held the header's size to the budget, but a header can understate its frame
+        // (an AVIF's `ispe` is only a claim about its AV1 frame), so the decoded frame is held to
+        // it too before Capsule copies or resamples it.
+        check_frame_budget(format, rgb.width(), rgb.height(), MAX_DECODE_PIXELS)?;
 
-    let image = to_rgba8(&rgb);
-    tracing::debug!(
-        %format,
-        width = image.width,
-        height = image.height,
-        orientation,
-        "media: decoded a still"
-    );
-    Ok(DecodedImage {
-        image,
-        gamut: probed.gamut,
-        orientation_applied: orientation,
-        format,
-    })
+        let orientation = probed.orientation.unwrap_or(ORIENTATION_NORMAL);
+        if orientation != ORIENTATION_NORMAL {
+            apply_orientation(&mut rgb, orientation);
+            check_rgb_buffer(&rgb, format)?;
+        }
+
+        let image = to_rgba8(&rgb);
+        tracing::debug!(
+            %format,
+            width = image.width,
+            height = image.height,
+            orientation,
+            "media: decoded a still"
+        );
+        Ok(DecodedImage {
+            image,
+            gamut: probed.gamut,
+            orientation_applied: orientation,
+            format,
+        })
+    }
 }
 
 /// Run `decoder.decode` with the unwind boundary an import needs.
@@ -390,20 +345,11 @@ pub fn guarded<T>(
 }
 
 /// Identify a still and refuse anything this build has no codec for, before any decoder runs.
-///
-/// Under [`RawOpen::Defer`] that includes every RAW family, so no RAW reaches `RawFile::open`.
-fn gate(bytes: &[u8], ext: &str, op: FormatOp, raw: RawOpen) -> Result<StillFormat, MediaError> {
+fn gate(bytes: &[u8], ext: &str, op: FormatOp) -> Result<StillFormat, MediaError> {
     let Some(format) = StillFormat::detect(bytes, ext) else {
         return Err(MediaError::NotAStillImage);
     };
-    let bounded_raw = raw == RawOpen::Bounded && BOUNDED_RAW_FORMATS.contains(&format);
-    if !format.is_decodable() && !bounded_raw {
-        if BOUNDED_RAW_FORMATS.contains(&format) {
-            tracing::debug!(
-                %format,
-                "media: deferring a RAW still without opening it (issue #1323)"
-            );
-        }
+    if !format.is_decodable() {
         return Err(MediaError::UnsupportedFormat { format, op });
     }
     Ok(format)
@@ -535,6 +481,9 @@ struct RawLayout {
     /// stated length before it reads. Empty for a DNG, whose reader no longer reports its ranges
     /// and checks them itself without allocating them (see [`raw_layout`]).
     ranges: Vec<(u64, u64)>,
+    /// Whether the reader checks the ranges itself rather than reporting them: true for the DNG
+    /// reader, whichever extension the file came with.
+    reader_checks_ranges: bool,
     bit_depth: u8,
     orientation: Option<u16>,
 }
@@ -607,6 +556,7 @@ fn raw_layout(
                 } else {
                     vec![(m.raw_data_offset, m.raw_data_size)]
                 },
+                reader_checks_ranges: false,
                 bit_depth: m.bit_depth,
                 orientation: m.orientation,
             }
@@ -646,6 +596,7 @@ fn raw_layout(
                 unit: if tiled { "tile" } else { "strip" },
                 // Upstream checks the ranges themselves; see above.
                 ranges: Vec::new(),
+                reader_checks_ranges: true,
                 bit_depth: m.bit_depth,
                 orientation: m.orientation,
             }
@@ -671,12 +622,16 @@ fn raw_layout(
 /// decoded Deflate; and a lossless-JPEG chunk is allocated at its own SOF3 header's size, so a
 /// header stating more samples than its strip or tile holds is refused. A real file never states
 /// one, and the reader would refuse it after decoding.
+///
+/// Applied to every file the reader opens as a DNG, which is any whose IFD0 states `DNGVersion`
+/// ([`IfdWalk::dng`]) whatever its extension, as well as to every `.dng`: a DNG named `.arw` is
+/// opened by the eager reader all the same.
 fn check_eager_raw_frames(
     format: StillFormat,
     walk: &IfdWalk,
     limit: u64,
 ) -> Result<(), MediaError> {
-    if format != StillFormat::Dng {
+    if format != StillFormat::Dng && !walk.dng {
         return Ok(());
     }
     let clamp = |v: u64| u32::try_from(v).unwrap_or(u32::MAX);
@@ -835,8 +790,9 @@ fn check_raw_layout(
         });
     }
     // A DNG's ranges are its reader's to check (see `raw_layout`), so only the families that
-    // report them can be refused for listing none.
-    if layout.ranges.is_empty() && format != StillFormat::Dng {
+    // report them can be refused for listing none. Which reader that was is the reader's choice,
+    // not the extension's: a DNG named `.arw` is read as a DNG.
+    if layout.ranges.is_empty() && !layout.reader_checks_ranges {
         return Err(MediaError::Decode {
             format,
             detail: "RAW file locates no strip or tile data".to_owned(),
@@ -939,6 +895,23 @@ fn open_raw_within(
                 budget = scan.budget,
                 "media: refused a RAW still whose lossless-JPEG chunks exhaust the header scan's \
                  budget"
+            ),
+            IfdRefusal::Exhausted(exhausted) => tracing::warn!(
+                %format,
+                budget = ?exhausted.budget,
+                at = exhausted.at,
+                limit = exhausted.limit,
+                "media: refused a RAW still whose directories, image data or pointers exhaust \
+                 the IFD walk's work budget"
+            ),
+            IfdRefusal::Unbounded(unbounded) => tracing::warn!(
+                %format,
+                ifd_offset = unbounded.ifd_offset,
+                tag = unbounded.tag,
+                stated = unbounded.stated,
+                limit = unbounded.limit,
+                "media: refused a RAW still stating a count its reader would allocate from \
+                 without bound"
             ),
         }
         MediaError::Decode {
@@ -1054,35 +1027,12 @@ impl std::fmt::Debug for EmbeddedPreview {
 /// [`MediaError::PixelBudgetExceeded`] for a preview frame over budget, [`MediaError::Decode`]
 /// for a RAW or a preview that does not read, and [`MediaError::DecoderPanic`] when the reader
 /// panics. Every one leaves the rung to the next source.
-///
-/// While RAW decode is deferred (issue #1323), every RAW family is
-/// [`MediaError::UnsupportedFormat`] here too, before `RawFile::open`: opening a DNG for its
-/// preview decodes its whole raw image first.
 #[tracing::instrument(level = "debug", skip_all, fields(bytes = bytes.len(), ext))]
 pub fn extract_embedded_preview(
     bytes: &[u8],
     ext: &str,
 ) -> Result<Option<EmbeddedPreview>, MediaError> {
-    embedded_preview(bytes, ext, RawOpen::Defer)
-}
-
-/// [`extract_embedded_preview`] through the RAW pipeline's pre-open bounds, as production did
-/// before issue #1323, so the tests keep driving them for issue #1324.
-#[cfg(test)]
-pub(super) fn extract_bounded_embedded_preview(
-    bytes: &[u8],
-    ext: &str,
-) -> Result<Option<EmbeddedPreview>, MediaError> {
-    embedded_preview(bytes, ext, RawOpen::Bounded)
-}
-
-/// [`extract_embedded_preview`] with the RAW policy as a parameter.
-fn embedded_preview(
-    bytes: &[u8],
-    ext: &str,
-    raw: RawOpen,
-) -> Result<Option<EmbeddedPreview>, MediaError> {
-    let format = gate(bytes, ext, FormatOp::Decode, raw)?;
+    let format = gate(bytes, ext, FormatOp::Decode)?;
     if !format.is_raw() {
         return Ok(None);
     }
