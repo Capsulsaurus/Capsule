@@ -45,9 +45,8 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v7
 
-      # Gradle 8.11.1 supports JDK 21, not the JDK 26 on some dev machines — this pin
-      # is the de-facto fix for the documented local Gradle break (see
-      # capsule-core-kotlin/README.md and ci.yml's kotlin lane).
+      # JDK 21 runs Gradle 9.9, as in ci.yml's kotlin lane; the modules compile against
+      # JDK 17 through toolchains.
       - name: Set up JDK
         uses: actions/setup-java@v6
         with:
@@ -58,7 +57,7 @@ jobs:
         uses: android-actions/setup-android@v4
 
       - name: Install Android platform
-        run: sdkmanager "platforms;android-36"
+        run: sdkmanager "platforms;android-37.0"
 
       # NDK r27c matches ci.yml's rust-cross android lane — the cargo-ndk .so build must
       # use the same NDK the cross-compile gate verifies against.

@@ -819,18 +819,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      # Gradle 8.11.1 supports JDK 21 (not the JDK 26 used on some dev machines).
+      # JDK 21 runs Gradle 9.9; the modules compile against JDK 17 through toolchains.
       - name: Set up JDK
         uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
       # The :android module applies the Android Gradle Plugin, so Gradle needs the SDK
-      # (compileSdk 36) just to configure — even for the ktlint/detekt tasks.
+      # (compileSdk 37) just to configure — even for the ktlint/detekt tasks.
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
       - name: Install Android platform
-        run: sdkmanager "platforms;android-36"
+        run: sdkmanager "platforms;android-37.0"
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
       - name: Set up mise (task runner)
