@@ -1,5 +1,5 @@
 [versions]
-agp = "9.5.1"
+agp = "9.5.2"
 androidx-activityCompose = "1.13.0"
 androidx-appcompat = "1.8.0"
 androidx-benchmark = "1.5.0"
@@ -9,11 +9,11 @@ androidx-test-runner = "1.7.0"
 androidx-tracing = "2.0.5"
 androidx-uiautomator = "2.4.1"
 androidx-navigationCompose = "2.10.2"
-androidx-viewmodelCompose = "2.11.0"
+androidx-viewmodelCompose = "2.11.1"
 coil = "3.6.3"
-# Jetpack Compose BOM: pins every androidx.compose artifact to one tested set (Compose 1.12,
-# Material 3 1.4).
-compose-bom = "2026.09.00"
+# Jetpack Compose BOM: pins every androidx.compose artifact to one tested set (Compose 1.13,
+# Material 3 1.5).
+compose-bom = "2026.11.01"
 koin = "4.2.2"
 kotlin = "2.4.21"
 kotlinx-serialization = "1.13.0"
