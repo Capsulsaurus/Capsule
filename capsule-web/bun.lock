@@ -41,6 +41,7 @@
         "@rsdoctor/rspack-plugin": "^1.6.5",
         "@tanstack/react-router-devtools": "^1.167.4",
         "@tanstack/router-plugin": "^1.169.0",
+        "@types/bun": "^1.4.5",
         "@types/node": "^26.6.6",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
@@ -418,6 +419,8 @@
 
     "@tybys/wasm-util": ["@tybys/wasm-util@0.10.5", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-dOGOPxlaNV+G046mZzN+9C0dAcQZeSKcXiVaM0TYy/LM4ttTmgSBDxYfovcYI8Em3+eAbiAYpvWLOv8+ZVRJKA=="],
 
+    "@types/bun": ["@types/bun@1.4.5", "", { "dependencies": { "bun-types": "1.4.5" } }, "sha512-DpgwNI9z0L1S0gtb45QLCWgwCUcMLnsHYMJHQvpNj7erGiCGBvpggltAIeARrtobNMKMuy0UP7i56tKKgwFs/Q=="],
+
     "@types/connect": ["@types/connect@3.4.38", "", { "dependencies": { "@types/node": "*" } }, "sha512-K6uROf1LD88uDQqJCktA4yzL1YYAK6NgfsI0v/mTgyPKWsX1CnJ0XPSDhViejru1GcRkLWb8RlzFYJRqGUbaug=="],
 
     "@types/cors": ["@types/cors@2.8.19", "", { "dependencies": { "@types/node": "*" } }, "sha512-mFNylyeyqN93lfe/9CSxOGREz8cpzAhH+E93xJ4xWQf62V8sQ/24reV2nyzUWM6H6Xji+GGHpkbLe7pVoUEskg=="],
@@ -499,6 +502,8 @@
     "browserslist-load-config": ["browserslist-load-config@1.0.4", "", {}, "sha512-5Naou4DgM5JyU3lubTHD+UWIvwpjxVAAxaGvh5DV4rDNEEwzAt26Z0XfrVwXOdQSJPs8OPwiDwZ9Sq/oew7U6w=="],
 
     "browserslist-to-es-version": ["browserslist-to-es-version@1.4.2", "", { "dependencies": { "browserslist": "^4.28.2" }, "bin": { "browserslist-to-es-version": "./dist/cli.js" } }, "sha512-3NV13pCv0wmPxxZZcekHAG6vt8rQ94w2c4/UBe3ZU3NDUm5TP+QFK3rjS6XeKWSHWpnPYNfQzlhnljka0BrEOA=="],
+
+    "bun-types": ["bun-types@1.4.5", "", { "dependencies": { "@types/node": "*", "undici-types": "*" } }, "sha512-ECHn+9dhL3wv0G6u0+7dQvrnaimXiRDxxerYBmhTaLyJEEuvTPWk2Fye3XIf5Y++JIIiHKfQw4Z7V5D8KuiXbg=="],
 
     "caniuse-lite": ["caniuse-lite@1.0.30001827", "", {}, "sha512-YWEDr46gSO81M8w6uPbaIy4++IXsirx2asUqvllNiD4BPf75ibxclUjWEqp8ObCenRv+UM2n5Y8xuRPT8V8FrQ=="],
 

@@ -70,7 +70,10 @@ export const AssetGrid = ({ assets, onAssetClick }: AssetGridProps) => {
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [lastClickedId, setLastClickedId] = useState<string | null>(null);
 
-    const handleAssetClick = (asset: Asset, e: React.MouseEvent) => {
+    const handleAssetClick = (
+        asset: Asset,
+        e: React.MouseEvent | React.KeyboardEvent,
+    ) => {
         // Prevent default browser behavior if needed
         // e.preventDefault(); // Sometimes needed but check conflict with ContextMenu
 
@@ -268,7 +271,10 @@ interface VirtualListProps {
     containerRef: React.RefObject<HTMLDivElement | null>;
     albums: Album[];
     selectedIds: Set<string>;
-    onAssetClick: (asset: Asset, e: React.MouseEvent) => void;
+    onAssetClick: (
+        asset: Asset,
+        e: React.MouseEvent | React.KeyboardEvent,
+    ) => void;
     onToggleSelection: (id: string) => void;
     onContextMenu: (asset: Asset, e: React.MouseEvent) => void;
     onMoveToAlbum: (title: string) => void;
@@ -345,7 +351,7 @@ interface AssetCardProps {
     asset: Asset;
     albums: Album[];
     selected: boolean;
-    onClick: (e: React.MouseEvent) => void;
+    onClick: (e: React.MouseEvent | React.KeyboardEvent) => void;
     onToggle: () => void;
     onContextMenu: (e: React.MouseEvent) => void;
     onMoveToAlbum: (title: string) => void;

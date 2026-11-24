@@ -24,7 +24,7 @@ mise run hooks-install # git hooks (hk)
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `mise run check`            | The full gate: `format-check`, then `lint-check`, then `test`                                                                                                  |
 | `mise run check-rust`       | Rust format, clippy, docs, codegen drift (`i18n`, OpenAPI, READMEs), architecture and licence checks, builds and bindings; sequential under one `target/` lock |
-| `mise run check-web`        | Web format, lint, test, build                                                                                                                                  |
+| `mise run check-web`        | Web format, lint, type check, test, build                                                                                                                      |
 | `mise run check-docs`       | Docs format, lint, Astro build (a broken internal link fails it)                                                                                               |
 | `mise run check-md`         | markdownlint over every `.md`                                                                                                                                  |
 | `mise run check-kotlin`     | Kotlin format and lint                                                                                                                                         |

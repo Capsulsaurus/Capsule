@@ -125,7 +125,7 @@ describe('the protocol handshake', () => {
             /pub const PROTOCOL_VERSION: &str = "(\d{4}-\d{2}-\d{2})";/,
         );
         expect(declared).not.toBeNull();
-        expect(PROTOCOL_VERSION).toBe(declared?.[1]);
+        expect(declared?.[1]).toBe(PROTOCOL_VERSION);
     });
 
     test('rides refreshAccessToken', async () => {

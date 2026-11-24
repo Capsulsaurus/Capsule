@@ -62,7 +62,7 @@ const fixture: Fixture = JSON.parse(
     ),
 );
 
-const bytes = (b64: string): Uint8Array =>
+const bytes = (b64: string): Uint8Array<ArrayBuffer> =>
     new Uint8Array(Buffer.from(b64, 'base64'));
 
 beforeAll(async () => {
