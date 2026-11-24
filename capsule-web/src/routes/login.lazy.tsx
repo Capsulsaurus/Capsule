@@ -210,13 +210,8 @@ function Login() {
                                 account there is no reset, because the server cannot re-wrap a
                                 master key it has never seen. Recovery is the escrow
                                 blob, and it needs a screen of its own rather than a link that
-                                promises the wrong thing. */}
-                            <p className="text-xs text-muted-foreground text-center">
-                                <FormattedMessage id="auth.no_account" />{' '}
-                                <Link to="/register" className="underline">
-                                    <FormattedMessage id="auth.sign_up" />
-                                </Link>
-                            </p>
+                                promises the wrong thing. No "sign up" link: the web
+                                client is read-only and has no registration route. */}
                         </CardFooter>
                     </form>
                 </Card>
