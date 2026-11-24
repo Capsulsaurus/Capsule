@@ -189,7 +189,7 @@ pub enum OpRejection {
         detail: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The protocol version is outside the accepted window.
@@ -204,7 +204,7 @@ pub enum OpRejection {
         protocol_max: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The caller may not write to this album, or the asset is not theirs.
@@ -216,7 +216,7 @@ pub enum OpRejection {
     AlbumAccessDenied {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// Invariant 17: the manifest does not chain onto the asset's stored head.
@@ -230,7 +230,7 @@ pub enum OpRejection {
         chain_head: Option<String>,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A `trash-restore` arrived at or after the asset's signed retention floor, judged by the
@@ -248,7 +248,7 @@ pub enum OpRejection {
         retention_until: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The account is suspended.
@@ -262,7 +262,7 @@ pub enum OpRejection {
     AccountSuspended {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The account is past its grace window, and this write would grow stored metadata.
@@ -275,7 +275,7 @@ pub enum OpRejection {
     QuotaGraceExpired {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The account's quota is suspended by the server's operator, and this write would grow
@@ -288,7 +288,7 @@ pub enum OpRejection {
     QuotaSuspended {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A collaborator could not answer.
@@ -297,7 +297,7 @@ pub enum OpRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -372,7 +372,7 @@ pub async fn apply_op(
     if !standing.may_write() {
         tracing::info!(%caller, "a lifecycle write was refused: the account is suspended");
         return Err(OpRejection::AccountSuspended {
-            code: error_codes::MODERATION_ACCOUNT_SUSPENDED,
+            code: error_codes::MODERATION_ACCOUNT_SUSPENDED.into(),
         });
     }
 
@@ -477,12 +477,12 @@ pub async fn apply_op(
         if state == crate::quota::QuotaState::Suspended {
             tracing::info!(%caller, "a lifecycle write was refused: the account's quota is suspended");
             return Err(OpRejection::QuotaSuspended {
-                code: error_codes::QUOTA_SUSPENDED,
+                code: error_codes::QUOTA_SUSPENDED.into(),
             });
         }
         tracing::info!(%caller, ?state, "a lifecycle write was refused: past the grace window");
         return Err(OpRejection::QuotaGraceExpired {
-            code: error_codes::QUOTA_GRACE_LOCKED,
+            code: error_codes::QUOTA_GRACE_LOCKED.into(),
         });
     }
 
@@ -599,7 +599,7 @@ pub async fn apply_op(
         })),
         OpOutcome::StaleChain { head } => Err(OpRejection::StaleRevival {
             chain_head: head.map(|hash| hash.to_hex()),
-            code: error_codes::UPLOAD_STALE_REVIVAL,
+            code: error_codes::UPLOAD_STALE_REVIVAL.into(),
         }),
         OpOutcome::AmkRegressed { stored } => Err(OpRejection::invalid(
             error_codes::UPLOAD_AMK_REGRESSED,
@@ -609,7 +609,7 @@ pub async fn apply_op(
             tracing::info!(%owner, asset = %asset_id, %retention_until, "a trash-restore was refused: the retention window has closed");
             Err(OpRejection::RetentionElapsed {
                 retention_until: retention_until.to_string(),
-                code: error_codes::UPLOAD_RETENTION_ELAPSED,
+                code: error_codes::UPLOAD_RETENTION_ELAPSED.into(),
             })
         }
         OpOutcome::NotFound => {
@@ -751,21 +751,21 @@ impl OpRejection {
     fn invalid(code: &'static str, detail: &str) -> Self {
         Self::Invalid {
             detail: detail.to_owned(),
-            code,
+            code: code.into(),
         }
     }
 
     /// The album is not writable, or the asset is not this album's.
     fn album_access_denied() -> Self {
         Self::AlbumAccessDenied {
-            code: error_codes::UPLOAD_ALBUM_ACCESS_DENIED,
+            code: error_codes::UPLOAD_ALBUM_ACCESS_DENIED.into(),
         }
     }
 
     /// A collaborator could not answer.
     fn unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::UPLOAD_UNAVAILABLE,
+            code: error_codes::UPLOAD_UNAVAILABLE.into(),
         }
     }
 
@@ -780,7 +780,7 @@ impl OpRejection {
             GateReject::ProtocolOutOfRange => Self::ProtocolUnsupported {
                 protocol_min: String::new(),
                 protocol_max: String::new(),
-                code: error_codes::PROTOCOL_VERSION_UNSUPPORTED,
+                code: error_codes::PROTOCOL_VERSION_UNSUPPORTED.into(),
             },
             GateReject::UnknownCryptoSuite => invalid(
                 error_codes::UPLOAD_UNKNOWN_CRYPTO_SUITE,

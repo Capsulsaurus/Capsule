@@ -37,7 +37,8 @@
 use kynos::extract::FromRequest;
 use kynos::extract::body::binary::Binary;
 use kynos::extract::describe::Describe;
-use kynos::http::Request;
+use kynos::http::Parts;
+use kynos::http::body::Body;
 use kynos::http::media::MediaType;
 use kynos::prelude::*;
 use kynos::router::operation::OperationCx;
@@ -80,7 +81,7 @@ pub enum OpaqueBodyRejection {
     UnsupportedMediaType {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The body could not be read to its end.
@@ -89,28 +90,32 @@ pub enum OpaqueBodyRejection {
     Unreadable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
 impl<C: Sync, M: CodedMedia + Send> FromRequest<C> for OpaqueBody<M> {
     type Rejection = OpaqueBodyRejection;
 
-    async fn from_request(request: Request, context: &C) -> Result<Self, Self::Rejection> {
-        Binary::<M>::from_request(request, context)
+    async fn from_request(
+        parts: &mut Parts,
+        body: Body,
+        context: &C,
+    ) -> Result<Self, Self::Rejection> {
+        Binary::<M>::from_request(parts, body, context)
             .await
             .map(Self)
             .map_err(|rejection| {
                 if rejection.status() == kynos::http::StatusCode::UNSUPPORTED_MEDIA_TYPE {
                     OpaqueBodyRejection::UnsupportedMediaType {
-                        code: M::UNSUPPORTED_MEDIA_TYPE,
+                        code: M::UNSUPPORTED_MEDIA_TYPE.into(),
                     }
                 } else {
                     // A transport failure part-way through the body. `Binary` cannot produce a
                     // schema failure, so this is the only other shape.
                     tracing::info!(%rejection, "a raw-bytes body did not arrive whole");
                     OpaqueBodyRejection::Unreadable {
-                        code: M::UNREADABLE,
+                        code: M::UNREADABLE.into(),
                     }
                 }
             })

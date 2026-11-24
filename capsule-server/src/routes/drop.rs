@@ -285,7 +285,7 @@ pub enum LinkRejection {
         detail: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The owner is over their storage limit and past the grace window.
@@ -297,7 +297,7 @@ pub enum LinkRejection {
     QuotaGraceExpired {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The owner's quota is suspended by the server's operator (#705).
@@ -309,7 +309,7 @@ pub enum LinkRejection {
     QuotaSuspended {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A store could not answer.
@@ -318,7 +318,7 @@ pub enum LinkRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -338,7 +338,7 @@ pub enum DropChunkRejection {
         detail: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The link or the session is not here. One answer, as on session creation.
@@ -354,7 +354,7 @@ pub enum DropChunkRejection {
         detail: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A failure a retry of this chunk cannot repair, so it is not a wait: the stage is shorter
@@ -364,7 +364,7 @@ pub enum DropChunkRejection {
     Internal {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The server's disk is full. Nothing of this chunk was kept, so the same chunk at the same
@@ -374,7 +374,7 @@ pub enum DropChunkRejection {
     StorageFull {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
         /// When the guest may retry, as Unix seconds.
         #[problem(extension)]
         retry_after: u64,
@@ -387,7 +387,7 @@ pub enum DropChunkRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
         /// When the guest may retry, as Unix seconds.
         #[problem(extension)]
         retry_after: u64,
@@ -399,7 +399,7 @@ impl DropChunkRejection {
     fn malformed(detail: &str) -> Self {
         Self::Malformed {
             detail: detail.to_owned(),
-            code: error_codes::DROP_MALFORMED,
+            code: error_codes::DROP_MALFORMED.into(),
         }
     }
 
@@ -407,14 +407,14 @@ impl DropChunkRejection {
     fn refused(detail: &str) -> Self {
         Self::Refused {
             detail: detail.to_owned(),
-            code: error_codes::DROP_CHUNK_REFUSED,
+            code: error_codes::DROP_CHUNK_REFUSED.into(),
         }
     }
 
     /// A collaborator could not answer; the guest retries after a short wait.
     fn unavailable(clock: &dyn Clock) -> Self {
         Self::Unavailable {
-            code: error_codes::DROP_CHUNK_UNAVAILABLE,
+            code: error_codes::DROP_CHUNK_UNAVAILABLE.into(),
             retry_after: retry_at(clock, UNAVAILABLE_RETRY),
         }
     }
@@ -422,7 +422,7 @@ impl DropChunkRejection {
     /// The disk is full; the guest retries once space has had time to come back.
     fn storage_full(clock: &dyn Clock) -> Self {
         Self::StorageFull {
-            code: error_codes::DROP_STORAGE_FULL,
+            code: error_codes::DROP_STORAGE_FULL.into(),
             retry_after: retry_at(clock, STORAGE_FULL_RETRY),
         }
     }
@@ -430,7 +430,7 @@ impl DropChunkRejection {
     /// A failure a retry of the chunk cannot repair.
     fn internal() -> Self {
         Self::Internal {
-            code: error_codes::DROP_UNAVAILABLE,
+            code: error_codes::DROP_UNAVAILABLE.into(),
         }
     }
 }
@@ -446,7 +446,7 @@ pub enum DropRejection {
         detail: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The link, or the session, is not here.
@@ -468,7 +468,7 @@ pub enum DropRejection {
     PassphraseRequired {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The owner's quota will not admit the drop (invariant 29).
@@ -477,7 +477,7 @@ pub enum DropRejection {
     QuotaExceeded {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The link owner's quota is suspended by the server's operator (#705).
@@ -489,7 +489,7 @@ pub enum DropRejection {
     QuotaSuspended {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A cumulative cap on an otherwise-live link (invariant 26).
@@ -502,7 +502,7 @@ pub enum DropRejection {
     CapExhausted {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The file alone is larger than the link permits (invariant 28).
@@ -514,7 +514,7 @@ pub enum DropRejection {
         limit: u64,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// Too many drop-session creations against this link (invariant 31), **or** the limiter is
@@ -530,7 +530,7 @@ pub enum DropRejection {
     RateLimited {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
         /// When the caller may retry, as Unix seconds. An **upper** bound: one limiter window,
         /// by which time a live window has lapsed and freed room.
         #[problem(extension)]
@@ -543,7 +543,7 @@ pub enum DropRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -561,7 +561,7 @@ pub enum InboxReadRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -574,7 +574,7 @@ pub enum DiscardRejection {
     NotFound {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The store could not answer.
@@ -583,7 +583,7 @@ pub enum DiscardRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -599,7 +599,7 @@ pub enum AdoptRejection {
     NotFound {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The adoption's manifest or its target was refused.
@@ -610,7 +610,7 @@ pub enum AdoptRejection {
         detail: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A store could not answer.
@@ -619,7 +619,7 @@ pub enum AdoptRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -731,13 +731,13 @@ async fn admit_link_growth(
         Some(crate::quota::QuotaState::Suspended) => {
             tracing::info!(%owner, "an upload link was refused: the account's quota is suspended");
             Err(LinkRejection::QuotaSuspended {
-                code: error_codes::QUOTA_SUSPENDED,
+                code: error_codes::QUOTA_SUSPENDED.into(),
             })
         }
         Some(state) => {
             tracing::info!(%owner, ?state, "an upload link was refused: past the quota grace window");
             Err(LinkRejection::QuotaGraceExpired {
-                code: error_codes::QUOTA_GRACE_LOCKED,
+                code: error_codes::QUOTA_GRACE_LOCKED.into(),
             })
         }
     }
@@ -804,7 +804,7 @@ async fn charge_drop_limiter(
     match verdict {
         Verdict::Admitted { .. } => Ok(()),
         Verdict::Limited { retry_after } => Err(DropRejection::RateLimited {
-            code: error_codes::DROP_RATE_LIMITED,
+            code: error_codes::DROP_RATE_LIMITED.into(),
             retry_after: unix_seconds(retry_after),
         }),
     }
@@ -895,7 +895,7 @@ pub async fn create_drop(
                 "a drop was refused: the passphrase proof did not verify"
             );
             return Err(DropRejection::PassphraseRequired {
-                code: error_codes::DROP_PASSPHRASE_REQUIRED,
+                code: error_codes::DROP_PASSPHRASE_REQUIRED.into(),
             });
         }
     }
@@ -919,13 +919,13 @@ pub async fn create_drop(
         Admission::NotLive => return Err(DropRejection::NotFound),
         Admission::CapExhausted => {
             return Err(DropRejection::CapExhausted {
-                code: error_codes::DROP_CAP_EXHAUSTED,
+                code: error_codes::DROP_CAP_EXHAUSTED.into(),
             });
         }
         Admission::FileTooLarge { limit } => {
             return Err(DropRejection::FileTooLarge {
                 limit,
-                code: error_codes::DROP_FILE_TOO_LARGE,
+                code: error_codes::DROP_FILE_TOO_LARGE.into(),
             });
         }
     };
@@ -950,11 +950,11 @@ pub async fn create_drop(
         if state == crate::quota::QuotaState::Suspended {
             tracing::info!(%owner, "a drop was refused: the link owner's quota is suspended");
             return Err(DropRejection::QuotaSuspended {
-                code: error_codes::QUOTA_SUSPENDED,
+                code: error_codes::QUOTA_SUSPENDED.into(),
             });
         }
         return Err(DropRejection::QuotaExceeded {
-            code: error_codes::QUOTA_EXCEEDED,
+            code: error_codes::QUOTA_EXCEEDED.into(),
         });
     }
 
@@ -1230,7 +1230,7 @@ pub enum DropStatusRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -1238,7 +1238,7 @@ impl DropStatusRejection {
     /// A store could not answer.
     fn unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::DROP_UNAVAILABLE,
+            code: error_codes::DROP_UNAVAILABLE.into(),
         }
     }
 }
@@ -1816,7 +1816,7 @@ pub async fn list_inbox(
     let entries = drops.drops().inbox(&owner).await.map_err(|error| {
         tracing::error!(%error, %owner, "the drop store could not read an inbox");
         InboxReadRejection::Unavailable {
-            code: error_codes::DROP_UNAVAILABLE,
+            code: error_codes::DROP_UNAVAILABLE.into(),
         }
     })?;
 
@@ -1844,13 +1844,13 @@ pub async fn discard_drop(
         .map_err(|error| {
             tracing::error!(%error, %owner, "the drop store could not discard");
             DiscardRejection::Unavailable {
-                code: error_codes::DROP_UNAVAILABLE,
+                code: error_codes::DROP_UNAVAILABLE.into(),
             }
         })?;
 
     if !discarded {
         return Err(DiscardRejection::NotFound {
-            code: error_codes::DROP_NOT_FOUND,
+            code: error_codes::DROP_NOT_FOUND.into(),
         });
     }
     Ok(NoContent)
@@ -1956,14 +1956,14 @@ impl LinkRejection {
     fn malformed(detail: &str) -> Self {
         Self::Malformed {
             detail: detail.to_owned(),
-            code: error_codes::DROP_MALFORMED,
+            code: error_codes::DROP_MALFORMED.into(),
         }
     }
 
     /// A store could not answer.
     fn unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::DROP_UNAVAILABLE,
+            code: error_codes::DROP_UNAVAILABLE.into(),
         }
     }
 }
@@ -1973,7 +1973,7 @@ impl DropRejection {
     fn malformed(detail: &str) -> Self {
         Self::Malformed {
             detail: detail.to_owned(),
-            code: error_codes::DROP_MALFORMED,
+            code: error_codes::DROP_MALFORMED.into(),
         }
     }
 
@@ -1984,7 +1984,7 @@ impl DropRejection {
     /// broken.
     fn at_capacity(retry_after: jiff::Timestamp) -> Self {
         Self::RateLimited {
-            code: error_codes::DROP_AT_CAPACITY,
+            code: error_codes::DROP_AT_CAPACITY.into(),
             retry_after: unix_seconds(retry_after),
         }
     }
@@ -1992,7 +1992,7 @@ impl DropRejection {
     /// A store could not answer.
     fn unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::DROP_UNAVAILABLE,
+            code: error_codes::DROP_UNAVAILABLE.into(),
         }
     }
 }
@@ -2002,21 +2002,21 @@ impl AdoptRejection {
     fn refused(detail: &str) -> Self {
         Self::Refused {
             detail: detail.to_owned(),
-            code: error_codes::DROP_ADOPTION_REFUSED,
+            code: error_codes::DROP_ADOPTION_REFUSED.into(),
         }
     }
 
     /// No such drop in the caller's inbox.
     fn not_found() -> Self {
         Self::NotFound {
-            code: error_codes::DROP_NOT_FOUND,
+            code: error_codes::DROP_NOT_FOUND.into(),
         }
     }
 
     /// A store could not answer.
     fn unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::DROP_UNAVAILABLE,
+            code: error_codes::DROP_UNAVAILABLE.into(),
         }
     }
 }

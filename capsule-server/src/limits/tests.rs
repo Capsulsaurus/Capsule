@@ -7,6 +7,22 @@ fn the_listener_carries_the_configured_header_bound_and_keeps_connections_alive(
     assert!(config.keep_alive);
 }
 
+/// The body idle timer never undercuts a configured chunk stall bound, and never falls below
+/// the head's budget.
+#[test]
+fn the_body_idle_bound_is_the_longer_of_the_head_and_chunk_stall_bounds() {
+    let head = Duration::from_secs(30);
+    assert_eq!(
+        request_body_idle_timeout(head, Duration::from_secs(90)),
+        Duration::from_secs(90)
+    );
+    assert_eq!(
+        request_body_idle_timeout(head, Duration::from_secs(5)),
+        head
+    );
+    assert_eq!(request_body_idle_timeout(head, head), head);
+}
+
 /// The upload protocol's own maximum chunk size.
 ///
 /// Restated here only as the subject of the assertion below; the bound itself is owned by

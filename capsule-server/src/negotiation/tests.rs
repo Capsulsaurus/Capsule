@@ -21,7 +21,7 @@ fn policy() -> UploadPolicy {
 fn code(rejection: &NegotiationRejection) -> &'static str {
     match rejection {
         NegotiationRejection::ProtocolUnsupported { code, .. }
-        | NegotiationRejection::Malformed { code, .. } => code,
+        | NegotiationRejection::Malformed { code, .. } => code.as_str(),
     }
 }
 
@@ -119,6 +119,7 @@ fn the_response_group_encodes_what_it_declares() {
     };
     let encoded: Vec<(String, String)> = window
         .encode()
+        .expect("the window's values are header values")
         .into_iter()
         .map(|(name, value)| {
             (
@@ -150,16 +151,18 @@ fn the_response_group_encodes_what_it_declares() {
 }
 
 /// A policy built past the configuration boundary with a non-header value is a programming
-/// error, and is reported as one rather than silently sending a shorter response.
+/// error, and is refused naming the header rather than silently sending a shorter response.
 #[test]
-#[should_panic(expected = "config validation should have refused")]
-fn a_window_value_that_is_not_a_header_value_is_a_programming_error() {
+fn a_window_value_that_is_not_a_header_value_is_refused() {
     let window = NegotiationResponseHeaders {
         protocol_min: "2026-01-01".to_owned(),
         protocol_max: "bad\nvalue".to_owned(),
         min_client_build: "0.0.0".to_owned(),
     };
-    let _ = window.encode();
+    let refused = window
+        .encode()
+        .expect_err("a value with a line break is not a header value");
+    assert_eq!(refused.name().as_str(), "x-capsule-protocol-max");
 }
 
 #[test]

@@ -117,7 +117,7 @@ pub enum IssueRejection {
     LocalAuthRequired {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A store could not answer.
@@ -126,7 +126,7 @@ pub enum IssueRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -143,7 +143,7 @@ pub enum RedeemRejection {
     Refused {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// Too many redemption attempts presenting this spelling of a code.
@@ -163,7 +163,7 @@ pub enum RedeemRejection {
     RateLimited {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
         /// When the caller may retry, as Unix seconds. An **upper** bound: one limiter window,
         /// by which time a live window has lapsed and freed room.
         #[problem(extension)]
@@ -176,7 +176,7 @@ pub enum RedeemRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -191,7 +191,7 @@ pub enum RelayRejection {
         detail: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The handle names no live channel.
@@ -200,7 +200,7 @@ pub enum RelayRejection {
     NoChannel {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A store could not answer.
@@ -209,7 +209,7 @@ pub enum RelayRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -241,7 +241,7 @@ pub async fn issue_enrollment_code(
     if !enrollment.is_fresh(credential.authenticated_at, now) {
         tracing::info!(%user, "an enrollment was refused: no recent local authorization");
         return Err(IssueRejection::LocalAuthRequired {
-            code: error_codes::ENROLLMENT_LOCAL_AUTH_REQUIRED,
+            code: error_codes::ENROLLMENT_LOCAL_AUTH_REQUIRED.into(),
         });
     }
 
@@ -331,13 +331,13 @@ pub async fn redeem_enrollment_code(
         if let Some(retry_after) = counters.capacity_refusal(&error, budget) {
             tracing::warn!(%error, "the redemption limiter is at capacity");
             RedeemRejection::RateLimited {
-                code: error_codes::ENROLLMENT_AT_CAPACITY,
+                code: error_codes::ENROLLMENT_AT_CAPACITY.into(),
                 retry_after: unix_seconds(retry_after),
             }
         } else {
             tracing::error!(%error, "the redemption counter could not be reached");
             RedeemRejection::Unavailable {
-                code: error_codes::AUTH_UNAVAILABLE,
+                code: error_codes::AUTH_UNAVAILABLE.into(),
             }
         }
     })?;
@@ -350,7 +350,7 @@ pub async fn redeem_enrollment_code(
             "the redemption budget is spent"
         );
         return Err(RedeemRejection::RateLimited {
-            code: error_codes::ENROLLMENT_RATE_LIMITED,
+            code: error_codes::ENROLLMENT_RATE_LIMITED.into(),
             retry_after: unix_seconds(retry_after),
         });
     }
@@ -362,14 +362,14 @@ pub async fn redeem_enrollment_code(
         .map_err(|error| {
             tracing::error!(%error, "the enrollment store could not redeem");
             RedeemRejection::Unavailable {
-                code: error_codes::AUTH_UNAVAILABLE,
+                code: error_codes::AUTH_UNAVAILABLE.into(),
             }
         })?;
 
     let Some(pending) = redeemed else {
         tracing::info!("an enrollment code was refused");
         return Err(RedeemRejection::Refused {
-            code: error_codes::ENROLLMENT_CODE_REFUSED,
+            code: error_codes::ENROLLMENT_CODE_REFUSED.into(),
         });
     };
 
@@ -388,7 +388,7 @@ pub async fn redeem_enrollment_code(
         .map_err(|error| {
             tracing::error!(%error, "the channel store could not open");
             RedeemRejection::Unavailable {
-                code: error_codes::AUTH_UNAVAILABLE,
+                code: error_codes::AUTH_UNAVAILABLE.into(),
             }
         })?;
 
@@ -422,7 +422,7 @@ pub async fn relay_enrollment_payload(
     if request.payload.is_empty() || request.payload.len() > MAX_RELAY_BYTES {
         return Err(RelayRejection::Malformed {
             detail: format!("a relay payload must be 1..={MAX_RELAY_BYTES} bytes"),
-            code: error_codes::ENROLLMENT_RELAY_MALFORMED,
+            code: error_codes::ENROLLMENT_RELAY_MALFORMED.into(),
         });
     }
 
@@ -594,7 +594,7 @@ fn direction(raw: &str) -> Result<Direction, RelayRejection> {
             tracing::info!(direction = %other, "a relay named an unknown direction");
             Err(RelayRejection::Malformed {
                 detail: "direction must be `to_initiator` or `to_enrollee`".to_owned(),
-                code: error_codes::ENROLLMENT_RELAY_MALFORMED,
+                code: error_codes::ENROLLMENT_RELAY_MALFORMED.into(),
             })
         }
     }
@@ -604,7 +604,7 @@ impl IssueRejection {
     /// A store could not answer.
     fn unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::AUTH_UNAVAILABLE,
+            code: error_codes::AUTH_UNAVAILABLE.into(),
         }
     }
 }
@@ -613,14 +613,14 @@ impl RelayRejection {
     /// The handle names no live channel.
     fn no_channel() -> Self {
         Self::NoChannel {
-            code: error_codes::ENROLLMENT_CHANNEL_NOT_FOUND,
+            code: error_codes::ENROLLMENT_CHANNEL_NOT_FOUND.into(),
         }
     }
 
     /// A store could not answer.
     fn unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::AUTH_UNAVAILABLE,
+            code: error_codes::AUTH_UNAVAILABLE.into(),
         }
     }
 }

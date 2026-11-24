@@ -46,7 +46,7 @@ use std::time::Instant;
 
 use bytes::Bytes;
 use kynos::extract::FromRequestParts as _;
-use kynos::extract::params::header::{EncodeHeaders, HeaderParams};
+use kynos::extract::params::header::{EncodeHeaders, HeaderParams, UnencodableHeader};
 use kynos::http::{HeaderName, HeaderValue, Request};
 use kynos::middleware::{Continued, Interceptor, Next};
 use kynos::openapi::{Header, Map, Parameter, RefOr, Schema};
@@ -125,8 +125,12 @@ impl HeaderParams for RequestIdHeader {
 }
 
 impl EncodeHeaders for RequestIdHeader {
-    fn encode(&self) -> Vec<(HeaderName, HeaderValue)> {
-        vec![(HeaderName::from_static("x-request-id"), self.0.clone())]
+    fn encode(&self) -> Result<Vec<(HeaderName, HeaderValue)>, UnencodableHeader> {
+        // Already a `HeaderValue`, so there is nothing that can fail to encode.
+        Ok(vec![(
+            HeaderName::from_static("x-request-id"),
+            self.0.clone(),
+        )])
     }
 }
 

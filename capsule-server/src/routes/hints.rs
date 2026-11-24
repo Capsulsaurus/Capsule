@@ -89,7 +89,7 @@ pub enum HintRejection {
     Malformed {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The signature does not verify under the peer's pinned key — or it does, over a hint
@@ -99,7 +99,7 @@ pub enum HintRejection {
     Unsigned {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// No operator has pinned a key for the home server.
@@ -108,7 +108,7 @@ pub enum HintRejection {
     PeerUnknown {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The home server is on this server's blocklist.
@@ -117,7 +117,7 @@ pub enum HintRejection {
     PeerBlocked {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// This peer has spent its hint budget, or a hint counter is holding as many keys as it
@@ -127,7 +127,7 @@ pub enum HintRejection {
     RateLimited {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A collaborator could not answer, so nothing was scheduled.
@@ -136,32 +136,32 @@ pub enum HintRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
 impl HintRejection {
     fn malformed() -> Self {
         Self::Malformed {
-            code: error_codes::FEDERATION_HINT_MALFORMED,
+            code: error_codes::FEDERATION_HINT_MALFORMED.into(),
         }
     }
 
     fn unsigned() -> Self {
         Self::Unsigned {
-            code: error_codes::FEDERATION_HINT_UNSIGNED,
+            code: error_codes::FEDERATION_HINT_UNSIGNED.into(),
         }
     }
 
     fn unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::FEDERATION_UNAVAILABLE,
+            code: error_codes::FEDERATION_UNAVAILABLE.into(),
         }
     }
 
     fn peer_unknown() -> Self {
         Self::PeerUnknown {
-            code: error_codes::FEDERATION_PEER_UNKNOWN,
+            code: error_codes::FEDERATION_PEER_UNKNOWN.into(),
         }
     }
 }
@@ -286,7 +286,7 @@ pub async fn submit_pull_hint(
     if record.is_blocked() {
         tracing::info!(%peer, "a pull hint was refused: the peer is blocked");
         return Err(HintRejection::PeerBlocked {
-            code: error_codes::MODERATION_SERVER_BLOCKED,
+            code: error_codes::MODERATION_SERVER_BLOCKED.into(),
         });
     }
     let Some(key) = record.signing_key else {
@@ -337,7 +337,7 @@ pub async fn submit_pull_hint(
         Verdict::Limited { retry_after } => {
             tracing::info!(%peer, %retry_after, "a peer's pull-hint budget is spent");
             return Err(HintRejection::RateLimited {
-                code: error_codes::FEDERATION_HINT_RATE_LIMITED,
+                code: error_codes::FEDERATION_HINT_RATE_LIMITED.into(),
             });
         }
     }
@@ -388,7 +388,7 @@ fn refused_by_counter(
     if let Some(retry_after) = counters.capacity_refusal(error, budget) {
         tracing::warn!(%error, kind = key.as_str(), %retry_after, "a hint counter is at capacity");
         HintRejection::RateLimited {
-            code: error_codes::FEDERATION_HINT_AT_CAPACITY,
+            code: error_codes::FEDERATION_HINT_AT_CAPACITY.into(),
         }
     } else {
         tracing::error!(%error, kind = key.as_str(), "a hint counter could not be reached");

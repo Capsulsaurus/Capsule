@@ -14,7 +14,10 @@ plugins {
 
 android {
     namespace = "com.justin13888.capsule.benchmark"
-    compileSdk = 37
+    // API 37.1, matching :android, which the Compose 1.13 AARs require.
+    compileSdk {
+        version = release(37) { minorApiLevel = 1 }
+    }
 
     defaultConfig {
         // FrameTimingMetric reads frame timelines, which the platform only exposes from API 31.

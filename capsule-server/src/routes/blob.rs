@@ -101,7 +101,7 @@ pub enum BlobRejection {
     NotFound {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// Not referenced *yet*: the caller's own account has an upload of exactly these bytes in
@@ -116,7 +116,7 @@ pub enum BlobRejection {
     Pending {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The caller was a member of the album that holds these bytes and has been removed from
@@ -130,7 +130,7 @@ pub enum BlobRejection {
     Forbidden {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// Referenced, but not retrievable per policy. Permanent.
@@ -139,7 +139,7 @@ pub enum BlobRejection {
     Gone {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A peer's capability has been revoked.
@@ -152,7 +152,7 @@ pub enum BlobRejection {
     CapabilityRevoked {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The peer is on this server's blocklist.
@@ -161,7 +161,7 @@ pub enum BlobRejection {
     PeerBlocked {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The peer is entitled to the album but its grant does not cover this blob's role.
@@ -174,7 +174,7 @@ pub enum BlobRejection {
     ScopeInsufficient {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The peer's events-per-hour budget is spent (invariant 21).
@@ -183,7 +183,7 @@ pub enum BlobRejection {
     RateLimited {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A collaborator could not answer, so nothing was decided.
@@ -192,7 +192,7 @@ pub enum BlobRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -200,16 +200,16 @@ impl From<Refusal> for BlobRejection {
     fn from(refusal: Refusal) -> Self {
         match refusal {
             Refusal::Revoked => Self::CapabilityRevoked {
-                code: error_codes::FEDERATION_CAPABILITY_REVOKED,
+                code: error_codes::FEDERATION_CAPABILITY_REVOKED.into(),
             },
             Refusal::PeerBlocked => Self::PeerBlocked {
-                code: error_codes::MODERATION_SERVER_BLOCKED,
+                code: error_codes::MODERATION_SERVER_BLOCKED.into(),
             },
             Refusal::RateLimited { .. } => Self::RateLimited {
-                code: error_codes::FEDERATION_RATE_BUDGET_EXCEEDED,
+                code: error_codes::FEDERATION_RATE_BUDGET_EXCEEDED.into(),
             },
             Refusal::Unavailable => Self::Unavailable {
-                code: error_codes::FEDERATION_UNAVAILABLE,
+                code: error_codes::FEDERATION_UNAVAILABLE.into(),
             },
         }
     }
@@ -219,42 +219,42 @@ impl BlobRejection {
     /// A former member of the album that holds the bytes.
     fn forbidden() -> Self {
         Self::Forbidden {
-            code: error_codes::BLOB_ACCESS_REVOKED,
+            code: error_codes::BLOB_ACCESS_REVOKED.into(),
         }
     }
 
     /// No live reference, or a malformed address.
     fn not_found() -> Self {
         Self::NotFound {
-            code: error_codes::BLOB_NOT_FOUND,
+            code: error_codes::BLOB_NOT_FOUND.into(),
         }
     }
 
     /// On its way.
     fn pending() -> Self {
         Self::Pending {
-            code: error_codes::BLOB_PENDING_UPLOAD,
+            code: error_codes::BLOB_PENDING_UPLOAD.into(),
         }
     }
 
     /// Referenced but gone.
     fn gone() -> Self {
         Self::Gone {
-            code: error_codes::BLOB_GONE,
+            code: error_codes::BLOB_GONE.into(),
         }
     }
 
     /// A collaborator could not answer.
     fn unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::BLOB_UNAVAILABLE,
+            code: error_codes::BLOB_UNAVAILABLE.into(),
         }
     }
 
     /// A peer's grant does not cover this blob's role.
     fn scope_insufficient() -> Self {
         Self::ScopeInsufficient {
-            code: error_codes::FEDERATION_SCOPE_INSUFFICIENT,
+            code: error_codes::FEDERATION_SCOPE_INSUFFICIENT.into(),
         }
     }
 }

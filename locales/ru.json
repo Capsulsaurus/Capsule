@@ -10319,6 +10319,11 @@
     "origin": "machine",
     "source": "594d0bec965c42ab"
   },
+  "error.request.timeout": {
+    "message": "Этот запрос передавался слишком долго. Повторите попытку.",
+    "origin": "machine",
+    "source": "e71726a2a0e9960e"
+  },
   "error.request.too_early": {
     "message": "Этот запрос отправлен слишком рано. Повторите попытку.",
     "origin": "machine",

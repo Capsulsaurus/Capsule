@@ -2063,6 +2063,7 @@
   "error.request.not_found": "تعذّر على Capsule العثور على ذلك.",
   "error.request.not_implemented": "تعذّر على Capsule معالجة هذا الطلب.",
   "error.request.range_not_satisfiable": "تعذّر على Capsule إرسال ذلك الجزء من الملف.",
+  "error.request.timeout": "استغرق وصول هذا الطلب وقتًا طويلاً جدًا. يُرجى المحاولة مرة أخرى.",
   "error.request.too_early": "أُرسل هذا الطلب مبكرًا جدًا. يُرجى المحاولة مرة أخرى.",
   "error.request.too_large": "كان هذا الطلب أكبر من أن يُقبل.",
   "error.request.unauthenticated": "يُرجى تسجيل الدخول مرة أخرى.",

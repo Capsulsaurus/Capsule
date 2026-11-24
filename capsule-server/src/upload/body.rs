@@ -54,9 +54,9 @@ use http_body_util::BodyExt as _;
 use kynos::di::Provides;
 use kynos::extract::FromRequest;
 use kynos::extract::describe::Describe;
-use kynos::http::Request;
 use kynos::http::body::Body;
 use kynos::http::media::OctetStream;
+use kynos::http::{Parts, Request};
 use kynos::middleware::{Continued, Interceptor, Next};
 use kynos::prelude::*;
 use kynos::router::operation::OperationCx;
@@ -94,7 +94,7 @@ pub enum ChunkBodyRejection {
     UnsupportedMediaType {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The body could not be read to its end.
@@ -103,7 +103,7 @@ pub enum ChunkBodyRejection {
     Unreadable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The body stalled, or arrived below the minimum sustained rate, and was cut.
@@ -112,7 +112,7 @@ pub enum ChunkBodyRejection {
     TimedOut {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -253,9 +253,30 @@ pub enum PacedRead {
     Failed(Bytes),
 }
 
-/// The transport under a body failed part-way.
+/// Why a [`DataSource`] stopped yielding part-way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TransportFailed;
+pub enum ReadFailed {
+    /// The transport under the body failed.
+    Transport,
+    /// The server's own request-body idle timer fired first: no frame arrived within it
+    /// ([`kynos::http::body::BodyStalled`]). The body stopped arriving, which is a stall, and
+    /// [`read_paced`] cuts it as one.
+    Stalled,
+}
+
+impl ReadFailed {
+    /// What a request body's read `error` means: a stall when Kynos's idle timer produced it,
+    /// however deep a reader wrapped it, and a transport failure otherwise.
+    fn of(error: &(dyn std::error::Error + 'static)) -> Self {
+        let stalled = std::iter::successors(Some(error), |&error| error.source())
+            .any(<dyn std::error::Error + 'static>::is::<kynos::http::body::BodyStalled>);
+        if stalled {
+            Self::Stalled
+        } else {
+            Self::Transport
+        }
+    }
+}
 
 /// Where a paced read takes its bytes from: a request [`Body`], or a test's scripted source.
 ///
@@ -266,17 +287,18 @@ pub trait DataSource {
     ///
     /// # Errors
     ///
-    /// [`TransportFailed`] when the transport failed part-way.
+    /// [`ReadFailed`] when the body stopped part-way: its transport failed, or the server's
+    /// request-body idle timer fired.
     fn next_data(
         &mut self,
-    ) -> impl std::future::Future<Output = Option<Result<Bytes, TransportFailed>>> + Send;
+    ) -> impl std::future::Future<Output = Option<Result<Bytes, ReadFailed>>> + Send;
 }
 
 impl DataSource for Body {
-    async fn next_data(&mut self) -> Option<Result<Bytes, TransportFailed>> {
+    async fn next_data(&mut self) -> Option<Result<Bytes, ReadFailed>> {
         loop {
             match self.frame().await? {
-                Err(_) => return Some(Err(TransportFailed)),
+                Err(error) => return Some(Err(ReadFailed::of(&*error))),
                 Ok(frame) => {
                     if let Ok(data) = frame.into_data() {
                         return Some(Ok(data));
@@ -315,7 +337,15 @@ pub async fn read_paced<B: DataSource>(mut body: B, pace: ChunkPace, limit: u64)
         };
         let data = match next {
             None => return PacedRead::Whole(collected.freeze()),
-            Some(Err(TransportFailed)) => return PacedRead::Failed(collected.freeze()),
+            Some(Err(ReadFailed::Transport)) => return PacedRead::Failed(collected.freeze()),
+            // The server's idle timer cut the body before this pace's own stall bound did: the
+            // same stall, so the same `408`, rather than a transport failure's `400`.
+            Some(Err(ReadFailed::Stalled)) => {
+                return PacedRead::Cut {
+                    cut: Cut::Stalled,
+                    received: meter.received(),
+                };
+            }
             Some(Ok(data)) => data,
         };
         meter.on_bytes(
@@ -335,13 +365,16 @@ where
 {
     type Rejection = ChunkBodyRejection;
 
-    async fn from_request(request: Request, context: &C) -> Result<Self, Self::Rejection> {
+    async fn from_request(
+        parts: &mut Parts,
+        body: Body,
+        context: &C,
+    ) -> Result<Self, Self::Rejection> {
         let pace = context.provide().policy().chunk_pace();
-        let path = request.uri().path().to_owned();
+        let path = parts.uri.path().to_owned();
         let started = Instant::now();
         // A length-less body the interceptor that read it already cut.
-        let expired = request.extensions().get::<ChunkReadExpired>().copied();
-        let (parts, body) = request.into_parts();
+        let expired = parts.extensions.get::<ChunkReadExpired>().copied();
         let read = match expired {
             Some(ChunkReadExpired { cut, received }) => PacedRead::Cut { cut, received },
             None => read_paced(body, pace, crate::limits::MAX_REQUEST_BODY_BYTES).await,
@@ -360,7 +393,7 @@ where
                     "a chunk was refused: its body stopped arriving"
                 );
                 return Err(ChunkBodyRejection::TimedOut {
-                    code: error_codes::UPLOAD_CHUNK_TIMEOUT,
+                    code: error_codes::UPLOAD_CHUNK_TIMEOUT.into(),
                 });
             }
             PacedRead::Failed(arrived) => {
@@ -371,13 +404,13 @@ where
                     "a chunk body did not arrive whole: the transport failed part-way"
                 );
                 return Err(ChunkBodyRejection::Unreadable {
-                    code: error_codes::UPLOAD_MALFORMED_REQUEST,
+                    code: error_codes::UPLOAD_MALFORMED_REQUEST.into(),
                 });
             }
         };
         // The bytes are whole; the media type and the description stay `OpaqueBody`'s.
-        let request = Request::from_parts(parts, Body::from_bytes(bytes));
-        let body = OpaqueBody::<OctetStream>::from_request(request, context).await?;
+        let body = OpaqueBody::<OctetStream>::from_request(parts, Body::from_bytes(bytes), context)
+            .await?;
         tracing::trace!(
             %path,
             bytes = body.bytes().len(),

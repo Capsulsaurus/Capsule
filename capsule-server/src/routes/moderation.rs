@@ -78,7 +78,7 @@ pub enum ModerationRecordRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -133,7 +133,7 @@ impl ModerationRecordRejection {
     /// The store could not answer.
     fn unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::MODERATION_UNAVAILABLE,
+            code: error_codes::MODERATION_UNAVAILABLE.into(),
         }
     }
 }

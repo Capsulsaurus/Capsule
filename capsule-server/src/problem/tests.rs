@@ -8,7 +8,7 @@ use super::*;
 #[test]
 fn every_status_the_surface_renders_has_its_own_code() {
     for status in [
-        400_u16, 401, 403, 404, 405, 406, 413, 415, 416, 422, 425, 501,
+        400_u16, 401, 403, 404, 405, 406, 408, 413, 415, 416, 422, 425, 501,
     ] {
         assert_ne!(
             code_for(status),

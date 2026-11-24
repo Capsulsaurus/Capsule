@@ -162,7 +162,7 @@ pub enum VerifyRejection {
         detail: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A signed verdict was asked for and the account's budget is spent.
@@ -175,7 +175,7 @@ pub enum VerifyRejection {
     RateLimited {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
         /// When the caller may retry, as Unix seconds.
         #[problem(extension)]
         retry_after: u64,
@@ -191,7 +191,7 @@ pub enum VerifyRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -200,14 +200,14 @@ impl VerifyRejection {
     fn invalid(detail: impl Into<String>) -> Self {
         Self::Invalid {
             detail: detail.into(),
-            code: error_codes::STORAGE_INVALID_REQUEST,
+            code: error_codes::STORAGE_INVALID_REQUEST.into(),
         }
     }
 
     /// A collaborator could not answer.
     fn unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::STORAGE_UNAVAILABLE,
+            code: error_codes::STORAGE_UNAVAILABLE.into(),
         }
     }
 }
@@ -279,7 +279,7 @@ pub async fn verify_storage(
         // unsigned answer would hold nothing it could later show anyone, and would not know it.
         tracing::info!(%owner, %retry_after, "a signed verify was throttled");
         return Err(VerifyRejection::RateLimited {
-            code: error_codes::STORAGE_DEEP_RATE_LIMITED,
+            code: error_codes::STORAGE_DEEP_RATE_LIMITED.into(),
             retry_after: unix_seconds(retry_after),
         });
     }

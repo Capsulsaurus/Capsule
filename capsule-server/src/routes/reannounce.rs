@@ -103,7 +103,7 @@ pub enum ReannounceRejection {
         detail: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A collaborator could not answer, so nothing more was decided.
@@ -112,7 +112,7 @@ pub enum ReannounceRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -120,7 +120,7 @@ impl ReannounceRejection {
     fn invalid(detail: impl Into<String>) -> Self {
         Self::Invalid {
             detail: detail.into(),
-            code: error_codes::SYNC_REANNOUNCE_INVALID,
+            code: error_codes::SYNC_REANNOUNCE_INVALID.into(),
         }
     }
 }
@@ -160,7 +160,7 @@ pub async fn reannounce_manifests(
             .map_err(|error| {
                 tracing::error!(%error, %caller, "a re-announce could not be decided");
                 ReannounceRejection::Unavailable {
-                    code: error_codes::SYNC_UNAVAILABLE,
+                    code: error_codes::SYNC_UNAVAILABLE.into(),
                 }
             })?;
         results.push(render(answer));

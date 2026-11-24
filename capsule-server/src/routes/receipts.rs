@@ -57,7 +57,7 @@ pub enum ReceiptRejection {
     SessionNotFound {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The session exists and has not produced a receipt yet.
@@ -66,7 +66,7 @@ pub enum ReceiptRejection {
     NotAvailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A collaborator could not answer.
@@ -75,7 +75,7 @@ pub enum ReceiptRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -99,7 +99,7 @@ pub async fn get_upload_receipt(
         .map_err(|error| {
             tracing::error!(%error, upload_id = %id, "the session store could not answer");
             ReceiptRejection::Unavailable {
-                code: error_codes::UPLOAD_UNAVAILABLE,
+                code: error_codes::UPLOAD_UNAVAILABLE.into(),
             }
         })?
         .ok_or_else(ReceiptRejection::session_not_found)?;
@@ -118,11 +118,11 @@ pub async fn get_upload_receipt(
         .map_err(|error| {
             tracing::error!(%error, upload_id = %id, "the receipt log could not answer");
             ReceiptRejection::Unavailable {
-                code: error_codes::UPLOAD_UNAVAILABLE,
+                code: error_codes::UPLOAD_UNAVAILABLE.into(),
             }
         })?
         .ok_or(ReceiptRejection::NotAvailable {
-            code: error_codes::UPLOAD_RECEIPT_NOT_AVAILABLE,
+            code: error_codes::UPLOAD_RECEIPT_NOT_AVAILABLE.into(),
         })?;
 
     // Verbatim: the signature covers these exact bytes.
@@ -133,7 +133,7 @@ impl ReceiptRejection {
     /// No such session, or not this caller's.
     fn session_not_found() -> Self {
         Self::SessionNotFound {
-            code: error_codes::UPLOAD_SESSION_NOT_FOUND,
+            code: error_codes::UPLOAD_SESSION_NOT_FOUND.into(),
         }
     }
 }

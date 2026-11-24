@@ -10319,6 +10319,11 @@
     "origin": "machine",
     "source": "594d0bec965c42ab"
   },
+  "error.request.timeout": {
+    "message": "استغرق وصول هذا الطلب وقتًا طويلاً جدًا. يُرجى المحاولة مرة أخرى.",
+    "origin": "machine",
+    "source": "e71726a2a0e9960e"
+  },
   "error.request.too_early": {
     "message": "أُرسل هذا الطلب مبكرًا جدًا. يُرجى المحاولة مرة أخرى.",
     "origin": "machine",

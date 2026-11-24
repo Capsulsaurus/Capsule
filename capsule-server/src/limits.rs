@@ -175,5 +175,19 @@ pub fn http1(header_read_timeout: Duration) -> Http1Config {
         .header_read_timeout(Some(header_read_timeout))
 }
 
+/// How long the server lets any request body go without a frame: the header-read bound, or the
+/// chunk stall bound where that is longer.
+///
+/// Kynos 0.6 holds every request body to an idle timer of its own (30 s unless set), and a body
+/// it cuts fails its read before the chunk extractor's pace can. Set below the chunk stall bound,
+/// it would cut a chunk the deployment configured to be waited on, so the chunk's bound is
+/// honoured as configured. Every other body keeps the head's budget, as Kynos's default does; a
+/// stall the timer still reports first is cut by [`crate::upload::body::read_paced`] as the
+/// same stall, with the same `408`.
+#[must_use]
+pub fn request_body_idle_timeout(header_read_timeout: Duration, chunk_stall: Duration) -> Duration {
+    header_read_timeout.max(chunk_stall)
+}
+
 #[cfg(test)]
 mod tests;
