@@ -1233,8 +1233,9 @@ pub fn http_builder() -> reqwest::ClientBuilder {
 /// `ring` alone, as the HTTP/3 leg and LAN peering already do, instead of the aws-lc-rs that
 /// reqwest's `rustls` feature would add to every client binary. reqwest then takes the
 /// process default, and panics building a client without one. Idempotent and cheap, so every
-/// path that builds a reqwest client calls it first: [`http_builder`], and the crate's one
-/// generated-client constructor, for the client spargen builds internally.
+/// path that builds a reqwest client calls it first, which in this crate is [`http_builder`]:
+/// spargen's `with_backend` builds no client of its own (spargen 0.8), so the generated client
+/// needs no provider beyond the one its backend's client was built with.
 pub fn ensure_crypto_provider() {
     if rustls::crypto::CryptoProvider::get_default().is_none() {
         // A concurrent first caller may win the race; whichever provider it installed is ring
@@ -1245,9 +1246,8 @@ pub fn ensure_crypto_provider() {
 
 /// A generated client over `backend` for `base_url`: the one way this crate constructs one.
 ///
-/// spargen's `with_backend` builds a default `reqwest::Client` of its own to *assemble*
-/// requests (every byte is executed through `backend`), so the crypto provider must be in
-/// place before it is called; this is where that is guaranteed.
+/// Every byte the client sends is executed through `backend`; `with_backend` builds no
+/// `reqwest::Client` of its own (spargen 0.8), so nothing here needs a crypto provider.
 ///
 /// The error is the generated client's description of why it could not be built — a `base_url`
 /// it cannot parse, in practice.
@@ -1255,7 +1255,6 @@ pub(crate) fn generated_client(
     backend: Arc<dyn crate::rest::HttpBackend>,
     base_url: &str,
 ) -> Result<crate::rest::Client, String> {
-    ensure_crypto_provider();
     crate::rest::Client::with_backend(backend, base_url).map_err(|error| error.to_string())
 }
 
