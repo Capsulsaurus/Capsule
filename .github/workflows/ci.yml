@@ -370,7 +370,7 @@ jobs:
   # ever run in CI, and a broken adapter reported green. The task admits the tier and fails on
   # any skip line, so a runner that lost its container runtime
   # fails here instead of passing vacuously. Each case starts its own container through
-  # testcontainers on the runner's Docker socket; no `services:` block, because a shared
+  # `capsule-test-postgres`, which drives the runner's `docker` CLI; no `services:` block, because a shared
   # service would break the one-container-per-case isolation the suites rely on.
   rust-containers:
     name: Rust (container tiers)

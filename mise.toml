@@ -239,8 +239,9 @@ run = [
 # both by being named like the others.
 #
 # The task admits the tier itself, so it means the same thing locally and in CI: each case
-# starts its own container through testcontainers (Docker's socket on CI; locally, `DOCKER_HOST`
-# at the podman socket and `CAPSULE_TEST_CONTAINER_USERNS=keep-id` for rootless podman).
+# starts its own container through `capsule-test-postgres`, which drives the container CLI
+# (`docker` on CI; locally, `CAPSULE_TEST_CONTAINER_CLI=podman` and
+# `CAPSULE_TEST_CONTAINER_USERNS=keep-id` for rootless podman).
 #
 # A gated case that cannot reach its tier prints a `skipping <case>:` / `skipped:` line and
 # passes, which is exactly how these suites reported green in CI while never running. So the
