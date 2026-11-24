@@ -31,7 +31,8 @@ public struct AssetExifMetadata: Sendable, Equatable {
     public var shutterSpeed: Double?
     public var focalLength: Double?
 
-    /// File
+    // MARK: File
+
     /// The name the file had when it was captured or imported.
     public var originalFilename: String?
     /// Size on disk, in bytes.
