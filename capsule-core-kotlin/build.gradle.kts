@@ -7,7 +7,10 @@ plugins {
 
 android {
     namespace = "com.justin13888.capsule.core"
-    compileSdk = 37
+    // API 37.1, matching :android, so the whole build needs one SDK platform.
+    compileSdk {
+        version = release(37) { minorApiLevel = 1 }
+    }
 
     defaultConfig {
         minSdk = 26
