@@ -253,9 +253,30 @@ pub enum PacedRead {
     Failed(Bytes),
 }
 
-/// The transport under a body failed part-way.
+/// Why a [`DataSource`] stopped yielding part-way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TransportFailed;
+pub enum ReadFailed {
+    /// The transport under the body failed.
+    Transport,
+    /// The server's own request-body idle timer fired first: no frame arrived within it
+    /// ([`kynos::http::body::BodyStalled`]). The body stopped arriving, which is a stall, and
+    /// [`read_paced`] cuts it as one.
+    Stalled,
+}
+
+impl ReadFailed {
+    /// What a request body's read `error` means: a stall when Kynos's idle timer produced it,
+    /// however deep a reader wrapped it, and a transport failure otherwise.
+    fn of(error: &(dyn std::error::Error + 'static)) -> Self {
+        let stalled = std::iter::successors(Some(error), |&error| error.source())
+            .any(|error| error.is::<kynos::http::body::BodyStalled>());
+        if stalled {
+            Self::Stalled
+        } else {
+            Self::Transport
+        }
+    }
+}
 
 /// Where a paced read takes its bytes from: a request [`Body`], or a test's scripted source.
 ///
@@ -266,17 +287,18 @@ pub trait DataSource {
     ///
     /// # Errors
     ///
-    /// [`TransportFailed`] when the transport failed part-way.
+    /// [`ReadFailed`] when the body stopped part-way: its transport failed, or the server's
+    /// request-body idle timer fired.
     fn next_data(
         &mut self,
-    ) -> impl std::future::Future<Output = Option<Result<Bytes, TransportFailed>>> + Send;
+    ) -> impl std::future::Future<Output = Option<Result<Bytes, ReadFailed>>> + Send;
 }
 
 impl DataSource for Body {
-    async fn next_data(&mut self) -> Option<Result<Bytes, TransportFailed>> {
+    async fn next_data(&mut self) -> Option<Result<Bytes, ReadFailed>> {
         loop {
             match self.frame().await? {
-                Err(_) => return Some(Err(TransportFailed)),
+                Err(error) => return Some(Err(ReadFailed::of(&*error))),
                 Ok(frame) => {
                     if let Ok(data) = frame.into_data() {
                         return Some(Ok(data));
@@ -315,7 +337,15 @@ pub async fn read_paced<B: DataSource>(mut body: B, pace: ChunkPace, limit: u64)
         };
         let data = match next {
             None => return PacedRead::Whole(collected.freeze()),
-            Some(Err(TransportFailed)) => return PacedRead::Failed(collected.freeze()),
+            Some(Err(ReadFailed::Transport)) => return PacedRead::Failed(collected.freeze()),
+            // The server's idle timer cut the body before this pace's own stall bound did: the
+            // same stall, so the same `408`, rather than a transport failure's `400`.
+            Some(Err(ReadFailed::Stalled)) => {
+                return PacedRead::Cut {
+                    cut: Cut::Stalled,
+                    received: meter.received(),
+                };
+            }
             Some(Ok(data)) => data,
         };
         meter.on_bytes(

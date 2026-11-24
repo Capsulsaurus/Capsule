@@ -4186,6 +4186,50 @@ async fn a_chunk_body_that_stalls_is_refused_and_the_connection_closed() {
     assert_eq!(fixture.blobs.staged_len_for_test(&id).await, Some(0));
 }
 
+/// The server's own request-body idle timer, firing before the chunk pace's stall bound does,
+/// is the same stall: `408 error.upload.chunk_timeout`, which the SDK recovers from, never the
+/// `400 error.upload.malformed_request` a transport failure gets (#1344).
+///
+/// The body is the one Kynos wraps on a real socket, so the read fails with its `BodyStalled`.
+#[tokio::test]
+async fn a_chunk_body_the_server_idle_timer_cuts_is_refused_as_a_stall() {
+    let body_idle = Duration::from_millis(300);
+    let fixture = Fixture::working();
+    // A pace that would wait a minute: only the server's timer can cut inside the test.
+    fixture
+        .chunk_pace
+        .set(ChunkPace::new(Duration::from_secs(60), 0));
+    let bearer = fixture.bearer().await;
+    let (first, _, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    let address =
+        support::serve_on_socket_with_body_idle(fixture.app(), Duration::from_secs(30), body_idle)
+            .await;
+
+    let mut stream = TcpStream::connect(address).await.expect("it connects");
+    let started = Instant::now();
+    stream
+        .write_all(chunk_head(&id, 0, &first, &bearer).as_bytes())
+        .await
+        .expect("the head writes");
+    // A hundred bytes of the 4 KiB the head declares, and then nothing.
+    stream.write_all(&first[..100]).await.expect("it writes");
+
+    let answer = support::read_until_closed(&mut stream).await;
+    assert!(answer.starts_with("HTTP/1.1 408"), "{answer}");
+    assert!(answer.contains("error.upload.chunk_timeout"), "{answer}");
+    assert!(
+        started.elapsed() >= body_idle,
+        "refused before the idle bound passed"
+    );
+    let record = fixture
+        .uploads
+        .read_for_test(&id)
+        .await
+        .expect("the session survives");
+    assert_eq!(record.committed.prefix(), 0);
+}
+
 #[tokio::test]
 async fn a_chunk_body_that_trickles_below_the_minimum_rate_is_refused() {
     // A floor of 64 KiB/s owed after a 300 ms grace.

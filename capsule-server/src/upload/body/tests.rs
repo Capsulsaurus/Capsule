@@ -148,6 +148,8 @@ fn zero_bytes_are_not_progress() {
 enum Step {
     Data(Duration, &'static [u8]),
     Fail(Duration),
+    /// The server's request-body idle timer fires, after this long.
+    IdleTimeout(Duration),
     /// Never yields again.
     Hang,
 }
@@ -162,7 +164,7 @@ impl Script {
 }
 
 impl DataSource for Script {
-    async fn next_data(&mut self) -> Option<Result<Bytes, TransportFailed>> {
+    async fn next_data(&mut self) -> Option<Result<Bytes, ReadFailed>> {
         match self.0.pop_front()? {
             Step::Data(after, bytes) => {
                 tokio::time::sleep(after).await;
@@ -170,7 +172,11 @@ impl DataSource for Script {
             }
             Step::Fail(after) => {
                 tokio::time::sleep(after).await;
-                Some(Err(TransportFailed))
+                Some(Err(ReadFailed::Transport))
+            }
+            Step::IdleTimeout(after) => {
+                tokio::time::sleep(after).await;
+                Some(Err(ReadFailed::Stalled))
             }
             Step::Hang => std::future::pending().await,
         }
@@ -256,6 +262,31 @@ async fn a_transport_failure_hands_back_what_arrived() {
     ]);
     let read = read_paced(script, default_pace(), u64::MAX).await;
     assert_eq!(read, PacedRead::Failed(Bytes::from_static(b"cipher")));
+}
+
+/// The server's own idle timer can fire before the pace's stall bound does (#1344): that read
+/// failure is the same stall, cut as one and answered with the `408`, not a transport failure.
+#[tokio::test(start_paused = true)]
+async fn a_server_idle_timeout_is_cut_as_a_stall() {
+    let script = Script::new([
+        Step::Data(Duration::from_millis(10), b"cipher"),
+        Step::IdleTimeout(Duration::from_millis(10)),
+    ]);
+    let read = read_paced(script, default_pace(), u64::MAX).await;
+    assert_eq!(
+        read,
+        PacedRead::Cut {
+            cut: Cut::Stalled,
+            received: 6,
+        }
+    );
+}
+
+/// A read error Kynos's idle timer did not produce is the transport's.
+#[test]
+fn a_read_error_that_is_not_the_idle_timer_is_a_transport_failure() {
+    let error = std::io::Error::other("connection reset");
+    assert_eq!(ReadFailed::of(&error), ReadFailed::Transport);
 }
 
 #[tokio::test]

@@ -5661,10 +5661,21 @@ pub(crate) async fn serve_on_socket(
     app: App,
     header_read_timeout: std::time::Duration,
 ) -> std::net::SocketAddr {
+    // The same budget the head is given, as the server's own default.
+    serve_on_socket_with_body_idle(app, header_read_timeout, header_read_timeout).await
+}
+
+/// [`serve_on_socket`], with the server's request-body idle timer set to `body_idle_timeout`.
+pub(crate) async fn serve_on_socket_with_body_idle(
+    app: App,
+    header_read_timeout: std::time::Duration,
+    body_idle_timeout: std::time::Duration,
+) -> std::net::SocketAddr {
     let service = capsule_server::service(app).expect("the router builds");
     let bound = kynos::server::Server::new(service)
         .bind(("127.0.0.1", 0))
         .http1(capsule_server::limits::http1(header_read_timeout))
+        .request_body_idle_timeout(Some(body_idle_timeout))
         .prepare()
         .await
         .expect("an ephemeral port binds");
