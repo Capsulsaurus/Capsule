@@ -366,48 +366,6 @@ fn every_planned_workspace_dependency_states_its_reason() {
 }
 
 #[test]
-fn a_failed_cargo_tree_is_never_read_as_chrono_absent() {
-    // The fail-open this guard used to have. `cargo tree` exits non-zero for a *failure* as
-    // well as for "that crate is not in the lock", and treating every non-zero exit as the
-    // second one means the guard reports clean exactly when it knows least.
-    let failed = classify_chrono_tree(
-        false,
-        "",
-        "error: failed to parse manifest at `/x/Cargo.toml`\n",
-    );
-    assert!(
-        failed.is_err(),
-        "a broken invocation must not decide anything, got {failed:?}"
-    );
-
-    // The one non-zero exit that *is* an answer: chrono has left the lock file entirely.
-    assert_eq!(
-        classify_chrono_tree(
-            false,
-            "",
-            "error: package ID specification `chrono` did not match any packages",
-        ),
-        Ok(false)
-    );
-}
-
-#[test]
-fn a_successful_cargo_tree_is_read_from_its_output() {
-    assert_eq!(
-        classify_chrono_tree(true, "", "warning: nothing to print."),
-        Ok(false)
-    );
-    assert_eq!(
-        classify_chrono_tree(
-            true,
-            "chrono v0.4.45\n└── capsule-server-migration v0.1.0\n",
-            ""
-        ),
-        Ok(true)
-    );
-}
-
-#[test]
 fn no_workspace_pin_is_planned_without_a_consumer() {
     // A guard on scope rather than on content: this list is the one place an
     // unused pin can hide, so growing it should be a deliberate edit here.

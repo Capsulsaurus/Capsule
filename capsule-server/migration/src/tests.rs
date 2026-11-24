@@ -1,4 +1,16 @@
+use super::util::get_file_stem;
 use super::{checksum, checksums, sources};
+
+/// A migration's name is its file's stem, which is the version `seaql_migrations` records.
+#[test]
+fn a_migration_is_named_by_its_file_stem() {
+    assert_eq!(
+        get_file_stem("capsule-server/migration/src/m20260902_000001_asset_index.rs"),
+        "m20260902_000001_asset_index"
+    );
+    let (first, _) = &sources()[0];
+    assert_eq!(first.name(), "m20260902_000001_asset_index");
+}
 
 #[test]
 fn a_checksum_is_the_hex_sha256_of_the_source() {

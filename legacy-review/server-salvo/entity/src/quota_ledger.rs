@@ -20,7 +20,6 @@
 //!
 //! The SSoT for the accounting model is the [Quota design doc](../../../../capsule-docs/src/content/docs/design/quota.md).
 
-use chrono::{DateTime, Utc};
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -51,7 +50,7 @@ pub struct Model {
         column_type = "TimestampWithTimeZone",
         default_value = "CURRENT_TIMESTAMP"
     )]
-    pub created_at: DateTime<Utc>,
+    pub created_at: DateTimeUtc,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

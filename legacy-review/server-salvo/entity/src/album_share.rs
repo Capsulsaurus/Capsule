@@ -1,4 +1,3 @@
-use chrono::{DateTime, Utc};
 use nanoid::nanoid;
 use sea_orm::Set;
 use sea_orm::entity::prelude::*;
@@ -29,7 +28,7 @@ pub struct Model {
         column_type = "TimestampWithTimeZone",
         default_value = "CURRENT_TIMESTAMP"
     )]
-    pub created_at: DateTime<Utc>,
+    pub created_at: DateTimeUtc,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

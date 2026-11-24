@@ -1,4 +1,3 @@
-use chrono::{DateTime, FixedOffset, Utc};
 use nanoid::nanoid;
 use sea_orm::Set;
 use sea_orm::entity::prelude::*;
@@ -44,17 +43,17 @@ pub struct Model {
         default_value = "CURRENT_TIMESTAMP",
         indexed
     )]
-    pub uploaded_at: DateTime<Utc>,
+    pub uploaded_at: DateTimeUtc,
     #[sea_orm(
         column_type = "TimestampWithTimeZone",
         default_value = "CURRENT_TIMESTAMP",
         on_update = "CURRENT_TIMESTAMP",
         indexed
     )]
-    pub modified_at: DateTime<FixedOffset>,
+    pub modified_at: DateTimeWithTimeZone,
     /// Date when the album was deleted if not NULL
     #[sea_orm(column_type = "TimestampWithTimeZone", nullable, indexed)]
-    pub deleted_at: Option<DateTime<Utc>>,
+    pub deleted_at: Option<DateTimeUtc>,
     /// Whether asset has been uploaded
     pub uploaded: bool,
     /// User who uploaded the asset (for storage quota)

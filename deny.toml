@@ -125,12 +125,6 @@ ignore = [
     # the CLI's state database, both under paths it creates. Remove this entry in #1232, with
     # the rusqlite bump.
     { id = "RUSTSEC-2026-0459", reason = "libsqlite3-sys 0.30.1 via rusqlite 0.32; rusqlite 0.41+ cannot resolve beside sqlx-sqlite 0.9.0's optional libsqlite3-sys <0.38 (links conflict); tracked in #1232" },
-
-    # Unmaintained, no vulnerability, and every chrono version is affected, so no upgrade
-    # clears it. It is reached through sea-orm 2.0.4's default `with-chrono` feature, which also
-    # enables it in sea-query and sqlx, in capsule-server and its migrations. The remedy is
-    # leaving chrono for jiff, a workspace refactor of its own. Remove this entry in #1315.
-    { id = "RUSTSEC-2026-0543", reason = "chrono (unmaintained, all versions) via sea-orm 2.0.4's default with-chrono feature; replaced by jiff in #1315" },
 ]
 
 [bans]

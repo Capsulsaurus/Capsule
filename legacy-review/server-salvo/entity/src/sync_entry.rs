@@ -11,7 +11,6 @@
 //! monotone because minting happens under the per-album counter row lock inside the
 //! finalization transaction (SSoT: the download-sync design doc).
 
-use chrono::{DateTime, Utc};
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -44,7 +43,7 @@ pub struct Model {
     pub original_held: bool,
     /// Row creation instant.
     #[sea_orm(column_type = "TimestampWithTimeZone")]
-    pub created_at: DateTime<Utc>,
+    pub created_at: DateTimeUtc,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

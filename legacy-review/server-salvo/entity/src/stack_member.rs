@@ -1,4 +1,3 @@
-use chrono::{DateTime, Utc};
 use nanoid::nanoid;
 use sea_orm::entity::prelude::*;
 use sea_orm::{QueryOrder, Set};
@@ -34,7 +33,7 @@ pub struct Model {
         column_type = "TimestampWithTimeZone",
         default_value = "CURRENT_TIMESTAMP"
     )]
-    pub created_at: DateTime<Utc>,
+    pub created_at: DateTimeUtc,
 }
 
 /// Role of an asset within a stack

@@ -20,7 +20,6 @@
 //! [Share Links design doc]: ../../../../capsule-docs/src/content/docs/design/share-links.md
 //! [`WrappedScope`]: capsule_core::sharing::WrappedScope
 
-use chrono::{DateTime, Utc};
 use sea_orm::entity::prelude::*;
 
 /// What a share link points at (the `{opaque-id}` itself carries no scope).
@@ -65,16 +64,16 @@ pub struct Model {
     pub served_metadata: Json,
     /// Optional RFC 3339 expiry; `NULL` = no expiry (revocation still applies).
     #[sea_orm(column_type = "TimestampWithTimeZone", nullable)]
-    pub expires_at: Option<DateTime<Utc>>,
+    pub expires_at: Option<DateTimeUtc>,
     /// Fail-closed revocation instant; `NULL` = live.
     #[sea_orm(column_type = "TimestampWithTimeZone", nullable)]
-    pub revoked_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTimeUtc>,
     /// Row creation instant.
     #[sea_orm(
         column_type = "TimestampWithTimeZone",
         default_value = "CURRENT_TIMESTAMP"
     )]
-    pub created_at: DateTime<Utc>,
+    pub created_at: DateTimeUtc,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

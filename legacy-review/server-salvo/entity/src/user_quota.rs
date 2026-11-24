@@ -16,7 +16,6 @@
 //!
 //! [`QuotaState::Suspended`]: /design/quota/#thresholds-and-states
 
-use chrono::{DateTime, Utc};
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -28,7 +27,7 @@ pub struct Model {
     /// When the user first crossed the hard limit and has since stayed at/above it; `NULL`
     /// when not currently hard-exceeded. The grace window is measured from this instant.
     #[sea_orm(column_type = "TimestampWithTimeZone", nullable)]
-    pub hard_exceeded_since: Option<DateTime<Utc>>,
+    pub hard_exceeded_since: Option<DateTimeUtc>,
     /// Admin/billing suspension flag (moderation-owned enforcement; quota only reports it).
     #[sea_orm(default_value = "false")]
     pub suspended: bool,
@@ -37,7 +36,7 @@ pub struct Model {
         column_type = "TimestampWithTimeZone",
         default_value = "CURRENT_TIMESTAMP"
     )]
-    pub updated_at: DateTime<Utc>,
+    pub updated_at: DateTimeUtc,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

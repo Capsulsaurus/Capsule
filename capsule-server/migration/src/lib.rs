@@ -46,12 +46,11 @@
 //!
 //! # Every instant is a `BIGINT` of microseconds since the Unix epoch
 //!
-//! Not `TIMESTAMPTZ`. Binding one needs sea-orm's `with-chrono` or `with-time`, and both are
-//! refused: `chrono` is banned by a gate (`cargo xtask architecture-check`), and `time` would be
-//! a second datetime crate beside `jiff`. `capsule_server::postgres::time` converts at the adapter
-//! boundary. What that costs is SQL date arithmetic; every expiry
-//! and retention comparison in these tables is an ordering on one column, and integers order
-//! identically.
+//! Not `TIMESTAMPTZ`. Binding one needs one of sea-orm's datetime features, each of which brings
+//! a second datetime crate beside `jiff`; one of those crates is unmaintained in every version
+//! (RUSTSEC-2026-0543), which `deny.toml` refuses. `capsule_server::postgres::time` converts at
+//! the adapter boundary. What that costs is SQL date arithmetic; every expiry and retention
+//! comparison in these tables is an ordering on one column, and integers order identically.
 
 //!
 //! # Every applied migration records a checksum of its source (#524)
@@ -60,8 +59,8 @@
 //! after it was applied is indistinguishable from the one that ran. [`CHECKSUM_LEDGER`] is the
 //! companion ledger that closes that: one row per applied migration, holding the SHA-256 of the
 //! migration's source file ([`checksum`]). Every migration [`Migrator`] lists is wrapped so that
-//! applying it writes its row and rolling it back deletes it, inside the transaction
-//! `sea-orm-migration` opens around the whole run — the two ledgers cannot disagree about which
+//! applying it writes its row and rolling it back deletes it, inside the transaction the
+//! [`migrator`] opens around that migration — the two ledgers cannot disagree about which
 //! migrations are applied.
 //!
 //! `capsule_server::postgres::assert_schema_current` reads the ledger and refuses to boot when a
@@ -79,9 +78,50 @@
 //! `UPDATE capsule_migration_checksums SET checksum = '<the checksum EXPECTED_MIGRATIONS
 //! lists>' WHERE version = 'm20260902_000017_migration_checksums'`.
 
-pub use sea_orm_migration::prelude::*;
-use sea_orm_migration::sea_orm::Statement;
+//!
+//! # The runner is this crate's own
+//!
+//! [`migrator`] applies and rolls back migrations; it replaced `sea-orm-migration` (its docs say
+//! why) and keeps that crate's ledger. The migration files still open with
+//! `use sea_orm_migration::prelude::*`, because editing an applied migration changes its
+//! checksum: the crate names itself `sea_orm_migration` below, so that path is [`prelude`], and
+//! the `DeriveMigrationName` derive finds [`MigrationName`] and [`util`] where it expects them.
+
+extern crate self as sea_orm_migration;
+
+pub mod cli;
+pub mod migrator;
+
+pub use migrator::MigrationStatus;
+pub use prelude::*;
+pub use sea_orm;
+use sea_orm::Statement;
 use sha2::{Digest as _, Sha256};
+
+/// What every migration file glob-imports, under the paths `sea-orm-migration`'s prelude used.
+pub mod prelude {
+    pub use async_trait;
+    pub use sea_orm::sea_query::{self, *};
+    pub use sea_orm::{self, ConnectionTrait, DbErr, DeriveIden, DeriveMigrationName};
+
+    pub use crate::migrator::{MigrationName, MigrationTrait, MigratorTrait, SchemaManager};
+}
+
+/// The path `DeriveMigrationName` expands to.
+pub mod util {
+    /// A migration's name: the stem of the file `file!()` names.
+    ///
+    /// # Panics
+    ///
+    /// A path with no UTF-8 file stem, which `file!()` of a `.rs` source never is.
+    #[must_use]
+    pub fn get_file_stem(path: &str) -> &str {
+        std::path::Path::new(path)
+            .file_stem()
+            .and_then(std::ffi::OsStr::to_str)
+            .expect("a migration's source file has a UTF-8 stem")
+    }
+}
 
 /// The companion ledger: `version` (the migration's name) and `checksum` (its [`checksum`]).
 pub const CHECKSUM_LEDGER: &str = "capsule_migration_checksums";

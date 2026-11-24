@@ -9,7 +9,6 @@
 //! `user_id` is the account id (a nanoid, matching `users.id`) the publisher authenticated
 //! as, not the crypto `DirectoryCore.user_id`.
 
-use chrono::{DateTime, Utc};
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -25,7 +24,7 @@ pub struct Model {
     pub document: Vec<u8>,
     /// Instant the current directory was published.
     #[sea_orm(column_type = "TimestampWithTimeZone")]
-    pub updated_at: DateTime<Utc>,
+    pub updated_at: DateTimeUtc,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

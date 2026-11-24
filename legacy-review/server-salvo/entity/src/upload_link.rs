@@ -9,7 +9,6 @@
 //!
 //! [Web Upload design doc]: ../../../../capsule-docs/src/content/docs/design/web-upload.md
 
-use chrono::{DateTime, Utc};
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -33,7 +32,7 @@ pub struct Model {
     pub crypto_suite_id: i32,
     /// Cap: RFC 3339 expiry; `NULL` = no expiry (revocation still applies).
     #[sea_orm(column_type = "TimestampWithTimeZone", nullable)]
-    pub expires_at: Option<DateTime<Utc>>,
+    pub expires_at: Option<DateTimeUtc>,
     /// Cap: cumulative byte cap across all drops on this link.
     #[sea_orm(nullable)]
     pub max_total_bytes: Option<i64>,
@@ -51,7 +50,7 @@ pub struct Model {
     pub passphrase_verifier: Option<Json>,
     /// Fail-closed revocation instant; `NULL` = live.
     #[sea_orm(column_type = "TimestampWithTimeZone", nullable)]
-    pub revoked_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTimeUtc>,
     /// Running cumulative bytes deposited (against `max_total_bytes`).
     pub bytes_used: i64,
     /// Running cumulative file count (against `max_file_count`).
@@ -61,7 +60,7 @@ pub struct Model {
         column_type = "TimestampWithTimeZone",
         default_value = "CURRENT_TIMESTAMP"
     )]
-    pub created_at: DateTime<Utc>,
+    pub created_at: DateTimeUtc,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

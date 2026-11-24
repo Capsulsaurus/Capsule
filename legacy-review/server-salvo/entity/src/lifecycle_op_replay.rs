@@ -7,7 +7,6 @@
 //! mints the `sync_seq`, so the op is applied at most once (the lifecycle analogue of the
 //! upload chunk-replay tuple).
 
-use chrono::{DateTime, Utc};
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -29,7 +28,7 @@ pub struct Model {
     pub response_body: Vec<u8>,
     /// Row creation instant.
     #[sea_orm(column_type = "TimestampWithTimeZone")]
-    pub created_at: DateTime<Utc>,
+    pub created_at: DateTimeUtc,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

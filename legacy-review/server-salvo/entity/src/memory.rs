@@ -1,4 +1,3 @@
-use chrono::{DateTime, Utc};
 use nanoid::nanoid;
 use sea_orm::Set;
 use sea_orm::entity::prelude::*;
@@ -25,7 +24,7 @@ pub struct Model {
     pub asset_ids: String,
     /// The historical date this memory references
     #[sea_orm(column_type = "TimestampWithTimeZone", indexed)]
-    pub memory_date: DateTime<Utc>,
+    pub memory_date: DateTimeUtc,
     /// Whether the user has seen this memory
     #[sea_orm(default_value = "false")]
     pub is_seen: bool,
@@ -36,7 +35,7 @@ pub struct Model {
         column_type = "TimestampWithTimeZone",
         default_value = "CURRENT_TIMESTAMP"
     )]
-    pub created_at: DateTime<Utc>,
+    pub created_at: DateTimeUtc,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

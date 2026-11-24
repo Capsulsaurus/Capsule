@@ -1,4 +1,3 @@
-use chrono::{DateTime, Utc};
 use nanoid::nanoid;
 use sea_orm::Set;
 use sea_orm::entity::prelude::*;
@@ -31,11 +30,11 @@ pub struct Model {
         column_type = "TimestampWithTimeZone",
         default_value = "CURRENT_TIMESTAMP"
     )]
-    pub created_at: DateTime<Utc>,
+    pub created_at: DateTimeUtc,
 
     /// The last time this key was successfully used to log in.
     #[sea_orm(column_type = "TimestampWithTimeZone", nullable)]
-    pub last_used_at: Option<DateTime<Utc>>,
+    pub last_used_at: Option<DateTimeUtc>,
 
     /// Authenticator Attestation GUID; identifies the hardware/software type.
     #[sea_orm(column_type = "Uuid", nullable)]

@@ -8,7 +8,7 @@ use super::CohortError;
 ///
 /// Timestamps are Unix seconds (matching the session listing's other time fields), converted
 /// from the stored `timestamptz` at this boundary so the transport layer never sees a
-/// `chrono` type.
+/// database column type.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CohortObservation {
     /// The advisory cohort hash (opaque; the client groups its sessions by this).

@@ -459,9 +459,9 @@ fn warn_in_memory() {
 
 /// Open the durable pool and refuse a schema this binary was not built for.
 ///
-/// The check is **not** a migration. `capsule-server` cannot link the migrator — see
-/// `capsule-server/migration`'s manifest for the `chrono` gate that forces it — and a server that
-/// migrated on start would run the migration once per replica during a rolling deploy anyway.
+/// The check is **not** a migration. `capsule-server` does not link the migrator (it is a
+/// dev-dependency only), because a server that migrated on start would run the migration once
+/// per replica during a rolling deploy.
 /// What it does instead is read `seaql_migrations` and refuse, naming the command an operator has
 /// to run.
 ///

@@ -98,7 +98,7 @@ indexmap = { version = "2.14.2", features = ["serde"] }
 jiff = { version = "1.0", features = ["serde"] }
 # EdDSA access tokens, and the OIDC relying party's signature check. Discovery, the JWKS cache
 # and the token exchange are hand-written, so every claim check is Capsule's. Not
-# `openidconnect`, which pulls `chrono`, `log` and a vulnerable `rsa`.
+# `openidconnect`, which pulls a second datetime crate, `log` and a vulnerable `rsa`.
 jsonwebtoken = { version = "12.0.0", features = ["aws_lc_rs"] }
 nanoid = "0.5.0"
 # The HTTP client. `capsule-sdk` is the sanctioned client network path and `capsule-server`'s
@@ -133,10 +133,22 @@ ring = "0.17.14"
 # `libsqlite3-sys` is `links = "sqlite3"`: two rusqlite versions in one build cannot link, which
 # is why the CLI left sea-orm's `sqlx-sqlite` (a second SQLite driver) for this crate.
 rusqlite = { version = "0.32", features = ["bundled"] }
-# The server's Postgres schema migrator (`capsule-server-migration`). sea-orm itself has no
-# workspace pin: `capsule-server` is its one direct consumer and declares it with its defaults
-# off (see that manifest); keep the two versions in step. The CLI's SQLite is on `rusqlite` above.
-sea-orm-migration = { version = "2.0.4", features = [
+# The server's Postgres stack: `capsule-server`'s adapters and its schema migrator
+# (`capsule-server-migration`). The CLI's SQLite is on `rusqlite` above.
+#
+# `default-features = false` is load-bearing and lives here because a member cannot turn an
+# inherited dependency's defaults off: sea-orm's defaults include a datetime binding whose crate
+# is unmaintained in every version (RUSTSEC-2026-0543, which `deny.toml` refuses), and `jiff` is
+# the workspace's one datetime crate. That is also why the migrator is Capsule's own
+# (`server_migration::migrator`) rather than `sea-orm-migration`, whose sea-orm dependency keeps
+# the defaults on. Without a datetime feature there is no Rust binding for `TIMESTAMPTZ`, which
+# is why every instant in the server's schema is a `BIGINT` of epoch microseconds.
+#
+# Three features and no more: `macros` for the `FromQueryResult`, `DeriveIden` and
+# `DeriveMigrationName` derives, `sqlx-postgres` for the driver, `runtime-tokio-rustls` because
+# the workspace's TLS rule is rustls only.
+sea-orm = { version = "2.0.4", default-features = false, features = [
+    "macros",
     "sqlx-postgres",
     "runtime-tokio-rustls",
 ] }

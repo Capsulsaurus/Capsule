@@ -6,7 +6,6 @@
 //! reach the admin queue. A peer with no row here is unknown — its report is unverifiable and
 //! is dropped (invariant 24). SSoT: the [Moderation design doc](https://docs/design/moderation/).
 
-use chrono::{DateTime, Utc};
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -23,7 +22,7 @@ pub struct Model {
         column_type = "TimestampWithTimeZone",
         default_value = "CURRENT_TIMESTAMP"
     )]
-    pub created_at: DateTime<Utc>,
+    pub created_at: DateTimeUtc,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

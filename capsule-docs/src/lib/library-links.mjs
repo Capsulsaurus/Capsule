@@ -171,11 +171,6 @@ export const LIBRARIES = [
         code: ['jiff'],
     },
     {
-        url: 'https://github.com/chronotope/chrono',
-        names: [],
-        code: ['chrono'],
-    },
-    {
         url: 'https://github.com/dtolnay/thiserror',
         names: [],
         code: ['thiserror'],
