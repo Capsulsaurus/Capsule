@@ -4,7 +4,7 @@ description: Day-to-day use of a Capsule library with the capsule CLI — import
 audit: none
 ---
 
-This guide covers the `capsule` CLI, the reference client. Commands marked *(planned)* are on
+This guide covers the `capsule` CLI, the reference client. Commands marked _(planned)_ are on
 the [roadmap](https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md) and not yet
 available. `capsule <command> --help` is authoritative for flags; the
 CLI reference ([](/reference/cli/)) lists them all.
@@ -40,7 +40,7 @@ you import.
   verified. Do not delete source files before then. `import --move --push` deletes each source only
   after its asset is verified. Without `--push`, `--move` keeps every source and says so, and a
   later `import --move --push` over the same files releases them.
-- `capsule restore` *(planned)* downloads originals and checks them byte for byte against what
+- `capsule restore` _(planned)_ downloads originals and checks them byte for byte against what
   was signed at import.
 
 ## Organize
@@ -48,11 +48,11 @@ you import.
 - **Labels** are free-form and attach to an asset, a stack (RAW+JPEG pair, burst, bracket), an
   album or a region of an image. Labels you add are kept separate from AI-suggested ones, and you
   can promote or dismiss a suggestion. Asset labels exist today; stack, album and region labels
-  are *(planned)*.
+  are _(planned)_.
 - `capsule show <asset>` prints what an asset's signed metadata records: caption, rating,
   labels, location, capture time.
 - `capsule repair capture-time` finds assets whose capture time disagrees with the original's
-  EXIF and, with `--apply`, corrects them. Location editing is *(planned)*.
+  EXIF and, with `--apply`, corrects them. Location editing is _(planned)_.
 
 Every edit is a signed, append-only change: the earlier value stays in the asset's provenance
 history, and concurrent edits from two devices merge deterministically.

@@ -230,7 +230,7 @@ No plaintext capture date, dimensions, EXIF, tags or filename ever reaches the s
 
 ## Ownership, Partitioning, and Quota
 
-`owner_id` is the billing and namespace entity, mirrored as an MLS group ([](/design/cryptography/keys/#owner-group-keys-ogks)). Quota is charged to `upload_user_id` ([](/design/quota/)). The blob store is global; every *reference* is owner-scoped, and dedup is owner-scoped.
+`owner_id` is the billing and namespace entity, mirrored as an MLS group ([](/design/cryptography/keys/#owner-group-keys-ogks)). Quota is charged to `upload_user_id` ([](/design/quota/)). The blob store is global; every _reference_ is owner-scoped, and dedup is owner-scoped.
 
 The owner record carries a non-secret `default_album_id` (plus optional scope overrides) naming the default album ([](/design/organization/#the-default-album)). It is discovery only: writes are still gated on album write capability (invariant 6 of [](/design/threat-model/validation/#server-side-validation-invariants)).
 
@@ -257,16 +257,16 @@ The server attests, key-free, whether a blob is stored (`stat` in `blobs/`, and 
 
 Every table and directory that grows with traffic MUST have a stated bound, and that bound lives in the doc that owns the data. Expiring state needs no entry: each such table carries `expires_at` and is swept ([](#required-services)). The append-only stores, at the target scale of 100k+ assets per account and 100k+ accounts:
 
-| Store | Grows with | Bound and retention | Hot query, and its index |
-| --- | --- | --- | --- |
-| Blobs (`blobs/`) | Finalized blobs | Referenced blobs; the rest are collected ([](#deletion-and-garbage-collection)) | Lookup by address (a `stat`) |
-| Owner ledger (`ledger/`) | One custody and one indexed entry per finalization, one per lifecycle op | Never rewritten: grows with the owner's lifetime writes, partitioned by owner. An account's ledger goes with the account. | Tail append under the owner's lock |
-| `custody_receipts` (index) | One row per blob finalization | Rows of an asset's receipts go with its purge; the bytes stay in the ledger ([](/design/transfer/durability/#custody-receipts)) | An asset's receipts in order, `(owner, asset, position)` |
-| `applied_manifests` | One row per applied lifecycle write | 30 days. The row only answers a replay with the sequence number it first minted; a replay older than that is answered from the chain, as an already-applied record at the asset's current sequence | Lookup by manifest hash (primary key) |
-| `asset_superseded` | One row per edit | Until purge or a checkpoint releases it ([](#uniform-opaque-blobs)) | An asset's chain in order, `(asset, position)` |
-| `moderation_events` | Operator actions only, never user traffic | Kept for the account's lifetime, as client-verifiable evidence ([](/design/moderation/#the-moderation-record)) | An account's record in order, `(user, seq)` |
-| `activity_events` | Account events | Bounded already: 90 days and at most 1,000 per account ([](/design/activity-log/#retention)) | An account's events in order |
-| `quarantine/` | Rejected and lost objects | [](#quarantine-retention) | Operator listing |
+| Store                      | Grows with                                                               | Bound and retention                                                                                                                                                                                | Hot query, and its index                                 |
+| -------------------------- | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| Blobs (`blobs/`)           | Finalized blobs                                                          | Referenced blobs; the rest are collected ([](#deletion-and-garbage-collection))                                                                                                                    | Lookup by address (a `stat`)                             |
+| Owner ledger (`ledger/`)   | One custody and one indexed entry per finalization, one per lifecycle op | Never rewritten: grows with the owner's lifetime writes, partitioned by owner. An account's ledger goes with the account.                                                                          | Tail append under the owner's lock                       |
+| `custody_receipts` (index) | One row per blob finalization                                            | Rows of an asset's receipts go with its purge; the bytes stay in the ledger ([](/design/transfer/durability/#custody-receipts))                                                                    | An asset's receipts in order, `(owner, asset, position)` |
+| `applied_manifests`        | One row per applied lifecycle write                                      | 30 days. The row only answers a replay with the sequence number it first minted; a replay older than that is answered from the chain, as an already-applied record at the asset's current sequence | Lookup by manifest hash (primary key)                    |
+| `asset_superseded`         | One row per edit                                                         | Until purge or a checkpoint releases it ([](#uniform-opaque-blobs))                                                                                                                                | An asset's chain in order, `(asset, position)`           |
+| `moderation_events`        | Operator actions only, never user traffic                                | Kept for the account's lifetime, as client-verifiable evidence ([](/design/moderation/#the-moderation-record))                                                                                     | An account's record in order, `(user, seq)`              |
+| `activity_events`          | Account events                                                           | Bounded already: 90 days and at most 1,000 per account ([](/design/activity-log/#retention))                                                                                                       | An account's events in order                             |
+| `quarantine/`              | Rejected and lost objects                                                | [](#quarantine-retention)                                                                                                                                                                          | Operator listing                                         |
 
 Partitioning or sharding, when a single instance stops sufficing, is by `owner_id`, which every hot table already carries.
 
@@ -274,13 +274,13 @@ Partitioning or sharding, when a single instance stops sufficing, is by `owner_i
 
 What one finalized blob costs the server beyond its own bytes. Sizes assume ext4 with 4 KiB blocks and the hybrid attestation signature (64-byte Ed25519 plus 3,309-byte ML-DSA-65).
 
-| Item | Per blob | Notes |
-| --- | --- | --- |
-| Self-description | 56 B header plus 16 B per 65,520-byte chunk ([](/design/cryptography/encryption/#blob-header)) | About 0.03% of a large blob |
-| Filesystem | ~2 KiB average tail slack, a 256 B inode and a ~76 B directory entry | Dominates only for small blobs (thumbnails, metadata, manifests) |
-| PostgreSQL rows and indexes | ~0.5 KB | The blob row with its two indexes and its quota attribution. Raw `bytea` addresses save about 33 B on every copy of an address relative to hex text, around 200 B per blob across the rows and indexes that carry it |
-| Custody receipt | ~3.9 KB, once, in the ledger | Plus an index row of ~0.1 KB. Keeping a second full copy in PostgreSQL would add another 3.9 KB |
-| Ledger entries | ~0.4 KB of entry cores, plus an amortized checkpoint | Signing each entry instead would add ~6.8 KB per finalization (two hybrid signatures) |
+| Item                        | Per blob                                                                                       | Notes                                                                                                                                                                                                                |
+| --------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Self-description            | 56 B header plus 16 B per 65,520-byte chunk ([](/design/cryptography/encryption/#blob-header)) | About 0.03% of a large blob                                                                                                                                                                                          |
+| Filesystem                  | ~2 KiB average tail slack, a 256 B inode and a ~76 B directory entry                           | Dominates only for small blobs (thumbnails, metadata, manifests)                                                                                                                                                     |
+| PostgreSQL rows and indexes | ~0.5 KB                                                                                        | The blob row with its two indexes and its quota attribution. Raw `bytea` addresses save about 33 B on every copy of an address relative to hex text, around 200 B per blob across the rows and indexes that carry it |
+| Custody receipt             | ~3.9 KB, once, in the ledger                                                                   | Plus an index row of ~0.1 KB. Keeping a second full copy in PostgreSQL would add another 3.9 KB                                                                                                                      |
+| Ledger entries              | ~0.4 KB of entry cores, plus an amortized checkpoint                                           | Signing each entry instead would add ~6.8 KB per finalization (two hybrid signatures)                                                                                                                                |
 
 Leaving filesystem slack aside, the total is about 5 KB of metadata per blob, against about 15.5 KB with per-entry ledger signatures, hex addresses and a receipt stored twice. An asset is typically seven blobs (original, metadata, provenance, two derivatives and their two manifests), so about 35 KB per asset instead of about 110 KB: roughly 3.5 GB of metadata for a 100k-asset library instead of 11 GB. The receipt's signature is now the dominant term, and it is what the custody guarantee costs.
 

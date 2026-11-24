@@ -48,7 +48,7 @@ backup.tar
   - **Hybrid signature** ([](/design/cryptography/primitives/#signature-scheme)) by the exporter's DSK ([](/design/cryptography/keys/#device-keys)) defeats a wrap-key thief who re-HMACs. Restore resolves the exporter's key from the account's pinned device directory ([](/design/cryptography/keys/#device-directory)) by the manifest's `exporter_device`, never from a key the caller supplies. An exporter absent from the directory is refused.
   - **A revoked exporter is accepted; its artifact grants nothing on its own.** The directory retains a revoked device so that its signatures stay verifiable. Restore accepts an artifact whose exporter key is in the account's directory history, revoked or not, and then verifies every asset inside by its own provenance ([](#backup-verification)), never by the artifact's signature. No time is compared: the manifest's `export_timestamp` is self-asserted and audit-only ([](/design/threat-model/schema-rules/#timestamp-grammar)); the restore report names the exporter as revoked. A lost phone's last backup is the common restore, so refusing it would defeat the artifact's purpose. Backdating gains nothing, because nothing reads the time: producing an artifact that opens needs the wrap key, which comes from the recovery secret no device stores, and an asset a revoked device signed is accepted or refused on its manifest and chain exactly as it would be outside the artifact.
 - **Versioned** per [](/design/cryptography/primitives/#versioning-identifiers): old artifacts stay restorable, and an unknown `crypto_suite_id` is rejected.
-- **`authority/` is public, not a capability.** It makes restored assets *verifiable* and carries no write-tier or admin seed, so an album new to the library restores read-only. Restore re-verifies the ledger's admin signature chain, adopts it only for an album with no authority of its own, and never replaces existing authority. Format-1 artifacts restore readable but unverifiable.
+- **`authority/` is public, not a capability.** It makes restored assets _verifiable_ and carries no write-tier or admin seed, so an album new to the library restores read-only. Restore re-verifies the ledger's admin signature chain, adopts it only for an album with no authority of its own, and never replaces existing authority. Format-1 artifacts restore readable but unverifiable.
 
 The optional entries below are additive within format 2: an older reader verifies and skips them.
 
@@ -104,7 +104,7 @@ The master key and the sealed identity ([](/design/cryptography/keys/#registered
 
 **Every recovery path terminates at the one account master key, and the recovery secret (or a quorum of its Shamir shares) is the only user-held secret class. No feature may add a second escrowed secret class or a path that bypasses the master key.**
 
-The escrow, the artifact wrap key and Shamir shares all derive from the same secret. OGK and Drop-Key escrows, the album key escrows ([](#album-key-escrow)) and the sealed user identity ([](/design/cryptography/keys/#registered-accounts)) are wraps *reachable from* the master key, not roots. Sponsored accounts ([](/design/authentication/#account-types)) hold no root; they route through the sponsor's, so they are never prompted to verify.
+The escrow, the artifact wrap key and Shamir shares all derive from the same secret. OGK and Drop-Key escrows, the album key escrows ([](#album-key-escrow)) and the sealed user identity ([](/design/cryptography/keys/#registered-accounts)) are wraps _reachable from_ the master key, not roots. Sponsored accounts ([](/design/authentication/#account-types)) hold no root; they route through the sponsor's, so they are never prompted to verify.
 
 An exported artifact stays bound to the secret in force at export, so rotating the secret ends with "re-export or destroy old artifacts" guidance.
 
@@ -113,16 +113,16 @@ An exported artifact stays bound to the secret in force at export, so rotating t
 Independent paths; every failure mode recovers through at least one, and each row of a page's
 Failure Modes table is tested for its detection and its recovery:
 
-| # | Path | Survives |
-| --- | --- | --- |
-| 1 | [](#master-key-escrow): passphrase/seed → master key → AMK escrow | Total device loss |
-| 2 | Cross-device recovery ([](/design/device-enrollment/)) | Partial device loss; lost master-key backup if one device survives |
-| 3 | [](/design/cryptography/keys/#owner-group-keys-ogks): any owner recovers every album's AMKs | Lost membership, AMK distribution gaps |
-| 4 | Offline backup artifact ([](#backup-artifact)) | Server loss, account compromise, escrow corruption |
-| 5 | Filesystem rebuild: CBOR sidecars are canonical, the DB is a cache (idempotent `rebuild_index()`) | DB corruption, index bugs |
-| 6 | Content-addressed copies on devices or federated peers ([](/design/federation/); ciphertext, not keys) | Single-server data loss |
-| 7 | Trash ([](/design/organization/#recycling)): signed soft `delete` with a retention window before purge | Erroneous deletes |
-| 8 | Trusted-contact recovery ([](#opt-in-trusted-contact-recovery)): contacts plus a server-held half released after an owner-vetoable notice period | The owner can no longer act: lost secret and every device, incapacity, death |
+| #   | Path                                                                                                                                             | Survives                                                                     |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| 1   | [](#master-key-escrow): passphrase/seed → master key → AMK escrow                                                                                | Total device loss                                                            |
+| 2   | Cross-device recovery ([](/design/device-enrollment/))                                                                                           | Partial device loss; lost master-key backup if one device survives           |
+| 3   | [](/design/cryptography/keys/#owner-group-keys-ogks): any owner recovers every album's AMKs                                                      | Lost membership, AMK distribution gaps                                       |
+| 4   | Offline backup artifact ([](#backup-artifact))                                                                                                   | Server loss, account compromise, escrow corruption                           |
+| 5   | Filesystem rebuild: CBOR sidecars are canonical, the DB is a cache (idempotent `rebuild_index()`)                                                | DB corruption, index bugs                                                    |
+| 6   | Content-addressed copies on devices or federated peers ([](/design/federation/); ciphertext, not keys)                                           | Single-server data loss                                                      |
+| 7   | Trash ([](/design/organization/#recycling)): signed soft `delete` with a retention window before purge                                           | Erroneous deletes                                                            |
+| 8   | Trusted-contact recovery ([](#opt-in-trusted-contact-recovery)): contacts plus a server-held half released after an owner-vetoable notice period | The owner can no longer act: lost secret and every device, incapacity, death |
 
 **Account types.** Registered accounts have paths 1 to 7, and path 8 once enrolled. Delegated/sponsored accounts ([](/design/authentication/#account-types)) recover only through the sponsor's master key ([](/design/cryptography/keys/#delegatedsponsored-accounts)). Non-registered share-link accounts ([](/design/share-links/)) have no collection to recover.
 
@@ -165,7 +165,7 @@ Periodically the user proves they still hold the secret. The check MUST NOT beco
 ### Local Verification
 
 - **Local-only.** The client unwraps a cached copy of the escrow blob and compares an HKDF-derived tag against one derived from the device-held master key, never raw key bytes. No server round-trip; a failure locks nothing.
-- **Stale cache.** Before recording a failure, refresh the blob and retry once. If the client has seen a `stored_at` (returned when the escrow is stored) newer than its copy, refresh *before* comparing.
+- **Stale cache.** Before recording a failure, refresh the blob and retry once. If the client has seen a `stored_at` (returned when the escrow is stored) newer than its copy, refresh _before_ comparing.
 - `replaced` distinguishes first setup from rotation; only rotation shows the old-artifact guidance.
 - **Server copy.** The secret check never needs the server, but the same check also reads the server's escrow generation and blob hash when online and compares them with the device's record ([](#master-key-escrow)). A mismatch is an alert, never a failed check, and an offline device skips it.
 
@@ -191,13 +191,13 @@ This is **wrap rotation, not key rotation**: no re-encryption and no blob-hash c
 
 Restore is **dry-run by default**; writing requires explicit `--commit` (UI: typed-phrase confirm after the report).
 
-| Stage | Checks | Writes |
-| --- | --- | --- |
-| Preview | Counts, sizes, readable titles | No |
-| Dry-run (default) | Decrypt, hash match, decode in the sandboxed decoder ([](/design/clients/#sandboxed-decoder)); diff vs live library | No |
-| Signature chain | `MANIFEST.cbor` HMAC + exporter signature; every asset manifest ([](/design/cryptography/provenance/#asset-manifest)) against the device directory, every device cert to a user IK. Any break refuses restore | No |
-| AMK completeness | Every referenced `amk_version` present in the artifact's own ledger | No |
-| Commit | Chain reconciliation below | Yes |
+| Stage             | Checks                                                                                                                                                                                                        | Writes |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| Preview           | Counts, sizes, readable titles                                                                                                                                                                                | No     |
+| Dry-run (default) | Decrypt, hash match, decode in the sandboxed decoder ([](/design/clients/#sandboxed-decoder)); diff vs live library                                                                                           | No     |
+| Signature chain   | `MANIFEST.cbor` HMAC + exporter signature; every asset manifest ([](/design/cryptography/provenance/#asset-manifest)) against the device directory, every device cert to a user IK. Any break refuses restore | No     |
+| AMK completeness  | Every referenced `amk_version` present in the artifact's own ledger                                                                                                                                           | No     |
+| Commit            | Chain reconciliation below                                                                                                                                                                                    | Yes    |
 
 Commit reconciles each manifest against the live `latest_provenance_hash` and **never silently overwrites newer local state**:
 
@@ -212,16 +212,16 @@ Commit reconciles each manifest against the live `latest_provenance_hash` and **
 
 ## Failure Modes
 
-| Failure | Detected / contained by | Recovery |
-| --- | --- | --- |
-| Master key loss | — | Path 1 or 2 ([](#recovery-paths)) |
-| Backup missing an `amk_version` | AMK-completeness check ([](#backup-verification)) | Re-export before relying on the backup |
-| Escrow overwritten through a leaked session | Signed writes ([](#master-key-escrow)) refuse it | None needed |
-| Master-key escrow replaced by a compromised device | The time lock, announced on every device | Cancel with the current recovery key |
-| Album slot replaced by a compromised device | Generation compare at the next verification check | Re-escrow from a device holding the album ([](#album-key-escrow)) |
-| A contact claims while the owner is fine | The notice period and its local alert on every device | Block the claim |
-| A contact's identity key is compromised | Fewer than `m` shares, or the notice period | Block, then revoke and re-issue |
-| Only backup exported by a since-revoked device | Directory-history lookup; each asset verified by its provenance ([](#container-format)) | Restores; the report names the exporter as revoked |
+| Failure                                            | Detected / contained by                                                                 | Recovery                                                          |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| Master key loss                                    | —                                                                                       | Path 1 or 2 ([](#recovery-paths))                                 |
+| Backup missing an `amk_version`                    | AMK-completeness check ([](#backup-verification))                                       | Re-export before relying on the backup                            |
+| Escrow overwritten through a leaked session        | Signed writes ([](#master-key-escrow)) refuse it                                        | None needed                                                       |
+| Master-key escrow replaced by a compromised device | The time lock, announced on every device                                                | Cancel with the current recovery key                              |
+| Album slot replaced by a compromised device        | Generation compare at the next verification check                                       | Re-escrow from a device holding the album ([](#album-key-escrow)) |
+| A contact claims while the owner is fine           | The notice period and its local alert on every device                                   | Block the claim                                                   |
+| A contact's identity key is compromised            | Fewer than `m` shares, or the notice period                                             | Block, then revoke and re-issue                                   |
+| Only backup exported by a since-revoked device     | Directory-history lookup; each asset verified by its provenance ([](#container-format)) | Restores; the report names the exporter as revoked                |
 
 ## Known Gaps
 

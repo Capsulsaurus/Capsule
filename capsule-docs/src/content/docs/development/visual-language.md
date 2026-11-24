@@ -37,11 +37,11 @@ no third house style. The brand reaches a native client only through its accent 
 One accent, defined once as an OKLCH hue and chroma, from which every theme's three steps are derived
 at fixed lightness. The current accent is **Slate Blue** (hue 255, chroma 0.09).
 
-| Step | Light | Dark | Use |
-| --- | --- | --- | --- |
-| `low` | `#dce9fa` | `#19273a` | Tinted surfaces: callouts, icon wells, selected rows. |
-| `accent` | `#3e6596` | `#7ea7dc` | Fills: primary buttons, the selected tab, focus rings. |
-| `high` | `#173357` | `#a1c7f8` | Text in the accent colour: links, and text on a `low` surface. |
+| Step     | Light     | Dark      | Use                                                            |
+| -------- | --------- | --------- | -------------------------------------------------------------- |
+| `low`    | `#dce9fa` | `#19273a` | Tinted surfaces: callouts, icon wells, selected rows.          |
+| `accent` | `#3e6596` | `#7ea7dc` | Fills: primary buttons, the selected tab, focus rings.         |
+| `high`   | `#173357` | `#a1c7f8` | Text in the accent colour: links, and text on a `low` surface. |
 
 A light link is `accent` on white (6.0:1); a dark link is `high` on the dark background (10.4:1).
 Changing the accent changes these six values together and nothing else.
@@ -70,12 +70,12 @@ tags.
 
 ## Adoption per Surface
 
-| Surface | Where the accent lands | Everything else | Status |
-| --- | --- | --- | --- |
-| Docs site | `--capsule-accent-*` in `capsule-docs/src/styles/global.css`, mapped onto Starlight's `--sl-color-accent*`. | Starlight, restyled per the rules below. | Implemented |
-| Apple | An `AccentColor` asset, read once through `CapsuleTheme.accent`. | SwiftUI system styles, SF Symbols, Liquid Glass. | Planned: the apps use the system tint |
-| Android | The Material 3 seed colour, with the scheme generated from it and dynamic colour as a user option. | Material 3 components and type scale. | Planned: the app uses the default scheme |
-| Web client | The shadcn `--primary` token, with Geist self-hosted. | Neutral shadcn tokens. | Planned: neutral primary, fonts from Google |
+| Surface    | Where the accent lands                                                                                      | Everything else                                  | Status                                      |
+| ---------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | ------------------------------------------- |
+| Docs site  | `--capsule-accent-*` in `capsule-docs/src/styles/global.css`, mapped onto Starlight's `--sl-color-accent*`. | Starlight, restyled per the rules below.         | Implemented                                 |
+| Apple      | An `AccentColor` asset, read once through `CapsuleTheme.accent`.                                            | SwiftUI system styles, SF Symbols, Liquid Glass. | Planned: the apps use the system tint       |
+| Android    | The Material 3 seed colour, with the scheme generated from it and dynamic colour as a user option.          | Material 3 components and type scale.            | Planned: the app uses the default scheme    |
+| Web client | The shadcn `--primary` token, with Geist self-hosted.                                                       | Neutral shadcn tokens.                           | Planned: neutral primary, fonts from Google |
 
 The docs favicon is a provisional capsule mark in the accent colour; the app icon replaces it once
 one is designed.
@@ -196,7 +196,7 @@ one is designed.
   badged, so a pill never splits a word; the next standalone mention is.
   Add a library there, not a URL to a page. A name that is also an ordinary word, or names two
   things (`gamut`), is linked by hand.
-- **Diagrams are Mermaid.** A graph, flow or state machine is a ```` ```mermaid title="…" ````
+- **Diagrams are Mermaid.** A graph, flow or state machine is a ` ```mermaid title="…" `
   fence, compiled at build time to SVG in the page's colours (`src/lib/remark-mermaid.mjs`); the
   title is its caption and accessible name. Flowchart nodes take the house classes `client`,
   `server`, `store`, `external`, `danger` and `accent`. A literal directory layout stays a text

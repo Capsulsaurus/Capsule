@@ -28,59 +28,59 @@ Within a known schema version Capsule is liberal: unknown sidecar fields are pre
 
 Every primitive, construction, format or component identity is **declared in exactly one owner doc**. Other docs link the declaration and never restate the choice. Explaining a behaviour elsewhere ("STREAM tags catch chunk reordering") is fine; restating the choice ("we use SHA-256") is not. When in doubt, link.
 
-| Domain | Owner doc |
-| --- | --- |
-| Cryptographic primitives, constructions, version identifiers | [](/design/cryptography/primitives/) |
-| Key hierarchy, device coordination | [](/design/cryptography/keys/) |
-| MLS membership, ciphersuite binding | [](/design/cryptography/mls/) |
-| Asset + metadata encryption | [](/design/cryptography/encryption/) |
-| Provenance chains, signed manifests | [](/design/cryptography/provenance/) |
-| MLS resilience | [](/design/mls-resilience/) |
-| Device enrollment | [](/design/device-enrollment/) |
-| ML pipelines, weight registry, model identities, embedding provenance | [](/design/ai/) |
-| Face clustering, people corrections | [](/design/people/) |
-| Memory generators, memory state | [](/design/memories/) |
-| LQIP, thumbnail/preview formats | [](/design/thumbnails/) |
-| Server filesystem, required services | [](/design/filesystem/server/) |
-| Client filesystem, local index | [](/design/filesystem/client/) |
-| Library self-maintenance, atomic-write granularity | [](/design/filesystem/maintenance/) |
-| Tokens, identity binding, auth flow | [](/design/authentication/) |
-| Backup container, escrow, recovery paths | [](/design/backup-recovery/) |
-| CRDTs, identifiers, geolocation, sidecar schema | [](/design/metadata/) |
-| Import pipeline | [](/design/import/pipeline/) |
-| Upload protocol | [](/design/transfer/upload/) |
-| Download, transfer scheduler | [](/design/transfer/download/) |
-| Sync feed, auto-sync | [](/design/sync/) |
-| Storage durability, verify-before-destroy | [](/design/transfer/durability/) |
-| Tethered camera import | [](/design/import/camera-import/) |
-| Plaintext export, archive format | [](/design/export/) |
-| Connection and retry classes, transport security | [](/design/networking/) |
-| Offline-first requirements | [](/design/local-gallery/) |
-| Federation trust, capability tokens | [](/design/federation/) |
-| LAN discovery, peer channel | [](/design/peering/) |
-| Album protocol version pinning | [](/design/versioning/) |
-| Stacking, trash retention | [](/design/organization/) |
-| Search grammar, search index | [](/design/search/) |
-| Places, map clustering, geocoding | [](/design/places/) |
-| Lifecycle action set | [](/design/authorization/) |
-| Rate limits, freshness gates, server-side membership | [](/design/authorization/) |
-| Damage scenarios, client classes | [](/design/threat-model/) |
-| Risk register | [](/design/threat-model/risks/) |
-| Refuse-by-default validation invariants | [](/design/threat-model/validation/) |
-| Schema evolution, deprecation | [](/design/threat-model/schema-rules/) |
-| Outbound licence, dependency-licence policy | [](/design/licensing/) |
-| Share links | [](/design/share-links/) |
-| Upload links, guest drops | [](/design/web-upload/) |
-| Moderation, reporting, blocklists | [](/design/moderation/) |
-| Quota accounting + enforcement | [](/design/quota/) |
-| Client validation duties, sandboxed decoder | [](/design/clients/) |
-| OS integrations (intents, shortcuts, system pickers) | [](/design/platform-integrations/) |
-| Alerts, delivery, wake tier | [](/design/notifications/) |
-| Catalogs, locale resolution, error codes | [](/design/i18n/) |
-| API surface ↔ transport map | [](/design/api-surfaces/) |
-| Developer-reference generation | [](/design/developer-docs/) |
-| Performance metrics, benchmarks | [](/development/performance/) |
-| Supply-chain policy | [](/development/supply-chain/) |
+| Domain                                                                | Owner doc                              |
+| --------------------------------------------------------------------- | -------------------------------------- |
+| Cryptographic primitives, constructions, version identifiers          | [](/design/cryptography/primitives/)   |
+| Key hierarchy, device coordination                                    | [](/design/cryptography/keys/)         |
+| MLS membership, ciphersuite binding                                   | [](/design/cryptography/mls/)          |
+| Asset + metadata encryption                                           | [](/design/cryptography/encryption/)   |
+| Provenance chains, signed manifests                                   | [](/design/cryptography/provenance/)   |
+| MLS resilience                                                        | [](/design/mls-resilience/)            |
+| Device enrollment                                                     | [](/design/device-enrollment/)         |
+| ML pipelines, weight registry, model identities, embedding provenance | [](/design/ai/)                        |
+| Face clustering, people corrections                                   | [](/design/people/)                    |
+| Memory generators, memory state                                       | [](/design/memories/)                  |
+| LQIP, thumbnail/preview formats                                       | [](/design/thumbnails/)                |
+| Server filesystem, required services                                  | [](/design/filesystem/server/)         |
+| Client filesystem, local index                                        | [](/design/filesystem/client/)         |
+| Library self-maintenance, atomic-write granularity                    | [](/design/filesystem/maintenance/)    |
+| Tokens, identity binding, auth flow                                   | [](/design/authentication/)            |
+| Backup container, escrow, recovery paths                              | [](/design/backup-recovery/)           |
+| CRDTs, identifiers, geolocation, sidecar schema                       | [](/design/metadata/)                  |
+| Import pipeline                                                       | [](/design/import/pipeline/)           |
+| Upload protocol                                                       | [](/design/transfer/upload/)           |
+| Download, transfer scheduler                                          | [](/design/transfer/download/)         |
+| Sync feed, auto-sync                                                  | [](/design/sync/)                      |
+| Storage durability, verify-before-destroy                             | [](/design/transfer/durability/)       |
+| Tethered camera import                                                | [](/design/import/camera-import/)      |
+| Plaintext export, archive format                                      | [](/design/export/)                    |
+| Connection and retry classes, transport security                      | [](/design/networking/)                |
+| Offline-first requirements                                            | [](/design/local-gallery/)             |
+| Federation trust, capability tokens                                   | [](/design/federation/)                |
+| LAN discovery, peer channel                                           | [](/design/peering/)                   |
+| Album protocol version pinning                                        | [](/design/versioning/)                |
+| Stacking, trash retention                                             | [](/design/organization/)              |
+| Search grammar, search index                                          | [](/design/search/)                    |
+| Places, map clustering, geocoding                                     | [](/design/places/)                    |
+| Lifecycle action set                                                  | [](/design/authorization/)             |
+| Rate limits, freshness gates, server-side membership                  | [](/design/authorization/)             |
+| Damage scenarios, client classes                                      | [](/design/threat-model/)              |
+| Risk register                                                         | [](/design/threat-model/risks/)        |
+| Refuse-by-default validation invariants                               | [](/design/threat-model/validation/)   |
+| Schema evolution, deprecation                                         | [](/design/threat-model/schema-rules/) |
+| Outbound licence, dependency-licence policy                           | [](/design/licensing/)                 |
+| Share links                                                           | [](/design/share-links/)               |
+| Upload links, guest drops                                             | [](/design/web-upload/)                |
+| Moderation, reporting, blocklists                                     | [](/design/moderation/)                |
+| Quota accounting + enforcement                                        | [](/design/quota/)                     |
+| Client validation duties, sandboxed decoder                           | [](/design/clients/)                   |
+| OS integrations (intents, shortcuts, system pickers)                  | [](/design/platform-integrations/)     |
+| Alerts, delivery, wake tier                                           | [](/design/notifications/)             |
+| Catalogs, locale resolution, error codes                              | [](/design/i18n/)                      |
+| API surface ↔ transport map                                           | [](/design/api-surfaces/)              |
+| Developer-reference generation                                        | [](/design/developer-docs/)            |
+| Performance metrics, benchmarks                                       | [](/development/performance/)          |
+| Supply-chain policy                                                   | [](/development/supply-chain/)         |
 
 ## Doc Structure
 
@@ -96,18 +96,18 @@ Every authored page carries a required `audit` frontmatter field pinning its las
 
 ```yaml
 audit:
-  commit: <40-hex sha>     # the commit whose copy of the page was audited
-  date: YYYY-MM-DD         # when, in UTC
-  digest: sha256:<64-hex>  # of the page with this field removed
+    commit: <40-hex sha> # the commit whose copy of the page was audited
+    date: YYYY-MM-DD # when, in UTC
+    digest: sha256:<64-hex> # of the page with this field removed
 ```
 
 The status a reader sees is never written down. The site computes it by comparing the stamped digest with the page as it is now:
 
-| Status | When | Shown |
-| --- | --- | --- |
-| Audited | The digest matches: the page is exactly what was audited. | "Audited as of `<commit>` on `<date>`" |
-| Changed since audit | The page has changed since its stamp. | "Last audited as of `<commit>` on `<date>`" |
-| Unaudited | `audit: none` | "Unaudited" |
+| Status              | When                                                      | Shown                                       |
+| ------------------- | --------------------------------------------------------- | ------------------------------------------- |
+| Audited             | The digest matches: the page is exactly what was audited. | "Audited as of `<commit>` on `<date>`"      |
+| Changed since audit | The page has changed since its stamp.                     | "Last audited as of `<commit>` on `<date>`" |
+| Unaudited           | `audit: none`                                             | "Unaudited"                                 |
 
 Any edit after an audit therefore shows at once, with no one having to remember to flip a flag, and the computation needs no git history. An auditor commits their edits, reviews the page as committed, then stamps it with `mise run audit-docs -- <page>` (`bun run audit-page <page>` inside `capsule-docs`) and commits the stamp. The tool refuses a page that differs from HEAD, so the pinned commit always holds the audited text. `test-docs` fails on a missing or malformed field, and wherever the stamped commit is in local history it checks that the digest matches that commit's copy of the page.
 

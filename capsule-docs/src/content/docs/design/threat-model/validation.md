@@ -90,7 +90,7 @@ A drop ([](/design/web-upload/#security-contract)) has no manifest, so these rep
 
 ## Client-Side Validation Invariants
 
-Run before applying any received data; skipping one makes a client *faulty*.
+Run before applying any received data; skipping one makes a client _faulty_.
 
 - Run `verify_asset` ([](/design/cryptography/keys/#write-authorization)) on every `AssetManifest`; quarantine on failure.
 - Refuse a `sidecar_schema` above the client's max (write never; read only by opt-in read-only mode).
@@ -104,7 +104,7 @@ Run before applying any received data; skipping one makes a client *faulty*.
 - Refuse an OR-set remove of an unobserved `add_id`.
 - Refuse a `revoke_all_sessions` without master-key proof.
 - Decode remote-origin bytes only in the sandboxed decoder ([](/design/clients/#sandboxed-decoder)). Until a platform has it, guest drops are decoded only by the memory-safe core codecs ([](/design/web-upload/#security-contract)); other remote-origin bytes are decoded in process, a documented deviation.
-- Classify a blob that will not open into exactly one state of [](/design/cryptography/encryption/#reading-a-blob): never decrypt on a commitment mismatch, and never report a ranged-read tag failure as *sealed bad at source* before a whole-blob address check.
+- Classify a blob that will not open into exactly one state of [](/design/cryptography/encryption/#reading-a-blob): never decrypt on a commitment mismatch, and never report a ranged-read tag failure as _sealed bad at source_ before a whole-blob address check.
 - Cap every response body after content decoding, per operation, before parsing it; never size an allocation from a length the server or a peer states ([](/design/networking/#http-transport)).
 - Accept an `AlbumKeyDistribution` only if it equals the receiver's own export for that epoch; never overwrite a held key ([](/design/cryptography/keys/#key-delivery-and-who-may-send-it)).
 
@@ -139,21 +139,21 @@ The negotiation headers are specified in [](/reference/api/conventions/#protocol
 
 Duplicates are no-ops; the same key with different content is corruption. An unlisted surface is **not** idempotent.
 
-| Surface | Key | Duplicate |
-| --- | --- | --- |
-| Upload chunk | `(upload_id, byte range)` | Wholly committed → the session's state, nothing written, bytes not compared and never written (a changed source is stopped by the client's chunk-tag guard in [](/design/cryptography/encryption/#encryption-workflow)); partial overlap → `409 error.upload.range_conflict` |
-| Session creation | `(owner_id, hash, album_id)` | Active session returned; finalized → `409 error.upload.duplicate_blob` + existing asset |
-| Lifecycle manifest | `(asset_id, prior_provenance_hash, manifest_hash)` | Chain advances once |
-| Metadata update | op id + `(asset_id, prior_provenance_hash)` | Structurally identical |
-| Federation capability proof | `(peer_id, jti)` | Same response |
-| Federation pull | `(peer_id, sync_cursor)` | Same page |
-| MLS commit | Group commit chain (OpenMLS) | Rejected |
-| Album upgrade ([](/design/versioning/#album-upgrade-ceremony)) / MLS re-key ([](/design/mls-resilience/#group-re-keying-ceremony)) | `intent_id` | Never forks or re-keys twice |
-| Device enrollment ([](/design/device-enrollment/#cross-device-add)) | Single-use enrollment code | Re-redemption rejected |
-| Share/upload-link create | Client op id | Returns the minted link |
-| Share/upload-link revoke | `link_id` | No-op |
-| Drop adoption | `drop_id` (invariant 32) | Returns the promoted asset |
-| Album roster publish | `(album_id, roster_version)` (invariant 35) | Identical bytes → `200 replayed`; different → `409 error.album.roster_stale` |
+| Surface                                                                                                                            | Key                                                | Duplicate                                                                                                                                                                                                                                                                    |
+| ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Upload chunk                                                                                                                       | `(upload_id, byte range)`                          | Wholly committed → the session's state, nothing written, bytes not compared and never written (a changed source is stopped by the client's chunk-tag guard in [](/design/cryptography/encryption/#encryption-workflow)); partial overlap → `409 error.upload.range_conflict` |
+| Session creation                                                                                                                   | `(owner_id, hash, album_id)`                       | Active session returned; finalized → `409 error.upload.duplicate_blob` + existing asset                                                                                                                                                                                      |
+| Lifecycle manifest                                                                                                                 | `(asset_id, prior_provenance_hash, manifest_hash)` | Chain advances once                                                                                                                                                                                                                                                          |
+| Metadata update                                                                                                                    | op id + `(asset_id, prior_provenance_hash)`        | Structurally identical                                                                                                                                                                                                                                                       |
+| Federation capability proof                                                                                                        | `(peer_id, jti)`                                   | Same response                                                                                                                                                                                                                                                                |
+| Federation pull                                                                                                                    | `(peer_id, sync_cursor)`                           | Same page                                                                                                                                                                                                                                                                    |
+| MLS commit                                                                                                                         | Group commit chain (OpenMLS)                       | Rejected                                                                                                                                                                                                                                                                     |
+| Album upgrade ([](/design/versioning/#album-upgrade-ceremony)) / MLS re-key ([](/design/mls-resilience/#group-re-keying-ceremony)) | `intent_id`                                        | Never forks or re-keys twice                                                                                                                                                                                                                                                 |
+| Device enrollment ([](/design/device-enrollment/#cross-device-add))                                                                | Single-use enrollment code                         | Re-redemption rejected                                                                                                                                                                                                                                                       |
+| Share/upload-link create                                                                                                           | Client op id                                       | Returns the minted link                                                                                                                                                                                                                                                      |
+| Share/upload-link revoke                                                                                                           | `link_id`                                          | No-op                                                                                                                                                                                                                                                                        |
+| Drop adoption                                                                                                                      | `drop_id` (invariant 32)                           | Returns the promoted asset                                                                                                                                                                                                                                                   |
+| Album roster publish                                                                                                               | `(album_id, roster_version)` (invariant 35)        | Identical bytes → `200 replayed`; different → `409 error.album.roster_stale`                                                                                                                                                                                                 |
 
 ## Atomicity Invariants
 
@@ -162,7 +162,7 @@ Duplicates are no-ops; the same key with different content is corruption. An unl
 - **Batch metadata changes** (time corrections, duplicate merges, rule actions, stack-wide hide or trash): staged and committed together under the same rule.
 - **AMK epoch bump + write-tier rotation:** one MLS commit.
 - **Album upgrade:** one MLS commit (`AlbumTombstone`) ([](/design/versioning/#album-upgrade-ceremony)).
-- **Lifecycle manifest + provenance:** the same act, because the entry *is* the manifest plus its chain link.
+- **Lifecycle manifest + provenance:** the same act, because the entry _is_ the manifest plus its chain link.
 
 ## Known Gaps
 

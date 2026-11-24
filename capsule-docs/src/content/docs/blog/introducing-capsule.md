@@ -4,7 +4,7 @@ description: Why Capsule exists, what it does differently, and where it is today
 date: 2026-11-09
 authors: justin
 tags:
-  - announcement
+    - announcement
 audit: none
 # Unpublished: Starlight excludes `draft: true` pages from production builds.
 # The outline below is a placeholder until the post is written.

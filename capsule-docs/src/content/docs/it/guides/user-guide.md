@@ -5,7 +5,7 @@ audit: none
 ---
 
 Questa guida tratta la CLI `capsule`, il client di riferimento. I comandi contrassegnati come
-*(pianificato)* sono nella [roadmap](https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md)
+_(pianificato)_ sono nella [roadmap](https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md)
 e non ancora disponibili. `capsule <command> --help` è il riferimento autorevole per le opzioni; il
 riferimento della CLI ([](/reference/cli/)) le elenca tutte.
 
@@ -46,7 +46,7 @@ di ogni originale che importi.
   elimina ogni file di origine solo dopo che il suo elemento è stato verificato. Senza `--push`,
   `--move` conserva tutti i file di origine e lo segnala, e un successivo `import --move --push`
   sugli stessi file li rilascia.
-- `capsule restore` *(pianificato)* scarica gli originali e li confronta byte per byte con quanto
+- `capsule restore` _(pianificato)_ scarica gli originali e li confronta byte per byte con quanto
   firmato all'importazione.
 
 <a id="organize"></a>
@@ -56,11 +56,11 @@ di ogni originale che importi.
 - Le **etichette** sono libere e si applicano a un elemento, a uno stack (coppia RAW+JPEG, raffica,
   bracketing), a un album o a una regione di un'immagine. Le etichette che aggiungi restano separate
   da quelle suggerite dall'IA, e puoi accettare o scartare un suggerimento. Le etichette degli
-  elementi esistono già; quelle di stack, album e regioni sono *(pianificate)*.
+  elementi esistono già; quelle di stack, album e regioni sono _(pianificate)_.
 - `capsule show <asset>` mostra ciò che registrano i metadati firmati di un elemento: didascalia,
   valutazione, etichette, posizione, data e ora di scatto.
 - `capsule repair capture-time` trova gli elementi la cui data di scatto non corrisponde all'EXIF
-  dell'originale e, con `--apply`, la corregge. La modifica della posizione è *(pianificata)*.
+  dell'originale e, con `--apply`, la corregge. La modifica della posizione è _(pianificata)_.
 
 Ogni modifica è un cambiamento firmato e di sola aggiunta: il valore precedente resta nella
 cronologia di provenienza dell'elemento, e le modifiche simultanee da due dispositivi vengono unite

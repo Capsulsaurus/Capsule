@@ -181,18 +181,21 @@ export function decryptShareBlob(
     scope: ShareScope,
     params: ShareAssetCryptoParams,
     ciphertext: Uint8Array,
-): Uint8Array {
+): Uint8Array<ArrayBuffer> {
     const wrapped = params.keyMode === 'wrapped';
     if (wrapped !== (params.wrappedFileKeyHex !== undefined)) {
         throw new Error('malformed');
     }
+    // wasm-bindgen copies the plaintext out of wasm memory (`.slice()`) into a fresh, unshared
+    // `ArrayBuffer`, but declares it as a bare `Uint8Array`; narrowing it here is what lets the
+    // viewer hand it to `Blob` without a copy.
     return scope.decryptBlob(
         params.assetId,
         params.amkVersion,
         params.noncePrefixHex,
         ciphertext,
         wrapped ? params.wrappedFileKeyHex : undefined,
-    );
+    ) as Uint8Array<ArrayBuffer>;
 }
 
 /**

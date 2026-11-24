@@ -141,13 +141,13 @@ Mantenha-o sincronizado com NTP (chrony ou systemd-timesyncd) no host. Um contê
 host, então sincronize o host. A diferença DEVERIA ficar dentro de um segundo, e DEVE ficar dentro
 de 30 segundos. Além desses limites:
 
-| Diferença | O que quebra |
-| --- | --- |
-| Mais de 30 s | Os códigos do segundo fator começam a falhar: um código só é aceito dentro de um intervalo de 30 s em relação ao relógio do servidor ([](/design/authentication/)) |
-| Mais de 5 min | A federação para nas duas direções: os pares recusam as requisições, dicas e relatórios assinados deste servidor, e ele recusa os deles ([](/design/federation/)) |
-| Relógio adiantado | A lixeira é esvaziada antes do fim do prazo de retenção, e uma restauração feita a tempo é recusada ([](/design/organization/#retention-window)). Sessões, links de compartilhamento e sessões de envio expiram antes da hora |
-| Relógio atrasado | Sessões, links de compartilhamento e contadores expirados continuam válidos por mais tempo que o configurado |
-| Diferença grosseira | Os clientes recusam recibos de custódia cujo `received_at` não é plausível ([](/design/transfer/durability/)) |
+| Diferença           | O que quebra                                                                                                                                                                                                                  |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Mais de 30 s        | Os códigos do segundo fator começam a falhar: um código só é aceito dentro de um intervalo de 30 s em relação ao relógio do servidor ([](/design/authentication/))                                                            |
+| Mais de 5 min       | A federação para nas duas direções: os pares recusam as requisições, dicas e relatórios assinados deste servidor, e ele recusa os deles ([](/design/federation/))                                                             |
+| Relógio adiantado   | A lixeira é esvaziada antes do fim do prazo de retenção, e uma restauração feita a tempo é recusada ([](/design/organization/#retention-window)). Sessões, links de compartilhamento e sessões de envio expiram antes da hora |
+| Relógio atrasado    | Sessões, links de compartilhamento e contadores expirados continuam válidos por mais tempo que o configurado                                                                                                                  |
+| Diferença grosseira | Os clientes recusam recibos de custódia cujo `received_at` não é plausível ([](/design/transfer/durability/))                                                                                                                 |
 
 Só inicie o `serve` depois que o relógio estiver sincronizado. Com systemd, ordene-o depois de
 `time-sync.target` com `chrony-wait.service` ou `systemd-time-wait-sync.service` habilitado. Uma
@@ -168,14 +168,14 @@ com senha (cerca de 19 MiB cada). Ele nunca decodifica, redimensiona ou transcod
 criptografa nem descriptografa, e deixa o TLS para o proxy reverso. O corpo de um envio nunca fica
 em buffer além de um bloco, então a memória não cresce com o tamanho do arquivo.
 
-| | Mínimo | Recomendado |
-| --- | --- | --- |
-| **CPU** | 2 núcleos, x86_64 ou arm64 | 4 núcleos. As instruções SHA-2 (SHA-NI no x86_64, as extensões de criptografia do Armv8) aceleram o cálculo de hashes |
-| **RAM** | 2 GB | De 4 a 8 GB. Mais memória ajuda o cache do PostgreSQL em uma biblioteca grande, mas o armazenamento dá retorno primeiro |
-| **Armazenamento do sistema** | SSD, 10 GB livres | SSD ou NVMe para o PostgreSQL |
-| **Armazenamento de blobs** | O tamanho da sua biblioteca, mais espaço para os envios em andamento | Discos redundantes (espelho, RAID ou ZFS) dimensionados para vários anos de crescimento. Discos rígidos convencionais servem |
-| **Rede** | 10 Mbit/s de upload | Gigabit na LAN, e 50 Mbit/s ou mais de upload se os dispositivos sincronizarem de fora dela |
-| **Energia** | — | Um nobreak, para que uma queda de energia não interrompa o PostgreSQL no meio de uma escrita |
+|                              | Mínimo                                                               | Recomendado                                                                                                                  |
+| ---------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| **CPU**                      | 2 núcleos, x86_64 ou arm64                                           | 4 núcleos. As instruções SHA-2 (SHA-NI no x86_64, as extensões de criptografia do Armv8) aceleram o cálculo de hashes        |
+| **RAM**                      | 2 GB                                                                 | De 4 a 8 GB. Mais memória ajuda o cache do PostgreSQL em uma biblioteca grande, mas o armazenamento dá retorno primeiro      |
+| **Armazenamento do sistema** | SSD, 10 GB livres                                                    | SSD ou NVMe para o PostgreSQL                                                                                                |
+| **Armazenamento de blobs**   | O tamanho da sua biblioteca, mais espaço para os envios em andamento | Discos redundantes (espelho, RAID ou ZFS) dimensionados para vários anos de crescimento. Discos rígidos convencionais servem |
+| **Rede**                     | 10 Mbit/s de upload                                                  | Gigabit na LAN, e 50 Mbit/s ou mais de upload se os dispositivos sincronizarem de fora dela                                  |
+| **Energia**                  | —                                                                    | Um nobreak, para que uma queda de energia não interrompa o PostgreSQL no meio de uma escrita                                 |
 
 - **O `BLOB_ROOT` fica em um único sistema de arquivos.** A árvore inteira, incluindo `incoming/`,
   precisa ser um só sistema de arquivos, então não pode ser dividida entre um SSD e um array de
@@ -185,8 +185,8 @@ em buffer além de um bloco, então a memória não cresce com o tamanho do arqu
   das requisições além do índice da biblioteca. Sessões, sessões de envio e contadores são pequenos,
   e o servidor os exclui assim que expiram.
 - **A banda de upload é o limite para dispositivos remotos.** Um celular fora da sua rede envia na
-  velocidade de *download* da sua conexão, mas cada busca de uma prévia ou de um original sai na sua
-  velocidade de *upload*. Um bloco só é cortado quando para de chegar, nunca por demorar, e o
+  velocidade de _download_ da sua conexão, mas cada busca de uma prévia ou de um original sai na sua
+  velocidade de _upload_. Um bloco só é cortado quando para de chegar, nunca por demorar, e o
   cliente dimensiona seus blocos para terminarem em um tempo-alvo curto na velocidade que mede,
   então um link lento envia no próprio ritmo. Mantenha o limite de travamento do servidor abaixo do
   tempo limite de inatividade do proxy, para que o servidor responda a um bloco travado antes que o
@@ -265,11 +265,11 @@ A configuração é feita somente por variáveis de ambiente. `capsule-server/.e
 inicial, e esta página cita as variáveis que um operador precisa decidir. Um servidor durável se
 recusa a iniciar (saída 2), citando todas as variáveis ausentes de uma vez, sem:
 
-| Variável | Finalidade |
-| --- | --- |
-| `DATABASE_URL` | Conexão com o PostgreSQL |
-| `BLOB_ROOT` | Diretório de blobs |
-| `JWT_ED25519_DER` | Chave Ed25519 em Base64 que assina os tokens de sessão |
+| Variável               | Finalidade                                                                                       |
+| ---------------------- | ------------------------------------------------------------------------------------------------ |
+| `DATABASE_URL`         | Conexão com o PostgreSQL                                                                         |
+| `BLOB_ROOT`            | Diretório de blobs                                                                               |
+| `JWT_ED25519_DER`      | Chave Ed25519 em Base64 que assina os tokens de sessão                                           |
 | `ATTESTATION_KEY_SEED` | Semente em Base64 que assina os recibos de custódia; precisa ser independente da chave de tokens |
 
 - **Proteja a chave de tokens acima de tudo.** O banco de dados não guarda nenhum segredo de
@@ -299,10 +299,10 @@ explicitamente. A federação fica desativada a não ser que `FEDERATION_ENABLED
 
 Informe o seu proxy reverso para que os limites de taxa por origem vejam o cliente, e não o proxy.
 
-| Variável | Significado |
-| --- | --- |
-| `TRUSTED_PROXIES` | Endereços e redes CIDR separados por vírgula (`10.0.0.0/8`). Uma rede `/0` é recusada, porque confiaria em qualquer remetente. |
-| `TRUSTED_PROXY_HOPS` | Confia nessa quantidade de saltos de encaminhamento mais próximos do servidor, seja qual for o endereço deles. |
+| Variável               | Significado                                                                                                                                             |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TRUSTED_PROXIES`      | Endereços e redes CIDR separados por vírgula (`10.0.0.0/8`). Uma rede `/0` é recusada, porque confiaria em qualquer remetente.                          |
+| `TRUSTED_PROXY_HOPS`   | Confia nessa quantidade de saltos de encaminhamento mais próximos do servidor, seja qual for o endereço deles.                                          |
 | `TRUSTED_PROXY_HEADER` | O único campo de encaminhamento que o servidor lê: `x-forwarded-for` (o padrão) ou `forwarded` (RFC 7239). Qualquer outro valor impede a inicialização. |
 
 Sem essas variáveis, nenhum cabeçalho de encaminhamento é considerado. Isso é seguro, mas então

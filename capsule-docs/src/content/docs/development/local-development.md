@@ -20,15 +20,15 @@ mise run hooks-install # git hooks (hk)
 
 ## Gates
 
-| Task | Scope |
-| --- | --- |
-| `mise run check` | The full gate: `format-check`, then `lint-check`, then `test` |
-| `mise run check-rust` | Rust format, clippy, docs, codegen drift (`i18n`, OpenAPI, READMEs), architecture and licence checks, builds and bindings; sequential under one `target/` lock |
-| `mise run check-web` | Web format, lint, test, build |
-| `mise run check-docs` | Docs format, lint, Astro build (a broken internal link fails it) |
-| `mise run check-md` | markdownlint over every `.md` |
-| `mise run check-kotlin` | Kotlin format and lint |
-| `mise run lint-check-shell` | shellcheck over the shell scripts in `mise-tasks/`, `scripts/` and every `*.sh`, then actionlint over `.github/workflows/`; part of `lint-check` and pre-push |
+| Task                        | Scope                                                                                                                                                          |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mise run check`            | The full gate: `format-check`, then `lint-check`, then `test`                                                                                                  |
+| `mise run check-rust`       | Rust format, clippy, docs, codegen drift (`i18n`, OpenAPI, READMEs), architecture and licence checks, builds and bindings; sequential under one `target/` lock |
+| `mise run check-web`        | Web format, lint, type check, test, build                                                                                                                      |
+| `mise run check-docs`       | Docs format, lint, Astro build (a broken internal link fails it)                                                                                               |
+| `mise run check-md`         | markdownlint over every `.md`                                                                                                                                  |
+| `mise run check-kotlin`     | Kotlin format and lint                                                                                                                                         |
+| `mise run lint-check-shell` | shellcheck over the shell scripts in `mise-tasks/`, `scripts/` and every `*.sh`, then actionlint over `.github/workflows/`; part of `lint-check` and pre-push  |
 
 Frequently used tasks:
 

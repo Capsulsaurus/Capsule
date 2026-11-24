@@ -10,12 +10,12 @@ policy is [](/design/licensing/), and this page does not restate it.
 
 ## Gates
 
-| Gate | Tool | Scope | Where it runs |
-| --- | --- | --- | --- |
-| Licences | cargo-deny (`mise run license-check`) | The Rust graph, every target and feature | `check-rust`, pre-push, CI |
-| Rust advisories, bans, sources | cargo-deny (`mise run deny-check`) | `Cargo.lock` against RustSec, unmaintained crates included | CI, every pull request and every push to `master` |
-| Advisories in every ecosystem | dependable | `Cargo.lock`, both `bun.lock` files, the Gradle version catalog, each committed `Package.resolved` | CI, every pull request and every push to `master`; pre-push when a manifest or lockfile changes |
-| Version updates | Dependabot | One entry per manifest root | Scheduled pull requests, which pass every gate above |
+| Gate                           | Tool                                  | Scope                                                                                              | Where it runs                                                                                   |
+| ------------------------------ | ------------------------------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Licences                       | cargo-deny (`mise run license-check`) | The Rust graph, every target and feature                                                           | `check-rust`, pre-push, CI                                                                      |
+| Rust advisories, bans, sources | cargo-deny (`mise run deny-check`)    | `Cargo.lock` against RustSec, unmaintained crates included                                         | CI, every pull request and every push to `master`                                               |
+| Advisories in every ecosystem  | dependable                            | `Cargo.lock`, both `bun.lock` files, the Gradle version catalog, each committed `Package.resolved` | CI, every pull request and every push to `master`; pre-push when a manifest or lockfile changes |
+| Version updates                | Dependabot                            | One entry per manifest root                                                                        | Scheduled pull requests, which pass every gate above                                            |
 
 dependable is getkono/dependable: a CLI that checks dependency versions and known vulnerabilities
 against the package registries and the OSV database. It needs no API key and has no cloud
@@ -30,12 +30,12 @@ against a lockfile nobody touched, so a path filter would hide it.
 dependable runs from the repository root over every manifest it discovers. Its version is pinned
 in `mise.toml` like every other tool, so local runs and CI agree.
 
-| Lockfile | Ecosystem | What dependable establishes | Gate |
-| --- | --- | --- | --- |
-| `Cargo.lock` | `rust` | Locked versions and the resolved tree | Reported. cargo-deny is the Rust gate until dependable honours the ignores in `deny.toml` |
-| `capsule-web/bun.lock`, `capsule-docs/bun.lock` | `npm` | Locked versions and the resolved tree | `--fail-on vulnerable` |
-| `gradle/libs.versions.toml` | `jvm` | Catalog versions only; build scripts are never read | `--fail-on vulnerable` |
-| `Package.resolved` beside each `Package.swift` | `swift` | Advisories only (OSV `SwiftURL`); never currency | `--fail-on vulnerable` |
+| Lockfile                                        | Ecosystem | What dependable establishes                         | Gate                                                                                      |
+| ----------------------------------------------- | --------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `Cargo.lock`                                    | `rust`    | Locked versions and the resolved tree               | Reported. cargo-deny is the Rust gate until dependable honours the ignores in `deny.toml` |
+| `capsule-web/bun.lock`, `capsule-docs/bun.lock` | `npm`     | Locked versions and the resolved tree               | `--fail-on vulnerable`                                                                    |
+| `gradle/libs.versions.toml`                     | `jvm`     | Catalog versions only; build scripts are never read | `--fail-on vulnerable`                                                                    |
+| `Package.resolved` beside each `Package.swift`  | `swift`   | Advisories only (OSV `SwiftURL`); never currency    | `--fail-on vulnerable`                                                                    |
 
 - **Exit 1 fails the gate, and so does exit 2.** Exit 2 means the run could not answer (a registry
   or OSV did not respond). An unanswered gate is never a pass, in CI or in the hook.
@@ -51,7 +51,7 @@ in `mise.toml` like every other tool, so local runs and CI agree.
   `build.gradle.kts` is invisible to dependable, which reports the script as unread. A build script
   references the catalog (`libs.…`) and nothing else.
 - **A `Package.resolved` is committed** beside every `Package.swift` that declares a remote package,
-  including a Tuist `Tuist/Package.swift`. Without one, dependable reports the package *unknown*: it
+  including a Tuist `Tuist/Package.swift`. Without one, dependable reports the package _unknown_: it
   scanned nothing, which reads like a clean result. A package with no remote dependency has nothing
   to pin.
 - **Swift is vulnerability-only.** SwiftPM has no registry to ask for newer versions, so Dependabot
@@ -134,14 +134,14 @@ holds its manifest. An entry aimed at a missing manifest is a permanent dashboar
 update, so a change that moves or adds a manifest updates `.github/dependabot.yml` in the same
 change.
 
-| Ecosystem | Directory |
-| --- | --- |
-| `bun` | `/capsule-web`, `/capsule-docs` |
-| `cargo` | `/` (the workspace) |
-| `docker-compose` | `/capsule-server` |
-| `github-actions` | `/` |
-| `gradle` | `/` (the version catalog and every included build) |
-| `swift` | `/capsule-core-swift` |
+| Ecosystem        | Directory                                          |
+| ---------------- | -------------------------------------------------- |
+| `bun`            | `/capsule-web`, `/capsule-docs`                    |
+| `cargo`          | `/` (the workspace)                                |
+| `docker-compose` | `/capsule-server`                                  |
+| `github-actions` | `/`                                                |
+| `gradle`         | `/` (the version catalog and every included build) |
+| `swift`          | `/capsule-core-swift`                              |
 
 ## Known Gaps
 

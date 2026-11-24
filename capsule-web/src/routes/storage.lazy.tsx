@@ -1,16 +1,13 @@
 import { createLazyFileRoute } from '@tanstack/react-router';
-import {
-    createColumnHelper,
-    flexRender,
-    getCoreRowModel,
-    getSortedRowModel,
-    type SortingState,
-    useReactTable,
-} from '@tanstack/react-table';
-import { filesize } from 'filesize';
-import { FileText, FileVideo, Image, RefreshCw, Trash2 } from 'lucide-react';
-import React, { useState } from 'react';
+import { FileText, Image, RefreshCw, Trash2 } from 'lucide-react';
+import { useState } from 'react';
 import { FormattedMessage, useIntl } from 'react-intl';
+import {
+    AssetList,
+    AssetType,
+    formatFileSize,
+    type StorageAsset,
+} from '@/components/storage-asset-table';
 import {
     Dialog,
     DialogContent,
@@ -24,13 +21,6 @@ import { cn } from '@/lib/utils';
 export const Route = createLazyFileRoute('/storage')({
     component: () => <Storage />,
 });
-
-// Mock AssetType Enum
-enum AssetType {
-    Photo = 'PHOTO',
-    Video = 'VIDEO',
-    Sidecar = 'SIDECAR',
-}
 
 // Mock Data Types
 type StorageStats = {
@@ -46,17 +36,6 @@ type StorageStats = {
     usedStorageLargeFiles: number;
 };
 
-// Asset type definition
-type Asset = {
-    id: string;
-    type: AssetType;
-    fileName: string;
-    path: string;
-    size: number;
-    date: Date;
-    thumbnail?: string;
-};
-
 const mockStats: StorageStats = {
     totalPhotos: 1234,
     totalAlbums: 42,
@@ -70,22 +49,17 @@ const mockStats: StorageStats = {
     usedStorageLargeFiles: 3000000000, // 3 GB
 };
 
-const mockStorageAssets: Asset[] = Array.from({ length: 20 }).map((_, i) => ({
-    id: `asset-${i}`,
-    type: i % 3 === 0 ? AssetType.Video : AssetType.Photo,
-    fileName: `IMG_${20230000 + i}.${i % 3 === 0 ? 'mp4' : 'jpg'}`,
-    path: `/DCIM/100CANON/IMG_${20230000 + i}.${i % 3 === 0 ? 'mp4' : 'jpg'}`,
-    size: i % 3 === 0 ? 50000000 + i * 1000 : 4000000 + i * 1000,
-    date: new Date(2023, 5, i + 1),
-    thumbnail: `https://picsum.photos/seed/${i}/100/100`,
-}));
-
-function formatFileSize(size: number) {
-    return filesize(size, {
-        base: 2,
-        standard: 'jedec',
-    });
-}
+const mockStorageAssets: StorageAsset[] = Array.from({ length: 20 }).map(
+    (_, i) => ({
+        id: `asset-${i}`,
+        type: i % 3 === 0 ? AssetType.Video : AssetType.Photo,
+        fileName: `IMG_${20230000 + i}.${i % 3 === 0 ? 'mp4' : 'jpg'}`,
+        path: `/DCIM/100CANON/IMG_${20230000 + i}.${i % 3 === 0 ? 'mp4' : 'jpg'}`,
+        size: i % 3 === 0 ? 50000000 + i * 1000 : 4000000 + i * 1000,
+        date: new Date(2023, 5, i + 1),
+        thumbnail: `https://picsum.photos/seed/${i}/100/100`,
+    }),
+);
 
 type Suggestion = 'trash-files' | 'similar-assets' | 'large-files';
 
@@ -394,220 +368,5 @@ function Storage() {
                 </DialogHeader>
             </DialogContent>
         </Dialog>
-    );
-}
-
-// AssetList component
-function AssetList({ assets }: { assets: Asset[] }) {
-    const intl = useIntl();
-    // Column helper for type safety
-    const columnHelper = createColumnHelper<Asset>();
-
-    // Define columns
-    const columns = [
-        columnHelper.accessor('thumbnail', {
-            header: '',
-            cell: (info) => (
-                <div className="flex items-center justify-center w-12 h-12">
-                    {info.getValue() ? (
-                        <div className="w-10 h-10 bg-blue-100 rounded overflow-hidden">
-                            <img
-                                src={info.getValue()}
-                                alt={intl.formatMessage(
-                                    { id: 'storage.thumbnail_alt' },
-                                    {
-                                        fileName: info.row.original.fileName,
-                                    },
-                                )}
-                                className="w-full h-full object-cover"
-                            />
-                        </div>
-                    ) : (
-                        <div className="w-10 h-10 bg-gray-100 rounded flex items-center justify-center">
-                            {info.row.original.type === AssetType.Photo ? (
-                                <Image
-                                    className="size-6 text-blue-500"
-                                    aria-label={intl.formatMessage(
-                                        { id: 'storage.image_file_alt' },
-                                        {
-                                            fileName:
-                                                info.row.original.fileName,
-                                        },
-                                    )}
-                                />
-                            ) : info.row.original.type === AssetType.Video ? (
-                                <FileVideo
-                                    className="size-6 text-red-500"
-                                    aria-label={intl.formatMessage(
-                                        { id: 'storage.video_file_alt' },
-                                        {
-                                            fileName:
-                                                info.row.original.fileName,
-                                        },
-                                    )}
-                                />
-                            ) : info.row.original.type === AssetType.Sidecar ? (
-                                <FileText
-                                    className="size-6 text-purple-500"
-                                    aria-label={intl.formatMessage(
-                                        { id: 'storage.sidecar_file_alt' },
-                                        {
-                                            fileName:
-                                                info.row.original.fileName,
-                                        },
-                                    )}
-                                />
-                            ) : null}
-                        </div>
-                    )}
-                </div>
-            ),
-            enableSorting: false,
-        }),
-        columnHelper.accessor('fileName', {
-            header: () => <FormattedMessage id="storage.col_filename" />,
-            cell: (info) => (
-                <div className="font-medium">{info.getValue()}</div>
-            ),
-        }),
-        columnHelper.accessor('path', {
-            header: () => <FormattedMessage id="storage.col_path" />,
-            cell: (info) => (
-                <div className="text-gray-500 text-sm">{info.getValue()}</div>
-            ),
-        }),
-        columnHelper.accessor('size', {
-            header: () => (
-                <div className="text-end">
-                    <FormattedMessage id="storage.col_size" />
-                </div>
-            ),
-            cell: (info) => (
-                <div className="text-end">
-                    {formatFileSize(info.getValue())}
-                </div>
-            ),
-            sortingFn: 'basic',
-        }),
-        columnHelper.accessor('date', {
-            header: () => (
-                <div className="text-end">
-                    <FormattedMessage id="storage.col_date" />
-                </div>
-            ),
-            cell: (info) => (
-                <div className="text-end">
-                    {intl.formatDate(info.getValue())}
-                </div>
-            ),
-            sortingFn: 'datetime',
-        }),
-    ];
-
-    // Fix the sorting state type
-    const [sorting, setSorting] = React.useState<SortingState>([]);
-
-    const table = useReactTable({
-        data: assets,
-        columns,
-        state: {
-            sorting,
-        },
-        onSortingChange: setSorting,
-        getCoreRowModel: getCoreRowModel(),
-        getSortedRowModel: getSortedRowModel(),
-    });
-
-    if (assets.length === 0) {
-        return (
-            <div>
-                <FormattedMessage id="storage.empty_list" />
-            </div>
-        );
-    }
-
-    return (
-        <div className="rounded-md border">
-            <table className="w-full">
-                <thead>
-                    {table.getHeaderGroups().map((headerGroup) => (
-                        <tr
-                            key={headerGroup.id}
-                            className="border-b bg-gray-50"
-                        >
-                            {headerGroup.headers.map((header) => (
-                                <th
-                                    key={header.id}
-                                    className="px-4 py-3 text-start text-sm font-medium text-gray-700"
-                                    onClick={header.column.getToggleSortingHandler()}
-                                    onKeyDown={(e) => {
-                                        if (
-                                            e.key === 'Enter' ||
-                                            e.key === ' '
-                                        ) {
-                                            header.column.getToggleSortingHandler();
-                                        }
-                                    }}
-                                    style={{
-                                        cursor: header.column.getCanSort()
-                                            ? 'pointer'
-                                            : 'default',
-                                    }}
-                                    tabIndex={
-                                        header.column.getCanSort()
-                                            ? 0
-                                            : undefined
-                                    }
-                                    role={
-                                        header.column.getCanSort()
-                                            ? 'button'
-                                            : undefined
-                                    }
-                                >
-                                    <div className="flex items-center">
-                                        {flexRender(
-                                            header.column.columnDef.header,
-                                            header.getContext(),
-                                        )}
-                                        {header.column.getCanSort() && (
-                                            <span className="ms-1">
-                                                {header.column.getIsSorted() ===
-                                                'asc'
-                                                    ? '🔼'
-                                                    : header.column.getIsSorted() ===
-                                                        'desc'
-                                                      ? '🔽'
-                                                      : '⏺️'}
-                                            </span>
-                                        )}
-                                    </div>
-                                </th>
-                            ))}
-                        </tr>
-                    ))}
-                </thead>
-                <tbody>
-                    {table.getRowModel().rows.map((row) => (
-                        <tr key={row.id} className="border-b hover:bg-gray-50">
-                            {row.getVisibleCells().map((cell) => (
-                                <td
-                                    key={cell.id}
-                                    className="px-4 py-3 text-sm"
-                                    // onKeyDown={() => {
-                                    //   setPreviewAssetId(row.id);
-                                    //   setPreviewOpen(true);
-                                    // }} // TODO: Fix this
-                                >
-                                    {flexRender(
-                                        cell.column.columnDef.cell,
-                                        cell.getContext(),
-                                    )}
-                                </td>
-                            ))}
-                        </tr>
-                    ))}
-                </tbody>
-            </table>
-        </div>
     );
 }

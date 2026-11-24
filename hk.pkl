@@ -3,7 +3,7 @@
 // steps whose files actually changed.
 //
 // The hk version in this URL MUST match `hk` in mise.toml [tools]; bump them together.
-amends "package://github.com/jdx/hk/releases/download/v1.48.0/hk@1.48.0#/Config.pkl"
+amends "package://github.com/jdx/hk/releases/download/v2.14.0/hk@2.14.0#/Config.pkl"
 
 hooks {
   // pre-commit: auto-fix formatters/linters and stage the result. hk's native
@@ -15,7 +15,7 @@ hooks {
     stage = true    // re-stage what the fixers changed; the commit proceeds with fixes
     steps {
       ["format-rust"]   { glob = "**/*.rs"; fix = "mise run format-rust" }
-      ["format-web"]    { glob = "capsule-web/**/*.{ts,tsx,js,jsx,json,jsonc,css}"; fix = "mise run format-web" }
+      ["format-web"]    { glob = "capsule-web/**/*.{ts,tsx,js,jsx,json,jsonc,css,md}"; fix = "mise run format-web" }
       ["format-docs"]   { glob = "capsule-docs/**/*.{ts,tsx,js,jsx,json,jsonc,css,astro,md,mdx}"; fix = "mise run format-docs" }
       ["format-kotlin"] { glob = "**/*.{kt,kts}"; fix = "mise run format-kotlin" }
       // Swift tasks self-skip off macOS (see mise-tasks/format-swift).
@@ -23,7 +23,7 @@ hooks {
 
       // Linters run after their formatter — same glob, same files, so depends never
       // skip-mismatches, and we avoid two fixers writing the same files concurrently.
-      ["lint-web"]    { glob = "capsule-web/**/*.{ts,tsx,js,jsx,json,jsonc,css}"; fix = "mise run lint-web"; depends = "format-web" }
+      ["lint-web"]    { glob = "capsule-web/**/*.{ts,tsx,js,jsx,json,jsonc,css,md}"; fix = "mise run lint-web"; depends = "format-web" }
       ["lint-docs"]   { glob = "capsule-docs/**/*.{ts,tsx,js,jsx,json,jsonc,css,astro,md,mdx}"; fix = "mise run lint-docs"; depends = "format-docs" }
       ["lint-md"]     { glob = "**/*.md"; fix = "mise run lint-md" }
     }
@@ -57,8 +57,8 @@ hooks {
       ["test-layout-check"]   { glob = List("**/*.rs"); check = "mise run test-layout-check" }
       ["license-check"]       { glob = List("**/Cargo.toml", "Cargo.lock", "deny.toml"); check = "mise run license-check" }
 
-      ["format-check-web"]    { glob = "capsule-web/**/*.{ts,tsx,js,jsx,json,jsonc,css}"; check = "mise run format-check-web" }
-      ["lint-check-web"]      { glob = "capsule-web/**/*.{ts,tsx,js,jsx,json,jsonc,css}"; check = "mise run lint-check-web" }
+      ["format-check-web"]    { glob = "capsule-web/**/*.{ts,tsx,js,jsx,json,jsonc,css,md}"; check = "mise run format-check-web" }
+      ["lint-check-web"]      { glob = "capsule-web/**/*.{ts,tsx,js,jsx,json,jsonc,css,md}"; check = "mise run lint-check-web" }
       ["test-web"]            { glob = "capsule-web/**/*.{ts,tsx,js,jsx}"; check = "mise run test-web" }
 
       ["format-check-docs"]   { glob = "capsule-docs/**/*.{ts,tsx,js,jsx,json,jsonc,css,astro,md,mdx}"; check = "mise run format-check-docs" }

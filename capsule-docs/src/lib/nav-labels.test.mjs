@@ -7,17 +7,18 @@ import {
 } from './nav-labels.mjs';
 
 describe('NAV_LABELS', () => {
-    it.each(
-        Object.keys(NAV_LABELS),
-    )('renders %s in every docs locale', (label) => {
-        const byLang = NAV_LABELS[label];
-        expect(Object.keys(byLang).sort()).toEqual(
-            DOCS_LOCALES.map(({ lang }) => lang).sort(),
-        );
-        for (const text of Object.values(byLang)) {
-            expect(text.trim()).not.toBe('');
-        }
-    });
+    it.each(Object.keys(NAV_LABELS))(
+        'renders %s in every docs locale',
+        (label) => {
+            const byLang = NAV_LABELS[label];
+            expect(Object.keys(byLang).sort()).toEqual(
+                DOCS_LOCALES.map(({ lang }) => lang).sort(),
+            );
+            for (const text of Object.values(byLang)) {
+                expect(text.trim()).not.toBe('');
+            }
+        },
+    );
 
     it('covers the sidebar groups and the header and footer links', () => {
         for (const label of [

@@ -15,7 +15,7 @@ A device's commit never reaches the server. If the device does not see its epoch
 ### State divergence
 
 - **Local is behind:** replay the missed commits from the server's chain.
-- **Local is ahead** (it holds a commit the server's chain lacks): treat it as a lost commit ([](#lost-commit)) first. The device discards its state and **re-bootstraps in full** only after the retry budget is spent, or on a *provable fork*, where the server has advanced past the parent with a different commit. Partial repair is never attempted.
+- **Local is ahead** (it holds a commit the server's chain lacks): treat it as a lost commit ([](#lost-commit)) first. The device discards its state and **re-bootstraps in full** only after the retry budget is spent, or on a _provable fork_, where the server has advanced past the parent with a different commit. Partial repair is never attempted.
 
 ### Concurrent commits with the wrong ordering
 

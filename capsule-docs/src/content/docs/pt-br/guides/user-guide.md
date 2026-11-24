@@ -4,7 +4,7 @@ description: O uso diário de uma biblioteca do Capsule com a CLI capsule — im
 audit: none
 ---
 
-Este guia cobre a CLI `capsule`, o cliente de referência. Os comandos marcados como *(planejado)*
+Este guia cobre a CLI `capsule`, o cliente de referência. Os comandos marcados como _(planejado)_
 estão no [roadmap](https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md) e ainda não estão
 disponíveis. `capsule <command> --help` é a referência oficial para as opções; a referência da CLI
 ([](/reference/cli/)) lista todas elas.
@@ -45,7 +45,7 @@ de qualquer original que você importar.
   `import --move --push` exclui cada origem somente depois que o item correspondente é verificado.
   Sem `--push`, `--move` mantém todas as origens e avisa, e um `import --move --push` posterior sobre
   os mesmos arquivos as libera.
-- `capsule restore` *(planejado)* baixa os originais e os compara byte a byte com o que foi
+- `capsule restore` _(planejado)_ baixa os originais e os compara byte a byte com o que foi
   assinado na importação.
 
 <a id="organize"></a>
@@ -55,11 +55,11 @@ de qualquer original que você importar.
 - **Etiquetas** são livres e se ligam a um item, uma pilha (par RAW+JPEG, sequência de disparos,
   bracketing), um álbum ou uma região de uma imagem. As etiquetas que você adiciona ficam separadas
   das sugeridas pela IA, e você pode aceitar ou descartar uma sugestão. Etiquetas de itens já
-  existem; etiquetas de pilhas, álbuns e regiões estão *(planejadas)*.
+  existem; etiquetas de pilhas, álbuns e regiões estão _(planejadas)_.
 - `capsule show <asset>` mostra o que os metadados assinados de um item registram: legenda,
   classificação, etiquetas, localização e horário de captura.
 - `capsule repair capture-time` encontra itens cujo horário de captura não bate com o EXIF do
-  original e, com `--apply`, o corrige. A edição de localização está *(planejada)*.
+  original e, com `--apply`, o corrige. A edição de localização está _(planejada)_.
 
 Toda edição é uma alteração assinada e somente de acréscimo: o valor anterior permanece no histórico
 de procedência do item, e edições simultâneas feitas em dois dispositivos são mescladas de forma

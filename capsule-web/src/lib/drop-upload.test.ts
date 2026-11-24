@@ -7,6 +7,7 @@ import { describe, expect, test } from 'bun:test';
 
 import type { SealedDropWire } from './drop-seal';
 import {
+    type DropFailureCode,
     DropUploadError,
     MAX_CHUNK_WAITS,
     MAX_STATUS_POLLS,
@@ -127,7 +128,7 @@ describe('uploadDrop — chunking & progress', () => {
         expect((patches[1].body as Uint8Array).length).toBe(100);
 
         // Progress ends at 1 after the final chunk.
-        expect(progress.at(-1)).toBe(1);
+        expect(progress[progress.length - 1]).toBe(1);
         expect(progress.length).toBe(2);
     });
 
@@ -177,7 +178,7 @@ describe('uploadDrop — failure classification', () => {
 
     async function expectCreateFailure(
         response: Response,
-        expected: string,
+        expected: DropFailureCode,
     ): Promise<void> {
         const { impl } = mockFetch(() => response);
         const err = await uploadDrop({

@@ -39,13 +39,13 @@ Pulled blobs are bounded by a per-`(receiving_user, source_peer)` caching budget
 
 ## Thresholds and States
 
-| State | Condition | Refuses |
-| --- | --- | --- |
-| **OK** | `used < soft_limit` | nothing |
-| **Soft warning** | `soft_limit ≤ used < hard_limit` | nothing; the client raises the `quota_soft` alert ([](/design/notifications/#alert-classes)) |
-| **Hard exceeded** | `used ≥ hard_limit` | new upload sessions and new share-link metadata records ([](/design/share-links/#quota)); all other writes work |
-| **Grace expired** | hard-exceeded for longer than `grace_window` | additionally every metadata-growth write (caption/tag edits, new share or upload links) |
-| **Suspended** | set by an operator, whatever `used` | every growth write: new upload sessions, drop sessions charged to the account, every metadata-growth write |
+| State             | Condition                                    | Refuses                                                                                                         |
+| ----------------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| **OK**            | `used < soft_limit`                          | nothing                                                                                                         |
+| **Soft warning**  | `soft_limit ≤ used < hard_limit`             | nothing; the client raises the `quota_soft` alert ([](/design/notifications/#alert-classes))                    |
+| **Hard exceeded** | `used ≥ hard_limit`                          | new upload sessions and new share-link metadata records ([](/design/share-links/#quota)); all other writes work |
+| **Grace expired** | hard-exceeded for longer than `grace_window` | additionally every metadata-growth write (caption/tag edits, new share or upload links)                         |
+| **Suspended**     | set by an operator, whatever `used`          | every growth write: new upload sessions, drop sessions charged to the account, every metadata-growth write      |
 
 - The writes a `delete`, `trash-restore` or trash-empty produces MUST always be admitted: a user must be able to delete their way back under quota.
 - Entering the grace window raises `quota_grace_expiring`. Reads are never refused by quota.

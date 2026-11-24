@@ -4,7 +4,7 @@ description: Tiered, ranged, on-demand blob fetch — access scoping, the fallba
 audit: none
 ---
 
-The server-to-client half of the [](/design/transfer/), bound by its invariants ([](/design/transfer/#invariants)). Upload optimises for correctness under interruption; download optimises for **bandwidth and storage frugality**, fetching the smallest representation that serves the user's current intent. A client learns *what* to fetch from the sync feed ([](/design/sync/)). Server: `capsule-server::serve` behind `GET /v1/blob/{hash}` ([](/reference/api/sync/)); client: `capsule-sdk::fetch`.
+The server-to-client half of the [](/design/transfer/), bound by its invariants ([](/design/transfer/#invariants)). Upload optimises for correctness under interruption; download optimises for **bandwidth and storage frugality**, fetching the smallest representation that serves the user's current intent. A client learns _what_ to fetch from the sync feed ([](/design/sync/)). Server: `capsule-server::serve` behind `GET /v1/blob/{hash}` ([](/reference/api/sync/)); client: `capsule-sdk::fetch`.
 
 ## Tiered, On-Demand Fetch
 
@@ -19,7 +19,7 @@ The per-library synchronization scope ([](/design/sync/#synchronization-scope)) 
 
 ### Render Ladder
 
-What a client *shows* follows the same ladder, extended with what is already on the device. The order is computed once, in Rust, and reaches every native app through the FFI; apps render the representation it names and keep no ladder of their own. The keyless web client shows what the sync feed and its share paths serve. From least to most faithful:
+What a client _shows_ follows the same ladder, extended with what is already on the device. The order is computed once, in Rust, and reaches every native app through the FFI; apps render the representation it names and keep no ladder of their own. The keyless web client shows what the sync feed and its share paths serve. From least to most faithful:
 
 1. **LQIP** from the metadata blob, or its dominant colour when the LQIP cannot be decoded ([](/design/thumbnails/#lqip)).
 2. **Thumbnail**: the encoded tier, or, until it exists, an embedded preview ([](/design/thumbnails/#embedded-previews)) whose long edge reaches the Thumbnail tier's.
@@ -73,7 +73,7 @@ A missing representation MUST NOT remove the asset's metadata or index entry, an
 - The client then checks the header and decrypts, relying on STREAM's authentication tags to detect truncation, reordering or deletion. A blob that will not open is classified into exactly one state (corrupt, unsupported, key not held, wrong key, or sealed bad at source), each with its own action ([](/design/cryptography/encryption/#reading-a-blob)); a fetch never reports one undifferentiated failure. A derivative sealed bad at source is discarded and **not** re-fetched, since the manifest commits to that address; the client regenerates it from the original ([](/design/thumbnails/)).
 - **Decryption is one pass.** Where the client wants plaintext (opening an original, export, restore), it hashes the ciphertext and decrypts it in the same streaming read, writing plaintext to a temporary file that is renamed into place only after the final STREAM tag and the content address both verify. The ciphertext is not staged on disk and read a second time. A restore interrupted mid-blob resumes by re-sealing the held plaintext prefix, which reproduces the ciphertext prefix exactly and so restores the hash state, or else starts the blob again.
 - A write that fails for lack of space keeps the partial and pauses the fetch's class rather than retrying it ([](/design/transfer/#failure-model)).
-- Discarding the only local copy of a *local-origin* asset is gated by [](/design/transfer/durability/#verify-before-destroy). Re-fetchable server-origin blobs are always safe to drop.
+- Discarding the only local copy of a _local-origin_ asset is gated by [](/design/transfer/durability/#verify-before-destroy). Re-fetchable server-origin blobs are always safe to drop.
 
 ## Prefetch and Frugality
 
@@ -83,18 +83,18 @@ A missing representation MUST NOT remove the asset's metadata or index entry, an
 
 ## Transfer Scheduler
 
-What a user is looking at decides what moves first. One `TransferScheduler` per client process, in Rust core and shared by every app through the FFI, admits **every** blob transfer in both directions: fetches, upload sessions from every lane ([](/design/transfer/upload/#queueing-across-servers)) and delegated hand-offs. It decides order, deduplication and cancellation, and stamps each request with its class. *Whether* a class may send at all on the current path (allow, ask or deny; metering, power, heat) is decided per request by the admission layer at Spargen's transport seam ([](/design/networking/#admission-and-priority)), so a backend swap keeps both and no scheduling or metering ever lives in the HTTP backend ([](/design/networking/#one-http-stack)).
+What a user is looking at decides what moves first. One `TransferScheduler` per client process, in Rust core and shared by every app through the FFI, admits **every** blob transfer in both directions: fetches, upload sessions from every lane ([](/design/transfer/upload/#queueing-across-servers)) and delegated hand-offs. It decides order, deduplication and cancellation, and stamps each request with its class. _Whether_ a class may send at all on the current path (allow, ask or deny; metering, power, heat) is decided per request by the admission layer at Spargen's transport seam ([](/design/networking/#admission-and-priority)), so a backend swap keeps both and no scheduling or metering ever lives in the HTTP backend ([](/design/networking/#one-http-stack)).
 
 **Priority classes**, highest first:
 
-| Class | What | Typical source |
-| --- | --- | --- |
-| `visible` | A representation a surface is showing now | Grid cells and the open asset, from viewport hints |
-| `near_view` | A representation just outside the viewport, in scroll direction | Viewport hints' lookahead |
-| `requested_original` | An original the user explicitly asked for | Full-fidelity view, export, share |
-| `prefetch` | A predicted need | The likely-next preview |
-| `sync` | Keeping devices converged | Feed metadata, eager-scope fetches ([](/design/sync/#synchronization-scope)), index- and preview-tier uploads |
-| `backup` | Moving custody to the server | Original uploads, backup artifacts, delegated hand-offs |
+| Class                | What                                                            | Typical source                                                                                                |
+| -------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `visible`            | A representation a surface is showing now                       | Grid cells and the open asset, from viewport hints                                                            |
+| `near_view`          | A representation just outside the viewport, in scroll direction | Viewport hints' lookahead                                                                                     |
+| `requested_original` | An original the user explicitly asked for                       | Full-fidelity view, export, share                                                                             |
+| `prefetch`           | A predicted need                                                | The likely-next preview                                                                                       |
+| `sync`               | Keeping devices converged                                       | Feed metadata, eager-scope fetches ([](/design/sync/#synchronization-scope)), index- and preview-tier uploads |
+| `backup`             | Moving custody to the server                                    | Original uploads, backup artifacts, delegated hand-offs                                                       |
 
 - **Strict order for admission.** When a slot frees, the highest class with waiting work takes it. To keep custody moving, the lowest class the plan permits keeps one slot whenever it has work, so `backup` is slowed, never starved.
 - **One request per address.** A representation wanted by two classes is one transfer at the higher class; a lower-class request for it joins the transfer already admitted.

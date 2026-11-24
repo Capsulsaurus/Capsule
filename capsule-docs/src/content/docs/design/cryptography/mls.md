@@ -86,7 +86,7 @@ At-rest ciphertext persists, so true forward secrecy does not apply to it. Each 
 ## Validation
 
 - **Round trip:** add user, add device, remove user, remove device and AMK rotation, with all members' views agreeing after each commit.
-- **Welcome:** `Full` delivers every prior AMK and decrypts every prior asset; `Capped(n)` delivers exactly the last *n*.
+- **Welcome:** `Full` delivers every prior AMK and decrypts every prior asset; `Capped(n)` delivers exactly the last _n_.
 - **Policy consistency:** the same user added through different devices or in different orders receives an identical AMK range.
 - **Epoch ceiling:** a manifest claiming an epoch above the chain's attested ceiling is rejected.
 - **Idempotency:** a replayed commit is rejected and leaves state unchanged.

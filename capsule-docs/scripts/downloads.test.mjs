@@ -112,26 +112,28 @@ describe('GitHub releases', () => {
         );
     });
 
-    it.each(
-        RELEASE_TARGETS.map((target) => [target.target, target]),
-    )('%s says whether its archive holds the server, as the workflow packages it', (name, target) => {
-        const entry = MATRIX.find((row) => row.target === name);
-        const windows = entry.os.startsWith('windows');
-        const unix = step('Package (unix)');
-        const win = step('Package (windows)');
-        expect(unix).toContain("if: runner.os != 'Windows'");
-        expect(win).toContain("if: runner.os == 'Windows'");
-        expect(target.includesServer).toBe(
-            (windows ? win : unix).includes('release/capsule-server'),
-        );
-    });
+    it.each(RELEASE_TARGETS.map((target) => [target.target, target]))(
+        '%s says whether its archive holds the server, as the workflow packages it',
+        (name, target) => {
+            const entry = MATRIX.find((row) => row.target === name);
+            const windows = entry.os.startsWith('windows');
+            const unix = step('Package (unix)');
+            const win = step('Package (windows)');
+            expect(unix).toContain("if: runner.os != 'Windows'");
+            expect(win).toContain("if: runner.os == 'Windows'");
+            expect(target.includesServer).toBe(
+                (windows ? win : unix).includes('release/capsule-server'),
+            );
+        },
+    );
 
-    it.each(
-        RELEASE_TARGETS.map((target) => [target.target, target]),
-    )('%s is best-effort exactly when the workflow lets it fail', (name, target) => {
-        const entry = MATRIX.find((row) => row.target === name);
-        expect(target.bestEffort).toBe(entry.optional);
-    });
+    it.each(RELEASE_TARGETS.map((target) => [target.target, target]))(
+        '%s is best-effort exactly when the workflow lets it fail',
+        (name, target) => {
+            const entry = MATRIX.find((row) => row.target === name);
+            expect(target.bestEffort).toBe(entry.optional);
+        },
+    );
 
     it('labels an archive without the server as command line only', () => {
         for (const [i, target] of RELEASE_TARGETS.entries()) {

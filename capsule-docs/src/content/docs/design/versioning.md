@@ -22,15 +22,15 @@ Every client and server implementation, of any version, MUST uphold these. Toget
 
 ## Version Identifiers
 
-| Identifier | Carried on | Owner |
-| --- | --- | --- |
-| `protocol_version` (`YYYY-MM-DD`) | every request, every album pin | [](/design/threat-model/validation/#universal-headers) |
-| `crypto_suite_id` | every manifest and metadata blob | [](/design/cryptography/primitives/#versioning-identifiers) |
-| `sidecar_schema` | every sidecar, key 0 | [](/design/metadata/#schema-versioning-rules) |
-| provenance record version | every provenance record, leading field | [](/design/cryptography/provenance/) |
-| client build (semver) | `X-Capsule-Min-Client-Build` floor in every response | [](/design/threat-model/validation/#universal-headers) |
-| catalog `PRAGMA user_version` | the client's SQLite catalog | [](#client-catalog-migration) |
-| server schema migrations | PostgreSQL `seaql_migrations` | [](/design/filesystem/server/) |
+| Identifier                        | Carried on                                           | Owner                                                       |
+| --------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------- |
+| `protocol_version` (`YYYY-MM-DD`) | every request, every album pin                       | [](/design/threat-model/validation/#universal-headers)      |
+| `crypto_suite_id`                 | every manifest and metadata blob                     | [](/design/cryptography/primitives/#versioning-identifiers) |
+| `sidecar_schema`                  | every sidecar, key 0                                 | [](/design/metadata/#schema-versioning-rules)               |
+| provenance record version         | every provenance record, leading field               | [](/design/cryptography/provenance/)                        |
+| client build (semver)             | `X-Capsule-Min-Client-Build` floor in every response | [](/design/threat-model/validation/#universal-headers)      |
+| catalog `PRAGMA user_version`     | the client's SQLite catalog                          | [](#client-catalog-migration)                               |
+| server schema migrations          | PostgreSQL `seaql_migrations`                        | [](/design/filesystem/server/)                              |
 
 ### Protocol Version Source
 

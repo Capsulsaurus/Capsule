@@ -6,10 +6,10 @@ audit: none
 
 The **server** stores only opaque, content-addressed ciphertext and never holds a key. **Clients** hold keys, so a client stores plaintext media, signed sidecars, and rebuildable caches. The on-disk layouts are part of the contract.
 
-| Sub-doc | Concern |
-| --- | --- |
-| [](/design/filesystem/server/) | Blob store layout, Postgres index, required services, deletion |
-| [](/design/filesystem/client/) | Library layout, local SQLite index, space recovery |
+| Sub-doc                             | Concern                                                           |
+| ----------------------------------- | ----------------------------------------------------------------- |
+| [](/design/filesystem/server/)      | Blob store layout, Postgres index, required services, deletion    |
+| [](/design/filesystem/client/)      | Library layout, local SQLite index, space recovery                |
 | [](/design/filesystem/maintenance/) | Validation, scrubbing, repair, intra-library dedup, atomic writes |
 
 Byte transfer is covered by [](/design/transfer/); metadata sync by [](/design/sync/).
@@ -22,10 +22,10 @@ Byte transfer is covered by [](/design/transfer/); metadata sync by [](/design/s
 - **4 KiB alignment.** Upload chunks are 4 KiB-aligned so the staging path ([](/design/transfer/upload/#staging)) stays block-aligned.
 - **Content-addressing.** Server blobs are named by their ciphertext hash ([](/design/cryptography/primitives/)).
 
-| Concern | Server | Client |
-| --- | --- | --- |
-| Stored form | Opaque ciphertext blobs | Plaintext media + CBOR sidecars |
-| Naming | Ciphertext hash | UUIDv7, date-bucketed |
-| Index | PostgreSQL, authoritative, key-free | SQLite, migrated in place; partly rebuildable |
-| Derived data | Client-generated encrypted blobs | Generated locally, evictable |
-| Originals | Retained while referenced | Present only if synced locally |
+| Concern      | Server                              | Client                                        |
+| ------------ | ----------------------------------- | --------------------------------------------- |
+| Stored form  | Opaque ciphertext blobs             | Plaintext media + CBOR sidecars               |
+| Naming       | Ciphertext hash                     | UUIDv7, date-bucketed                         |
+| Index        | PostgreSQL, authoritative, key-free | SQLite, migrated in place; partly rebuildable |
+| Derived data | Client-generated encrypted blobs    | Generated locally, evictable                  |
+| Originals    | Retained while referenced           | Present only if synced locally                |

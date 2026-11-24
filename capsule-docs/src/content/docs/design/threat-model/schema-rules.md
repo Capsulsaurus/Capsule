@@ -10,7 +10,7 @@ Fields live in their owner docs; this doc fixes how they may evolve.
 
 [](/design/principles/#postels-law-asymmetric):
 
-- **Requests:** unknown fields *inside* a known schema are preserved verbatim. Unknown **top-level** fields are rejected. An undeclared `sidecar_schema` or `crypto_suite_id` is rejected outright.
+- **Requests:** unknown fields _inside_ a known schema are preserved verbatim. Unknown **top-level** fields are rejected. An undeclared `sidecar_schema` or `crypto_suite_id` is rejected outright.
 - **Responses:** unknown fields are preserved verbatim, so a newer server never breaks an older client.
 - **Bounded sizes:** every field has a schema-declared maximum, and oversize is rejected.
 
@@ -26,20 +26,20 @@ Every enum in a signed or validated structure is **closed per `protocol_version`
 
 An index of negated owner-doc rules. Receivers reject the consequence structurally regardless.
 
-| A correct client never… | Owner |
-| --- | --- |
-| Re-signs under a lower `crypto_suite_id` | [](/design/cryptography/primitives/#versioning-identifiers) |
-| Signs for an epoch whose write-tier key it lacks | [](/design/cryptography/keys/#write-authorization) |
-| Removes an OR-set `add_id` it never observed | [](/design/metadata/#add-id-binding) |
-| Strips `_unknown` or `superseded_captions` on write-back | [](/design/metadata/#collaborative-metadata) |
-| Overwrites or truncates a provenance chain | [](/design/cryptography/provenance/#chained-append-only-structure) |
-| Sends `revoke_all_sessions` without master-key proof | [](/design/authentication/#explicit-revocation) |
-| Decodes non-home-peer bytes outside the sandbox | [](/design/clients/#sandboxed-decoder) |
-| Promotes an AI tag to a user tag except by a signed op | [](/design/metadata/#tag-provenance-and-namespacing) |
-| Retries `429`/`409`/`426` with the same payload | [](/design/threat-model/validation/#protocol-and-capability-negotiation) |
-| Orders a merge or authorizes a write by a self-asserted `ts` or `timestamp` | [](/design/metadata/#collaborative-metadata) |
-| Sizes an allocation from a length a server or peer states | [](/design/networking/#http-transport) |
-| Hashes, seals, derives a key or encodes a signed record with its own re-implementation instead of the shared core | [](/design/threat-model/risks/) |
+| A correct client never…                                                                                           | Owner                                                                    |
+| ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Re-signs under a lower `crypto_suite_id`                                                                          | [](/design/cryptography/primitives/#versioning-identifiers)              |
+| Signs for an epoch whose write-tier key it lacks                                                                  | [](/design/cryptography/keys/#write-authorization)                       |
+| Removes an OR-set `add_id` it never observed                                                                      | [](/design/metadata/#add-id-binding)                                     |
+| Strips `_unknown` or `superseded_captions` on write-back                                                          | [](/design/metadata/#collaborative-metadata)                             |
+| Overwrites or truncates a provenance chain                                                                        | [](/design/cryptography/provenance/#chained-append-only-structure)       |
+| Sends `revoke_all_sessions` without master-key proof                                                              | [](/design/authentication/#explicit-revocation)                          |
+| Decodes non-home-peer bytes outside the sandbox                                                                   | [](/design/clients/#sandboxed-decoder)                                   |
+| Promotes an AI tag to a user tag except by a signed op                                                            | [](/design/metadata/#tag-provenance-and-namespacing)                     |
+| Retries `429`/`409`/`426` with the same payload                                                                   | [](/design/threat-model/validation/#protocol-and-capability-negotiation) |
+| Orders a merge or authorizes a write by a self-asserted `ts` or `timestamp`                                       | [](/design/metadata/#collaborative-metadata)                             |
+| Sizes an allocation from a length a server or peer states                                                         | [](/design/networking/#http-transport)                                   |
+| Hashes, seals, derives a key or encodes a signed record with its own re-implementation instead of the shared core | [](/design/threat-model/risks/)                                          |
 
 ## Min-Supported-Client Deprecation Policy
 

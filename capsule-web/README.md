@@ -32,7 +32,7 @@ drop in later:
 Reads return key-free shells: ids, album membership and counts, and
 awaiting-original state are real; titles, cover art, capture dates, dimensions,
 LQIP and locations live in encrypted metadata and stay absent until a decode and
-verify boundary lands *below* `CapsuleGateway`. That boundary is post-v1. With no
+verify boundary lands _below_ `CapsuleGateway`. That boundary is post-v1. With no
 reachable server the store stays empty and the app renders empty states rather
 than failing.
 
@@ -61,6 +61,9 @@ Until then this path works and is tested; it is not dead code.
   submenus open to the right and arrow keys run backwards under Arabic.
 - **Guest share crypto:** `capsule-wasm` (`mise run build-wasm`), generated and never committed.
 - **Lint / format:** Biome. **Runtime, package manager and test runner:** bun.
+- **Type checking:** TypeScript, run by `mise run typecheck-web` in `check-web`. `@types/bun`
+  types the `bun:test` suites and the `node:` builtins they read fixtures with; the tsconfig
+  names it in `types` because TypeScript 7 no longer loads every `@types` package by itself.
 
 ## Development
 

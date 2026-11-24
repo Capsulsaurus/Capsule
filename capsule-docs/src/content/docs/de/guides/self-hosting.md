@@ -148,13 +148,13 @@ synchronisiert. Ein Container liest die Uhr des Hosts, also synchronisieren Sie 
 Abweichung SOLLTE (SHOULD) unter einer Sekunde bleiben und MUSS (MUST) unter 30 Sekunden bleiben.
 Jenseits dieser Grenzen:
 
-| Abweichung | Was nicht mehr funktioniert |
-| --- | --- |
-| Über 30 s | Codes für den zweiten Faktor schlagen fehl: Ein Code wird nur innerhalb eines 30-s-Schritts der Serveruhr akzeptiert ([](/design/authentication/)) |
-| Über 5 min | Die Föderation stoppt in beide Richtungen: Peers lehnen die signierten Anfragen, Hinweise und Berichte dieses Servers ab, und er lehnt ihre ab ([](/design/federation/)) |
-| Uhr geht vor | Der Papierkorb wird vor Ende seiner Aufbewahrungsfrist geleert, und eine rechtzeitige Wiederherstellung wird abgelehnt ([](/design/organization/#retention-window)). Sitzungen, Freigabelinks und Upload-Sitzungen laufen zu früh ab |
-| Uhr geht nach | Abgelaufene Sitzungen, Freigabelinks und Zähler bleiben länger gültig als konfiguriert |
-| Grob falsch | Clients lehnen Verwahrungsbelege ab, deren `received_at` unplausibel ist ([](/design/transfer/durability/)) |
+| Abweichung    | Was nicht mehr funktioniert                                                                                                                                                                                                          |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Über 30 s     | Codes für den zweiten Faktor schlagen fehl: Ein Code wird nur innerhalb eines 30-s-Schritts der Serveruhr akzeptiert ([](/design/authentication/))                                                                                   |
+| Über 5 min    | Die Föderation stoppt in beide Richtungen: Peers lehnen die signierten Anfragen, Hinweise und Berichte dieses Servers ab, und er lehnt ihre ab ([](/design/federation/))                                                             |
+| Uhr geht vor  | Der Papierkorb wird vor Ende seiner Aufbewahrungsfrist geleert, und eine rechtzeitige Wiederherstellung wird abgelehnt ([](/design/organization/#retention-window)). Sitzungen, Freigabelinks und Upload-Sitzungen laufen zu früh ab |
+| Uhr geht nach | Abgelaufene Sitzungen, Freigabelinks und Zähler bleiben länger gültig als konfiguriert                                                                                                                                               |
+| Grob falsch   | Clients lehnen Verwahrungsbelege ab, deren `received_at` unplausibel ist ([](/design/transfer/durability/))                                                                                                                          |
 
 Starten Sie `serve` erst, wenn die Uhr synchronisiert ist. Ordnen Sie es unter systemd nach
 `time-sync.target` ein, mit aktiviertem `chrony-wait.service` oder
@@ -176,14 +176,14 @@ verschlüsselt oder entschlüsselt nie und überlässt TLS dem Reverse Proxy. De
 wird nie über einen Chunk hinaus gepuffert, daher wächst der Speicherbedarf nicht mit der
 Dateigröße.
 
-| | Minimum | Empfohlen |
-| --- | --- | --- |
-| **CPU** | 2 Kerne, x86_64 oder arm64 | 4 Kerne. SHA-2-Befehle (SHA-NI auf x86_64, die Armv8-Kryptografieerweiterungen) beschleunigen das Hashen |
-| **RAM** | 2 GB | 4 bis 8 GB. Mehr hilft dem Cache von PostgreSQL bei einer großen Bibliothek, aber Speicher zahlt sich zuerst aus |
-| **Systemspeicher** | SSD, 10 GB frei | SSD oder NVMe für PostgreSQL |
-| **Blob-Speicher** | Die Größe Ihrer Bibliothek plus Platz für laufende Uploads | Redundante Festplatten (Spiegel, RAID oder ZFS), ausgelegt auf mehrere Jahre Wachstum. Klassische Festplatten genügen |
-| **Netzwerk** | 10 Mbit/s Upstream | Gigabit im LAN und 50 Mbit/s oder mehr Upstream, wenn Geräte von außerhalb synchronisieren |
-| **Stromversorgung** | — | Eine USV, damit ein Stromausfall PostgreSQL nicht mitten im Schreiben unterbricht |
+|                     | Minimum                                                    | Empfohlen                                                                                                             |
+| ------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| **CPU**             | 2 Kerne, x86_64 oder arm64                                 | 4 Kerne. SHA-2-Befehle (SHA-NI auf x86_64, die Armv8-Kryptografieerweiterungen) beschleunigen das Hashen              |
+| **RAM**             | 2 GB                                                       | 4 bis 8 GB. Mehr hilft dem Cache von PostgreSQL bei einer großen Bibliothek, aber Speicher zahlt sich zuerst aus      |
+| **Systemspeicher**  | SSD, 10 GB frei                                            | SSD oder NVMe für PostgreSQL                                                                                          |
+| **Blob-Speicher**   | Die Größe Ihrer Bibliothek plus Platz für laufende Uploads | Redundante Festplatten (Spiegel, RAID oder ZFS), ausgelegt auf mehrere Jahre Wachstum. Klassische Festplatten genügen |
+| **Netzwerk**        | 10 Mbit/s Upstream                                         | Gigabit im LAN und 50 Mbit/s oder mehr Upstream, wenn Geräte von außerhalb synchronisieren                            |
+| **Stromversorgung** | —                                                          | Eine USV, damit ein Stromausfall PostgreSQL nicht mitten im Schreiben unterbricht                                     |
 
 - **`BLOB_ROOT` bleibt auf einem Dateisystem.** Der gesamte Baum, `incoming/` eingeschlossen,
   muss ein Dateisystem sein. Er lässt sich also nicht auf eine SSD und ein Festplatten-Array oder
@@ -193,8 +193,8 @@ Dateigröße.
   Der Cache bedient also den Anfragepfad ebenso wie den Bibliotheksindex. Sitzungen,
   Upload-Sitzungen und Zähler sind klein, und der Server löscht sie, sobald sie abgelaufen sind.
 - **Die Upstream-Bandbreite ist die Grenze für entfernte Geräte.** Ein Smartphone außerhalb Ihres
-  Netzes lädt mit der *Download*-Geschwindigkeit Ihres Anschlusses hoch, aber jeder Abruf einer
-  Vorschau oder eines Originals verlässt das Haus mit Ihrer *Upstream*-Geschwindigkeit. Ein Chunk
+  Netzes lädt mit der _Download_-Geschwindigkeit Ihres Anschlusses hoch, aber jeder Abruf einer
+  Vorschau oder eines Originals verlässt das Haus mit Ihrer _Upstream_-Geschwindigkeit. Ein Chunk
   wird nur abgeschnitten, wenn er nicht mehr ankommt, nie, weil er lange dauert, und ein Client
   bemisst seine Chunks so, dass sie bei der gemessenen Geschwindigkeit in einer kurzen Zielzeit
   fertig werden. Eine langsame Leitung lädt also in ihrem eigenen Tempo hoch. Halten Sie die
@@ -271,11 +271,11 @@ ist eine Startvorlage, und diese Seite nennt die Variablen, über die ein Betrei
 muss. Ein dauerhafter Server verweigert den Start (Exit-Code 2) und nennt alle fehlenden Variablen
 auf einmal, wenn Folgendes fehlt:
 
-| Variable | Zweck |
-| --- | --- |
-| `DATABASE_URL` | PostgreSQL-Verbindung |
-| `BLOB_ROOT` | Blob-Verzeichnis |
-| `JWT_ED25519_DER` | Base64-codierter Ed25519-Schlüssel, der Sitzungstokens signiert |
+| Variable               | Zweck                                                                                           |
+| ---------------------- | ----------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`         | PostgreSQL-Verbindung                                                                           |
+| `BLOB_ROOT`            | Blob-Verzeichnis                                                                                |
+| `JWT_ED25519_DER`      | Base64-codierter Ed25519-Schlüssel, der Sitzungstokens signiert                                 |
 | `ATTESTATION_KEY_SEED` | Base64-codierter Seed, der Verwahrungsbelege signiert; muss unabhängig vom Token-Schlüssel sein |
 
 - **Schützen Sie vor allem den Token-Schlüssel.** Die Datenbank enthält kein Bearer-Geheimnis, eine
@@ -306,10 +306,10 @@ nicht ausdrücklich setzen. Die Föderation ist aus, solange `FEDERATION_ENABLED
 Benennen Sie Ihren Reverse Proxy, damit die quellenbezogenen Ratenlimits den Client sehen und
 nicht den Proxy.
 
-| Variable | Bedeutung |
-| --- | --- |
-| `TRUSTED_PROXIES` | Kommagetrennte Adressen und CIDR-Netze (`10.0.0.0/8`). Ein Netz `/0` wird abgelehnt, weil es jedem Absender glauben würde. |
-| `TRUSTED_PROXY_HOPS` | Vertraut so vielen Weiterleitungs-Hops, die dem Server am nächsten sind, unabhängig von ihrer Adresse. |
+| Variable               | Bedeutung                                                                                                                                            |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TRUSTED_PROXIES`      | Kommagetrennte Adressen und CIDR-Netze (`10.0.0.0/8`). Ein Netz `/0` wird abgelehnt, weil es jedem Absender glauben würde.                           |
+| `TRUSTED_PROXY_HOPS`   | Vertraut so vielen Weiterleitungs-Hops, die dem Server am nächsten sind, unabhängig von ihrer Adresse.                                               |
 | `TRUSTED_PROXY_HEADER` | Das eine Weiterleitungsfeld, das der Server liest: `x-forwarded-for` (Standard) oder `forwarded` (RFC 7239). Jeder andere Wert verhindert den Start. |
 
 Ohne diese Einstellungen wird keinem Weiterleitungs-Header geglaubt. Das ist sicher, aber dann

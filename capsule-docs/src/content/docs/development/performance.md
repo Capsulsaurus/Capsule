@@ -8,7 +8,7 @@ This page owns how Capsule measures speed and memory: the metrics on the path fr
 
 Two rules hold throughout:
 
-- **Every number on this page is unmeasured until a benchmark fills it.** A target with no run behind it is a goal, not a claim, and nothing here may be quoted in the README or user docs until its status is *measured*.
+- **Every number on this page is unmeasured until a benchmark fills it.** A target with no run behind it is a goal, not a claim, and nothing here may be quoted in the README or user docs until its status is _measured_.
 - **No optimisation without a measured A/B** ([](#measurement-policy)).
 
 ## Upload-to-Preview Chain
@@ -28,16 +28,16 @@ flowchart LR
     custody --> remote
 ```
 
-| Metric | Ends when | Pipeline boundary | Measured by |
-| --- | --- | --- | --- |
-| `t_first_local_thumbnail` | The importing device draws the asset's Thumbnail rung (an encoded tier or an embedded preview standing in for it) in a visible cell. | [](/design/import/pipeline/#execute) step 3, derivatives, in `Workspace::prepare_still` (`capsule-library/src/lifecycle/derivatives.rs:387`) | Rust stamps the stage; native code stamps the frame. |
-| `t_sealed` | The signed create commit returns: original encrypted, fsynced and renamed, sidecar sealed, manifest signed and self-verified, index row written. | Execute step 2, `Workspace::commit_signed_create` (`capsule-library/src/lifecycle/import.rs:811`) | Rust |
-| `t_server_custody` | Every blob of the asset's bundle holds a verified custody receipt ([](/design/transfer/durability/#custody-receipts)). | Execute step 4: `Workspace::upload_bundle` (`capsule-library/src/lifecycle/upload.rs:622`), then the SDK's `Receipt` transfer event (`capsule-sdk/src/events.rs:180`) | Rust |
-| `t_first_remote_preview` | A second enrolled device, already synced and in the foreground, draws the asset's Thumbnail rung fetched from the server. | The SDK's `FetchVerified` event (`capsule-sdk/src/events.rs:222`) for the thumbnail blob, then decode and frame | Rust for the fetch; the second device's native code for the frame. The two clocks are not compared: the second device reports its own interval from the sync feed announcing the asset. |
-| Decode ms | One decode of one rung, per format and tier. | The sandboxed decoder ([](/design/clients/#sandboxed-decoder)) or the in-process decode it stands in for | Native (`CapsuleSignpost.imagePipeline` on Apple); `capsule-core::media` for Rust-side decodes |
-| Peak RSS | The process's high-water resident memory over the run. | Whole run | Native only. Rust cannot see the host process's memory honestly. |
-| Queue depth | Assets admitted and not yet sealed, and blobs sealed and not yet in custody, sampled. | Executor and upload queue | Rust |
-| Frame time | Per-frame duration and missed deadlines while the chain runs, so an import that janks the grid is visible. | UI thread | Native (JankStats on Android, the `inputToFrame` and hitch signposts on Apple) |
+| Metric                    | Ends when                                                                                                                                        | Pipeline boundary                                                                                                                                                     | Measured by                                                                                                                                                                             |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `t_first_local_thumbnail` | The importing device draws the asset's Thumbnail rung (an encoded tier or an embedded preview standing in for it) in a visible cell.             | [](/design/import/pipeline/#execute) step 3, derivatives, in `Workspace::prepare_still` (`capsule-library/src/lifecycle/derivatives.rs:387`)                          | Rust stamps the stage; native code stamps the frame.                                                                                                                                    |
+| `t_sealed`                | The signed create commit returns: original encrypted, fsynced and renamed, sidecar sealed, manifest signed and self-verified, index row written. | Execute step 2, `Workspace::commit_signed_create` (`capsule-library/src/lifecycle/import.rs:811`)                                                                     | Rust                                                                                                                                                                                    |
+| `t_server_custody`        | Every blob of the asset's bundle holds a verified custody receipt ([](/design/transfer/durability/#custody-receipts)).                           | Execute step 4: `Workspace::upload_bundle` (`capsule-library/src/lifecycle/upload.rs:622`), then the SDK's `Receipt` transfer event (`capsule-sdk/src/events.rs:180`) | Rust                                                                                                                                                                                    |
+| `t_first_remote_preview`  | A second enrolled device, already synced and in the foreground, draws the asset's Thumbnail rung fetched from the server.                        | The SDK's `FetchVerified` event (`capsule-sdk/src/events.rs:222`) for the thumbnail blob, then decode and frame                                                       | Rust for the fetch; the second device's native code for the frame. The two clocks are not compared: the second device reports its own interval from the sync feed announcing the asset. |
+| Decode ms                 | One decode of one rung, per format and tier.                                                                                                     | The sandboxed decoder ([](/design/clients/#sandboxed-decoder)) or the in-process decode it stands in for                                                              | Native (`CapsuleSignpost.imagePipeline` on Apple); `capsule-core::media` for Rust-side decodes                                                                                          |
+| Peak RSS                  | The process's high-water resident memory over the run.                                                                                           | Whole run                                                                                                                                                             | Native only. Rust cannot see the host process's memory honestly.                                                                                                                        |
+| Queue depth               | Assets admitted and not yet sealed, and blobs sealed and not yet in custody, sampled.                                                            | Executor and upload queue                                                                                                                                             | Rust                                                                                                                                                                                    |
+| Frame time                | Per-frame duration and missed deadlines while the chain runs, so an import that janks the grid is visible.                                       | UI thread                                                                                                                                                             | Native (JankStats on Android, the `inputToFrame` and hitch signposts on Apple)                                                                                                          |
 
 Definitions that make the numbers comparable:
 
@@ -66,13 +66,13 @@ Metrics never leave the device. There is no telemetry upload, no third-party APM
 
 ## Benchmarks
 
-| Harness | Measures | Where | Status |
-| --- | --- | --- | --- |
-| Responsiveness parity | Cold start to first thumbnail, scroll frame rate and dropped frames, full-resolution open, input-to-frame, against the platform photo app on a 100,000-asset library | `xtask/src/bench_apps.rs`, `mise run bench-apps`, `.github/workflows/bench-apps.yml` (manual, self-hosted). Contract: [](/design/clients/#responsiveness) | Implemented; no device baseline is recorded yet |
-| Rust micro and macro benches | Hot functions (hashing, STREAM sealing, CBOR, CRDT merge, planner) and one-asset pipeline runs over the fixture corpus | divan, in each crate's `benches/` | Planned |
-| Upload-to-preview | The [](#upload-to-preview-chain) metrics on a fixed corpus, CLI-driven, against a local server | `capsule-e2e` plus the stage events | Planned |
-| Scale | The [](#scale-benchmark) phases on a synthetic multi-million-asset library | xtask, seeded generator | Planned |
-| Server soak | RSS, latency and fsync time over hours of mixed upload and fetch load | Staging cluster | Planned |
+| Harness                      | Measures                                                                                                                                                             | Where                                                                                                                                                     | Status                                          |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| Responsiveness parity        | Cold start to first thumbnail, scroll frame rate and dropped frames, full-resolution open, input-to-frame, against the platform photo app on a 100,000-asset library | `xtask/src/bench_apps.rs`, `mise run bench-apps`, `.github/workflows/bench-apps.yml` (manual, self-hosted). Contract: [](/design/clients/#responsiveness) | Implemented; no device baseline is recorded yet |
+| Rust micro and macro benches | Hot functions (hashing, STREAM sealing, CBOR, CRDT merge, planner) and one-asset pipeline runs over the fixture corpus                                               | divan, in each crate's `benches/`                                                                                                                         | Planned                                         |
+| Upload-to-preview            | The [](#upload-to-preview-chain) metrics on a fixed corpus, CLI-driven, against a local server                                                                       | `capsule-e2e` plus the stage events                                                                                                                       | Planned                                         |
+| Scale                        | The [](#scale-benchmark) phases on a synthetic multi-million-asset library                                                                                           | xtask, seeded generator                                                                                                                                   | Planned                                         |
+| Server soak                  | RSS, latency and fsync time over hours of mixed upload and fetch load                                                                                                | Staging cluster                                                                                                                                           | Planned                                         |
 
 **divan is the Rust benchmark harness** for the main workspace. It runs benches as plain functions with allocation counting built in, which is what an allocator or arena A/B needs. Rawshift is a separate repository and keeps its own Criterion benches (`rawshift-image`'s `benches/`). No workspace crate has a bench target today.
 
@@ -120,39 +120,39 @@ Not adopted. The server's per-chunk cost is one `fsync` and one SHA-256 pass ([]
 
 Status is **unmeasured** for every row until the named benchmark fills it. Targets are p95 unless stated.
 
-| Target | Library | Profile | Benchmark | Status |
-| --- | --- | --- | --- | --- |
-| Import throughput ≥ 1,000 assets/min (JPEG/HEIC), sealed and in custody | 1M | Reference desktop, LAN server | Scale: import | Unmeasured |
-| `t_first_local_thumbnail` < 500 ms for the first asset of a run | any | Parity phone | Upload-to-preview | Unmeasured |
-| `t_sealed` < 1 s for a 25 MB still | any | Parity phone | Upload-to-preview | Unmeasured |
-| Cold start to first thumbnail no worse than the platform photo app | 100k, 1M | Parity phone | Parity | Unmeasured |
-| First 100 thumbnails drawn < 100 ms from warm open | 1M | Parity phone | Parity | Unmeasured |
-| Full-resolution open < 500 ms (RAW < 2 s) | any | Parity phone | Parity | Unmeasured |
-| Scroll: no dropped frames beyond the baseline tolerance during a fling | 1M, 5M | Parity phone | Scale: scroll | Unmeasured |
-| Search < 200 ms, first results | 1M, 5M | Parity phone | Scale: search | Unmeasured |
-| Places clusters for any viewport < 100 ms | 5M | Parity phone | Scale: places | Unmeasured |
-| Fresh-device metadata catch-up | 1M | Parity phone, LAN | Scale: sync | Unmeasured, no target yet |
-| CRDT merge of one asset's concurrent edits < 100 ms | n/a | Reference desktop | divan | Unmeasured |
-| Client peak RSS < 500 MB during import | 1M | Parity phone | Upload-to-preview | Unmeasured |
-| Server steady-state RSS flat over a 24 h soak | n/a | Staging cluster | Server soak | Unmeasured |
+| Target                                                                  | Library  | Profile                       | Benchmark         | Status                    |
+| ----------------------------------------------------------------------- | -------- | ----------------------------- | ----------------- | ------------------------- |
+| Import throughput ≥ 1,000 assets/min (JPEG/HEIC), sealed and in custody | 1M       | Reference desktop, LAN server | Scale: import     | Unmeasured                |
+| `t_first_local_thumbnail` < 500 ms for the first asset of a run         | any      | Parity phone                  | Upload-to-preview | Unmeasured                |
+| `t_sealed` < 1 s for a 25 MB still                                      | any      | Parity phone                  | Upload-to-preview | Unmeasured                |
+| Cold start to first thumbnail no worse than the platform photo app      | 100k, 1M | Parity phone                  | Parity            | Unmeasured                |
+| First 100 thumbnails drawn < 100 ms from warm open                      | 1M       | Parity phone                  | Parity            | Unmeasured                |
+| Full-resolution open < 500 ms (RAW < 2 s)                               | any      | Parity phone                  | Parity            | Unmeasured                |
+| Scroll: no dropped frames beyond the baseline tolerance during a fling  | 1M, 5M   | Parity phone                  | Scale: scroll     | Unmeasured                |
+| Search < 200 ms, first results                                          | 1M, 5M   | Parity phone                  | Scale: search     | Unmeasured                |
+| Places clusters for any viewport < 100 ms                               | 5M       | Parity phone                  | Scale: places     | Unmeasured                |
+| Fresh-device metadata catch-up                                          | 1M       | Parity phone, LAN             | Scale: sync       | Unmeasured, no target yet |
+| CRDT merge of one asset's concurrent edits < 100 ms                     | n/a      | Reference desktop             | divan             | Unmeasured                |
+| Client peak RSS < 500 MB during import                                  | 1M       | Parity phone                  | Upload-to-preview | Unmeasured                |
+| Server steady-state RSS flat over a 24 h soak                           | n/a      | Staging cluster               | Server soak       | Unmeasured                |
 
 ### Goals From the Owner's Notes
 
-| Goal | Disposition | Status |
-| --- | --- | --- |
-| 10M assets per library | Stretch tier of the scale benchmark; 1M and 5M gate first | Unmeasured |
-| First 100 thumbnails < 100 ms | Scale target above | Unmeasured |
-| Full-res < 500 ms, RAW < 2 s | Scale target above; the RAW figure depends on Rawshift's decoder | Unmeasured |
-| Search < 200 ms | Scale target above | Unmeasured |
-| Idle CPU < 20% | Reframed: an idle phone app should cost close to nothing, so the target is no periodic wake-ups and no CPU while nothing is visible or transferring. That target replaces the 20% figure | Unmeasured |
-| Client RAM < 500 MB | Scale target above (peak RSS during import) | Unmeasured |
-| 99.99% availability | Tracked goal for a server deployment; offline-first clients do not depend on it ([](/design/local-gallery/)). It needs more than one serving replica, which is post-v1 ([ADR-0025](https://github.com/Capsulsaurus/Capsule/blob/master/adr/0025-a-blob-root-has-exactly-one-serving-process.md)) | Unmeasured |
-| 1000 images/min sync | Scale target above (import throughput to custody) | Unmeasured |
-| Conflict resolution < 100 ms | Scale target above (CRDT merge) | Unmeasured |
-| Self-host setup < 30 min | A timed walkthrough of [](/guides/self-hosting/) by someone new to it | Unmeasured, needs a human |
-| "40% better compression" | Tracked goal. Originals are stored byte-exact, so it depends on the roadmap's format-aware compression, which has no design doc yet; that doc names the baseline | Unmeasured |
-| Plugin architecture | Not a goal. Third-party code inside a client would sit inside the plaintext boundary | Dropped |
-| Webhooks < 100 ms | Not a v1 goal ([](#webhooks)) | Not a v1 goal |
+| Goal                          | Disposition                                                                                                                                                                                                                                                                                      | Status                    |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------- |
+| 10M assets per library        | Stretch tier of the scale benchmark; 1M and 5M gate first                                                                                                                                                                                                                                        | Unmeasured                |
+| First 100 thumbnails < 100 ms | Scale target above                                                                                                                                                                                                                                                                               | Unmeasured                |
+| Full-res < 500 ms, RAW < 2 s  | Scale target above; the RAW figure depends on Rawshift's decoder                                                                                                                                                                                                                                 | Unmeasured                |
+| Search < 200 ms               | Scale target above                                                                                                                                                                                                                                                                               | Unmeasured                |
+| Idle CPU < 20%                | Reframed: an idle phone app should cost close to nothing, so the target is no periodic wake-ups and no CPU while nothing is visible or transferring. That target replaces the 20% figure                                                                                                         | Unmeasured                |
+| Client RAM < 500 MB           | Scale target above (peak RSS during import)                                                                                                                                                                                                                                                      | Unmeasured                |
+| 99.99% availability           | Tracked goal for a server deployment; offline-first clients do not depend on it ([](/design/local-gallery/)). It needs more than one serving replica, which is post-v1 ([ADR-0025](https://github.com/Capsulsaurus/Capsule/blob/master/adr/0025-a-blob-root-has-exactly-one-serving-process.md)) | Unmeasured                |
+| 1000 images/min sync          | Scale target above (import throughput to custody)                                                                                                                                                                                                                                                | Unmeasured                |
+| Conflict resolution < 100 ms  | Scale target above (CRDT merge)                                                                                                                                                                                                                                                                  | Unmeasured                |
+| Self-host setup < 30 min      | A timed walkthrough of [](/guides/self-hosting/) by someone new to it                                                                                                                                                                                                                            | Unmeasured, needs a human |
+| "40% better compression"      | Tracked goal. Originals are stored byte-exact, so it depends on the roadmap's format-aware compression, which has no design doc yet; that doc names the baseline                                                                                                                                 | Unmeasured                |
+| Plugin architecture           | Not a goal. Third-party code inside a client would sit inside the plaintext boundary                                                                                                                                                                                                             | Dropped                   |
+| Webhooks < 100 ms             | Not a v1 goal ([](#webhooks))                                                                                                                                                                                                                                                                    | Not a v1 goal             |
 
 ### Webhooks
 

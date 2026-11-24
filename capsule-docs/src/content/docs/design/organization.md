@@ -13,7 +13,7 @@ Container albums ([](#container-albums)) are the cryptographic unit every asset 
 
 ### Container Albums
 
-A container album is the **sharing and access-control boundary** and *is* an MLS group. [](/design/cryptography/keys/) and [](/design/cryptography/mls/) own its keys and membership operations, and [](/design/filesystem/server/) its storage shape. This section owns the interaction surface.
+A container album is the **sharing and access-control boundary** and _is_ an MLS group. [](/design/cryptography/keys/) and [](/design/cryptography/mls/) own its keys and membership operations, and [](/design/filesystem/server/) its storage shape. This section owns the interaction surface.
 
 - **Moves are idempotent.** A move is a signed lifecycle action naming `(asset, target album, epoch)`. A replay finds the target state and no-ops, and concurrent moves resolve by MLS commit order ([](/design/metadata/#grouping-convergence-requirement)).
 - **Roles** are read (AMK), write (AMK + write-tier key) or admin (also admin-tier key), delivered over MLS ([](/design/cryptography/keys/#album-master-keys-amks)). A role change is an MLS commit and bumps the AMK epoch.
@@ -44,12 +44,12 @@ Scope {
 
 `scope_id` is deterministic, so same-platform devices agree. Locators are chosen for stability across reinstall:
 
-| Platform | Source | Canonical locator | Notes |
-| --- | --- | --- | --- |
-| iOS | camera roll / screenshots / user collection | smart-album subtype name, or the collection's `localIdentifier` | `localIdentifier` is per-device; cross-device only via override rows |
-| Android | MediaStore bucket | **relative path** (`DCIM/Camera`) | never `BUCKET_ID` (differs across devices and OS versions) |
-| Desktop | folder / watched dir | canonicalized path (symlinks resolved) | |
-| Any | removable volume | volume UUID + relative path | stable across mount points |
+| Platform | Source                                      | Canonical locator                                               | Notes                                                                |
+| -------- | ------------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------- |
+| iOS      | camera roll / screenshots / user collection | smart-album subtype name, or the collection's `localIdentifier` | `localIdentifier` is per-device; cross-device only via override rows |
+| Android  | MediaStore bucket                           | **relative path** (`DCIM/Camera`)                               | never `BUCKET_ID` (differs across devices and OS versions)           |
+| Desktop  | folder / watched dir                        | canonicalized path (symlinks resolved)                          |                                                                      |
+| Any      | removable volume                            | volume UUID + relative path                                     | stable across mount points                                           |
 
 - **Resolution order** (first match wins): explicit user pick → `scope_id` override row → per-`SourceKind` default row → `default_album_id` pointer → the stored default album id ([](#the-default-album)). The planner records which rule fired.
 - **Rows** (`scope_overrides`, `source_kind_defaults`) live in the library-settings document ([](/design/metadata/#the-library-settings-document)), E2E-encrypted, LWW per key.
@@ -102,16 +102,16 @@ Term { field: QueryField, op: Operator, operand: Operand }  // operand shape fix
 
 Every field reads the asset's **effective** value: the user's register if written, else the as-imported field ([](/design/metadata/#as-imported-and-user-values)).
 
-| Class | Fields | Valid operators | Operand |
-| --- | --- | --- | --- |
-| temporal | `capture_time`, `import_time` | `before`, `after`, `in_range` | RFC 3339 full-date or date-time (half-open `[start, end)` for `in_range`). Without an offset it compares the capture's local wall-clock time; with one, the instant |
-| enum | `content_type`, `media_kind` (`photo`\|`video`\|`live`), `media_subtype` ([](/design/metadata/#closed-enum-value-sets)), `gps.datum` | `eq`, `in` | value(s) from the field's closed enum; `content_type` also accepts the named set `raw` |
-| numeric | `rating`, `dimensions.width`, `dimensions.height`, `capture_settings.iso`, `capture_settings.focal_length_35mm` | `eq`, `gte`, `lte`, `in_range` | `u32` (`[lo, hi]` for `in_range`) |
-| trinary/bool | `cull`, `hidden` | `is` | `pick`\|`neutral`\|`reject`; `true`\|`false` |
-| set | `tags_user`, `tags_ai`, `stack_type`, `people_cluster`, `album_id`, `device_id` | `contains`, `contains_any`, `contains_all` | ≤ 64 members, each ≤ 256 bytes |
-| text | `text` (caption and labels at every level), `camera` (`capture_settings.camera_make`, `camera_id.model`), `lens` (`capture_settings.lens_make`, `capture_settings.lens_model`) | `matches` (substring), `eq` (whole value) | 1–256 bytes |
-| spatial | `gps` | `within`, `near` | `within`: south, west, north, east in WGS-84 degrees (west > east crosses the antimeridian); `near`: a WGS-84 point and a radius of 1 m–20,000 km |
-| presence | `gps`, `caption`, `tags_user`, `camera_id`, `capture_settings` | `exists` | `bool` |
+| Class        | Fields                                                                                                                                                                         | Valid operators                            | Operand                                                                                                                                                             |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| temporal     | `capture_time`, `import_time`                                                                                                                                                  | `before`, `after`, `in_range`              | RFC 3339 full-date or date-time (half-open `[start, end)` for `in_range`). Without an offset it compares the capture's local wall-clock time; with one, the instant |
+| enum         | `content_type`, `media_kind` (`photo`\|`video`\|`live`), `media_subtype` ([](/design/metadata/#closed-enum-value-sets)), `gps.datum`                                           | `eq`, `in`                                 | value(s) from the field's closed enum; `content_type` also accepts the named set `raw`                                                                              |
+| numeric      | `rating`, `dimensions.width`, `dimensions.height`, `capture_settings.iso`, `capture_settings.focal_length_35mm`                                                                | `eq`, `gte`, `lte`, `in_range`             | `u32` (`[lo, hi]` for `in_range`)                                                                                                                                   |
+| trinary/bool | `cull`, `hidden`                                                                                                                                                               | `is`                                       | `pick`\|`neutral`\|`reject`; `true`\|`false`                                                                                                                        |
+| set          | `tags_user`, `tags_ai`, `stack_type`, `people_cluster`, `album_id`, `device_id`                                                                                                | `contains`, `contains_any`, `contains_all` | ≤ 64 members, each ≤ 256 bytes                                                                                                                                      |
+| text         | `text` (caption and labels at every level), `camera` (`capture_settings.camera_make`, `camera_id.model`), `lens` (`capture_settings.lens_make`, `capture_settings.lens_model`) | `matches` (substring), `eq` (whole value)  | 1–256 bytes                                                                                                                                                         |
+| spatial      | `gps`                                                                                                                                                                          | `within`, `near`                           | `within`: south, west, north, east in WGS-84 degrees (west > east crosses the antimeridian); `near`: a WGS-84 point and a radius of 1 m–20,000 km                   |
+| presence     | `gps`, `caption`, `tags_user`, `camera_id`, `capture_settings`                                                                                                                 | `exists`                                   | `bool`                                                                                                                                                              |
 
 - **Closed.** An unknown `field`/`op` or a mistyped `operand` is a **structural rejection**, not a tolerated unknown. Extending the grammar needs a later `predicate_schema`, plus a sidecar-schema bump ([](/design/metadata/#schema-versioning-rules)) for a new sidecar field. A newer `predicate_schema` is preserved verbatim and never evaluated.
 - **No local state.** A term names only synced data. Search resolves names, places and fuzzy matches before saving ([](/design/search/#compiling-to-a-predicate)), so no term refers to a place-name cache, a suggester or an embedding, and semantic similarity is never a term.
@@ -157,27 +157,27 @@ Near-duplicates (re-saves, resized copies, near-identical frames) are found from
 - **Resolve.** Either stack the group (`smart selection`, keeper as `primary`), or keep one and trash the rest. Trashed copies follow the retention window ([](#retention-window)); the review never purges.
 - **Merge into the keeper.** Before anything is trashed, the keeper receives, in one atomic batch:
 
-| Field | Merge |
-| --- | --- |
-| Container album | Unchanged; the others' albums gain nothing, because a trashed copy's album keeps its own entry until purge |
-| `tags_user`, labels | Union |
-| `rating_lww` | Maximum |
-| `caption_lww` | The keeper's caption; every other distinct caption is appended to `superseded_captions` |
-| `gps_user` | Set only when every member's effective location agrees within 10 m |
-| `capture_timestamp_user` | Unchanged |
-| `hidden` | `true` if any member is hidden |
-| `cull` | Pick if any member is a pick |
+| Field                    | Merge                                                                                                      |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| Container album          | Unchanged; the others' albums gain nothing, because a trashed copy's album keeps its own entry until purge |
+| `tags_user`, labels      | Union                                                                                                      |
+| `rating_lww`             | Maximum                                                                                                    |
+| `caption_lww`            | The keeper's caption; every other distinct caption is appended to `superseded_captions`                    |
+| `gps_user`               | Set only when every member's effective location agrees within 10 m                                         |
+| `capture_timestamp_user` | Unchanged                                                                                                  |
+| `hidden`                 | `true` if any member is hidden                                                                             |
+| `cull`                   | Pick if any member is a pick                                                                               |
 
 ## Labels
 
 Users attach free-form **labels** at four levels. Every level stores labels as an OR-set with `add_id` binding ([](/design/metadata/#add-id-binding)), so concurrent adds and removes from any number of devices converge deterministically, and every change is a signed `metadata-update`.
 
-| Level | Where the labels live | Readable by |
-| --- | --- | --- |
-| **Asset** | `tags_user` in the asset's sidecar ([](/design/metadata/#sidecar-schema-v1)) | the asset's album members |
-| **Region** of an image | `regions` in the asset's sidecar, one OR-set per region | the asset's album members |
-| **Stack** | the stack's `StackDocV1` | the stack's album members |
-| **Album** | the album's `AlbumDocV1` | the album's members |
+| Level                  | Where the labels live                                                        | Readable by               |
+| ---------------------- | ---------------------------------------------------------------------------- | ------------------------- |
+| **Asset**              | `tags_user` in the asset's sidecar ([](/design/metadata/#sidecar-schema-v1)) | the asset's album members |
+| **Region** of an image | `regions` in the asset's sidecar, one OR-set per region                      | the asset's album members |
+| **Stack**              | the stack's `StackDocV1`                                                     | the stack's album members |
+| **Album**              | the album's `AlbumDocV1`                                                     | the album's members       |
 
 - **A label** is a Unicode string, NFC-normalized and trimmed, 1–256 bytes, case-preserving. It carries no hierarchy and no type; meaning is the user's.
 - **User and AI labels never mix.** AI suggestions live only in `tags_ai` and reach a user label only by an explicit promote ([](/design/metadata/#tag-provenance-and-namespacing)).
@@ -240,11 +240,11 @@ stateDiagram-v2
   Purged --> [*]
 ```
 
-| From | Verb | To | Record | Refused when |
-| --- | --- | --- | --- | --- |
-| live | delete | trashed | signed `delete` carrying `retention_until` | never; a delete of a trashed asset signs nothing and keeps its window |
-| trashed | restore | live | signed `trash-restore` | now is at or after `retention_until` |
-| trashed | purge | purged | before `retention_until`, a signed shorter-retention `delete` re-issue first | the asset is not trashed: a purge never skips the trash |
+| From    | Verb    | To      | Record                                                                       | Refused when                                                          |
+| ------- | ------- | ------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| live    | delete  | trashed | signed `delete` carrying `retention_until`                                   | never; a delete of a trashed asset signs nothing and keeps its window |
+| trashed | restore | live    | signed `trash-restore`                                                       | now is at or after `retention_until`                                  |
+| trashed | purge   | purged  | before `retention_until`, a signed shorter-retention `delete` re-issue first | the asset is not trashed: a purge never skips the trash               |
 
 **Delete** appends a signed `delete` record carrying `retention_until`, then updates the index from it. A delete that writes only the index is not a delete: it never syncs, and a rebuild brings the asset back.
 

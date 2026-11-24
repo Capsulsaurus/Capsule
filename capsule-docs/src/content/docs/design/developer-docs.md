@@ -32,13 +32,13 @@ maintained by hand.
 
 ## Surfaces
 
-| Surface | Artifact | Drift gate | Pages |
-| --- | --- | --- | --- |
-| REST | `capsule-server/openapi.json` (OpenAPI 3.2) | `openapi-check-kynos` | [](/reference/api/) |
-| CLI | `capsule-cli/cli-surface.json` | `cli-surface-check` | [](/reference/cli/) |
-| Swift and Kotlin | `capsule-sdk/bindings-surface.json` | `gen-bindings --check` (Rust gate) | [](/reference/sdk/swift/), [](/reference/sdk/kotlin/) |
-| Browser | `capsule-wasm/wasm-surface.d.ts` | `wasm-surface-check` (web gate) | [](/reference/sdk/wasm/) |
-| Rust crates | rustdoc, rendered from master, not committed | `doc-check-rust` | [rustdoc](/rustdoc/), mapped by [](/reference/sdk/rust/) |
+| Surface          | Artifact                                     | Drift gate                         | Pages                                                    |
+| ---------------- | -------------------------------------------- | ---------------------------------- | -------------------------------------------------------- |
+| REST             | `capsule-server/openapi.json` (OpenAPI 3.2)  | `openapi-check-kynos`              | [](/reference/api/)                                      |
+| CLI              | `capsule-cli/cli-surface.json`               | `cli-surface-check`                | [](/reference/cli/)                                      |
+| Swift and Kotlin | `capsule-sdk/bindings-surface.json`          | `gen-bindings --check` (Rust gate) | [](/reference/sdk/swift/), [](/reference/sdk/kotlin/)    |
+| Browser          | `capsule-wasm/wasm-surface.d.ts`             | `wasm-surface-check` (web gate)    | [](/reference/sdk/wasm/)                                 |
+| Rust crates      | rustdoc, rendered from master, not committed | `doc-check-rust`                   | [rustdoc](/rustdoc/), mapped by [](/reference/sdk/rust/) |
 
 - **Binding dump.** uniffi offers no stable machine-readable description of a namespace, so the
   dump is this repository's format: the declarations the native clients consume, as the generated

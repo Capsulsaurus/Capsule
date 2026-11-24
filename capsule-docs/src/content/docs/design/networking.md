@@ -59,13 +59,13 @@ The server decides what is compressed, per operation. A proxy never decides. [AD
 
 A closed enum, derived from the [](#path-snapshot) and evaluated on every change to it:
 
-| Class | Meaning | Detection |
-| --- | --- | --- |
-| `unmetered` | Bulk transfer acceptable | OS reports not expensive / not metered |
-| `metered` | Bulk deferred | OS reports expensive / metered |
-| `constrained` | OS data saver active | iOS Low Data Mode; Android Data Saver |
-| `adverse` | Connected but unreliable | Behavioral: repeated resets or stalls within a sliding window; demoted after a clean period |
-| `offline` | No usable path | OS path state |
+| Class         | Meaning                  | Detection                                                                                   |
+| ------------- | ------------------------ | ------------------------------------------------------------------------------------------- |
+| `unmetered`   | Bulk transfer acceptable | OS reports not expensive / not metered                                                      |
+| `metered`     | Bulk deferred            | OS reports expensive / metered                                                              |
+| `constrained` | OS data saver active     | iOS Low Data Mode; Android Data Saver                                                       |
+| `adverse`     | Connected but unreliable | Behavioral: repeated resets or stalls within a sliding window; demoted after a clean period |
+| `offline`     | No usable path           | OS path state                                                                               |
 
 Consumers: [](/design/sync/#synchronization-criteria), [](/design/transfer/upload/#upload-tiering-staged-uploads), [](/design/filesystem/client/#automatic-cache-management) (cache budget), [](/design/transfer/download/#prefetch-and-frugality), and [](/design/transfer/upload/#adaptive-chunk-sizing).
 
@@ -93,16 +93,16 @@ Whether a request may leave, and in what order, is decided per request, at Sparg
 - **Cancellation is per request.** The scheduler cancels a request when its reason goes (a cell scrolls away, focus moves). The seam drops its body stream at once, and resume reads server truth.
 - **The policy is per class: allow, ask or deny.** It is set per connection class. On `unmetered` every class is allowed. On `adverse` the bulk classes are held by the plan rules above, and on `offline` every class is held, whatever the policy says. The defaults for the two cost classes:
 
-| Class | `metered` | `constrained` |
-| --- | --- | --- |
-| interactive, and index-tier records ([](/design/transfer/upload/#upload-tiering-staged-uploads)) | allow | allow |
-| visible, near-view (thumbnail and preview rungs) | allow | allow, thumbnail rung only |
-| user-requested original | ask | ask |
-| prefetch, sync (bulk reconciliation), backup | deny | deny |
+| Class                                                                                            | `metered` | `constrained`              |
+| ------------------------------------------------------------------------------------------------ | --------- | -------------------------- |
+| interactive, and index-tier records ([](/design/transfer/upload/#upload-tiering-staged-uploads)) | allow     | allow                      |
+| visible, near-view (thumbnail and preview rungs)                                                 | allow     | allow, thumbnail rung only |
+| user-requested original                                                                          | ask       | ask                        |
+| prefetch, sync (bulk reconciliation), backup                                                     | deny      | deny                       |
 
-- **Ask raises `ApprovalRequired`.** The event names the class, the item count, the estimated bytes and the connection class. It goes out once per user action or batch, never once per request. Native code renders it as a platform prompt ([](/design/clients/#metered-prompt)). The answer is *once*, *always on this kind of network* (which changes the user's policy) or *not now* (which holds the work). A consent covers that batch on the current path generation only, and a new generation voids it. In the background, *ask* is *hold*: no prompt is raised from the background.
+- **Ask raises `ApprovalRequired`.** The event names the class, the item count, the estimated bytes and the connection class. It goes out once per user action or batch, never once per request. Native code renders it as a platform prompt ([](/design/clients/#metered-prompt)). The answer is _once_, _always on this kind of network_ (which changes the user's policy) or _not now_ (which holds the work). A consent covers that batch on the current path generation only, and a new generation voids it. In the background, _ask_ is _hold_: no prompt is raised from the background.
 - **Deny is not silent.** Held and refused bulk work is counted in the diagnostics snapshot ([](/development/performance/#typed-stage-events-and-the-diagnostics-snapshot)), and a client shows it as waiting for Wi-Fi.
-- **Force sync is consent.** The user's force-sync ([](/design/sync/#notifications)) answers *once* for every bulk class on the current generation.
+- **Force sync is consent.** The user's force-sync ([](/design/sync/#notifications)) answers _once_ for every bulk class on the current generation.
 - **The layer belongs to the SDK.** Admission sits at the transport seam rather than in each caller, so a hand-written path cannot skip it, and a backend swap keeps it.
 
 ## Server Advice
@@ -117,11 +117,11 @@ The server tunes clients it cannot redeploy through **advice**: one `X-Capsule-A
 
 Every retrying surface declares one class. All use exponential backoff with full jitter, honor `Retry-After`, give up into a user-visible state, and never hot-loop. Errors are classified before any retry: transport failures, `5xx`, `408`, `425` and `429` are retryable, and contract `4xx` codes are terminal unless the recovery matrix in [](/design/transfer/upload/#idempotency-and-resumption) names an action. Besides each item's own attempt cap, each server lane holds one shared retry budget, so a server that fails every request costs a bounded number of retries rather than one ladder per queued item.
 
-| Class | Shape | Instances |
-| --- | --- | --- |
-| `interactive` | short timeout, ≤ 2 retries | auth, on-demand fetches |
-| `bulk-transfer` | resume-first (committed set / `Range`) | [](/design/transfer/upload/#idempotency-and-resumption), [](/design/transfer/download/#resumption-and-verification) |
-| `control/ceremony` | slow ladder, never abandons silently | [](/design/mls-resilience/), federation circuit breaker |
+| Class              | Shape                                  | Instances                                                                                                           |
+| ------------------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `interactive`      | short timeout, ≤ 2 retries             | auth, on-demand fetches                                                                                             |
+| `bulk-transfer`    | resume-first (committed set / `Range`) | [](/design/transfer/upload/#idempotency-and-resumption), [](/design/transfer/download/#resumption-and-verification) |
+| `control/ceremony` | slow ladder, never abandons silently   | [](/design/mls-resilience/), federation circuit breaker                                                             |
 
 ## Adverse-Network Posture
 
@@ -159,7 +159,7 @@ No correctness or throughput property depends on marking: most access networks s
 ## Validation
 
 - **Generated-only (unit).** A test fails on a request built outside the generated client for an operation the document declares, other than a listed exemption.
-- **Admission (unit).** Every generated operation maps to a class. Each row of the defaults table yields its outcome on each connection class. A new path generation voids a consent. *Ask* in the background holds and raises nothing.
+- **Admission (unit).** Every generated operation maps to a class. Each row of the defaults table yields its outcome on each connection class. A new path generation voids a consent. _Ask_ in the background holds and raises nothing.
 - **Unreported path (unit).** A session that has had no report plans as `metered`.
 - **Path feeding (smoke, per platform).** A simulated switch from Wi-Fi to cellular reaches `set_path`, and the next chunk is held.
 - **Compression allowlist (unit).** Every allowlisted operation is JSON or CBOR and carries no excluded tag. Every other operation's response has no `Content-Encoding`.
