@@ -180,7 +180,7 @@ pub enum OidcAuthorizeRejection {
     RedirectInvalid {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The `binding_challenge` is not an S256 hash: 43 unpadded base64url characters.
@@ -189,7 +189,7 @@ pub enum OidcAuthorizeRejection {
     BindingMalformed {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// This deployment has no identity provider.
@@ -198,7 +198,7 @@ pub enum OidcAuthorizeRejection {
     NotConfigured {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// Too many ceremonies were begun for this redirect host in the window.
@@ -207,7 +207,7 @@ pub enum OidcAuthorizeRejection {
     RateLimited {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The pending-ceremony store is at its ceiling. Retryable: ceremonies expire in minutes.
@@ -224,7 +224,7 @@ pub enum OidcAuthorizeRejection {
     AtCapacity {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The provider could not be reached, or a store could not answer.
@@ -238,7 +238,7 @@ pub enum OidcAuthorizeRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -251,7 +251,7 @@ pub enum OidcCallbackRejection {
     StateInvalid {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The provider refused to exchange the code.
@@ -260,7 +260,7 @@ pub enum OidcCallbackRejection {
     ExchangeFailed {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The provider's ID token failed a check. One answer for every check; see the module docs.
@@ -269,7 +269,7 @@ pub enum OidcCallbackRejection {
     TokenInvalid {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The asserted address already belongs to an account here, and this identity is not it.
@@ -281,7 +281,7 @@ pub enum OidcCallbackRejection {
     AddressTaken {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The provider could not be reached, or a collaborator could not answer.
@@ -293,54 +293,54 @@ pub enum OidcCallbackRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
 impl OidcAuthorizeRejection {
     fn redirect_invalid() -> Self {
         Self::RedirectInvalid {
-            code: error_codes::AUTH_OIDC_REDIRECT_INVALID,
+            code: error_codes::AUTH_OIDC_REDIRECT_INVALID.into(),
         }
     }
 
     /// A client bug, not something a person can fix: the generic malformed-request code.
     fn binding_malformed() -> Self {
         Self::BindingMalformed {
-            code: error_codes::REQUEST_MALFORMED,
+            code: error_codes::REQUEST_MALFORMED.into(),
         }
     }
 
     fn not_configured() -> Self {
         Self::NotConfigured {
-            code: error_codes::AUTH_OIDC_NOT_CONFIGURED,
+            code: error_codes::AUTH_OIDC_NOT_CONFIGURED.into(),
         }
     }
 
     fn rate_limited() -> Self {
         Self::RateLimited {
-            code: error_codes::AUTH_RATE_LIMITED,
+            code: error_codes::AUTH_RATE_LIMITED.into(),
         }
     }
 
     /// The store refused a write because it is full.
     fn at_capacity() -> Self {
         Self::AtCapacity {
-            code: error_codes::AUTH_OIDC_AT_CAPACITY,
+            code: error_codes::AUTH_OIDC_AT_CAPACITY.into(),
         }
     }
 
     /// The identity provider could not answer.
     fn provider_unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::AUTH_OIDC_UNAVAILABLE,
+            code: error_codes::AUTH_OIDC_UNAVAILABLE.into(),
         }
     }
 
     /// A Capsule store could not answer.
     fn store_unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::AUTH_UNAVAILABLE,
+            code: error_codes::AUTH_UNAVAILABLE.into(),
         }
     }
 }
@@ -348,37 +348,37 @@ impl OidcAuthorizeRejection {
 impl OidcCallbackRejection {
     fn state_invalid() -> Self {
         Self::StateInvalid {
-            code: error_codes::AUTH_OIDC_STATE_INVALID,
+            code: error_codes::AUTH_OIDC_STATE_INVALID.into(),
         }
     }
 
     fn exchange_failed() -> Self {
         Self::ExchangeFailed {
-            code: error_codes::AUTH_OIDC_EXCHANGE_FAILED,
+            code: error_codes::AUTH_OIDC_EXCHANGE_FAILED.into(),
         }
     }
 
     fn token_invalid() -> Self {
         Self::TokenInvalid {
-            code: error_codes::AUTH_OIDC_TOKEN_INVALID,
+            code: error_codes::AUTH_OIDC_TOKEN_INVALID.into(),
         }
     }
 
     fn address_taken() -> Self {
         Self::AddressTaken {
-            code: error_codes::AUTH_OIDC_ADDRESS_TAKEN,
+            code: error_codes::AUTH_OIDC_ADDRESS_TAKEN.into(),
         }
     }
 
     fn provider_unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::AUTH_OIDC_UNAVAILABLE,
+            code: error_codes::AUTH_OIDC_UNAVAILABLE.into(),
         }
     }
 
     fn store_unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::AUTH_UNAVAILABLE,
+            code: error_codes::AUTH_UNAVAILABLE.into(),
         }
     }
 }
@@ -810,7 +810,7 @@ pub enum OidcDeviceRejection {
     BindingMalformed {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// There is no device sign-in to offer.
@@ -824,7 +824,7 @@ pub enum OidcDeviceRejection {
     NotOffered {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// Too many device authorizations were begun in the window.
@@ -833,7 +833,7 @@ pub enum OidcDeviceRejection {
     RateLimited {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The pending-device store is at its ceiling. Retryable: ceremonies expire in minutes.
@@ -842,7 +842,7 @@ pub enum OidcDeviceRejection {
     AtCapacity {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The provider could not be reached, or a store could not answer — `error.auth.
@@ -852,50 +852,50 @@ pub enum OidcDeviceRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
 impl OidcDeviceRejection {
     fn binding_malformed() -> Self {
         Self::BindingMalformed {
-            code: error_codes::REQUEST_MALFORMED,
+            code: error_codes::REQUEST_MALFORMED.into(),
         }
     }
 
     fn not_configured() -> Self {
         Self::NotOffered {
-            code: error_codes::AUTH_OIDC_NOT_CONFIGURED,
+            code: error_codes::AUTH_OIDC_NOT_CONFIGURED.into(),
         }
     }
 
     fn unsupported() -> Self {
         Self::NotOffered {
-            code: error_codes::AUTH_OIDC_DEVICE_UNSUPPORTED,
+            code: error_codes::AUTH_OIDC_DEVICE_UNSUPPORTED.into(),
         }
     }
 
     fn rate_limited() -> Self {
         Self::RateLimited {
-            code: error_codes::AUTH_RATE_LIMITED,
+            code: error_codes::AUTH_RATE_LIMITED.into(),
         }
     }
 
     fn at_capacity() -> Self {
         Self::AtCapacity {
-            code: error_codes::AUTH_OIDC_AT_CAPACITY,
+            code: error_codes::AUTH_OIDC_AT_CAPACITY.into(),
         }
     }
 
     fn provider_unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::AUTH_OIDC_UNAVAILABLE,
+            code: error_codes::AUTH_OIDC_UNAVAILABLE.into(),
         }
     }
 
     fn store_unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::AUTH_UNAVAILABLE,
+            code: error_codes::AUTH_UNAVAILABLE.into(),
         }
     }
 }
@@ -913,7 +913,7 @@ pub enum OidcDevicePollRejection {
     Pending {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// Polled too soon, or the provider asked to slow down. Add five seconds to the interval.
@@ -922,7 +922,7 @@ pub enum OidcDevicePollRejection {
     SlowDown {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The handle is unknown, finished or expired, its binding did not match, or the provider
@@ -932,7 +932,7 @@ pub enum OidcDevicePollRejection {
     Expired {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The person declined at the provider.
@@ -941,7 +941,7 @@ pub enum OidcDevicePollRejection {
     Denied {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The provider refused the poll for a reason RFC 8628 does not name.
@@ -950,7 +950,7 @@ pub enum OidcDevicePollRejection {
     ExchangeFailed {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The provider's ID token failed a check. One answer for every check.
@@ -959,7 +959,7 @@ pub enum OidcDevicePollRejection {
     TokenInvalid {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The asserted address already belongs to an account here, and this identity is not it.
@@ -968,7 +968,7 @@ pub enum OidcDevicePollRejection {
     AddressTaken {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The provider could not be reached, or a store could not answer.
@@ -977,62 +977,62 @@ pub enum OidcDevicePollRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
 impl OidcDevicePollRejection {
     fn pending() -> Self {
         Self::Pending {
-            code: error_codes::AUTH_OIDC_DEVICE_PENDING,
+            code: error_codes::AUTH_OIDC_DEVICE_PENDING.into(),
         }
     }
 
     fn slow_down() -> Self {
         Self::SlowDown {
-            code: error_codes::AUTH_OIDC_DEVICE_SLOW_DOWN,
+            code: error_codes::AUTH_OIDC_DEVICE_SLOW_DOWN.into(),
         }
     }
 
     fn expired() -> Self {
         Self::Expired {
-            code: error_codes::AUTH_OIDC_DEVICE_EXPIRED,
+            code: error_codes::AUTH_OIDC_DEVICE_EXPIRED.into(),
         }
     }
 
     fn denied() -> Self {
         Self::Denied {
-            code: error_codes::AUTH_OIDC_DEVICE_DENIED,
+            code: error_codes::AUTH_OIDC_DEVICE_DENIED.into(),
         }
     }
 
     fn exchange_failed() -> Self {
         Self::ExchangeFailed {
-            code: error_codes::AUTH_OIDC_EXCHANGE_FAILED,
+            code: error_codes::AUTH_OIDC_EXCHANGE_FAILED.into(),
         }
     }
 
     fn token_invalid() -> Self {
         Self::TokenInvalid {
-            code: error_codes::AUTH_OIDC_TOKEN_INVALID,
+            code: error_codes::AUTH_OIDC_TOKEN_INVALID.into(),
         }
     }
 
     fn address_taken() -> Self {
         Self::AddressTaken {
-            code: error_codes::AUTH_OIDC_ADDRESS_TAKEN,
+            code: error_codes::AUTH_OIDC_ADDRESS_TAKEN.into(),
         }
     }
 
     fn provider_unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::AUTH_OIDC_UNAVAILABLE,
+            code: error_codes::AUTH_OIDC_UNAVAILABLE.into(),
         }
     }
 
     fn store_unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::AUTH_UNAVAILABLE,
+            code: error_codes::AUTH_UNAVAILABLE.into(),
         }
     }
 }

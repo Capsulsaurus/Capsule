@@ -54,9 +54,9 @@ use http_body_util::BodyExt as _;
 use kynos::di::Provides;
 use kynos::extract::FromRequest;
 use kynos::extract::describe::Describe;
-use kynos::http::Request;
 use kynos::http::body::Body;
 use kynos::http::media::OctetStream;
+use kynos::http::{Parts, Request};
 use kynos::middleware::{Continued, Interceptor, Next};
 use kynos::prelude::*;
 use kynos::router::operation::OperationCx;
@@ -94,7 +94,7 @@ pub enum ChunkBodyRejection {
     UnsupportedMediaType {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The body could not be read to its end.
@@ -103,7 +103,7 @@ pub enum ChunkBodyRejection {
     Unreadable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The body stalled, or arrived below the minimum sustained rate, and was cut.
@@ -112,7 +112,7 @@ pub enum ChunkBodyRejection {
     TimedOut {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -335,13 +335,16 @@ where
 {
     type Rejection = ChunkBodyRejection;
 
-    async fn from_request(request: Request, context: &C) -> Result<Self, Self::Rejection> {
+    async fn from_request(
+        parts: &mut Parts,
+        body: Body,
+        context: &C,
+    ) -> Result<Self, Self::Rejection> {
         let pace = context.provide().policy().chunk_pace();
-        let path = request.uri().path().to_owned();
+        let path = parts.uri.path().to_owned();
         let started = Instant::now();
         // A length-less body the interceptor that read it already cut.
-        let expired = request.extensions().get::<ChunkReadExpired>().copied();
-        let (parts, body) = request.into_parts();
+        let expired = parts.extensions.get::<ChunkReadExpired>().copied();
         let read = match expired {
             Some(ChunkReadExpired { cut, received }) => PacedRead::Cut { cut, received },
             None => read_paced(body, pace, crate::limits::MAX_REQUEST_BODY_BYTES).await,
@@ -360,7 +363,7 @@ where
                     "a chunk was refused: its body stopped arriving"
                 );
                 return Err(ChunkBodyRejection::TimedOut {
-                    code: error_codes::UPLOAD_CHUNK_TIMEOUT,
+                    code: error_codes::UPLOAD_CHUNK_TIMEOUT.into(),
                 });
             }
             PacedRead::Failed(arrived) => {
@@ -371,13 +374,13 @@ where
                     "a chunk body did not arrive whole: the transport failed part-way"
                 );
                 return Err(ChunkBodyRejection::Unreadable {
-                    code: error_codes::UPLOAD_MALFORMED_REQUEST,
+                    code: error_codes::UPLOAD_MALFORMED_REQUEST.into(),
                 });
             }
         };
         // The bytes are whole; the media type and the description stay `OpaqueBody`'s.
-        let request = Request::from_parts(parts, Body::from_bytes(bytes));
-        let body = OpaqueBody::<OctetStream>::from_request(request, context).await?;
+        let body = OpaqueBody::<OctetStream>::from_request(parts, Body::from_bytes(bytes), context)
+            .await?;
         tracing::trace!(
             %path,
             bytes = body.bytes().len(),

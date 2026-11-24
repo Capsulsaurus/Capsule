@@ -81,7 +81,7 @@ pub enum ActivityRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -108,7 +108,7 @@ pub async fn list_activity(
         .map_err(|error| {
             tracing::error!(%error, %user, "the activity log could not be read");
             ActivityRejection::Unavailable {
-                code: error_codes::AUTH_UNAVAILABLE,
+                code: error_codes::AUTH_UNAVAILABLE.into(),
             }
         })?;
     tracing::debug!(%user, events = events.len(), "served an activity log");

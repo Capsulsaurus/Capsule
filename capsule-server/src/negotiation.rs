@@ -102,7 +102,9 @@ use capsule_core::validation::{HandshakeReject, check_sidecar_schema, check_suit
 use capsule_i18n::error_codes;
 use kynos::di::Provides;
 use kynos::error::rejection::HeaderRejection;
-use kynos::extract::params::header::{DecodeHeaders, EncodeHeaders, HeaderParams};
+use kynos::extract::params::header::{
+    DecodeHeaders, EncodeHeaders, HeaderParams, UnencodableHeader,
+};
 use kynos::http::{HeaderMap, HeaderName, HeaderValue, Request};
 use kynos::middleware::{Continued, Interceptor, Next};
 use kynos::openapi::{Header, Parameter, Schema};
@@ -232,7 +234,7 @@ pub enum MalformedHandshake {
         detail: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -240,7 +242,7 @@ impl MalformedHandshake {
     fn new(detail: impl Into<String>) -> Self {
         Self::Malformed {
             detail: detail.into(),
-            code: error_codes::REQUEST_MALFORMED,
+            code: error_codes::REQUEST_MALFORMED.into(),
         }
     }
 }
@@ -263,7 +265,7 @@ pub enum NegotiationRejection {
         protocol_max: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A handshake header is missing, unreadable, or names something this server does not
@@ -275,7 +277,7 @@ pub enum NegotiationRejection {
         detail: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -386,7 +388,7 @@ pub fn negotiate_write(
             Err(NegotiationRejection::ProtocolUnsupported {
                 protocol_min: policy.protocol_min().to_owned(),
                 protocol_max: policy.protocol_max().to_owned(),
-                code: error_codes::PROTOCOL_VERSION_UNSUPPORTED,
+                code: error_codes::PROTOCOL_VERSION_UNSUPPORTED.into(),
             })
         }
     }
@@ -503,7 +505,7 @@ impl HeaderParams for NegotiationResponseHeaders {
 }
 
 impl EncodeHeaders for NegotiationResponseHeaders {
-    fn encode(&self) -> Vec<(HeaderName, HeaderValue)> {
+    fn encode(&self) -> Result<Vec<(HeaderName, HeaderValue)>, UnencodableHeader> {
         [
             ("x-capsule-protocol-min", self.protocol_min.as_str()),
             ("x-capsule-protocol-max", self.protocol_max.as_str()),
@@ -511,18 +513,27 @@ impl EncodeHeaders for NegotiationResponseHeaders {
         ]
         .into_iter()
         .map(|(name, value)| {
+            let name = HeaderName::from_static(name);
             // Total by construction: `config.rs` parses both window ends as `jiff::civil::Date`
             // and the client-build cutoff as three dot-separated integers before a policy is
             // built from them, and the crate defaults are literals of the same shapes. A value
             // that reaches here and is not a header value is a policy built past the
-            // configuration boundary, which is a programming error and is reported as one.
-            let value = HeaderValue::from_str(value).unwrap_or_else(|error| {
-                panic!(
-                    "{name} carries `{value}`, which config validation should have refused: \
-                     {error}"
-                )
-            });
-            (HeaderName::from_static(name), value)
+            // configuration boundary, which is a programming error: it is logged as one, and
+            // Kynos answers the refusal with a `500` rather than a response missing a header
+            // its description promises.
+            match HeaderValue::from_str(value) {
+                Ok(value) => Ok((name, value)),
+                Err(error) => {
+                    tracing::error!(
+                        header = %name,
+                        value,
+                        %error,
+                        "a negotiation header carries a value config validation should have \
+                         refused"
+                    );
+                    Err(UnencodableHeader::new(name))
+                }
+            }
         })
         .collect()
     }

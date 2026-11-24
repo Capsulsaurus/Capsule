@@ -75,15 +75,8 @@ use crate::directory::{
 };
 use crate::ledger::LedgerEvent;
 use crate::ledger::directory::DirectoryCopy;
+use crate::routes::devices::SessionsTag;
 use crate::store::{OwnerId, UserId};
-
-/// The device surface: who a user's devices are, and which keys to trust for them.
-#[derive(Tag)]
-#[tag(
-    name = "devices",
-    description = "Publishing and fetching the signed device directory."
-)]
-pub struct DevicesTag;
 
 /// `application/cbor` — the encoding the directory is *signed* in.
 ///
@@ -151,7 +144,7 @@ pub enum PublishRejection {
         detail: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The submitted identity key is not this account's anchor.
@@ -164,7 +157,7 @@ pub enum PublishRejection {
     IdentityMismatch {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// Invariant 23: the version does not strictly advance.
@@ -183,7 +176,7 @@ pub enum PublishRejection {
         submitted: u64,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The store could not answer.
@@ -192,7 +185,7 @@ pub enum PublishRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -205,7 +198,7 @@ pub enum FetchRejection {
     NotPublished {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The store could not answer.
@@ -214,7 +207,7 @@ pub enum FetchRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -226,7 +219,7 @@ pub enum FetchRejection {
 #[kynos::post(
     "/v1/auth/devices/directory",
     operation_id = "publish_device_directory",
-    tag = DevicesTag
+    tag = SessionsTag
 )]
 pub async fn publish_device_directory(
     Auth(credential): Auth<AccessToken>,
@@ -242,14 +235,14 @@ pub async fn publish_device_directory(
         tracing::info!(%user, "a device directory publish carried no identity key");
         return Err(PublishRejection::Malformed {
             detail: "X-Capsule-Identity-Key is required".to_owned(),
-            code: error_codes::DIRECTORY_MALFORMED,
+            code: error_codes::DIRECTORY_MALFORMED.into(),
         });
     };
     let identity_key = BASE64.decode(encoded.trim()).map_err(|error| {
         tracing::info!(%user, %error, "a device directory publish carried an unreadable identity key");
         PublishRejection::Malformed {
             detail: "X-Capsule-Identity-Key is not base64".to_owned(),
-            code: error_codes::DIRECTORY_MALFORMED,
+            code: error_codes::DIRECTORY_MALFORMED.into(),
         }
     })?;
 
@@ -332,7 +325,7 @@ pub async fn publish_device_directory(
             Err(PublishRejection::VersionConflict {
                 stored,
                 submitted: directory_version,
-                code: error_codes::DIRECTORY_VERSION_CONFLICT,
+                code: error_codes::DIRECTORY_VERSION_CONFLICT.into(),
             })
         }
         PublishOutcome::IdentityMismatch => {
@@ -341,7 +334,7 @@ pub async fn publish_device_directory(
                 "a device directory publish was refused for its identity key after it was ledgered"
             );
             Err(PublishRejection::IdentityMismatch {
-                code: error_codes::DIRECTORY_IDENTITY_MISMATCH,
+                code: error_codes::DIRECTORY_IDENTITY_MISMATCH.into(),
             })
         }
     }
@@ -354,7 +347,7 @@ pub async fn publish_device_directory(
 #[kynos::get(
     "/v1/auth/devices/directory/{user_id}",
     operation_id = "fetch_device_directory",
-    tag = DevicesTag
+    tag = SessionsTag
 )]
 pub async fn fetch_device_directory(
     Auth(credential): Auth<AccessToken>,
@@ -369,13 +362,13 @@ pub async fn fetch_device_directory(
         .map_err(|error| {
             tracing::error!(%error, user = %target, "the device directory store could not answer");
             FetchRejection::Unavailable {
-                code: error_codes::DIRECTORY_UNAVAILABLE,
+                code: error_codes::DIRECTORY_UNAVAILABLE.into(),
             }
         })?
         .ok_or_else(|| {
             tracing::debug!(user = %target, "no device directory has been published");
             FetchRejection::NotPublished {
-                code: error_codes::DIRECTORY_NOT_PUBLISHED,
+                code: error_codes::DIRECTORY_NOT_PUBLISHED.into(),
             }
         })?;
 
@@ -393,14 +386,14 @@ impl PublishRejection {
     fn malformed(error: &MalformedDirectory) -> Self {
         Self::Malformed {
             detail: error.to_string(),
-            code: error_codes::DIRECTORY_MALFORMED,
+            code: error_codes::DIRECTORY_MALFORMED.into(),
         }
     }
 
     /// The store could not answer.
     fn unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::DIRECTORY_UNAVAILABLE,
+            code: error_codes::DIRECTORY_UNAVAILABLE.into(),
         }
     }
 }

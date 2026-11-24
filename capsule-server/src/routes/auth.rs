@@ -130,7 +130,7 @@ pub enum RegisterRejection {
         detail: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// An account already exists for that address.
@@ -145,7 +145,7 @@ pub enum RegisterRejection {
     AlreadyExists {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// This deployment accepts sign-in only through its identity provider
@@ -155,7 +155,7 @@ pub enum RegisterRejection {
     PasswordDisabled {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// Too many registrations from this source address, **or** the limiter is holding as many
@@ -170,7 +170,7 @@ pub enum RegisterRejection {
     RateLimited {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
         /// When the caller may retry, as Unix seconds. Lifted onto `Retry-After`.
         #[problem(extension)]
         retry_after: u64,
@@ -182,7 +182,7 @@ pub enum RegisterRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -191,28 +191,28 @@ impl RegisterRejection {
     fn invalid(detail: impl Into<String>) -> Self {
         Self::Invalid {
             detail: detail.into(),
-            code: error_codes::AUTH_REGISTRATION_INVALID,
+            code: error_codes::AUTH_REGISTRATION_INVALID.into(),
         }
     }
 
     /// A collaborator could not answer.
     fn unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::AUTH_UNAVAILABLE,
+            code: error_codes::AUTH_UNAVAILABLE.into(),
         }
     }
 
     /// Password registration is switched off on this deployment.
     fn password_disabled() -> Self {
         Self::PasswordDisabled {
-            code: error_codes::AUTH_PASSWORD_DISABLED,
+            code: error_codes::AUTH_PASSWORD_DISABLED.into(),
         }
     }
 
     /// The source's budget is spent until `retry_after`.
     fn rate_limited(retry_after: jiff::Timestamp) -> Self {
         Self::RateLimited {
-            code: error_codes::AUTH_RATE_LIMITED,
+            code: error_codes::AUTH_RATE_LIMITED.into(),
             retry_after: unix_seconds(retry_after),
         }
     }
@@ -220,7 +220,7 @@ impl RegisterRejection {
     /// The limiter's source-address partition is full until, at the latest, `retry_after`.
     fn at_capacity(retry_after: jiff::Timestamp) -> Self {
         Self::RateLimited {
-            code: error_codes::AUTH_REGISTRATION_AT_CAPACITY,
+            code: error_codes::AUTH_REGISTRATION_AT_CAPACITY.into(),
             retry_after: unix_seconds(retry_after),
         }
     }
@@ -417,7 +417,7 @@ pub enum LoginRejection {
     InvalidCredentials {
         /// The stable catalog code, from `capsule_i18n::error_codes`.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// This deployment accepts sign-in only through its identity provider
@@ -428,7 +428,7 @@ pub enum LoginRejection {
     PasswordDisabled {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The account is refusing attempts after too many failures.
@@ -437,7 +437,7 @@ pub enum LoginRejection {
     AccountLocked {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A collaborator could not answer, so the request neither succeeded nor was refused.
@@ -446,32 +446,32 @@ pub enum LoginRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
 impl LoginRejection {
     fn invalid_credentials() -> Self {
         Self::InvalidCredentials {
-            code: error_codes::AUTH_INVALID_CREDENTIALS,
+            code: error_codes::AUTH_INVALID_CREDENTIALS.into(),
         }
     }
 
     fn password_disabled() -> Self {
         Self::PasswordDisabled {
-            code: error_codes::AUTH_PASSWORD_DISABLED,
+            code: error_codes::AUTH_PASSWORD_DISABLED.into(),
         }
     }
 
     fn account_locked() -> Self {
         Self::AccountLocked {
-            code: error_codes::AUTH_ACCOUNT_LOCKED,
+            code: error_codes::AUTH_ACCOUNT_LOCKED.into(),
         }
     }
 
     fn unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::AUTH_UNAVAILABLE,
+            code: error_codes::AUTH_UNAVAILABLE.into(),
         }
     }
 }
@@ -490,7 +490,7 @@ pub enum RefreshRejection {
     SessionExpired {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The session store could not answer.
@@ -499,20 +499,20 @@ pub enum RefreshRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
 impl RefreshRejection {
     fn session_expired() -> Self {
         Self::SessionExpired {
-            code: error_codes::AUTH_SESSION_EXPIRED,
+            code: error_codes::AUTH_SESSION_EXPIRED.into(),
         }
     }
 
     fn unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::AUTH_UNAVAILABLE,
+            code: error_codes::AUTH_UNAVAILABLE.into(),
         }
     }
 }
@@ -527,13 +527,13 @@ impl RefreshRejection {
 pub struct LogoutRejection {
     /// The stable catalog code.
     #[problem(extension)]
-    code: &'static str,
+    code: crate::problem::Code,
 }
 
 impl LogoutRejection {
     fn unavailable() -> Self {
         Self {
-            code: error_codes::AUTH_UNAVAILABLE,
+            code: error_codes::AUTH_UNAVAILABLE.into(),
         }
     }
 }
@@ -626,7 +626,7 @@ pub async fn register_user(
         Registration::AlreadyExists => {
             tracing::info!("a registration was refused: the address is taken");
             return Err(RegisterRejection::AlreadyExists {
-                code: error_codes::AUTH_USER_ALREADY_EXISTS,
+                code: error_codes::AUTH_USER_ALREADY_EXISTS.into(),
             });
         }
     };
@@ -1234,7 +1234,7 @@ pub enum RevokeAllRejection {
     ProofRequired {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A proof was presented and did not establish the account.
@@ -1248,7 +1248,7 @@ pub enum RevokeAllRejection {
     ProofInvalid {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A store could not answer.
@@ -1257,7 +1257,7 @@ pub enum RevokeAllRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -1295,7 +1295,7 @@ pub async fn revoke_all_challenge(
         .map_err(|error| {
             store_unavailable(&error, "issue a revoke-all challenge");
             RevokeAllRejection::Unavailable {
-                code: error_codes::AUTH_UNAVAILABLE,
+                code: error_codes::AUTH_UNAVAILABLE.into(),
             }
         })?;
 
@@ -1326,7 +1326,7 @@ pub async fn revoke_all(
     let proof_bytes = BASE64.decode(request.proof.trim()).map_err(|error| {
         tracing::info!(%error, "a revoke-all proof was not base64");
         RevokeAllRejection::ProofRequired {
-            code: error_codes::AUTH_REVOKE_PROOF_REQUIRED,
+            code: error_codes::AUTH_REVOKE_PROOF_REQUIRED.into(),
         }
     })?;
     let Ok(signature) =
@@ -1334,7 +1334,7 @@ pub async fn revoke_all(
     else {
         tracing::info!("a revoke-all proof was not a decodable hybrid signature");
         return Err(RevokeAllRejection::ProofRequired {
-            code: error_codes::AUTH_REVOKE_PROOF_REQUIRED,
+            code: error_codes::AUTH_REVOKE_PROOF_REQUIRED.into(),
         });
     };
 
@@ -1346,7 +1346,7 @@ pub async fn revoke_all(
     let claimed = auth.challenges().consume(&token).await.map_err(|error| {
         store_unavailable(&error, "consume a revoke-all challenge");
         RevokeAllRejection::Unavailable {
-            code: error_codes::AUTH_UNAVAILABLE,
+            code: error_codes::AUTH_UNAVAILABLE.into(),
         }
     })?;
 
@@ -1365,7 +1365,7 @@ pub async fn revoke_all(
         .map_err(|error| {
             store_unavailable(&error, "read a device directory for a revoke-all");
             RevokeAllRejection::Unavailable {
-                code: error_codes::AUTH_UNAVAILABLE,
+                code: error_codes::AUTH_UNAVAILABLE.into(),
             }
         })?;
 
@@ -1406,7 +1406,7 @@ pub async fn revoke_all(
         .map_err(|error| {
             store_unavailable(&error, "close every session for a revoke-all");
             RevokeAllRejection::Unavailable {
-                code: error_codes::AUTH_UNAVAILABLE,
+                code: error_codes::AUTH_UNAVAILABLE.into(),
             }
         })?;
 
@@ -1432,7 +1432,7 @@ impl RevokeAllRejection {
     /// The one answer every failed proof gets.
     fn invalid() -> Self {
         Self::ProofInvalid {
-            code: error_codes::AUTH_REVOKE_PROOF_INVALID,
+            code: error_codes::AUTH_REVOKE_PROOF_INVALID.into(),
         }
     }
 }

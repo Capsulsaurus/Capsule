@@ -172,7 +172,7 @@ pub enum IssueShareRejection {
         detail: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The account is over its storage limit and past the grace window.
@@ -185,7 +185,7 @@ pub enum IssueShareRejection {
     QuotaGraceExpired {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// Storing the link's metadata record would carry the account to its hard storage limit.
@@ -197,7 +197,7 @@ pub enum IssueShareRejection {
     QuotaExceeded {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The account's quota is suspended by the server's operator (#705).
@@ -209,7 +209,7 @@ pub enum IssueShareRejection {
     QuotaSuspended {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The store could not answer.
@@ -218,7 +218,7 @@ pub enum IssueShareRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -253,7 +253,7 @@ pub enum ShareRejection {
     RateLimited {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
         /// When the caller may retry, as Unix seconds. An **upper** bound: one limiter window,
         /// by which time a live window has lapsed and freed room.
         #[problem(extension)]
@@ -271,7 +271,7 @@ pub enum ShareRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -361,7 +361,7 @@ pub async fn issue_share(
         .map_err(|error| {
             tracing::error!(%error, %owner, "the task storing a share's metadata record did not finish");
             IssueShareRejection::Unavailable {
-                code: error_codes::SHARE_UNAVAILABLE,
+                code: error_codes::SHARE_UNAVAILABLE.into(),
             }
         })??;
     }
@@ -384,7 +384,7 @@ pub async fn issue_share(
         .map_err(|error| {
             tracing::error!(%error, %owner, "the share store could not issue");
             IssueShareRejection::Unavailable {
-                code: error_codes::SHARE_UNAVAILABLE,
+                code: error_codes::SHARE_UNAVAILABLE.into(),
             }
         })?;
     if outcome == IssueOutcome::Conflict {
@@ -436,7 +436,7 @@ pub async fn revoke_share(
         .map_err(|error| {
             tracing::error!(%error, %owner, "the share store could not revoke");
             IssueShareRejection::Unavailable {
-                code: error_codes::SHARE_UNAVAILABLE,
+                code: error_codes::SHARE_UNAVAILABLE.into(),
             }
         })?;
 
@@ -612,7 +612,7 @@ async fn charge(
     match verdict {
         Verdict::Admitted { .. } => Ok(()),
         Verdict::Limited { retry_after } => Err(ShareRejection::RateLimited {
-            code: error_codes::SHARE_RATE_LIMITED,
+            code: error_codes::SHARE_RATE_LIMITED.into(),
             retry_after: unix_seconds(retry_after),
         }),
     }
@@ -701,7 +701,7 @@ async fn admit_metadata_growth(
         .map_err(|error| {
             tracing::error!(%error, %owner, "the quota ledger could not answer");
             IssueShareRejection::Unavailable {
-                code: error_codes::SHARE_UNAVAILABLE,
+                code: error_codes::SHARE_UNAVAILABLE.into(),
             }
         })?;
     let Some(state) = refusal else {
@@ -710,12 +710,12 @@ async fn admit_metadata_growth(
     if state == crate::quota::QuotaState::Suspended {
         tracing::info!(%owner, "a share link was refused: the account's quota is suspended");
         return Err(IssueShareRejection::QuotaSuspended {
-            code: error_codes::QUOTA_SUSPENDED,
+            code: error_codes::QUOTA_SUSPENDED.into(),
         });
     }
     tracing::info!(%owner, ?state, "a share link was refused: past the quota grace window");
     Err(IssueShareRejection::QuotaGraceExpired {
-        code: error_codes::QUOTA_GRACE_LOCKED,
+        code: error_codes::QUOTA_GRACE_LOCKED.into(),
     })
 }
 
@@ -742,7 +742,7 @@ async fn store_metadata_record(
         tracing::error!(%error, %owner, "the blob store could not hold a share's metadata record");
         release_metadata_charge(&quota, &owner, &metadata, charge).await;
         return Err(IssueShareRejection::Unavailable {
-            code: error_codes::SHARE_UNAVAILABLE,
+            code: error_codes::SHARE_UNAVAILABLE.into(),
         });
     }
     tracing::info!(%owner, size = record.len(), "stored a share's sealed metadata record");
@@ -777,7 +777,7 @@ async fn charge_metadata(
         .map_err(|error| {
             tracing::error!(%error, %owner, "the quota ledger could not charge a share's metadata record");
             IssueShareRejection::Unavailable {
-                code: error_codes::SHARE_UNAVAILABLE,
+                code: error_codes::SHARE_UNAVAILABLE.into(),
             }
         })?;
     tracing::debug!(%owner, size, ?outcome, "charged a share's metadata record");
@@ -788,14 +788,14 @@ async fn charge_metadata(
         crate::quota::UploadCharge::Refused => {
             tracing::info!(%owner, size, "a share link was refused: its record would cross the hard quota limit");
             Err(IssueShareRejection::QuotaExceeded {
-                code: error_codes::QUOTA_EXCEEDED,
+                code: error_codes::QUOTA_EXCEEDED.into(),
             })
         }
         // Suspended after `admit_metadata_growth` read the state: the charge's own check refuses.
         crate::quota::UploadCharge::Suspended => {
             tracing::info!(%owner, size, "a share link was refused: the account's quota is suspended");
             Err(IssueShareRejection::QuotaSuspended {
-                code: error_codes::QUOTA_SUSPENDED,
+                code: error_codes::QUOTA_SUSPENDED.into(),
             })
         }
     }
@@ -833,7 +833,7 @@ impl IssueShareRejection {
     fn malformed(detail: &str) -> Self {
         Self::Malformed {
             detail: detail.to_owned(),
-            code: error_codes::SHARE_MALFORMED,
+            code: error_codes::SHARE_MALFORMED.into(),
         }
     }
 }
@@ -842,7 +842,7 @@ impl ShareRejection {
     /// A store could not answer.
     fn unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::SHARE_UNAVAILABLE,
+            code: error_codes::SHARE_UNAVAILABLE.into(),
         }
     }
 
@@ -854,7 +854,7 @@ impl ShareRejection {
     /// really a capacity refusal would teach a legitimate viewer that a live link is dead.
     fn at_capacity(retry_after: jiff::Timestamp) -> Self {
         Self::RateLimited {
-            code: error_codes::SHARE_AT_CAPACITY,
+            code: error_codes::SHARE_AT_CAPACITY.into(),
             retry_after: unix_seconds(retry_after),
         }
     }

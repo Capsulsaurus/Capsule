@@ -179,7 +179,7 @@ pub enum SubscribeRejection {
     Malformed {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The issuer is unknown to this server or blocked by it, the capability did not verify,
@@ -190,7 +190,7 @@ pub enum SubscribeRejection {
     Refused {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A collaborator could not answer, so nothing was recorded.
@@ -199,24 +199,24 @@ pub enum SubscribeRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
 impl SubscribeRejection {
     fn malformed() -> Self {
         Self::Malformed {
-            code: error_codes::FEDERATION_CAPABILITY_MALFORMED,
+            code: error_codes::FEDERATION_CAPABILITY_MALFORMED.into(),
         }
     }
 
     fn refused(code: &'static str) -> Self {
-        Self::Refused { code }
+        Self::Refused { code: code.into() }
     }
 
     fn unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::FEDERATION_UNAVAILABLE,
+            code: error_codes::FEDERATION_UNAVAILABLE.into(),
         }
     }
 }
@@ -230,14 +230,14 @@ pub enum SubscriptionsRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
 impl SubscriptionsRejection {
     fn unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::FEDERATION_UNAVAILABLE,
+            code: error_codes::FEDERATION_UNAVAILABLE.into(),
         }
     }
 }
@@ -535,7 +535,7 @@ pub enum PulledAlbumRejection {
     NotFound {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A store could not answer.
@@ -544,20 +544,20 @@ pub enum PulledAlbumRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
 impl PulledAlbumRejection {
     fn not_found() -> Self {
         Self::NotFound {
-            code: error_codes::FEDERATION_ALBUM_NOT_FOUND,
+            code: error_codes::FEDERATION_ALBUM_NOT_FOUND.into(),
         }
     }
 
     fn unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::FEDERATION_UNAVAILABLE,
+            code: error_codes::FEDERATION_UNAVAILABLE.into(),
         }
     }
 }

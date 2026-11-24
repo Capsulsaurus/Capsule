@@ -185,7 +185,7 @@ pub enum NotFederating {
     Disabled {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -216,7 +216,7 @@ where
             "a federation operation was refused: this deployment does not federate"
         );
         Err(NotFederating::Disabled {
-            code: error_codes::FEDERATION_NOT_CONFIGURED,
+            code: error_codes::FEDERATION_NOT_CONFIGURED.into(),
         })
     }
 }
@@ -357,7 +357,7 @@ pub enum MintRejection {
     Malformed {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The peer is on this server's blocklist.
@@ -366,7 +366,7 @@ pub enum MintRejection {
     PeerBlocked {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// No such album, or one owned by a different account. One answer for both.
@@ -375,7 +375,7 @@ pub enum MintRejection {
     NotFound {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The member named is not on the album's current roster.
@@ -384,7 +384,7 @@ pub enum MintRejection {
     NotOnRoster {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The account's mint budget is spent, or the mint counter is holding as many accounts as
@@ -395,7 +395,7 @@ pub enum MintRejection {
     RateLimited {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A collaborator could not answer, so nothing was minted.
@@ -404,7 +404,7 @@ pub enum MintRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -412,14 +412,14 @@ impl MintRejection {
     /// A collaborator could not answer.
     fn unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::FEDERATION_UNAVAILABLE,
+            code: error_codes::FEDERATION_UNAVAILABLE.into(),
         }
     }
 
     /// No such album, or not the caller's.
     fn not_found() -> Self {
         Self::NotFound {
-            code: error_codes::FEDERATION_ALBUM_NOT_FOUND,
+            code: error_codes::FEDERATION_ALBUM_NOT_FOUND.into(),
         }
     }
 }
@@ -436,7 +436,7 @@ pub enum RevokeRejection {
     NotFound {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A collaborator could not answer, so nothing was revoked.
@@ -445,7 +445,7 @@ pub enum RevokeRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -458,7 +458,7 @@ pub enum RefreshRejection {
     NotRefreshable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The capability, or the successor a replay names, has been revoked.
@@ -467,7 +467,7 @@ pub enum RefreshRejection {
     Revoked {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The peer is on this server's blocklist.
@@ -476,7 +476,7 @@ pub enum RefreshRejection {
     PeerBlocked {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The grant's absolute deadline has passed, or the owner never made it renewable.
@@ -488,7 +488,7 @@ pub enum RefreshRejection {
     GrantExpired {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The member the grant was minted for is no longer on the album's roster at its epoch.
@@ -497,7 +497,7 @@ pub enum RefreshRejection {
     NotOnRoster {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The peer's events-per-hour budget is spent.
@@ -506,7 +506,7 @@ pub enum RefreshRejection {
     RateLimited {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A collaborator could not answer, so nothing was refreshed.
@@ -515,7 +515,7 @@ pub enum RefreshRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -523,16 +523,16 @@ impl From<Refusal> for RefreshRejection {
     fn from(refusal: Refusal) -> Self {
         match refusal {
             Refusal::Revoked => Self::Revoked {
-                code: error_codes::FEDERATION_CAPABILITY_REVOKED,
+                code: error_codes::FEDERATION_CAPABILITY_REVOKED.into(),
             },
             Refusal::PeerBlocked => Self::PeerBlocked {
-                code: error_codes::MODERATION_SERVER_BLOCKED,
+                code: error_codes::MODERATION_SERVER_BLOCKED.into(),
             },
             Refusal::RateLimited { .. } => Self::RateLimited {
-                code: error_codes::FEDERATION_RATE_BUDGET_EXCEEDED,
+                code: error_codes::FEDERATION_RATE_BUDGET_EXCEEDED.into(),
             },
             Refusal::Unavailable => Self::Unavailable {
-                code: error_codes::FEDERATION_UNAVAILABLE,
+                code: error_codes::FEDERATION_UNAVAILABLE.into(),
             },
         }
     }
@@ -574,14 +574,14 @@ pub async fn issue_capability(
             "a mint named a peer that is not a host name"
         );
         return Err(MintRejection::Malformed {
-            code: error_codes::FEDERATION_CAPABILITY_MALFORMED,
+            code: error_codes::FEDERATION_CAPABILITY_MALFORMED.into(),
         });
     };
     let member = request.member.trim();
     if member.is_empty() || member.len() > report_bounds::IDENTIFIER {
         tracing::info!(length = member.len(), "a mint named a member out of bounds");
         return Err(MintRejection::Malformed {
-            code: error_codes::FEDERATION_CAPABILITY_MALFORMED,
+            code: error_codes::FEDERATION_CAPABILITY_MALFORMED.into(),
         });
     }
     let member = UserId::new(member);
@@ -600,7 +600,7 @@ pub async fn issue_capability(
             if let Some(retry_after) = counters.capacity_refusal(&error, budgets::CAPABILITY_MINTS) {
                 tracing::warn!(%error, user = %credential.user, %retry_after, "a mint was refused: the mint counter is at capacity");
                 MintRejection::RateLimited {
-                    code: error_codes::FEDERATION_MINT_AT_CAPACITY,
+                    code: error_codes::FEDERATION_MINT_AT_CAPACITY.into(),
                 }
             } else {
                 tracing::error!(%error, user = %credential.user, "the mint counter could not be reached");
@@ -611,7 +611,7 @@ pub async fn issue_capability(
         crate::counter::Verdict::Limited { retry_after } => {
             tracing::info!(user = %credential.user, %retry_after, "a mint was refused: the account's mint budget is spent");
             return Err(MintRejection::RateLimited {
-                code: error_codes::FEDERATION_RATE_BUDGET_EXCEEDED,
+                code: error_codes::FEDERATION_RATE_BUDGET_EXCEEDED.into(),
             });
         }
     }
@@ -642,7 +642,7 @@ pub async fn issue_capability(
     if blocked {
         tracing::info!(%peer, %album, "a mint was refused: the peer is blocked");
         return Err(MintRejection::PeerBlocked {
-            code: error_codes::MODERATION_SERVER_BLOCKED,
+            code: error_codes::MODERATION_SERVER_BLOCKED.into(),
         });
     }
 
@@ -658,7 +658,7 @@ pub async fn issue_capability(
     let Membership::Member { granted_epoch, .. } = membership else {
         tracing::info!(%album, %member, ?membership, "a mint was refused: the member is not on the roster");
         return Err(MintRejection::NotOnRoster {
-            code: error_codes::FEDERATION_MEMBER_NOT_ON_ROSTER,
+            code: error_codes::FEDERATION_MEMBER_NOT_ON_ROSTER.into(),
         });
     };
 
@@ -677,13 +677,13 @@ pub async fn issue_capability(
             let Ok(until) = text.parse::<jiff::Timestamp>() else {
                 tracing::info!(%album, "a mint named an unreadable renewable_until");
                 return Err(MintRejection::Malformed {
-                    code: error_codes::FEDERATION_CAPABILITY_MALFORMED,
+                    code: error_codes::FEDERATION_CAPABILITY_MALFORMED.into(),
                 });
             };
             if until <= now {
                 tracing::info!(%album, %until, "a mint named a deadline in the past");
                 return Err(MintRejection::Malformed {
-                    code: error_codes::FEDERATION_CAPABILITY_MALFORMED,
+                    code: error_codes::FEDERATION_CAPABILITY_MALFORMED.into(),
                 });
             }
             Some(until)
@@ -717,7 +717,7 @@ pub async fn issue_capability(
     if not_after > crate::store::deadline(minted.grant.issued_at, MAX_GRANT_LIFETIME) {
         tracing::info!(%album, %not_after, "a mint named a deadline past the lifetime ceiling");
         return Err(MintRejection::Malformed {
-            code: error_codes::FEDERATION_CAPABILITY_MALFORMED,
+            code: error_codes::FEDERATION_CAPABILITY_MALFORMED.into(),
         });
     }
     federation
@@ -794,13 +794,13 @@ pub async fn revoke_capability(
     let record = albums.albums().read(&album).await.map_err(|error| {
         tracing::error!(%error, %album, "the album store could not answer a capability revoke");
         RevokeRejection::Unavailable {
-            code: error_codes::FEDERATION_UNAVAILABLE,
+            code: error_codes::FEDERATION_UNAVAILABLE.into(),
         }
     })?;
     if record.is_none_or(|record| record.owner_id.as_str() != credential.user.as_str()) {
         tracing::info!(user = %credential.user, %album, "a revoke was refused: no such album, or not the caller's");
         return Err(RevokeRejection::NotFound {
-            code: error_codes::FEDERATION_ALBUM_NOT_FOUND,
+            code: error_codes::FEDERATION_ALBUM_NOT_FOUND.into(),
         });
     }
 
@@ -813,7 +813,7 @@ pub async fn revoke_capability(
         .map_err(|error| {
             tracing::error!(%error, %album, "the capability store could not be read for a revoke");
             RevokeRejection::Unavailable {
-                code: error_codes::FEDERATION_UNAVAILABLE,
+                code: error_codes::FEDERATION_UNAVAILABLE.into(),
             }
         })?;
     match held {
@@ -825,7 +825,7 @@ pub async fn revoke_capability(
                 .map_err(|error| {
                     tracing::error!(%error, %album, jti = %path.jti, "a capability could not be revoked");
                     RevokeRejection::Unavailable {
-                        code: error_codes::FEDERATION_UNAVAILABLE,
+                        code: error_codes::FEDERATION_UNAVAILABLE.into(),
                     }
                 })?;
             tracing::info!(%album, jti = %path.jti, ?outcome, "an owner revoked a federation capability");
@@ -861,7 +861,7 @@ pub async fn refresh_capability(
     let Principal::Peer(capability) = principal else {
         tracing::info!("a session token was presented on the capability refresh");
         return Err(RefreshRejection::NotRefreshable {
-            code: error_codes::FEDERATION_CAPABILITY_INVALID,
+            code: error_codes::FEDERATION_CAPABILITY_INVALID.into(),
         });
     };
     // The same admission every federated read passes: live grant, unblocked peer, budget.
@@ -882,7 +882,7 @@ pub async fn refresh_capability(
             "a refresh was refused: the grant's deadline has passed"
         );
         return Err(RefreshRejection::GrantExpired {
-            code: error_codes::FEDERATION_CAPABILITY_EXPIRED,
+            code: error_codes::FEDERATION_CAPABILITY_EXPIRED.into(),
         });
     }
 
@@ -897,7 +897,7 @@ pub async fn refresh_capability(
         .map_err(|error| {
             tracing::error!(%error, album = %predecessor.album_id, "the membership store could not answer a refresh");
             RefreshRejection::Unavailable {
-                code: error_codes::FEDERATION_UNAVAILABLE,
+                code: error_codes::FEDERATION_UNAVAILABLE.into(),
             }
         })? {
         Membership::Member { granted_epoch, .. } if granted_epoch == predecessor.granted_epoch => {}
@@ -911,7 +911,7 @@ pub async fn refresh_capability(
                 "a refresh was refused: its member is not on the roster at the granted epoch"
             );
             return Err(RefreshRejection::NotOnRoster {
-                code: error_codes::FEDERATION_MEMBER_NOT_ON_ROSTER,
+                code: error_codes::FEDERATION_MEMBER_NOT_ON_ROSTER.into(),
             });
         }
     }
@@ -933,7 +933,7 @@ pub async fn refresh_capability(
         .map_err(|error| {
             tracing::error!(%error, "a successor capability could not be signed");
             RefreshRejection::Unavailable {
-                code: error_codes::FEDERATION_UNAVAILABLE,
+                code: error_codes::FEDERATION_UNAVAILABLE.into(),
             }
         })?;
     let successor = CapabilityRecord {
@@ -958,7 +958,7 @@ pub async fn refresh_capability(
         .map_err(|error| {
             tracing::error!(%error, jti = %predecessor.jti, "a capability could not be refreshed");
             RefreshRejection::Unavailable {
-                code: error_codes::FEDERATION_UNAVAILABLE,
+                code: error_codes::FEDERATION_UNAVAILABLE.into(),
             }
         })?;
 
@@ -971,13 +971,13 @@ pub async fn refresh_capability(
             if !record.is_live(now) {
                 tracing::info!(jti = %record.jti, "a replayed refresh named a successor that is no longer live");
                 return Err(RefreshRejection::Revoked {
-                    code: error_codes::FEDERATION_CAPABILITY_REVOKED,
+                    code: error_codes::FEDERATION_CAPABILITY_REVOKED.into(),
                 });
             }
             let token = federation.codec().sign(&record.grant()).map_err(|error| {
                 tracing::error!(%error, jti = %record.jti, "a stored grant could not be re-signed");
                 RefreshRejection::Unavailable {
-                    code: error_codes::FEDERATION_UNAVAILABLE,
+                    code: error_codes::FEDERATION_UNAVAILABLE.into(),
                 }
             })?;
             (record, token, true)
@@ -987,7 +987,7 @@ pub async fn refresh_capability(
         outcome => {
             tracing::info!(jti = %predecessor.jti, ?outcome, "a refresh named a grant that cannot be continued");
             return Err(RefreshRejection::Revoked {
-                code: error_codes::FEDERATION_CAPABILITY_REVOKED,
+                code: error_codes::FEDERATION_CAPABILITY_REVOKED.into(),
             });
         }
     };
@@ -1088,7 +1088,7 @@ pub enum ReportRejection {
     Malformed {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The signature does not verify under the peer's pinned key — or it does, over a report
@@ -1098,7 +1098,7 @@ pub enum ReportRejection {
     Unsigned {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// No operator has pinned a key for the reporting server.
@@ -1107,7 +1107,7 @@ pub enum ReportRejection {
     PeerUnknown {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The reporting server is on this server's blocklist.
@@ -1116,7 +1116,7 @@ pub enum ReportRejection {
     PeerBlocked {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// Too many reports from this peer about this account, or a report counter is holding as
@@ -1127,7 +1127,7 @@ pub enum ReportRejection {
     RateLimited {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A collaborator could not answer, so nothing was filed.
@@ -1136,7 +1136,7 @@ pub enum ReportRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -1144,21 +1144,21 @@ impl ReportRejection {
     /// A field of the body is not what it must be.
     fn malformed() -> Self {
         Self::Malformed {
-            code: error_codes::MODERATION_REPORT_MALFORMED,
+            code: error_codes::MODERATION_REPORT_MALFORMED.into(),
         }
     }
 
     /// A collaborator could not answer.
     fn unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::MODERATION_UNAVAILABLE,
+            code: error_codes::MODERATION_UNAVAILABLE.into(),
         }
     }
 
     /// The report does not authenticate a fresh report addressed to this server.
     fn unsigned() -> Self {
         Self::Unsigned {
-            code: error_codes::MODERATION_REPORT_UNSIGNED,
+            code: error_codes::MODERATION_REPORT_UNSIGNED.into(),
         }
     }
 }
@@ -1348,19 +1348,19 @@ pub async fn submit_federated_report(
     let Some(record) = record else {
         tracing::info!(%peer, "a report was refused: the peer is unknown");
         return Err(ReportRejection::PeerUnknown {
-            code: error_codes::FEDERATION_PEER_UNKNOWN,
+            code: error_codes::FEDERATION_PEER_UNKNOWN.into(),
         });
     };
     if record.is_blocked() {
         tracing::info!(%peer, "a report was refused: the peer is blocked");
         return Err(ReportRejection::PeerBlocked {
-            code: error_codes::MODERATION_SERVER_BLOCKED,
+            code: error_codes::MODERATION_SERVER_BLOCKED.into(),
         });
     }
     let Some(key) = record.signing_key else {
         tracing::info!(%peer, "a report was refused: the peer has no pinned key");
         return Err(ReportRejection::PeerUnknown {
-            code: error_codes::FEDERATION_PEER_UNKNOWN,
+            code: error_codes::FEDERATION_PEER_UNKNOWN.into(),
         });
     };
 
@@ -1537,7 +1537,7 @@ async fn charge(
         crate::counter::Verdict::Limited { retry_after } => {
             tracing::info!(kind = key.as_str(), %retry_after, "a federated report budget is spent");
             Err(ReportRejection::RateLimited {
-                code: error_codes::MODERATION_REPORT_RATE_LIMITED,
+                code: error_codes::MODERATION_REPORT_RATE_LIMITED.into(),
             })
         }
     }
@@ -1558,7 +1558,7 @@ fn refused_by_counter(
     if let Some(retry_after) = counters.capacity_refusal(error, budget) {
         tracing::warn!(%error, kind = key.as_str(), %retry_after, "a report counter is at capacity");
         ReportRejection::RateLimited {
-            code: error_codes::MODERATION_REPORT_AT_CAPACITY,
+            code: error_codes::MODERATION_REPORT_AT_CAPACITY.into(),
         }
     } else {
         tracing::error!(%error, kind = key.as_str(), "a report counter could not be reached");

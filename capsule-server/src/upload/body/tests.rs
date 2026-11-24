@@ -288,14 +288,14 @@ async fn a_body_past_the_cap_is_left_past_it_for_the_cap_to_refuse() {
 #[test]
 fn the_body_rejections_keep_their_codes_through_the_conversion() {
     let unsupported = ChunkBodyRejection::from(OpaqueBodyRejection::UnsupportedMediaType {
-        code: error_codes::UPLOAD_UNSUPPORTED_MEDIA_TYPE,
+        code: error_codes::UPLOAD_UNSUPPORTED_MEDIA_TYPE.into(),
     });
     assert!(matches!(
         unsupported,
         ChunkBodyRejection::UnsupportedMediaType { code } if code == error_codes::UPLOAD_UNSUPPORTED_MEDIA_TYPE
     ));
     let unreadable = ChunkBodyRejection::from(OpaqueBodyRejection::Unreadable {
-        code: error_codes::UPLOAD_MALFORMED_REQUEST,
+        code: error_codes::UPLOAD_MALFORMED_REQUEST.into(),
     });
     assert!(matches!(
         unreadable,

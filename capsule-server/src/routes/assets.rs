@@ -135,7 +135,7 @@ pub enum AssetReceiptsRejection {
     NotFound {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A collaborator could not answer.
@@ -144,7 +144,7 @@ pub enum AssetReceiptsRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -173,7 +173,7 @@ pub async fn get_asset_receipts(
         .map_err(|error| {
             tracing::error!(%error, asset_id = %asset, "the asset index could not answer");
             AssetReceiptsRejection::Unavailable {
-                code: error_codes::STORAGE_UNAVAILABLE,
+                code: error_codes::STORAGE_UNAVAILABLE.into(),
             }
         })?
         .ok_or_else(AssetReceiptsRejection::not_found)?;
@@ -190,7 +190,7 @@ pub async fn get_asset_receipts(
         .map_err(|error| {
             tracing::error!(%error, asset_id = %asset, "the receipt log could not answer");
             AssetReceiptsRejection::Unavailable {
-                code: error_codes::STORAGE_UNAVAILABLE,
+                code: error_codes::STORAGE_UNAVAILABLE.into(),
             }
         })?;
 
@@ -205,7 +205,7 @@ impl AssetReceiptsRejection {
     /// No such asset, or not this caller's.
     fn not_found() -> Self {
         Self::NotFound {
-            code: error_codes::STORAGE_ASSET_NOT_FOUND,
+            code: error_codes::STORAGE_ASSET_NOT_FOUND.into(),
         }
     }
 }

@@ -122,7 +122,7 @@ pub enum UpgradeRejection {
         detail: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The intent is not signed by a device in the caller's published directory.
@@ -131,7 +131,7 @@ pub enum UpgradeRejection {
     ProposerNotAuthorized {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// No such album, or not this caller's. One answer for both.
@@ -140,7 +140,7 @@ pub enum UpgradeRejection {
     NotFound {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A different ceremony is already in flight, and only one may be.
@@ -152,7 +152,7 @@ pub enum UpgradeRejection {
         intent_id: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A collaborator could not answer.
@@ -161,7 +161,7 @@ pub enum UpgradeRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -170,21 +170,21 @@ impl UpgradeRejection {
     fn malformed(detail: impl Into<String>) -> Self {
         Self::Malformed {
             detail: detail.into(),
-            code: error_codes::ALBUM_UPGRADE_MALFORMED,
+            code: error_codes::ALBUM_UPGRADE_MALFORMED.into(),
         }
     }
 
     /// No such album, or not this caller's.
     fn not_found() -> Self {
         Self::NotFound {
-            code: error_codes::ALBUM_UPGRADE_NOT_FOUND,
+            code: error_codes::ALBUM_UPGRADE_NOT_FOUND.into(),
         }
     }
 
     /// A collaborator could not answer.
     fn unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::ALBUM_UNAVAILABLE,
+            code: error_codes::ALBUM_UNAVAILABLE.into(),
         }
     }
 }
@@ -203,7 +203,7 @@ pub enum PhaseRejection {
     NotFound {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A collaborator could not answer.
@@ -212,7 +212,7 @@ pub enum PhaseRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -226,7 +226,7 @@ impl From<UpgradeRejection> for PhaseRejection {
         match rejection {
             UpgradeRejection::NotFound { code } => Self::NotFound { code },
             _ => Self::Unavailable {
-                code: error_codes::ALBUM_UNAVAILABLE,
+                code: error_codes::ALBUM_UNAVAILABLE.into(),
             },
         }
     }
@@ -246,7 +246,7 @@ pub enum AbortRejection {
         detail: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// No such album, or not this caller's.
@@ -255,7 +255,7 @@ pub enum AbortRejection {
     NotFound {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A different ceremony holds the album.
@@ -267,7 +267,7 @@ pub enum AbortRejection {
         intent_id: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A collaborator could not answer.
@@ -276,7 +276,7 @@ pub enum AbortRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -289,7 +289,7 @@ impl From<UpgradeRejection> for AbortRejection {
             }
             UpgradeRejection::Malformed { detail, code } => Self::Malformed { detail, code },
             _ => Self::Unavailable {
-                code: error_codes::ALBUM_UNAVAILABLE,
+                code: error_codes::ALBUM_UNAVAILABLE.into(),
             },
         }
     }
@@ -344,7 +344,7 @@ pub async fn begin_album_upgrade(
         .ok_or_else(|| {
             tracing::info!(%user, "an upgrade was refused: no published device directory");
             UpgradeRejection::ProposerNotAuthorized {
-                code: error_codes::ALBUM_UPGRADE_PROPOSER,
+                code: error_codes::ALBUM_UPGRADE_PROPOSER.into(),
             }
         })?;
     let Ok(directory) = capsule_core::cbor::from_slice::<capsule_core::crypto::keys::DeviceDirectory>(
@@ -358,7 +358,7 @@ pub async fn begin_album_upgrade(
     if let Err(error) = signed.verify(&directory) {
         tracing::info!(%user, %error, "an upgrade intent's proposer did not verify");
         return Err(UpgradeRejection::ProposerNotAuthorized {
-            code: error_codes::ALBUM_UPGRADE_PROPOSER,
+            code: error_codes::ALBUM_UPGRADE_PROPOSER.into(),
         });
     }
 
@@ -388,7 +388,7 @@ pub async fn begin_album_upgrade(
         }
         UpgradeOutcome::Conflict { intent_id } => Err(UpgradeRejection::AlreadyUpgrading {
             intent_id: intent_id.to_string(),
-            code: error_codes::ALBUM_UPGRADE_IN_FLIGHT,
+            code: error_codes::ALBUM_UPGRADE_IN_FLIGHT.into(),
         }),
         UpgradeOutcome::NotFound => Err(UpgradeRejection::not_found()),
     }
@@ -437,7 +437,7 @@ pub async fn abort_album_upgrade(
     let Ok(intent_id) = Uuid::parse_str(&query.intent_id) else {
         return Err(AbortRejection::Malformed {
             detail: "intent_id is not a UUID".to_owned(),
-            code: error_codes::ALBUM_UPGRADE_MALFORMED,
+            code: error_codes::ALBUM_UPGRADE_MALFORMED.into(),
         });
     };
     let now = albums.clock().now();
@@ -449,7 +449,7 @@ pub async fn abort_album_upgrade(
         .map_err(|error| {
             tracing::error!(%error, %album, "the album store could not end an upgrade");
             AbortRejection::Unavailable {
-                code: error_codes::ALBUM_UNAVAILABLE,
+                code: error_codes::ALBUM_UNAVAILABLE.into(),
             }
         })? {
         UpgradeOutcome::Cleared(_) | UpgradeOutcome::Quiescing(_) => {
@@ -457,10 +457,10 @@ pub async fn abort_album_upgrade(
         }
         UpgradeOutcome::Conflict { intent_id } => Err(AbortRejection::AlreadyUpgrading {
             intent_id: intent_id.to_string(),
-            code: error_codes::ALBUM_UPGRADE_IN_FLIGHT,
+            code: error_codes::ALBUM_UPGRADE_IN_FLIGHT.into(),
         }),
         UpgradeOutcome::NotFound => Err(AbortRejection::NotFound {
-            code: error_codes::ALBUM_UPGRADE_NOT_FOUND,
+            code: error_codes::ALBUM_UPGRADE_NOT_FOUND.into(),
         }),
     }
 }

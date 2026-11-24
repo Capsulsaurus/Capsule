@@ -129,6 +129,56 @@ pub fn code_for(status: u16) -> &'static str {
     }
 }
 
+/// A stable `error.*` catalog code, as a rejection's `#[problem(extension)] code` field holds
+/// it.
+///
+/// Kynos describes an extension member by its type's [`Schema`](kynos::schema::Schema), and
+/// `&'static str` has none; the orphan rule keeps Capsule from giving it one. This is that
+/// `&'static str` with the schema a string has: it serializes as the bare string, so the wire
+/// is unchanged, and the document describes the member as `{"type": "string"}`. A value comes
+/// from a `capsule_i18n::error_codes` constant through [`From`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
+#[serde(transparent)]
+pub struct Code(pub &'static str);
+
+impl Code {
+    /// The code as the catalog spells it.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        self.0
+    }
+}
+
+impl From<&'static str> for Code {
+    fn from(code: &'static str) -> Self {
+        Self(code)
+    }
+}
+
+impl PartialEq<&str> for Code {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<Code> for &str {
+    fn eq(&self, other: &Code) -> bool {
+        *self == other.0
+    }
+}
+
+impl std::fmt::Display for Code {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.0)
+    }
+}
+
+impl kynos::schema::Schema for Code {
+    fn schema(registry: &mut kynos::schema::registry::Registry) -> kynos::openapi::Schema {
+        <String as kynos::schema::Schema>::schema(registry)
+    }
+}
+
 /// Fills in the `error.*` code on problems the framework rendered.
 ///
 /// See the module docs. Holds nothing: the mapping is a function of the status and the decision
@@ -310,7 +360,7 @@ pub enum TooEarlyRejection {
     TooEarly {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -359,7 +409,7 @@ impl<C: Sync + 'static> Interceptor<C> for TooEarly {
                 "a write arrived as TLS early data and was refused with 425"
             );
             return Err(TooEarlyRejection::TooEarly {
-                code: error_codes::REQUEST_TOO_EARLY,
+                code: error_codes::REQUEST_TOO_EARLY.into(),
             });
         }
         Ok(next.run(request).await)

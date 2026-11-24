@@ -125,7 +125,7 @@ pub enum SessionsRejection {
         detail: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The session store could not answer.
@@ -134,7 +134,7 @@ pub enum SessionsRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -179,7 +179,7 @@ pub async fn list_upload_sessions(
                         "{token:?} is not an upload status; expected one of pending, uploading, \
                  waiting_for_processing, completed, failed_processing"
                     ),
-                    code: error_codes::UPLOAD_INVALID_STATUS_FILTER,
+                    code: error_codes::UPLOAD_INVALID_STATUS_FILTER.into(),
                 }
             })?),
         };
@@ -192,7 +192,7 @@ pub async fn list_upload_sessions(
         .map_err(|error| {
             tracing::error!(%error, user_id = %caller, "the session store could not be listed");
             SessionsRejection::Unavailable {
-                code: error_codes::UPLOAD_UNAVAILABLE,
+                code: error_codes::UPLOAD_UNAVAILABLE.into(),
             }
         })?;
 

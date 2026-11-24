@@ -126,7 +126,7 @@ pub enum StoreEscrowRejection {
         detail: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The store could not answer.
@@ -135,7 +135,7 @@ pub enum StoreEscrowRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -148,7 +148,7 @@ pub enum FetchEscrowRejection {
     NotStored {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The store could not answer.
@@ -157,7 +157,7 @@ pub enum FetchEscrowRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -197,7 +197,7 @@ pub async fn store_escrow(
         .map_err(|error| {
             tracing::error!(%error, %user, "the escrow store could not store");
             StoreEscrowRejection::Unavailable {
-                code: error_codes::ESCROW_UNAVAILABLE,
+                code: error_codes::ESCROW_UNAVAILABLE.into(),
             }
         })?;
 
@@ -238,13 +238,13 @@ pub async fn fetch_escrow(
         .map_err(|error| {
             tracing::error!(%error, %user, "the escrow store could not answer");
             FetchEscrowRejection::Unavailable {
-                code: error_codes::ESCROW_UNAVAILABLE,
+                code: error_codes::ESCROW_UNAVAILABLE.into(),
             }
         })?
         .ok_or_else(|| {
             tracing::debug!(%user, "no escrow has been stored for this account");
             FetchEscrowRejection::NotStored {
-                code: error_codes::ESCROW_NOT_STORED,
+                code: error_codes::ESCROW_NOT_STORED.into(),
             }
         })?;
 
@@ -271,7 +271,7 @@ pub enum FetchSealedIdentityRejection {
     NotStored {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The store could not answer.
@@ -280,7 +280,7 @@ pub enum FetchSealedIdentityRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -324,7 +324,7 @@ pub async fn store_sealed_identity(
         .map_err(|error| {
             tracing::error!(%error, %user, "the escrow store could not store a sealed identity");
             StoreEscrowRejection::Unavailable {
-                code: error_codes::ESCROW_UNAVAILABLE,
+                code: error_codes::ESCROW_UNAVAILABLE.into(),
             }
         })?;
 
@@ -355,13 +355,13 @@ pub async fn fetch_sealed_identity(
         .map_err(|error| {
             tracing::error!(%error, %user, "the escrow store could not answer for a sealed identity");
             FetchSealedIdentityRejection::Unavailable {
-                code: error_codes::ESCROW_UNAVAILABLE,
+                code: error_codes::ESCROW_UNAVAILABLE.into(),
             }
         })?
         .ok_or_else(|| {
             tracing::debug!(%user, "no sealed identity has been stored for this account");
             FetchSealedIdentityRejection::NotStored {
-                code: error_codes::ESCROW_IDENTITY_NOT_STORED,
+                code: error_codes::ESCROW_IDENTITY_NOT_STORED.into(),
             }
         })?;
 
@@ -374,7 +374,7 @@ impl StoreEscrowRejection {
     fn malformed(error: &MalformedEscrow) -> Self {
         Self::Malformed {
             detail: error.to_string(),
-            code: error_codes::ESCROW_MALFORMED,
+            code: error_codes::ESCROW_MALFORMED.into(),
         }
     }
 }
@@ -407,7 +407,7 @@ pub enum StoreAlbumKeysRejection {
     InvalidAlbumId {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The body cannot be an album key escrow at any version.
@@ -418,7 +418,7 @@ pub enum StoreAlbumKeysRejection {
         detail: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The account's album key escrows are at their bound: storing this one would pass the slot
@@ -428,7 +428,7 @@ pub enum StoreAlbumKeysRejection {
     Full {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The store could not answer.
@@ -437,7 +437,7 @@ pub enum StoreAlbumKeysRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -469,7 +469,7 @@ pub enum ListAlbumKeysRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -499,7 +499,7 @@ pub async fn store_album_keys(
     if !is_canonical_album_id(&path.album_id) {
         tracing::info!(%user, album = %path.album_id, "an album key escrow named no album");
         return Err(StoreAlbumKeysRejection::InvalidAlbumId {
-            code: error_codes::ALBUM_INVALID_ID,
+            code: error_codes::ALBUM_INVALID_ID.into(),
         });
     }
     let album = AlbumId::new(&path.album_id);
@@ -508,7 +508,7 @@ pub async fn store_album_keys(
         tracing::info!(%user, %album, %error, "an album key escrow was refused");
         StoreAlbumKeysRejection::Malformed {
             detail: error.to_string(),
-            code: error_codes::ESCROW_MALFORMED,
+            code: error_codes::ESCROW_MALFORMED.into(),
         }
     })?;
 
@@ -527,12 +527,12 @@ pub async fn store_album_keys(
         .map_err(|error| {
             tracing::error!(%error, %user, %album, "the escrow store could not store album keys");
             StoreAlbumKeysRejection::Unavailable {
-                code: error_codes::ESCROW_UNAVAILABLE,
+                code: error_codes::ESCROW_UNAVAILABLE.into(),
             }
         })?;
     let AlbumKeysStored::Stored(replaced) = stored else {
         return Err(StoreAlbumKeysRejection::Full {
-            code: error_codes::ESCROW_ALBUM_KEYS_FULL,
+            code: error_codes::ESCROW_ALBUM_KEYS_FULL.into(),
         });
     };
 
@@ -566,7 +566,7 @@ pub async fn list_album_keys(
         .map_err(|error| {
             tracing::error!(%error, %user, "the escrow store could not list album keys");
             ListAlbumKeysRejection::Unavailable {
-                code: error_codes::ESCROW_UNAVAILABLE,
+                code: error_codes::ESCROW_UNAVAILABLE.into(),
             }
         })?;
     tracing::debug!(%user, albums = held.len(), "serving the album key escrows");

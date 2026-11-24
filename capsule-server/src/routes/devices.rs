@@ -47,11 +47,16 @@ use crate::activity::{ActivityContext, ActivityKind};
 use crate::auth::{AccessToken, AuthContext};
 use crate::store::{SessionId, SessionRecord, UserId};
 
-/// The devices surface: which sessions an account has, and ending one.
+/// The devices surface: which sessions an account has, ending one, and the signed device
+/// directory that says which keys to trust for them.
+///
+/// One type for the one `devices` tag: Kynos refuses a document that declares a tag name twice,
+/// so [`crate::routes::directory`] files its operations under this one rather than its own.
 #[derive(Tag)]
 #[tag(
     name = "devices",
-    description = "The session ledger: listing an account's devices and revoking one."
+    description = "The session ledger and the signed device directory: listing an account's \
+                   devices, revoking one, and publishing and fetching the keys to trust for them."
 )]
 pub struct SessionsTag;
 
@@ -144,7 +149,7 @@ pub enum ListDevicesRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -161,7 +166,7 @@ pub enum RevokeSessionRejection {
     NotFound {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The store could not answer.
@@ -170,7 +175,7 @@ pub enum RevokeSessionRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -193,7 +198,7 @@ pub async fn list_devices(
         .map_err(|error| {
             tracing::error!(%error, %user, "the session store could not list");
             ListDevicesRejection::Unavailable {
-                code: error_codes::AUTH_UNAVAILABLE,
+                code: error_codes::AUTH_UNAVAILABLE.into(),
             }
         })?;
 
@@ -204,7 +209,7 @@ pub async fn list_devices(
         .map_err(|error| {
             tracing::error!(%error, %user, "the cohort map could not be read");
             ListDevicesRejection::Unavailable {
-                code: error_codes::AUTH_UNAVAILABLE,
+                code: error_codes::AUTH_UNAVAILABLE.into(),
             }
         })?;
 
@@ -264,14 +269,14 @@ pub async fn revoke_session(
         .map_err(|error| {
             tracing::error!(%error, %user, "the session store could not be read for a revoke");
             RevokeSessionRejection::Unavailable {
-                code: error_codes::AUTH_UNAVAILABLE,
+                code: error_codes::AUTH_UNAVAILABLE.into(),
             }
         })?;
 
     let Some(held) = held.filter(|record| record.user_id == user) else {
         tracing::info!(%user, session_id = %target, "a session revoke found nothing of this account's");
         return Err(RevokeSessionRejection::NotFound {
-            code: error_codes::AUTH_SESSION_NOT_FOUND,
+            code: error_codes::AUTH_SESSION_NOT_FOUND.into(),
         });
     };
 
@@ -281,7 +286,7 @@ pub async fn revoke_session(
         .map_err(|error| {
             tracing::error!(%error, %user, "the session store could not close a session");
             RevokeSessionRejection::Unavailable {
-                code: error_codes::AUTH_UNAVAILABLE,
+                code: error_codes::AUTH_UNAVAILABLE.into(),
             }
         })?;
 

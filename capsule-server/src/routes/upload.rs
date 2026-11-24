@@ -425,7 +425,7 @@ pub enum CreateRejection {
         intent_id: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The account is suspended.
@@ -439,7 +439,7 @@ pub enum CreateRejection {
     AccountSuspended {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// Invariant 1: the manifest envelope pins a `protocol_version` outside the window this
@@ -454,7 +454,7 @@ pub enum CreateRejection {
     ProtocolUnsupported {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// One of the structural invariants refused the request. The `code` says which.
@@ -466,7 +466,7 @@ pub enum CreateRejection {
         detail: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The write is not permitted: the album, the device, or the owner on whose behalf it was
@@ -478,7 +478,7 @@ pub enum CreateRejection {
         detail: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// Invariant 4's upper half: the declared size is past this deployment's per-blob ceiling.
@@ -487,7 +487,7 @@ pub enum CreateRejection {
     FileTooLarge {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The owner already holds these bytes, in the asset named.
@@ -505,7 +505,7 @@ pub enum CreateRejection {
         existing_asset: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The declared size would cross the account's hard quota limit.
@@ -518,7 +518,7 @@ pub enum CreateRejection {
     QuotaExceeded {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The account's quota is suspended by the server's operator (#705).
@@ -531,7 +531,7 @@ pub enum CreateRejection {
     QuotaSuspended {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The account opened sessions faster than its budget allows, or already holds as many live
@@ -544,7 +544,7 @@ pub enum CreateRejection {
     RateLimited {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
         /// When the caller may retry, as Unix seconds.
         #[problem(extension)]
         retry_after: u64,
@@ -556,7 +556,7 @@ pub enum CreateRejection {
     StorageFull {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
         /// When the caller may retry, as Unix seconds.
         #[problem(extension)]
         retry_after: u64,
@@ -568,7 +568,7 @@ pub enum CreateRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
         /// When the caller may retry, as Unix seconds.
         #[problem(extension)]
         retry_after: u64,
@@ -592,7 +592,7 @@ pub enum ChunkRejection {
         detail: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// Unknown, expired, discarded, or somebody else's — deliberately one answer.
@@ -606,7 +606,7 @@ pub enum ChunkRejection {
     SessionNotFound {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The range overlaps a range of the session still in flight, or is partly committed.
@@ -626,7 +626,7 @@ pub enum ChunkRejection {
         retry_after: Option<u64>,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The session already has its in-flight cap of ranges being written. Nothing was written.
@@ -641,7 +641,7 @@ pub enum ChunkRejection {
         retry_after: u64,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// Admitting the range could leave the committed set past its fragment bound. Nothing was
@@ -657,7 +657,7 @@ pub enum ChunkRejection {
         retry_after: Option<u64>,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The session is finalizing or already terminal; its bytes are settled.
@@ -666,7 +666,7 @@ pub enum ChunkRejection {
     SessionNotActive {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The chunk is larger than the protocol's 16 MiB ceiling.
@@ -675,7 +675,7 @@ pub enum ChunkRejection {
     ChunkTooLarge {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The server's own inconsistency: the stage and the session's counter disagree.
@@ -684,7 +684,7 @@ pub enum ChunkRejection {
     StorageInconsistent {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The account appended chunks faster than its budget allows.
@@ -693,7 +693,7 @@ pub enum ChunkRejection {
     RateLimited {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
         /// When the caller may retry, as Unix seconds.
         #[problem(extension)]
         retry_after: u64,
@@ -706,7 +706,7 @@ pub enum ChunkRejection {
     StorageFull {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
         /// When the caller may retry, as Unix seconds.
         #[problem(extension)]
         retry_after: u64,
@@ -718,7 +718,7 @@ pub enum ChunkRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
         /// When the caller may retry, as Unix seconds.
         #[problem(extension)]
         retry_after: u64,
@@ -807,7 +807,7 @@ pub enum SessionRejection {
     SessionNotFound {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A collaborator could not answer.
@@ -816,7 +816,7 @@ pub enum SessionRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
         /// When the caller may retry, as Unix seconds.
         #[problem(extension)]
         retry_after: u64,
@@ -838,7 +838,7 @@ pub enum CancelRejection {
     SessionNotFound {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// Finalization is running, or the session is already terminal.
@@ -852,7 +852,7 @@ pub enum CancelRejection {
     SessionNotActive {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A collaborator could not answer.
@@ -861,7 +861,7 @@ pub enum CancelRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
         /// When the caller may retry, as Unix seconds.
         #[problem(extension)]
         retry_after: u64,
@@ -871,13 +871,13 @@ pub enum CancelRejection {
 impl CancelRejection {
     fn not_active() -> Self {
         Self::SessionNotActive {
-            code: error_codes::UPLOAD_SESSION_NOT_ACTIVE,
+            code: error_codes::UPLOAD_SESSION_NOT_ACTIVE.into(),
         }
     }
 
     fn unavailable(clock: &dyn Clock) -> Self {
         Self::Unavailable {
-            code: error_codes::UPLOAD_UNAVAILABLE,
+            code: error_codes::UPLOAD_UNAVAILABLE.into(),
             retry_after: retry_at(clock, UNAVAILABLE_RETRY),
         }
     }
@@ -899,13 +899,13 @@ impl From<SessionRejection> for CancelRejection {
 impl SessionRejection {
     fn not_found() -> Self {
         Self::SessionNotFound {
-            code: error_codes::UPLOAD_SESSION_NOT_FOUND,
+            code: error_codes::UPLOAD_SESSION_NOT_FOUND.into(),
         }
     }
 
     fn unavailable(clock: &dyn Clock) -> Self {
         Self::Unavailable {
-            code: error_codes::UPLOAD_UNAVAILABLE,
+            code: error_codes::UPLOAD_UNAVAILABLE.into(),
             retry_after: retry_at(clock, UNAVAILABLE_RETRY),
         }
     }
@@ -1015,7 +1015,7 @@ pub async fn create_upload(
     if !standing.may_write() {
         tracing::info!(%uploader, "an upload was refused: the account is suspended");
         return Err(CreateRejection::AccountSuspended {
-            code: error_codes::MODERATION_ACCOUNT_SUSPENDED,
+            code: error_codes::MODERATION_ACCOUNT_SUSPENDED.into(),
         });
     }
 
@@ -1061,7 +1061,7 @@ pub async fn create_upload(
         );
         return Err(CreateRejection::UpgradeQuiescing {
             intent_id: live.to_string(),
-            code: error_codes::UPLOAD_ALBUM_QUIESCING,
+            code: error_codes::UPLOAD_ALBUM_QUIESCING.into(),
         });
     }
 
@@ -1098,7 +1098,7 @@ pub async fn create_upload(
         tracing::info!(%uploader, "an upload was refused: created_by_user is not the caller");
         return Err(CreateRejection::Invalid {
             detail: "created_by_user is not the authenticated caller".to_owned(),
-            code: error_codes::UPLOAD_ENVELOPE_MISMATCH,
+            code: error_codes::UPLOAD_ENVELOPE_MISMATCH.into(),
         });
     }
 
@@ -1346,7 +1346,7 @@ pub async fn create_upload(
         Ok(crate::quota::UploadCharge::Refused) => return Err(CreateRejection::quota_exceeded()),
         Ok(crate::quota::UploadCharge::Suspended) => {
             return Err(CreateRejection::QuotaSuspended {
-                code: error_codes::QUOTA_SUSPENDED,
+                code: error_codes::QUOTA_SUSPENDED.into(),
             });
         }
         Err(error) => {
@@ -1367,7 +1367,7 @@ pub async fn create_upload(
             BlobError::StorageFull { .. } => {
                 tracing::warn!(%error, upload_id = %upload_id, "a session was refused: the disk is full");
                 CreateRejection::StorageFull {
-                    code: error_codes::UPLOAD_STORAGE_FULL,
+                    code: error_codes::UPLOAD_STORAGE_FULL.into(),
                     retry_after: retry_at(upload.clock(), STORAGE_FULL_RETRY),
                 }
             }
@@ -1483,7 +1483,7 @@ pub async fn append_chunk(
     .await
     .map_err(|throttled| match throttled {
         Throttled::Until(retry_after) => ChunkRejection::RateLimited {
-            code: error_codes::UPLOAD_RATE_LIMITED,
+            code: error_codes::UPLOAD_RATE_LIMITED.into(),
             retry_after,
         },
         Throttled::Unavailable => ChunkRejection::unavailable(upload.clock()),
@@ -1617,7 +1617,7 @@ pub async fn append_chunk(
         }
         chunk::Accepted::StorageFull => {
             return Err(ChunkRejection::StorageFull {
-                code: error_codes::UPLOAD_STORAGE_FULL,
+                code: error_codes::UPLOAD_STORAGE_FULL.into(),
                 retry_after: retry_at(upload.clock(), STORAGE_FULL_RETRY),
             });
         }
@@ -1752,7 +1752,7 @@ async fn recharge_after_open(
         }
         Ok(crate::quota::UploadCharge::Refused) => CreateRejection::quota_exceeded(),
         Ok(crate::quota::UploadCharge::Suspended) => CreateRejection::QuotaSuspended {
-            code: error_codes::QUOTA_SUSPENDED,
+            code: error_codes::QUOTA_SUSPENDED.into(),
         },
         Err(error) => {
             store_unavailable(&error, "re-charge an opened upload against its quota");
@@ -2085,7 +2085,7 @@ impl CreateRejection {
     /// The upload would cross the hard quota limit.
     fn quota_exceeded() -> Self {
         Self::QuotaExceeded {
-            code: error_codes::QUOTA_EXCEEDED,
+            code: error_codes::QUOTA_EXCEEDED.into(),
         }
     }
 
@@ -2093,15 +2093,15 @@ impl CreateRejection {
     fn duplicate_blob(existing: &AssetId) -> Self {
         Self::DuplicateBlob {
             existing_asset: existing.to_string(),
-            code: error_codes::UPLOAD_DUPLICATE_BLOB,
+            code: error_codes::UPLOAD_DUPLICATE_BLOB.into(),
         }
     }
 
     /// Map the gate's verdict onto the taxonomy's status and code.
     fn from_gate(reject: GateReject) -> Self {
-        let invalid = |code, detail: &str| Self::Invalid {
+        let invalid = |code: &'static str, detail: &str| Self::Invalid {
             detail: detail.to_owned(),
-            code,
+            code: code.into(),
         };
         match reject {
             GateReject::ProtocolMalformed => invalid(
@@ -2109,7 +2109,7 @@ impl CreateRejection {
                 "protocol_version is not a YYYY-MM-DD date",
             ),
             GateReject::ProtocolOutOfRange => Self::ProtocolUnsupported {
-                code: error_codes::PROTOCOL_VERSION_UNSUPPORTED,
+                code: error_codes::PROTOCOL_VERSION_UNSUPPORTED.into(),
             },
             GateReject::UnknownCryptoSuite => invalid(
                 error_codes::UPLOAD_UNKNOWN_CRYPTO_SUITE,
@@ -2124,7 +2124,7 @@ impl CreateRejection {
                 "size must be greater than zero",
             ),
             GateReject::FileTooLarge => Self::FileTooLarge {
-                code: error_codes::UPLOAD_FILE_TOO_LARGE,
+                code: error_codes::UPLOAD_FILE_TOO_LARGE.into(),
             },
             GateReject::UnsupportedContentType => invalid(
                 error_codes::UPLOAD_UNSUPPORTED_CONTENT_TYPE,
@@ -2132,7 +2132,7 @@ impl CreateRejection {
             ),
             GateReject::EnvelopeMismatch(field) => Self::Invalid {
                 detail: format!("{field} contradicts the manifest envelope"),
-                code: error_codes::UPLOAD_ENVELOPE_MISMATCH,
+                code: error_codes::UPLOAD_ENVELOPE_MISMATCH.into(),
             },
             GateReject::AlbumPinMismatch => Self::album_access_denied(),
             GateReject::DeviceNotAuthorized => Self::device_not_authorized(),
@@ -2152,13 +2152,13 @@ impl CreateRejection {
                 detail: format!(
                     "a replace's manifest must name the bundle it commits to; {field} is absent"
                 ),
-                code: error_codes::UPLOAD_ENVELOPE_MISMATCH,
+                code: error_codes::UPLOAD_ENVELOPE_MISMATCH.into(),
             },
             GateReject::UnknownDerivativeFormat(format) => Self::Invalid {
                 detail: format!(
                     "derivative_format {format:?} is outside the closed still-derivative format set"
                 ),
-                code: error_codes::UPLOAD_UNKNOWN_DERIVATIVE_FORMAT,
+                code: error_codes::UPLOAD_UNKNOWN_DERIVATIVE_FORMAT.into(),
             },
             // Decided only at finalization, which holds the manifest's bytes; a create never
             // sees them. Mapped rather than unwrapped so the match stays total.
@@ -2172,34 +2172,34 @@ impl CreateRejection {
     fn album_access_denied() -> Self {
         Self::Forbidden {
             detail: "the album is missing, closed, or not writable by this owner".to_owned(),
-            code: error_codes::UPLOAD_ALBUM_ACCESS_DENIED,
+            code: error_codes::UPLOAD_ALBUM_ACCESS_DENIED.into(),
         }
     }
 
     fn device_not_authorized() -> Self {
         Self::Forbidden {
             detail: "the creating device is not authorized in the uploader's directory".to_owned(),
-            code: error_codes::UPLOAD_DEVICE_NOT_AUTHORIZED,
+            code: error_codes::UPLOAD_DEVICE_NOT_AUTHORIZED.into(),
         }
     }
 
     fn owner_not_permitted() -> Self {
         Self::Forbidden {
             detail: "the declared owner is not the album's owner".to_owned(),
-            code: error_codes::UPLOAD_OWNER_NOT_PERMITTED,
+            code: error_codes::UPLOAD_OWNER_NOT_PERMITTED.into(),
         }
     }
 
     fn rate_limited(retry_after: u64) -> Self {
         Self::RateLimited {
-            code: error_codes::UPLOAD_RATE_LIMITED,
+            code: error_codes::UPLOAD_RATE_LIMITED.into(),
             retry_after,
         }
     }
 
     fn unavailable(clock: &dyn Clock) -> Self {
         Self::Unavailable {
-            code: error_codes::UPLOAD_UNAVAILABLE,
+            code: error_codes::UPLOAD_UNAVAILABLE.into(),
             retry_after: retry_at(clock, UNAVAILABLE_RETRY),
         }
     }
@@ -2209,7 +2209,7 @@ impl ChunkRejection {
     fn invalid(code: &'static str, detail: &str) -> Self {
         Self::Invalid {
             detail: detail.to_owned(),
-            code,
+            code: code.into(),
         }
     }
 
@@ -2260,51 +2260,51 @@ impl ChunkRejection {
         Self::RangeConflict {
             committed: committed.to_header(),
             retry_after: in_flight.then(|| retry_at(clock, IN_FLIGHT_RETRY)),
-            code: error_codes::UPLOAD_RANGE_CONFLICT,
+            code: error_codes::UPLOAD_RANGE_CONFLICT.into(),
         }
     }
 
     fn too_many_in_flight(clock: &dyn Clock) -> Self {
         Self::TooManyInFlight {
             retry_after: retry_at(clock, IN_FLIGHT_RETRY),
-            code: error_codes::UPLOAD_TOO_MANY_IN_FLIGHT,
+            code: error_codes::UPLOAD_TOO_MANY_IN_FLIGHT.into(),
         }
     }
 
     fn too_fragmented(in_flight: bool, clock: &dyn Clock) -> Self {
         Self::TooFragmented {
             retry_after: in_flight.then(|| retry_at(clock, IN_FLIGHT_RETRY)),
-            code: error_codes::UPLOAD_TOO_FRAGMENTED,
+            code: error_codes::UPLOAD_TOO_FRAGMENTED.into(),
         }
     }
 
     fn session_not_active() -> Self {
         Self::SessionNotActive {
-            code: error_codes::UPLOAD_SESSION_NOT_ACTIVE,
+            code: error_codes::UPLOAD_SESSION_NOT_ACTIVE.into(),
         }
     }
 
     fn session_not_found() -> Self {
         Self::SessionNotFound {
-            code: error_codes::UPLOAD_SESSION_NOT_FOUND,
+            code: error_codes::UPLOAD_SESSION_NOT_FOUND.into(),
         }
     }
 
     fn chunk_too_large() -> Self {
         Self::ChunkTooLarge {
-            code: error_codes::UPLOAD_CHUNK_TOO_LARGE,
+            code: error_codes::UPLOAD_CHUNK_TOO_LARGE.into(),
         }
     }
 
     fn storage_inconsistent() -> Self {
         Self::StorageInconsistent {
-            code: error_codes::UPLOAD_STORAGE_INCONSISTENT,
+            code: error_codes::UPLOAD_STORAGE_INCONSISTENT.into(),
         }
     }
 
     fn unavailable(clock: &dyn Clock) -> Self {
         Self::Unavailable {
-            code: error_codes::UPLOAD_UNAVAILABLE,
+            code: error_codes::UPLOAD_UNAVAILABLE.into(),
             retry_after: retry_at(clock, UNAVAILABLE_RETRY),
         }
     }

@@ -58,7 +58,7 @@ pub enum QuotaRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -75,7 +75,7 @@ pub async fn get_quota(
     let usage = quota.quotas().usage(&user).await.map_err(|error| {
         tracing::error!(%error, %user, "the quota ledger could not answer");
         QuotaRejection::Unavailable {
-            code: error_codes::QUOTA_UNAVAILABLE,
+            code: error_codes::QUOTA_UNAVAILABLE.into(),
         }
     })?;
 
