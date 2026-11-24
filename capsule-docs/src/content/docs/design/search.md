@@ -16,12 +16,12 @@ album stores, so "save this search as a smart album" is a copy, not a translatio
 
 ## Where It Lives
 
-| Surface | Module | Status |
-| --- | --- | --- |
-| Grammar: parser, AST, printer, compiler to `Predicate` | `capsule-core::search` | Planned |
-| Predicate evaluation | `capsule-core::sidecar::smart_album` | Partial: the `tags_user` `contains` term only |
-| Search index, suggester, query execution, recent searches | `capsule-library::search` | Planned |
-| Semantic ranking | `capsule-core::ml` (`semantic_search`) | Implemented against the fixture runner only ([](/design/ai/#semantic-search)) |
+| Surface                                                   | Module                                 | Status                                                                        |
+| --------------------------------------------------------- | -------------------------------------- | ----------------------------------------------------------------------------- |
+| Grammar: parser, AST, printer, compiler to `Predicate`    | `capsule-core::search`                 | Planned                                                                       |
+| Predicate evaluation                                      | `capsule-core::sidecar::smart_album`   | Partial: the `tags_user` `contains` term only                                 |
+| Search index, suggester, query execution, recent searches | `capsule-library::search`              | Planned                                                                       |
+| Semantic ranking                                          | `capsule-core::ml` (`semantic_search`) | Implemented against the fixture runner only ([](/design/ai/#semantic-search)) |
 
 The grammar lives in the stateless core so the CLI, the FFI and the wasm build parse identically.
 The index lives in `capsule-library`, beside the catalog it indexes. Apps reach both through the
@@ -46,9 +46,9 @@ the catalog database ([](/design/filesystem/client/#desktop-library-layout)). Th
 the one `capsule-library` bundles (3.46.0, FTS5 enabled), so every platform runs the same engine and
 none depends on its OS's SQLite.
 
-- **Two tables, not one row per asset.** A *vocabulary* table holds each distinct searchable name
+- **Two tables, not one row per asset.** A _vocabulary_ table holds each distinct searchable name
   once (a label, a person, an album name, a place name, a camera or lens) with its kind and the id
-  it resolves to. A *caption* table holds captions, the only free text that is per asset. A name
+  it resolves to. A _caption_ table holds captions, the only free text that is per asset. A name
   is never copied into one row per asset that carries it, so the index grows with the number of
   distinct names and captions, not with the library.
 - **Why trigram.** It matches any substring of three or more characters, including inside words and
@@ -108,13 +108,13 @@ and `bech` finds `beach`.
 The scale benchmark ([](/development/performance/)) measures these on the parity phone. They are
 unmeasured targets until it runs.
 
-| Measure | 1,000,000 assets | 5,000,000 assets |
-| --- | --- | --- |
-| Search index on disk (FTS tables and the `fst` file) | < 64 MiB | < 320 MiB |
-| Heap held by search, beyond mapped pages the OS may evict | < 8 MiB | < 16 MiB |
-| One suggestion lookup, per keystroke (p95, warm) | < 16 ms | < 16 ms |
-| First page of results (p95, warm; cold within 2×) | < 200 ms | < 200 ms |
-| Full index rebuild from the catalog | < 60 s | < 5 min |
+| Measure                                                   | 1,000,000 assets | 5,000,000 assets |
+| --------------------------------------------------------- | ---------------- | ---------------- |
+| Search index on disk (FTS tables and the `fst` file)      | < 64 MiB         | < 320 MiB        |
+| Heap held by search, beyond mapped pages the OS may evict | < 8 MiB          | < 16 MiB         |
+| One suggestion lookup, per keystroke (p95, warm)          | < 16 ms          | < 16 ms          |
+| First page of results (p95, warm; cold within 2×)         | < 200 ms         | < 200 ms         |
+| Full index rebuild from the catalog                       | < 60 s           | < 5 min          |
 
 The vocabulary design is what makes the disk budget reachable: names are stored once, so only
 captions grow with the asset count.
@@ -144,20 +144,20 @@ A catalog rebuild ([](/design/filesystem/client/#local-index-staleness)) rebuild
 Each axis reads the **effective** value: the user's register if written, else the as-imported field
 ([](/design/metadata/#as-imported-and-user-values)).
 
-| Axis | Source | Index |
-| --- | --- | --- |
-| Labels, at every level | `tags_user`, live region labels, stack and album records ([](/design/organization/#labels)) | vocabulary + `asset_tags` |
-| AI tags | `tags_ai`, current generation only ([](/design/ai/#ai-output-containment)) | vocabulary |
-| People | named people ([](/design/people/)); before people clusters ship, region labels are how a person is named | vocabulary |
-| Place names | the place-name cache ([](/design/places/#place-names)) | vocabulary |
-| Captions | `caption_lww` | caption FTS |
-| Recognised text | the text-recognition output of the current model ([](/design/ai/#text-recognition)) | text FTS |
-| Album | container album and its name | vocabulary + `album_id` |
-| Camera and lens | `camera_id.model`, `capture_settings` ([](/design/metadata/#capture-settings)) | vocabulary |
-| Dates | effective capture time, import time | B-tree |
-| Media kind, content type | `content_type`, Live Photo stacks | B-tree |
-| Rating, cull, favorite | `rating_lww`, `cull` | B-tree |
-| Location | effective `gps` | the location index ([](/design/places/#the-location-index)) |
+| Axis                     | Source                                                                                                   | Index                                                       |
+| ------------------------ | -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Labels, at every level   | `tags_user`, live region labels, stack and album records ([](/design/organization/#labels))              | vocabulary + `asset_tags`                                   |
+| AI tags                  | `tags_ai`, current generation only ([](/design/ai/#ai-output-containment))                               | vocabulary                                                  |
+| People                   | named people ([](/design/people/)); before people clusters ship, region labels are how a person is named | vocabulary                                                  |
+| Place names              | the place-name cache ([](/design/places/#place-names))                                                   | vocabulary                                                  |
+| Captions                 | `caption_lww`                                                                                            | caption FTS                                                 |
+| Recognised text          | the text-recognition output of the current model ([](/design/ai/#text-recognition))                      | text FTS                                                    |
+| Album                    | container album and its name                                                                             | vocabulary + `album_id`                                     |
+| Camera and lens          | `camera_id.model`, `capture_settings` ([](/design/metadata/#capture-settings))                           | vocabulary                                                  |
+| Dates                    | effective capture time, import time                                                                      | B-tree                                                      |
+| Media kind, content type | `content_type`, Live Photo stacks                                                                        | B-tree                                                      |
+| Rating, cull, favorite   | `rating_lww`, `cull`                                                                                     | B-tree                                                      |
+| Location                 | effective `gps`                                                                                          | the location index ([](/design/places/#the-location-index)) |
 
 Camera and lens become searchable only once the sidecar carries them: import does not fill
 `camera_id` today (`capsule-library/src/lifecycle/import.rs:1057`), and `capture_settings` is new.
@@ -192,23 +192,23 @@ AND (`sunset` OR `sunrise`). Qualifier keys are ASCII and case-insensitive. They
 English only: the chips are fully localized ([](#chips-and-text)), so a user who never learns the
 syntax never needs it.
 
-| Syntax | Meaning | Compiles to |
-| --- | --- | --- |
-| `word`, `"a phrase"` | free text ([](#free-text)) | see below |
-| `@name` | a person or a label named *name* ([](#what--binds-to)) | `Any` of the person and label terms that resolve |
-| `#name`, `tag:name`, `label:name` | a label at any level | `tags_user contains` |
-| `person:name` | a named person only | person term ([](/design/organization/#smart-album-definition-schema)) |
-| `in:name`, `album:name` | an album | `album_id contains` (name resolved to id) |
-| `from:name` | the camera or device it came from | `Any(camera matches, device_id contains)` |
-| `camera:name`, `lens:name` | camera make or model; lens make or model | `camera matches`, `lens matches` |
-| `before:D`, `after:D`, `on:D` (`during:D`) | before the period *D* starts; after it ends; within it | `capture_time` range |
-| `near:place` | near a named place ([](/design/places/#place-search)) | `gps near (point, radius)` |
-| `has:location`, `has:caption`, `has:label`, `has:video` | has a location; a caption; any label; a moving part (a video or a Live Photo) | `gps exists`, `caption exists`, … |
+| Syntax                                                                                                           | Meaning                                                                                             | Compiles to                                                                            |
+| ---------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `word`, `"a phrase"`                                                                                             | free text ([](#free-text))                                                                          | see below                                                                              |
+| `@name`                                                                                                          | a person or a label named _name_ ([](#what--binds-to))                                              | `Any` of the person and label terms that resolve                                       |
+| `#name`, `tag:name`, `label:name`                                                                                | a label at any level                                                                                | `tags_user contains`                                                                   |
+| `person:name`                                                                                                    | a named person only                                                                                 | person term ([](/design/organization/#smart-album-definition-schema))                  |
+| `in:name`, `album:name`                                                                                          | an album                                                                                            | `album_id contains` (name resolved to id)                                              |
+| `from:name`                                                                                                      | the camera or device it came from                                                                   | `Any(camera matches, device_id contains)`                                              |
+| `camera:name`, `lens:name`                                                                                       | camera make or model; lens make or model                                                            | `camera matches`, `lens matches`                                                       |
+| `before:D`, `after:D`, `on:D` (`during:D`)                                                                       | before the period _D_ starts; after it ends; within it                                              | `capture_time` range                                                                   |
+| `near:place`                                                                                                     | near a named place ([](/design/places/#place-search))                                               | `gps near (point, radius)`                                                             |
+| `has:location`, `has:caption`, `has:label`, `has:video`                                                          | has a location; a caption; any label; a moving part (a video or a Live Photo)                       | `gps exists`, `caption exists`, …                                                      |
 | `is:favorite`, `is:pick`, `is:reject`, `is:raw`, `is:photo`, `is:video`, `is:live`, `is:screenshot`, `is:hidden` | rating 5 (the favourite rating); cull flags; a RAW `content_type`; media kind; a screenshot; hidden | `rating eq 5`, `cull is pick`, `content_type in raw`, `media_subtype eq screenshot`, … |
-| `rating:>=4`, `iso:>3200` | numeric comparisons | numeric terms |
-| `-x` | not *x* | `Not` |
+| `rating:>=4`, `iso:>3200`                                                                                        | numeric comparisons                                                                                 | numeric terms                                                                          |
+| `-x`                                                                                                             | not _x_                                                                                             | `Not`                                                                                  |
 
-- **Dates.** *D* is ISO 8601: `2024`, `2024-06` or `2024-06-01`; `2024/06/01` is accepted too.
+- **Dates.** _D_ is ISO 8601: `2024`, `2024-06` or `2024-06-01`; `2024/06/01` is accepted too.
   Each names a **period**, so `after:2024` starts on 2025-01-01 and `before:2024-06` ends on
   2024-05-31. A date compares the capture's **local wall-clock** time, the date the person who took
   it saw. Slash dates other than year-first (`01/02/2024`) are ambiguous across regions and are
@@ -243,7 +243,7 @@ A bare word or phrase matches, in the live search, any vocabulary name containin
 people, places, albums, cameras, lenses) any caption containing it and any recognised text containing it, after folding. Names match
 by trigram substring, or by the capped scan for a one- or two-character word
 ([](#full-text-fts5-trigram)); a word with no substring hit expands through the suggester's fuzzy match,
-and the result header says so ("Showing results for *beach*").
+and the result header says so ("Showing results for _beach_").
 
 ### Diagnostics, Not Errors
 
@@ -295,7 +295,7 @@ Matched entities (people, places, albums, labels) are listed above the assets as
 Semantic search is a **ranking mode**, not a predicate term. The free text of the query (every word
 and phrase not inside a qualifier) is embedded with the semantic-search embedder and matched against
 the vector index ([](/design/ai/#semantic-search)). Structured terms filter both result lists
-alike. The two rankings merge by reciprocal rank fusion with *k* = 60, ties broken by asset id, and
+alike. The two rankings merge by reciprocal rank fusion with _k_ = 60, ties broken by asset id, and
 every semantic-only hit carries its matched scope, so the UI can say why a photo with no "dog" label
 matched "dog".
 

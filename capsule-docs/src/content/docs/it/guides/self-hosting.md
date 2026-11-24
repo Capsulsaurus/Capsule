@@ -139,13 +139,13 @@ Mantienilo sincronizzato con NTP (chrony o systemd-timesyncd) sull'host. Un cont
 l'orologio dell'host, quindi sincronizza l'host. Lo scarto DOVREBBE restare entro un secondo, e DEVE
 restare entro 30 secondi. Oltre questi limiti:
 
-| Scarto | Cosa si rompe |
-| --- | --- |
-| Oltre 30 s | I codici del secondo fattore iniziano a fallire: un codice viene accettato solo entro un intervallo di 30 s rispetto all'orologio del server ([](/design/authentication/)) |
-| Oltre 5 min | La federazione si blocca in entrambe le direzioni: i peer rifiutano le richieste, i suggerimenti e i report firmati di questo server, e lui rifiuta i loro ([](/design/federation/)) |
-| Orologio avanti | Il cestino viene svuotato prima della fine del periodo di conservazione, e un ripristino fatto in tempo viene rifiutato ([](/design/organization/#retention-window)). Sessioni, link di condivisione e sessioni di caricamento scadono in anticipo |
-| Orologio indietro | Sessioni, link di condivisione e contatori scaduti restano validi più a lungo di quanto configurato |
-| Scarto grossolano | I client rifiutano le ricevute di custodia il cui `received_at` non è plausibile ([](/design/transfer/durability/)) |
+| Scarto            | Cosa si rompe                                                                                                                                                                                                                                      |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Oltre 30 s        | I codici del secondo fattore iniziano a fallire: un codice viene accettato solo entro un intervallo di 30 s rispetto all'orologio del server ([](/design/authentication/))                                                                         |
+| Oltre 5 min       | La federazione si blocca in entrambe le direzioni: i peer rifiutano le richieste, i suggerimenti e i report firmati di questo server, e lui rifiuta i loro ([](/design/federation/))                                                               |
+| Orologio avanti   | Il cestino viene svuotato prima della fine del periodo di conservazione, e un ripristino fatto in tempo viene rifiutato ([](/design/organization/#retention-window)). Sessioni, link di condivisione e sessioni di caricamento scadono in anticipo |
+| Orologio indietro | Sessioni, link di condivisione e contatori scaduti restano validi più a lungo di quanto configurato                                                                                                                                                |
+| Scarto grossolano | I client rifiutano le ricevute di custodia il cui `received_at` non è plausibile ([](/design/transfer/durability/))                                                                                                                                |
 
 Avvia `serve` solo quando l'orologio è sincronizzato. Con systemd, ordinalo dopo `time-sync.target`
 con `chrony-wait.service` o `systemd-time-wait-sync.service` abilitato. Una macchina virtuale
@@ -165,14 +165,14 @@ con password (circa 19 MiB ciascuno). Non decodifica, ridimensiona o transcodifi
 multimediali, non cifra né decifra mai, e lascia TLS al reverse proxy. Il corpo di un caricamento non
 viene mai bufferizzato oltre un blocco, quindi la memoria non cresce con la dimensione del file.
 
-| | Minimo | Consigliato |
-| --- | --- | --- |
-| **CPU** | 2 core, x86_64 o arm64 | 4 core. Le istruzioni SHA-2 (SHA-NI su x86_64, le estensioni crittografiche Armv8) velocizzano il calcolo degli hash |
-| **RAM** | 2 GB | Da 4 a 8 GB. Di più aiuta la cache di PostgreSQL su una libreria grande, ma lo storage ripaga prima |
-| **Storage di sistema** | SSD, 10 GB liberi | SSD o NVMe per PostgreSQL |
-| **Storage dei blob** | La dimensione della tua libreria, più spazio per i caricamenti in corso | Dischi ridondanti (mirror, RAID o ZFS) dimensionati per diversi anni di crescita. I dischi meccanici vanno bene |
-| **Rete** | 10 Mbit/s in upload | Gigabit sulla LAN, e 50 Mbit/s o più in upload se i dispositivi si sincronizzano dall'esterno |
-| **Alimentazione** | — | Un UPS, così un'interruzione di corrente non interrompe PostgreSQL a metà di una scrittura |
+|                        | Minimo                                                                  | Consigliato                                                                                                          |
+| ---------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| **CPU**                | 2 core, x86_64 o arm64                                                  | 4 core. Le istruzioni SHA-2 (SHA-NI su x86_64, le estensioni crittografiche Armv8) velocizzano il calcolo degli hash |
+| **RAM**                | 2 GB                                                                    | Da 4 a 8 GB. Di più aiuta la cache di PostgreSQL su una libreria grande, ma lo storage ripaga prima                  |
+| **Storage di sistema** | SSD, 10 GB liberi                                                       | SSD o NVMe per PostgreSQL                                                                                            |
+| **Storage dei blob**   | La dimensione della tua libreria, più spazio per i caricamenti in corso | Dischi ridondanti (mirror, RAID o ZFS) dimensionati per diversi anni di crescita. I dischi meccanici vanno bene      |
+| **Rete**               | 10 Mbit/s in upload                                                     | Gigabit sulla LAN, e 50 Mbit/s o più in upload se i dispositivi si sincronizzano dall'esterno                        |
+| **Alimentazione**      | —                                                                       | Un UPS, così un'interruzione di corrente non interrompe PostgreSQL a metà di una scrittura                           |
 
 - **`BLOB_ROOT` resta su un unico file system.** L'intero albero, `incoming/` compresa, deve essere
   un unico file system, quindi non può essere diviso tra un SSD e un array di dischi né tra due
@@ -182,8 +182,8 @@ viene mai bufferizzato oltre un blocco, quindi la memoria non cresce con la dime
   cache serve il percorso delle richieste oltre all'indice della libreria. Sessioni, sessioni di
   caricamento e contatori sono piccoli, e il server li elimina appena scadono.
 - **La banda in upload è il limite per i dispositivi remoti.** Un telefono fuori dalla tua rete
-  carica alla velocità di *download* della tua connessione, ma ogni recupero di un'anteprima o di un
-  originale esce alla tua velocità di *upload*. Un blocco viene interrotto solo quando smette di
+  carica alla velocità di _download_ della tua connessione, ma ogni recupero di un'anteprima o di un
+  originale esce alla tua velocità di _upload_. Un blocco viene interrotto solo quando smette di
   arrivare, mai perché ci mette troppo, e un client dimensiona i propri blocchi per completarli in un
   breve tempo obiettivo alla velocità che misura, quindi un collegamento lento carica al proprio
   ritmo. Mantieni la soglia di stallo del server al di sotto del timeout di inattività del proxy,
@@ -264,11 +264,11 @@ partenza, e questa pagina indica le variabili su cui chi gestisce il server deve
 durevole si rifiuta di avviarsi (uscita 2), indicando tutte le variabili mancanti in una volta sola,
 senza:
 
-| Variabile | Scopo |
-| --- | --- |
-| `DATABASE_URL` | Connessione a PostgreSQL |
-| `BLOB_ROOT` | Directory dei blob |
-| `JWT_ED25519_DER` | Chiave Ed25519 in Base64 che firma i token di sessione |
+| Variabile              | Scopo                                                                                             |
+| ---------------------- | ------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`         | Connessione a PostgreSQL                                                                          |
+| `BLOB_ROOT`            | Directory dei blob                                                                                |
+| `JWT_ED25519_DER`      | Chiave Ed25519 in Base64 che firma i token di sessione                                            |
 | `ATTESTATION_KEY_SEED` | Seed in Base64 che firma le ricevute di custodia; deve essere indipendente dalla chiave dei token |
 
 - **Proteggi soprattutto la chiave dei token.** Il database non contiene alcun segreto bearer,
@@ -298,10 +298,10 @@ imposti esplicitamente. La federazione è disattivata a meno che non siano impos
 
 Indica il tuo reverse proxy, così i limiti di frequenza per origine vedono il client e non il proxy.
 
-| Variabile | Significato |
-| --- | --- |
-| `TRUSTED_PROXIES` | Indirizzi e reti CIDR separati da virgole (`10.0.0.0/8`). Una rete `/0` viene rifiutata, perché crederebbe a qualsiasi mittente. |
-| `TRUSTED_PROXY_HOPS` | Considera attendibili altrettanti hop di inoltro più vicini al server, qualunque sia il loro indirizzo. |
+| Variabile              | Significato                                                                                                                                          |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TRUSTED_PROXIES`      | Indirizzi e reti CIDR separati da virgole (`10.0.0.0/8`). Una rete `/0` viene rifiutata, perché crederebbe a qualsiasi mittente.                     |
+| `TRUSTED_PROXY_HOPS`   | Considera attendibili altrettanti hop di inoltro più vicini al server, qualunque sia il loro indirizzo.                                              |
 | `TRUSTED_PROXY_HEADER` | L'unico campo di inoltro che il server legge: `x-forwarded-for` (il predefinito) o `forwarded` (RFC 7239). Qualsiasi altro valore impedisce l'avvio. |
 
 Se non sono impostate, nessun header di inoltro viene considerato attendibile. È sicuro, ma allora

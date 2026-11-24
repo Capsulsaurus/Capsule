@@ -13,7 +13,7 @@ Capsule is end-to-end encrypted, so the server **cannot** scan content, and no s
 - **No silent operations.** Every action affecting user data MUST append an entry to the user's **moderation record** ([](#the-moderation-record)), which the user reads at `GET /v1/moderation/record`. The [](/design/activity-log/) is a separate record of the user's own security events, not of operator actions.
 - **No authorship.** The server holds no device or write-tier key, so it cannot author an asset provenance record, and a record it signed would fail `verify_asset` on every client ([](/design/cryptography/provenance/#asset-manifest)). A moderation action therefore never touches an asset's chain: it changes what the server serves, and the moderation record says so.
 
-Moderation *actions* have **no wire surface**. There is no admin authentication model over HTTP, so the admin is the **operator on the host**, authenticated by holding the deployment's database credentials, and actions run through operator commands. The admin reads the federated report queue with `capsule-server moderation reports`.
+Moderation _actions_ have **no wire surface**. There is no admin authentication model over HTTP, so the admin is the **operator on the host**, authenticated by holding the deployment's database credentials, and actions run through operator commands. The admin reads the federated report queue with `capsule-server moderation reports`.
 
 ### The Moderation Record
 

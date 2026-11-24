@@ -4,15 +4,15 @@ description: What a key-free server can and cannot tell you — local alerts, th
 audit: none
 ---
 
-This doc owns alert delivery and the vocabulary. The server holds only ciphertext, and the short-poll sync feed stays the fallback for any push ([](/design/networking/#adverse-network-posture)), so a server can tell a client *that* something changed, never *what*.
+This doc owns alert delivery and the vocabulary. The server holds only ciphertext, and the short-poll sync feed stays the fallback for any push ([](/design/networking/#adverse-network-posture)), so a server can tell a client _that_ something changed, never _what_.
 
 ## Vocabulary
 
-| Term | Direction | Carries | Owner |
-| --- | --- | --- | --- |
-| **Alert** | device → its own user | Localized text composed **on-device** | This doc |
-| **Wake** | server → client | Nothing: "something changed for you" | This doc |
-| **Hint** | server ↔ server, peer ↔ peer | "A new event exists in album A"; advisory, no authority | [](/design/federation/#pull-only-federation), [](/design/peering/#sync) |
+| Term      | Direction                    | Carries                                                 | Owner                                                                   |
+| --------- | ---------------------------- | ------------------------------------------------------- | ----------------------------------------------------------------------- |
+| **Alert** | device → its own user        | Localized text composed **on-device**                   | This doc                                                                |
+| **Wake**  | server → client              | Nothing: "something changed for you"                    | This doc                                                                |
+| **Hint**  | server ↔ server, peer ↔ peer | "A new event exists in album A"; advisory, no authority | [](/design/federation/#pull-only-federation), [](/design/peering/#sync) |
 
 Alert classes and trigger predicates live in `capsule-core::notify`, one decision function for every platform; delivery is native per client. Open:
 
@@ -30,16 +30,16 @@ Alert classes and trigger predicates live in `capsule-core::notify`, one decisio
 
 A closed enum. Thresholds belong to the trigger owner, and parameters are plain values interpolated into catalog strings, never text.
 
-| Class | Trigger owner | Parameters | Pre-armable |
-| --- | --- | --- | --- |
-| `sync_stale` | [](/design/sync/#notifications) | `count`, `days_behind` | **Yes** |
-| `recovery_check_due` | [](/design/backup-recovery/#schedule-and-triggers) | `snooze_budget` (`available`/`spent`), `recovery` (`check`/`rewrap`) | **Yes** |
-| `quota_soft` / `quota_grace_expiring` | [](/design/quota/#thresholds-and-states) | `grace` (`counting`/`expired`), second only | No |
-| `quarantine_pending` | [](/design/threat-model/scenarios/#quarantine-surfaces) | `count` | No |
-| `drop_pending` | [](/design/web-upload/#drop-and-adoption-lifecycle) | `count` | No |
-| `recovery_claim` | [](/design/backup-recovery/#opt-in-trusted-contact-recovery) | `days_left` | No |
-| `album_activity` | [](/design/cryptography/mls/#comments-and-reactions) | `count`, `kind` (`comment`/`reaction`) | No |
-| `drop_sensitive` (**Planned**) | [](/design/ai/#sensitive-content) | `count` (flagged drops not yet reviewed) | No |
+| Class                                 | Trigger owner                                                | Parameters                                                           | Pre-armable |
+| ------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------- | ----------- |
+| `sync_stale`                          | [](/design/sync/#notifications)                              | `count`, `days_behind`                                               | **Yes**     |
+| `recovery_check_due`                  | [](/design/backup-recovery/#schedule-and-triggers)           | `snooze_budget` (`available`/`spent`), `recovery` (`check`/`rewrap`) | **Yes**     |
+| `quota_soft` / `quota_grace_expiring` | [](/design/quota/#thresholds-and-states)                     | `grace` (`counting`/`expired`), second only                          | No          |
+| `quarantine_pending`                  | [](/design/threat-model/scenarios/#quarantine-surfaces)      | `count`                                                              | No          |
+| `drop_pending`                        | [](/design/web-upload/#drop-and-adoption-lifecycle)          | `count`                                                              | No          |
+| `recovery_claim`                      | [](/design/backup-recovery/#opt-in-trusted-contact-recovery) | `days_left`                                                          | No          |
+| `album_activity`                      | [](/design/cryptography/mls/#comments-and-reactions)         | `count`, `kind` (`comment`/`reaction`)                               | No          |
+| `drop_sensitive` (**Planned**)        | [](/design/ai/#sensitive-content)                            | `count` (flagged drops not yet reviewed)                             | No          |
 
 ### The Pre-Arm Rule
 
@@ -58,13 +58,13 @@ The client loop is one idempotent refresh, run after every state change: read th
 
 ### Delivery
 
-| Platform | API | Fires with app not running |
-| --- | --- | --- |
-| iOS | `UNUserNotificationCenter` (calendar triggers at an absolute UTC instant, one request identifier per class) | Yes |
-| Android | `NotificationManager` from an `AlarmManager.setAndAllowWhileIdle` alarm, one `PendingIntent` per class, re-armed after reboot | Yes |
-| Desktop | Native OS notifications | While running |
-| Web | Service-worker `Notification` | Best-effort |
-| CLI | Exit codes and stderr | n/a |
+| Platform | API                                                                                                                           | Fires with app not running |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
+| iOS      | `UNUserNotificationCenter` (calendar triggers at an absolute UTC instant, one request identifier per class)                   | Yes                        |
+| Android  | `NotificationManager` from an `AlarmManager.setAndAllowWhileIdle` alarm, one `PendingIntent` per class, re-armed after reboot | Yes                        |
+| Desktop  | Native OS notifications                                                                                                       | While running              |
+| Web      | Service-worker `Notification`                                                                                                 | Best-effort                |
+| CLI      | Exit codes and stderr                                                                                                         | n/a                        |
 
 Permission is requested the first time a class has something to say, never at first launch: the first refresh that has a timer to arm asks, once. Android alarms are inexact on purpose. A two-week or ninety-day deadline needs no minute precision, an inexact alarm fires late but never early (so its alert is still true on arrival), and an exact one would need the `SCHEDULE_EXACT_ALARM` special-access grant.
 
@@ -94,11 +94,11 @@ Every client MUST reach the same state with wake permanently unavailable; only t
 
 So no **APNs** or **FCM** (bound to the published app), and no project relay.
 
-| Transport | Credential | Platforms |
-| --- | --- | --- |
-| Web Push ([RFC 8030](https://www.rfc-editor.org/rfc/rfc8030)) + VAPID ([RFC 8292](https://www.rfc-editor.org/rfc/rfc8292)) | Operator-generated keypair | Web, desktop |
-| UnifiedPush | A distributor the user chooses | Android, desktop |
-| `none` (**default**) | — | All |
+| Transport                                                                                                                  | Credential                     | Platforms        |
+| -------------------------------------------------------------------------------------------------------------------------- | ------------------------------ | ---------------- |
+| Web Push ([RFC 8030](https://www.rfc-editor.org/rfc/rfc8030)) + VAPID ([RFC 8292](https://www.rfc-editor.org/rfc/rfc8292)) | Operator-generated keypair     | Web, desktop     |
+| UnifiedPush                                                                                                                | A distributor the user chooses | Android, desktop |
+| `none` (**default**)                                                                                                       | —                              | All              |
 
 **iOS has no wake tier, permanently**, so events from other actors surface at next launch.
 

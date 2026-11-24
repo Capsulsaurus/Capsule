@@ -30,10 +30,10 @@ This blocks the "AI silently overwrites user data" damage class ([](/design/thre
 
 The execution provider (EP) is chosen by **output class**, not by platform:
 
-| Output class | Tasks | EP | Parity contract |
-| --- | --- | --- | --- |
-| **Deterministic** | Every stored embedding (semantic, face, re-ID), and every output that feeds a grouping, a stored tag or a stored flag: face and person boxes, zero-shot tags, the sensitive-content head | Deterministic CPU EP only: fixed thread count, deterministic kernels, quantized weights | Byte-identical to the release's known-answer output |
-| **Ephemeral** | Captions, OCR text, VLM answers, transcripts, display-only boxes | Any native EP the device has (CoreML, NNAPI/QNN, XNNPACK, CUDA/TensorRT, DirectML), CPU fallback | Within the release's declared tolerance of the CPU reference |
+| Output class      | Tasks                                                                                                                                                                                    | EP                                                                                               | Parity contract                                              |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------ |
+| **Deterministic** | Every stored embedding (semantic, face, re-ID), and every output that feeds a grouping, a stored tag or a stored flag: face and person boxes, zero-shot tags, the sensitive-content head | Deterministic CPU EP only: fixed thread count, deterministic kernels, quantized weights          | Byte-identical to the release's known-answer output          |
+| **Ephemeral**     | Captions, OCR text, VLM answers, transcripts, display-only boxes                                                                                                                         | Any native EP the device has (CoreML, NNAPI/QNN, XNNPACK, CUDA/TensorRT, DirectML), CPU fallback | Within the release's declared tolerance of the CPU reference |
 
 Stored embeddings are compared across devices ([](#embedding-provenance)), and AI grouping must regroup byte-identically ([](#ai-output-containment)), so anything either of them consumes runs deterministically. Native accelerators do not promise bit-exactness, so they serve only outputs a person reads: text that is stored once by the device that produced it, carries its tuple, and is never recomputed for comparison. That is also where large models need native acceleration to have usable latency.
 
@@ -105,7 +105,7 @@ Semantic search is how a text query reaches this index. The query's free text is
 
 - **On device, no network.** The query embedding and the scan run locally. A device without the embedder's weights runs lexical search only and says so; it never sends a query anywhere to be embedded.
 - **A ranking, never a stored fact.** Similarity depends on the querying device's text encoder and changes with each model version, so it is never written to a sidecar, never a smart-album term, and never compared across `(model_id, model_version)` tuples ([](#embedding-provenance)).
-- **Filtered before it is ranked.** Structured search terms narrow the candidate set first. When the narrowed set is small, the scan ranks exactly that set rather than taking a global top-*k* and filtering afterwards, which could return nothing.
+- **Filtered before it is ranked.** Structured search terms narrow the candidate set first. When the narrowed set is small, the scan ranks exactly that set rather than taking a global top-_k_ and filtering afterwards, which could return nothing.
 - **Explained.** A hit that only semantic search produced is marked as a semantic match in the result.
 
 **Status.** `semantic_search` in `capsule-core::ml` embeds the query, refuses a non-canonical runner and queries the vector index. It is exercised end to end in `capsule-library/tests/model_regen_e2e.rs`, but only against the fixture runner, which hashes its input and so answers nothing meaningful. Real semantic search therefore needs the first real runner. No app or CLI path calls it yet.
@@ -169,7 +169,7 @@ Every stored embedding (local index, backup, or embedding-class `DerivativeManif
 - The index MUST **refuse inserts** from a `(model_id, model_version)` absent from the client's registry snapshot. Known-but-superseded releases are admitted stale-flagged (the regeneration queue) and excluded from queries.
 - A new release is a new `model_version`. Regeneration writes new entries per asset beside the old ones, and the old ones are deleted only after cutover ([](#generation-cutover)).
 
-**One canonical vector per asset.** Image embeddings are computed once and shared ([](#synced-embeddings)), so devices compare the *same* stored vector rather than needing byte-identical inference. Only the text-query encoder runs on every device, and its output is only ever compared against image vectors of the same `(model_id, model_version)`. Stored-embedding pipelines still run only on the deterministic CPU path ([](#runtime)), and a device must match the release's known-answer output exactly ([](#distribution-and-readiness)) before it may **publish** a vector. Core-tier model size is bounded by the lowest-end supported device. A device that is within tolerance but not bit-exact never publishes; its locally computed vectors carry a `platform` discriminator and are **never merged** into the canonical index: the worst case is duplicated regeneration, never wrong results (row #14 of [](/design/threat-model/scenarios/#damage-scenario--invariant-map)).
+**One canonical vector per asset.** Image embeddings are computed once and shared ([](#synced-embeddings)), so devices compare the _same_ stored vector rather than needing byte-identical inference. Only the text-query encoder runs on every device, and its output is only ever compared against image vectors of the same `(model_id, model_version)`. Stored-embedding pipelines still run only on the deterministic CPU path ([](#runtime)), and a device must match the release's known-answer output exactly ([](#distribution-and-readiness)) before it may **publish** a vector. Core-tier model size is bounded by the lowest-end supported device. A device that is within tolerance but not bit-exact never publishes; its locally computed vectors carry a `platform` discriminator and are **never merged** into the canonical index: the worst case is duplicated regeneration, never wrong results (row #14 of [](/design/threat-model/scenarios/#damage-scenario--invariant-map)).
 
 ### Synced Embeddings
 
@@ -190,32 +190,32 @@ One pipeline per task. A backbone is reused across features whenever quality all
 
 Tiers bound what a device downloads. **Core** is sized for the lowest-end supported device. **Optional** is opt-in per feature. **Large** is for desktops and high-RAM devices only. Each tier has a **download ceiling**, counting the weight bytes of the current release of every pipeline in it:
 
-| Tier | Ceiling |
-| --- | --- |
-| Core | ≤ 150 MB in total |
+| Tier     | Ceiling              |
+| -------- | -------------------- |
+| Core     | ≤ 150 MB in total    |
 | Optional | ≤ 500 MB per feature |
-| Large | ≤ 4 GB per feature |
+| Large    | ≤ 4 GB per feature   |
 
 The publishing gate refuses to sign a release record that would push its tier over its ceiling. Clients do not re-check ceilings. A pipeline counts against the tier in its record, and a shared backbone counts once, in the lowest tier that uses it. A ceiling changes only by a change to this table, recorded in an ADR.
 
-| Feature | Pipeline | Candidate weights | Tier | Status |
-| --- | --- | --- | --- | --- |
-| Text and similarity search, similar photos | Semantic embedder | SigLIP / OpenCLIP class, INT8 (MobileCLIP weights are research-only, so inadmissible) | Core | Planned |
-| Scene and object tags (zero-shot) | Semantic embedder | (reused) | Core | Planned |
-| Near-duplicate detection | Semantic embedder + pHash | (reused) | Core | Planned |
-| Sensitive-content flag | Classifier head on the semantic embedding | Linear probe trained in-project | Core | Planned |
-| Expression search ("happy faces") | Semantic embedder over face crops | (reused) | Core | **Blocked** (needs face boxes) |
-| Face boxes and landmarks | Face detector | None admissible known; train in-project | Core | **Blocked** (licence) |
-| Face identity, clustering | Face embedder | None admissible known; train in-project | Core | **Blocked** (licence) |
-| Object and person boxes, region tags | Object detector | RT-DETR / D-FINE class (Apache-2.0) | Optional | Planned |
-| Person re-ID without a face | Re-ID embedder | OSNet class | Optional | Post-v1 |
-| Text recognition (OCR) | Platform recogniser, else a text recogniser ([](#text-recognition)) | Apple Vision, ML Kit; offline candidate not chosen | Optional | Post-v1 |
-| Alt-text, captions | Captioner | Florence-2 class | Optional | Post-v1 |
-| Chat about an image and its metadata | Small VLM | SmolVLM / Moondream class, quantized | Large | Post-v1 |
-| Speech captions for video | ASR | Whisper class | Large (batch on Optional) | Post-v1 |
-| Video shot boundaries | Shot detector | TransNet v2 class | Optional | Post-v1 |
-| Exact duplicates | None: content hash | — | — | Implemented |
-| Burst detection | None: EXIF burst id, capture-time window + pHash | — | — | Planned, as an extension of stack auto-detection ([](/design/organization/#asset-stacking)) |
+| Feature                                    | Pipeline                                                            | Candidate weights                                                                     | Tier                      | Status                                                                                      |
+| ------------------------------------------ | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------- |
+| Text and similarity search, similar photos | Semantic embedder                                                   | SigLIP / OpenCLIP class, INT8 (MobileCLIP weights are research-only, so inadmissible) | Core                      | Planned                                                                                     |
+| Scene and object tags (zero-shot)          | Semantic embedder                                                   | (reused)                                                                              | Core                      | Planned                                                                                     |
+| Near-duplicate detection                   | Semantic embedder + pHash                                           | (reused)                                                                              | Core                      | Planned                                                                                     |
+| Sensitive-content flag                     | Classifier head on the semantic embedding                           | Linear probe trained in-project                                                       | Core                      | Planned                                                                                     |
+| Expression search ("happy faces")          | Semantic embedder over face crops                                   | (reused)                                                                              | Core                      | **Blocked** (needs face boxes)                                                              |
+| Face boxes and landmarks                   | Face detector                                                       | None admissible known; train in-project                                               | Core                      | **Blocked** (licence)                                                                       |
+| Face identity, clustering                  | Face embedder                                                       | None admissible known; train in-project                                               | Core                      | **Blocked** (licence)                                                                       |
+| Object and person boxes, region tags       | Object detector                                                     | RT-DETR / D-FINE class (Apache-2.0)                                                   | Optional                  | Planned                                                                                     |
+| Person re-ID without a face                | Re-ID embedder                                                      | OSNet class                                                                           | Optional                  | Post-v1                                                                                     |
+| Text recognition (OCR)                     | Platform recogniser, else a text recogniser ([](#text-recognition)) | Apple Vision, ML Kit; offline candidate not chosen                                    | Optional                  | Post-v1                                                                                     |
+| Alt-text, captions                         | Captioner                                                           | Florence-2 class                                                                      | Optional                  | Post-v1                                                                                     |
+| Chat about an image and its metadata       | Small VLM                                                           | SmolVLM / Moondream class, quantized                                                  | Large                     | Post-v1                                                                                     |
+| Speech captions for video                  | ASR                                                                 | Whisper class                                                                         | Large (batch on Optional) | Post-v1                                                                                     |
+| Video shot boundaries                      | Shot detector                                                       | TransNet v2 class                                                                     | Optional                  | Post-v1                                                                                     |
+| Exact duplicates                           | None: content hash                                                  | —                                                                                     | —                         | Implemented                                                                                 |
+| Burst detection                            | None: EXIF burst id, capture-time window + pHash                    | —                                                                                     | —                         | Planned, as an extension of stack auto-detection ([](/design/organization/#asset-stacking)) |
 
 **Face rows are Blocked.** The widely used face embedders and the strongest detectors (InsightFace's SCRFD and ArcFace, AdaFace, ElasticFace) ship weights or training sets licensed for non-commercial use only. Lighter detectors with permissive weight licences exist, but their training data is unverified. The planned route is to train the detector and embedder in-project on GPU from datasets whose licences pass [](/design/licensing/#model-weights-and-datasets), synthetic sets included. The block lifts when such a release passes its evaluation.
 

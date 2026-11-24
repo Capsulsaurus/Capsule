@@ -45,20 +45,20 @@ doc owns each part. Error-code identity is [](/design/i18n/#server-error-codes);
 
 Each surface's operations are its generated reference page; its design is the owner doc.
 
-| Surface | Operations | Owner doc |
-| --- | --- | --- |
-| Version and handshake | [](/reference/api/version/) | [](/design/versioning/) |
-| Server discovery | [](/reference/api/well-known/) | [](/design/authentication/) |
-| Authentication, sessions, devices | [](/reference/api/auth/) | [](/design/authentication/), [](/design/device-enrollment/) |
-| Resumable upload | [](/reference/api/upload/) | [](/design/transfer/upload/) |
-| Lifecycle writes, roster | [](/reference/api/albums/) | [](/design/authorization/#the-lifecycle-write-surface), [](/design/cryptography/mls/) |
-| Sync feed, blob fetch | [](/reference/api/sync/) | [](/design/sync/), [](/design/transfer/download/) |
-| Storage verification | [](/reference/api/storage/) | [](/design/transfer/durability/) |
-| Share links | [](/reference/api/shares/) | [](/design/share-links/) |
-| Guest drops | [](/reference/api/drops/) | [](/design/web-upload/) |
-| Quota | [](/reference/api/quota/) | [](/design/quota/) |
-| Moderation | [](/reference/api/moderation/) | [](/design/moderation/) |
-| Federation; its pull reuses the sync and blob reads with a capability as bearer | [](/reference/api/federation/) | [](/design/federation/) |
+| Surface                                                                         | Operations                     | Owner doc                                                                             |
+| ------------------------------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------- |
+| Version and handshake                                                           | [](/reference/api/version/)    | [](/design/versioning/)                                                               |
+| Server discovery                                                                | [](/reference/api/well-known/) | [](/design/authentication/)                                                           |
+| Authentication, sessions, devices                                               | [](/reference/api/auth/)       | [](/design/authentication/), [](/design/device-enrollment/)                           |
+| Resumable upload                                                                | [](/reference/api/upload/)     | [](/design/transfer/upload/)                                                          |
+| Lifecycle writes, roster                                                        | [](/reference/api/albums/)     | [](/design/authorization/#the-lifecycle-write-surface), [](/design/cryptography/mls/) |
+| Sync feed, blob fetch                                                           | [](/reference/api/sync/)       | [](/design/sync/), [](/design/transfer/download/)                                     |
+| Storage verification                                                            | [](/reference/api/storage/)    | [](/design/transfer/durability/)                                                      |
+| Share links                                                                     | [](/reference/api/shares/)     | [](/design/share-links/)                                                              |
+| Guest drops                                                                     | [](/reference/api/drops/)      | [](/design/web-upload/)                                                               |
+| Quota                                                                           | [](/reference/api/quota/)      | [](/design/quota/)                                                                    |
+| Moderation                                                                      | [](/reference/api/moderation/) | [](/design/moderation/)                                                               |
+| Federation; its pull reuses the sync and blob reads with a capability as bearer | [](/reference/api/federation/) | [](/design/federation/)                                                               |
 
 ## Validation
 

@@ -33,7 +33,7 @@ Each album has one server-side key escrow. Rules, with the KDF choice in [](/des
 
 - `info` MUST carry a version string. Salts MUST be unique per scope (`album_id`, `file_id`) and never reused across scopes.
 - Every **encryption** derives a fresh key (`nonce_prefix` is folded into the salt), so even a same-`file_id` `replace` ([](/design/authorization/#the-closed-action-set)) re-rolls the key. No `(file_key, nonce_prefix)` pair is ever reused. The formula is in [](/design/cryptography/encryption/#asset-key-derivation).
-- **File-key modes:** *derived* (default, nothing stored) and *wrapped* (asset key wrapped under the AMK). Wrapped is only for bytes the client did not author, i.e. an adopted web-upload drop ([](/design/web-upload/)). The signed `key_mode` ([](/design/cryptography/provenance/#asset-manifest)) records which. The mode never affects authorization and `verify_asset` ([](#write-authorization)) ignores it.
+- **File-key modes:** _derived_ (default, nothing stored) and _wrapped_ (asset key wrapped under the AMK). Wrapped is only for bytes the client did not author, i.e. an adopted web-upload drop ([](/design/web-upload/)). The signed `key_mode` ([](/design/cryptography/provenance/#asset-manifest)) records which. The mode never affects authorization and `verify_asset` ([](#write-authorization)) ignores it.
 - The default album's `album_id` is derived from the account's **first** master key at account creation (HKDF, label `default-album-id/v1`; see [](/design/organization/#the-default-album)). From then on it is a stored value: it is sealed in the identity record beside the IK ([](#registered-accounts)) and re-sealed with it on every master-key rotation, so a recovered device reads it rather than computing it. Nothing re-derives it from the current master key: after a rotation that derivation names a different, empty album.
 - An AMK is exported from MLS once and then stored; nothing re-derives an AMK from MLS state afterwards, because MLS deletes epoch secrets ([](#album-master-keys-amks)).
 
@@ -51,10 +51,10 @@ All keys are generated client-side from the OS CSPRNG ([](/design/cryptography/p
 
 ### Device Keys
 
-| Key | Algorithm | Purpose |
-| --- | --- | --- |
+| Key | Algorithm           | Purpose                                    |
+| --- | ------------------- | ------------------------------------------ |
 | DSK | Ed25519 + ML-DSA-65 | Signs manifests and commits as this device |
-| DEK | X25519 + ML-KEM-768 | Receives encapsulated keys |
+| DEK | X25519 + ML-KEM-768 | Receives encapsulated keys                 |
 
 - The IK cross-signs both public halves via the [](#device-directory).
 - The **classical half** is generated in hardware and never leaves it (Secure Enclave, StrongBox/Keystore, TPM via Windows TBS). No shipping secure element implements PQ, so the **PQ half** is software-sealed under hardware-protected material.
@@ -75,11 +75,11 @@ All keys are generated client-side from the OS CSPRNG ([](/design/cryptography/p
 
 One MLS group per album, whose members are users with any role in the album roster ([](/design/authorization/#album-membership-on-the-server)). Secrecy (encryption) is separated from authorization (signatures):
 
-| Material | Comes from | Holders | Use |
-| --- | --- | --- | --- |
-| **AMK**: 32 B per epoch | The MLS exporter of the epoch ([](#where-an-amk-comes-from)) | All members | Decrypt (read) |
+| Material                                                                                                              | Comes from                                                                                             | Holders      | Use                                                                        |
+| --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ------------ | -------------------------------------------------------------------------- |
+| **AMK**: 32 B per epoch                                                                                               | The MLS exporter of the epoch ([](#where-an-amk-comes-from))                                           | All members  | Decrypt (read)                                                             |
 | **Write-tier keypair**: hybrid Ed25519 + ML-DSA-65 ([](/design/cryptography/primitives/#signature-scheme)), per epoch | Minted at random by the epoch's committer; the public half attested in the commit's authenticated data | Writers only | Sign asset manifests ([](/design/cryptography/provenance/#asset-manifest)) |
-| **Admin authority** | The album owner's devices; no shared key in an MLS album | The owner | Commit membership and role changes, publish the roster |
+| **Admin authority**                                                                                                   | The album owner's devices; no shared key in an MLS album                                               | The owner    | Commit membership and role changes, publish the roster                     |
 
 The epoch bumps on member add or remove, role change, and scheduled rotation (e.g. 30 days). `amk_version` is the MLS epoch plus one.
 
@@ -93,13 +93,13 @@ The epoch bumps on member add or remove, role change, and scheduled rotation (e.
 
 Key material a member cannot export itself rides MLS application messages ([](/design/cryptography/mls/#history-delivery-for-new-joiners)). MLS authenticates each message's sender leaf, and the receiver MUST check that leaf against the rule for the message kind:
 
-| Message | Accepted only from | Receiver check |
-| --- | --- | --- |
-| `AlbumKeyDistribution` | Any member | A receipt for an epoch the receiver exported itself: the bytes MUST equal its own export. A mismatch is rejected and surfaced; the message carries no authority of its own. |
-| `WriteTierDistribution` | The leaf that committed that epoch | The private half MUST derive the public half the commit attested. A joiner, which did not process that commit, takes the attestation from its Welcome, whose GroupInfo the committer signed. |
-| `AlbumHistoryBundle` | The leaf that committed the Add admitting the receiver (the signer of its Welcome's GroupInfo) | Entries strictly below the receiver's ceiling, within the album's history policy. |
+| Message                 | Accepted only from                                                                             | Receiver check                                                                                                                                                                               |
+| ----------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AlbumKeyDistribution`  | Any member                                                                                     | A receipt for an epoch the receiver exported itself: the bytes MUST equal its own export. A mismatch is rejected and surfaced; the message carries no authority of its own.                  |
+| `WriteTierDistribution` | The leaf that committed that epoch                                                             | The private half MUST derive the public half the commit attested. A joiner, which did not process that commit, takes the attestation from its Welcome, whose GroupInfo the committer signed. |
+| `AlbumHistoryBundle`    | The leaf that committed the Add admitting the receiver (the signer of its Welcome's GroupInfo) | Entries strictly below the receiver's ceiling, within the album's history policy.                                                                                                            |
 
-- **First valid delivery wins.** A second delivery for an epoch the receiver already holds, with different bytes, is rejected and surfaced as a key divergence; it never overwrites. Prior-epoch AMKs in a history bundle are also checked by the key commitment of the first blob opened under them ([](/design/cryptography/encryption/#reading-a-blob)), which turns a forged prior-epoch key into a *wrong key*, never a silent misread.
+- **First valid delivery wins.** A second delivery for an epoch the receiver already holds, with different bytes, is rejected and surfaced as a key divergence; it never overwrites. Prior-epoch AMKs in a history bundle are also checked by the key commitment of the first blob opened under them ([](/design/cryptography/encryption/#reading-a-blob)), which turns a forged prior-epoch key into a _wrong key_, never a silent misread.
 - **Writers only means sealed per writer.** The group channel is readable by every member, so the write-tier private half MUST NOT ride it in the clear whenever the writer set is smaller than the membership. The committer seals it to the leaf encryption key of each writer device at the new epoch with the labelled encryption of RFC 9420 §5.1.3, under the pinned suite's X-Wing HPKE: `EncryptWithLabel(leaf_encryption_key, "capsule write-tier v1", album_id || amk_version, write_tier_private)`. The HPKE `info` is therefore the serialized `EncryptContext` with label `"MLS 1.0 capsule write-tier v1"`, which no MLS-defined label shares, so a sealed write-tier key cannot be replayed as a path secret or a Welcome secret, nor the reverse. The receiver opens it with `DecryptWithLabel` under the same label and context. The sealed set travels as one application message. The writer set is the roster's writers at that epoch.
 - **Only an owner or a writer commits.** Whoever commits an epoch mints its write-tier key, so a reader that commits would hold write capability. Members MUST reject a commit unless its committer leaf is bound ([](/design/cryptography/mls/)) to the album owner, or to a writer whose commit only adds or removes leaves of the writer's own account or updates its own leaf. Role changes, and adds or removes of other users, are owner-only. A reader's own device change is a proposal that an owner or writer commits.
 - **Roles are group state.** The owner's commits carry the role map in a group-context extension, which the server's owner-signed roster mirrors, so members check committers against MLS state and never against the server.
@@ -107,7 +107,7 @@ Key material a member cannot export itself rides MLS application messages ([](/d
 
 ## Write Authorization
 
-A DSK signature proves *which device* produced an asset, not that it was *authorized to write* at that epoch. The server is not trusted for authorization, since it may replay, reorder or surface reader-signed or removed-writer assets, and bugs must fail closed.
+A DSK signature proves _which device_ produced an asset, not that it was _authorized to write_ at that epoch. The server is not trusted for authorization, since it may replay, reorder or surface reader-signed or removed-writer assets, and bugs must fail closed.
 
 `verify_asset(manifest, ciphertext_hash, authority)` in `capsule-core/src/crypto/verify_asset.rs` is the **single chokepoint** by which a client acknowledges an asset on import, sync, federation, peering and restore. Rules:
 
@@ -118,9 +118,9 @@ A DSK signature proves *which device* produced an asset, not that it was *author
 - **Downgrade-resistant.** Both signatures cover `crypto_suite_id`, `protocol_version` and `prior_provenance_hash`.
 - **Hash, not bytes.** It takes the ciphertext hash computed by the streaming path and never buffers a file.
 - **Three outcomes:**
-  - *accept*;
-  - *terminal-reject* (reader-signed, removed-writer, wrong-epoch, forged chain, suite-downgrade, tampered field): quarantined and surfaced in the audit trail ([](/design/cryptography/provenance/#provenance-of-library-modifications)), never silently dropped;
-  - *pending*: `amk_version` is within the attested range but the AMK is not yet held, because the commit has not been processed or the key delivery has not arrived ([](/design/cryptography/mls/#history-delivery-for-new-joiners)). Held and retried, escalating to quarantine after a timeout.
+  - _accept_;
+  - _terminal-reject_ (reader-signed, removed-writer, wrong-epoch, forged chain, suite-downgrade, tampered field): quarantined and surfaced in the audit trail ([](/design/cryptography/provenance/#provenance-of-library-modifications)), never silently dropped;
+  - _pending_: `amk_version` is within the attested range but the AMK is not yet held, because the commit has not been processed or the key delivery has not arrived ([](/design/cryptography/mls/#history-delivery-for-new-joiners)). Held and retried, escalating to quarantine after a timeout.
 - **Key delivery is authorization-neutral.** A `key_mode = wrapped` asset is authorized identically, by the adopter's `device_sig` + `write_sig`; the guest never signs. `key_mode` and `wrapped_file_key` are signed fields, so tampering is terminal-reject.
 - **Timestamp is audit-only.** The manifest `timestamp` is never used for authorization or ordering. Time-based policy uses the server's `received_at` (server envelope: [](/design/filesystem/server/#postgresql-what-the-server-knows)). The server's drift bound on `timestamp` is a sanity check, not a control. The grammar is in [](/design/threat-model/schema-rules/#timestamp-grammar).
 - **Validity ≠ durability.** Local destructive cleanup requires `verify_asset` **and** the key-free durability endpoint ([](/design/transfer/durability/)).
@@ -238,10 +238,10 @@ Ciphertext already exfiltrated under old AMKs stays readable to the attacker. Re
 
 The weight registry ([](/design/ai/#weight-registry)) is the only artefact Capsule signs as a project rather than as a user. These keys are generated offline by the maintainer, not by a client. A two-level hierarchy means a routine key change never needs a client release. Both levels are hybrid Ed25519 + ML-DSA-65, because a registry record is long-lived evidence ([](/design/cryptography/primitives/#signature-scheme)).
 
-| Key | Held by | Signs | Rotated by |
-| --- | --- | --- | --- |
-| **Release root** (active and successor) | The maintainer, offline on hardware tokens, with sealed offline backups | `delegate` and `checkpoint` records only | A `delegate` signed by the successor, then a client release |
-| **Registry key** | The maintainer, on a hardware token used to publish. Never a CI secret | Release records (`release`, `supersede`, `yank`) | A new `delegate` |
+| Key                                     | Held by                                                                 | Signs                                            | Rotated by                                                  |
+| --------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------ | ----------------------------------------------------------- |
+| **Release root** (active and successor) | The maintainer, offline on hardware tokens, with sealed offline backups | `delegate` and `checkpoint` records only         | A `delegate` signed by the successor, then a client release |
+| **Registry key**                        | The maintainer, on a hardware token used to publish. Never a CI secret  | Release records (`release`, `supersede`, `yank`) | A new `delegate`                                            |
 
 Validity is decided by **log position**, never by a clock: a record's `released_at` is self-asserted, and a timestamp is never used for authorization ([](/design/threat-model/schema-rules/#timestamp-grammar)). Every record's signature covers its `seq` and the hash of the record before it. A record therefore cannot be replayed at another position or into another log.
 
@@ -262,21 +262,21 @@ Validity is decided by **log position**, never by a clock: a record's `released_
 
 Paths are the numbered [](/design/backup-recovery/#recovery-paths). Rejected manifests and distribution lag are the `verify_asset` outcomes above ([](#write-authorization)). Master-key loss is in [](/design/backup-recovery/#failure-modes).
 
-| Failure | Detected / contained by | Recovery |
-| --- | --- | --- |
-| Device key loss | Device keys are disposable | Re-bootstrap (path 1 or 2); never recovered |
-| AMK loss | — | Path 3 or 4 |
-| Write-tier key loss | — | Re-minted next epoch |
-| Master key compromise | — | Rotate and re-key ([](#master-key-compromise)) |
-| Device compromise | — | Account compromise: [](#master-key-compromise). A device's key material includes the master key and, through it, the IK |
-| Forged or conflicting key delivery | Sender rule and export comparison ([](#key-delivery-and-who-may-send-it)); key commitment | Rejected and surfaced; the first valid delivery stands |
-| Hostile Argon2id parameters | Bounds ([](/design/cryptography/primitives/#password-based-kdf)) | Refused before any work |
-| AMK / write-tier compromise | — | Epoch bump; an old epoch cannot read or sign future ones |
-| Server compromise | Server never trusted | Authorization from MLS history; data is end-to-end encrypted |
-| One half of a hybrid primitive broken | Hybrid construction | The other half holds |
-| Registry key compromise | `max_seq` bounds what it can sign | Superseding `delegate` + `yank`; `checkpoint` recovers forked clients ([](#project-release-keys)) |
-| Active release root compromise | — | Successor-signed `delegate` retires it with no client release ([](#project-release-keys)) |
-| Successor root compromise | Separate custody | Client release replacing both roots ([](#project-release-keys)) |
+| Failure                               | Detected / contained by                                                                   | Recovery                                                                                                                |
+| ------------------------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Device key loss                       | Device keys are disposable                                                                | Re-bootstrap (path 1 or 2); never recovered                                                                             |
+| AMK loss                              | —                                                                                         | Path 3 or 4                                                                                                             |
+| Write-tier key loss                   | —                                                                                         | Re-minted next epoch                                                                                                    |
+| Master key compromise                 | —                                                                                         | Rotate and re-key ([](#master-key-compromise))                                                                          |
+| Device compromise                     | —                                                                                         | Account compromise: [](#master-key-compromise). A device's key material includes the master key and, through it, the IK |
+| Forged or conflicting key delivery    | Sender rule and export comparison ([](#key-delivery-and-who-may-send-it)); key commitment | Rejected and surfaced; the first valid delivery stands                                                                  |
+| Hostile Argon2id parameters           | Bounds ([](/design/cryptography/primitives/#password-based-kdf))                          | Refused before any work                                                                                                 |
+| AMK / write-tier compromise           | —                                                                                         | Epoch bump; an old epoch cannot read or sign future ones                                                                |
+| Server compromise                     | Server never trusted                                                                      | Authorization from MLS history; data is end-to-end encrypted                                                            |
+| One half of a hybrid primitive broken | Hybrid construction                                                                       | The other half holds                                                                                                    |
+| Registry key compromise               | `max_seq` bounds what it can sign                                                         | Superseding `delegate` + `yank`; `checkpoint` recovers forked clients ([](#project-release-keys))                       |
+| Active release root compromise        | —                                                                                         | Successor-signed `delegate` retires it with no client release ([](#project-release-keys))                               |
+| Successor root compromise             | Separate custody                                                                          | Client release replacing both roots ([](#project-release-keys))                                                         |
 
 ## Known Gaps
 

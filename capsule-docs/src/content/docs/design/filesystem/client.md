@@ -53,13 +53,13 @@ The reclaimable set is held within a user-configurable budget ([`capsule-library
 
 The budget scales with the connection class ([](/design/networking/#connection-classes); [`capsule-sdk::cache_budget`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-sdk/src/cache_budget.rs)), because re-fetching an evicted representation grows costlier down the table:
 
-| Class | Budget (× base) | Bulk transfers |
-| --- | --- | --- |
-| `unmetered` | 1 | Run |
-| `metered` | 2 | Deferred |
-| `constrained` | 2 | Deferred |
-| `adverse` | 3 | Deferred |
-| `offline` | 4 | Deferred |
+| Class         | Budget (× base) | Bulk transfers |
+| ------------- | --------------- | -------------- |
+| `unmetered`   | 1               | Run            |
+| `metered`     | 2               | Deferred       |
+| `constrained` | 2               | Deferred       |
+| `adverse`     | 3               | Deferred       |
+| `offline`     | 4               | Deferred       |
 
 The base budget is a user setting (default 2 GiB, `capsule cache budget --set`); `capsule cache sweep` runs the sweep under the current plan. On a deferring class a push runs staged ([](/design/transfer/upload/#upload-tiering-staged-uploads)) whatever the device's upload policy, so the index tier still publishes each asset while preview and original wait for an unmetered link. The client samples the class through a port before each sweep and each transfer and re-plans when it changes. A desktop with no OS signal reports `unmetered`.
 

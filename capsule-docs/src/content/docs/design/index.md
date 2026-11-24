@@ -2,9 +2,9 @@
 title: Design Overview
 description: How Capsule's design docs are organized and where to start
 audit:
-  commit: f8a82105b7c9cb43d6f603bc817e4bb5adc1030e
-  date: 2026-11-23
-  digest: sha256:8820e18995f7821ff8a3ee32eb329e260edd965af481a74a55a071499861dad7
+    commit: f8a82105b7c9cb43d6f603bc817e4bb5adc1030e
+    date: 2026-11-23
+    digest: sha256:8820e18995f7821ff8a3ee32eb329e260edd965af481a74a55a071499861dad7
 ---
 
 Capsule is an end-to-end-encrypted personal photo and media store with optional federation. These design docs are its normative specification. Every primitive, schema and protocol is declared in exactly one **owner doc** and referenced by anchor everywhere else ([](/design/principles/#single-source-of-truth)).

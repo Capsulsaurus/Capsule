@@ -47,20 +47,20 @@ Findings are **classified, never adjudicated**: the report names the check and b
 
 ## Repair
 
-*Ephemeral data is rebuilt silently; irreplaceable data is never destroyed to resolve an inconsistency.*
+_Ephemeral data is rebuilt silently; irreplaceable data is never destroyed to resolve an inconsistency._
 
-| Finding | Action |
-| --- | --- |
-| Stale `.tmp` | Deleted by the scrub. |
-| Orphaned `cache/` entry | Deleted. |
-| Bundle without an index row | Re-indexed on open from its sidecar and chain, through the same per-asset path as a rebuild ([](#atomic-writes-and-crash-recovery)). |
-| Index inconsistency | Rebuilt from sidecars and chains: row, user tags and stacks. Safe but not lossless (index-only state such as importer-formed stack placement is lost), so rebuild is never a schema-upgrade path. |
-| Sidecar without original | Expected under metadata-only sync scope ([](/design/sync/#synchronization-scope)); otherwise re-fetch the original. |
-| Original without sidecar | Never deleted: quarantined, surfaced, minimal sidecar re-derived. |
-| Sidecar without provenance chain | Not restored on open; listed as unanchored and left untouched. A write renames its chain into place last, so an interrupted one leaves this rather than a torn chain. |
-| Malformed sidecar | Bytes quarantined verbatim with reason, never silently skipped; current sidecar re-fetched first. |
-| Invalid sidecar signature | Quarantined, never overwritten; persistent failure shown as "provenance broken". |
-| Corrupt original | Re-fetched and derivatives regenerated if the server holds it; surfaced loudly if this is the only copy. |
+| Finding                          | Action                                                                                                                                                                                            |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stale `.tmp`                     | Deleted by the scrub.                                                                                                                                                                             |
+| Orphaned `cache/` entry          | Deleted.                                                                                                                                                                                          |
+| Bundle without an index row      | Re-indexed on open from its sidecar and chain, through the same per-asset path as a rebuild ([](#atomic-writes-and-crash-recovery)).                                                              |
+| Index inconsistency              | Rebuilt from sidecars and chains: row, user tags and stacks. Safe but not lossless (index-only state such as importer-formed stack placement is lost), so rebuild is never a schema-upgrade path. |
+| Sidecar without original         | Expected under metadata-only sync scope ([](/design/sync/#synchronization-scope)); otherwise re-fetch the original.                                                                               |
+| Original without sidecar         | Never deleted: quarantined, surfaced, minimal sidecar re-derived.                                                                                                                                 |
+| Sidecar without provenance chain | Not restored on open; listed as unanchored and left untouched. A write renames its chain into place last, so an interrupted one leaves this rather than a torn chain.                             |
+| Malformed sidecar                | Bytes quarantined verbatim with reason, never silently skipped; current sidecar re-fetched first.                                                                                                 |
+| Invalid sidecar signature        | Quarantined, never overwritten; persistent failure shown as "provenance broken".                                                                                                                  |
+| Corrupt original                 | Re-fetched and derivatives regenerated if the server holds it; surfaced loudly if this is the only copy.                                                                                          |
 
 Every finding and repair is logged.
 

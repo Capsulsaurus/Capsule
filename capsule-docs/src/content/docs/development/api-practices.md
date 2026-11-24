@@ -74,13 +74,13 @@ Every critical process must be reconstructable from its logs. Use
 never values formatted into the message. `#[instrument]` hot-path functions so spans carry the
 identifiers an investigation needs.
 
-| Level | Use |
-| --- | --- |
-| ERROR | Unexpected failures |
-| WARN | Recoverable or unusual conditions |
-| INFO | Domain events: reservation, finalization, lifecycle transitions, auth decisions |
-| DEBUG | Critical-process flow (use aggressively) |
-| TRACE | Per-request and per-chunk detail (use aggressively) |
+| Level | Use                                                                             |
+| ----- | ------------------------------------------------------------------------------- |
+| ERROR | Unexpected failures                                                             |
+| WARN  | Recoverable or unusual conditions                                               |
+| INFO  | Domain events: reservation, finalization, lifecycle transitions, auth decisions |
+| DEBUG | Critical-process flow (use aggressively)                                        |
+| TRACE | Per-request and per-chunk detail (use aggressively)                             |
 
 Never log plaintext or anything on the E2EE-forbidden list, credentials or key material, tokens,
 production PII, or blob contents. Errors carry the `error.*` code, never sensitive detail.

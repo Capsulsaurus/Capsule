@@ -37,10 +37,10 @@ is a comment beside its pin, and the shipped attribution text is the repo-root `
 A bounded, dischargeable obligation beyond attribution needs a per-crate `deny.toml` exception and
 a `NOTICE` entry.
 
-| Crate | Licence | Why it is bounded |
-| --- | --- | --- |
-| `tzf-dist` | `ODbL-1.0` | Share-alike binds the database only; embedded unmodified, no derivative database. |
-| Geist, Geist Mono | `OFL-1.1` | Font files the docs site vendors unmodified; the licence binds the fonts, never the pages using them. Not a crate, so outside `deny.toml`. |
+| Crate             | Licence    | Why it is bounded                                                                                                                          |
+| ----------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `tzf-dist`        | `ODbL-1.0` | Share-alike binds the database only; embedded unmodified, no derivative database.                                                          |
+| Geist, Geist Mono | `OFL-1.1`  | Font files the docs site vendors unmodified; the licence binds the fonts, never the pages using them. Not a crate, so outside `deny.toml`. |
 
 ### Forbidden
 

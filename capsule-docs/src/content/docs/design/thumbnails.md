@@ -26,9 +26,9 @@ Code that duplicates Rawshift today, deleted once the Rawshift revision it waits
 Pending validation of decoder coverage and quality-per-byte in the [image-delivery-format demo](https://github.com/justin13888/image-delivery-format-demo). If it fails, the primary reverts to AVIF, a one-row edit here.
 :::
 
-| Tier | Photo format | Video format | Notes |
-| --- | --- | --- | --- |
-| **Thumbnail** (grid) | JXL master; AVIF→WebP delivery | First-frame JXL/AVIF still | q=50, 4:2:0, ~256 px long edge |
+| Tier                            | Photo format                   | Video format                    | Notes                                      |
+| ------------------------------- | ------------------------------ | ------------------------------- | ------------------------------------------ |
+| **Thumbnail** (grid)            | JXL master; AVIF→WebP delivery | First-frame JXL/AVIF still      | q=50, 4:2:0, ~256 px long edge             |
 | **Preview** (single-asset view) | JXL master; AVIF→WebP delivery | H.264 baseline, capped to 1080p | Stills q=70; H.264 CRF 23, 30 fps cap, AAC |
 
 H.264 baseline is chosen for universal cheap decode; AV1 mobile encode is still too costly.
@@ -38,11 +38,11 @@ If an original is no larger than a tier's long edge, that tier references the or
 :::note[What the build generates today]
 The table is the contract, not an inventory. Native encoders sit behind the opt-in `media-linked-codecs` feature (CLI only); the mobile FFI and cross targets stay pure Rust.
 
-| Build | Thumbnail | Preview | Missing |
-| --- | --- | --- | --- |
-| `media-linked-codecs` (CLI) | JXL (lossy q=50) + AVIF | JXL + AVIF, q=70 | WebP (not enabled) |
-| `media` only (FFI, cross) | AVIF (q=50) | none | JXL (its only encoder, libjxl, is native code), WebP |
-| Either | — | — | All video derivatives (`rawshift-video` is an unimplemented placeholder) |
+| Build                       | Thumbnail               | Preview          | Missing                                                                  |
+| --------------------------- | ----------------------- | ---------------- | ------------------------------------------------------------------------ |
+| `media-linked-codecs` (CLI) | JXL (lossy q=50) + AVIF | JXL + AVIF, q=70 | WebP (not enabled)                                                       |
+| `media` only (FFI, cross)   | AVIF (q=50)             | none             | JXL (its only encoder, libjxl, is native code), WebP                     |
+| Either                      | —                       | —                | All video derivatives (`rawshift-video` is an unimplemented placeholder) |
 
 Decode covers JPEG, PNG, JXL, TIFF, GIF, ARW and DNG in every build, plus AVIF under `media-avif-decode` (the CLI). Rawshift decodes an AVIF's AV1 codestream only through a hardware decoder (VAAPI on Linux today), so on a host without one, or whose decoder refuses the codestream's profile (VAAPI decodes AV1 Profile 0 only, not 4:4:4 Profile 1), an AVIF is deferred, and its header size is checked before decode and its decoded frame after it, not its coded frame; both gaps are filed upstream ([visualcommons/rawshift#78](https://github.com/visualcommons/rawshift/issues/78), [#79](https://github.com/visualcommons/rawshift/issues/79)). Capsule pre-walks RAW IFD chains to bound value sizes and nesting depth (≤16), the directories, values, strips and tiles a file states (twice its length each) and the SubIFD pointers it follows (≤256), a DNG's black-level pattern (≤8 a side) and bad-pixel lists, and a DNG's stated image and tile sizes, the pixels of every image IFD its eager reader decodes taken together, its `SamplesPerPixel` (≤4) and each lossless-JPEG chunk's own header size, before handing them to the RAW reader. The DNG bounds apply to any file whose IFD0 states `DNGVersion`, whatever its extension, because the reader opens every such file as a DNG ([visualcommons/rawshift#83](https://github.com/visualcommons/rawshift/issues/83)). A Deflate DNG is deferred, because the reader inflates it with no output bound ([visualcommons/rawshift#82](https://github.com/visualcommons/rawshift/issues/82)). **HEIC is refused by decision**: libheif and libde265 are LGPL-3.0 ([](/design/licensing/)). WebP, other RAW families, and AVIF without the feature are recognised and refused.
 

@@ -8,11 +8,11 @@ audit: none
 
 Three things leave a library, and they must not be confused:
 
-| Thing | Holds | Read by | Owner |
-| --- | --- | --- | --- |
-| **Export** | Decrypted originals or renditions, optional sidecars, a checksums manifest | Any tool: a file manager, an unzip tool, another photo app | This doc |
-| **Backup artifact** | Ciphertext, wrapped keys, provenance; signed | Capsule restore only | [](/design/backup-recovery/#backup-artifact) |
-| **Delegation bundle** | One upload's ciphertext and signed manifest | The server, carried by another device | [](/design/peering/#delegation) |
+| Thing                 | Holds                                                                      | Read by                                                    | Owner                                        |
+| --------------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------- | -------------------------------------------- |
+| **Export**            | Decrypted originals or renditions, optional sidecars, a checksums manifest | Any tool: a file manager, an unzip tool, another photo app | This doc                                     |
+| **Backup artifact**   | Ciphertext, wrapped keys, provenance; signed                               | Capsule restore only                                       | [](/design/backup-recovery/#backup-artifact) |
+| **Delegation bundle** | One upload's ciphertext and signed manifest                                | The server, carried by another device                      | [](/design/peering/#delegation)              |
 
 An export is not a backup: it carries no keys, no provenance and no signatures, and Capsule does not restore from it. An `original` export with XMP sidecars re-imports through the ordinary import pipeline ([](/design/import/pipeline/)) as new assets.
 
@@ -30,12 +30,12 @@ One Rust module, `capsule-library::export`, owns planning, rendering, naming, si
 
 - **Native code supplies only a sink**: a sequential byte stream of named entries. A sink creates an entry, writes bytes, finishes or aborts it, and says whether it can reopen a finished file at an offset. The core never seeks the sink.
 
-| Client | Sink |
-| --- | --- |
-| CLI, desktop | A directory or file on the local filesystem (reopenable) |
-| iOS, iPadOS, macOS | A destination the user picked in the system document picker |
-| Android | A Storage Access Framework tree or document the user picked |
-| Web | A user-picked directory or file where the browser offers one, otherwise a streamed download per archive part |
+| Client             | Sink                                                                                                         |
+| ------------------ | ------------------------------------------------------------------------------------------------------------ |
+| CLI, desktop       | A directory or file on the local filesystem (reopenable)                                                     |
+| iOS, iPadOS, macOS | A destination the user picked in the system document picker                                                  |
+| Android            | A Storage Access Framework tree or document the user picked                                                  |
+| Web                | A user-picked directory or file where the browser offers one, otherwise a streamed download per archive part |
 
 - **Plan, then run.** Planning is pure over the library and the options. It fixes the entry list, every name, each entry's part and the totals, and reports refusals and warnings, before any byte is written. A run executes a plan. A dry run is a plan with no run.
 - **The web client exports too.** An export is a read, which the read-only web client is allowed ([](/design/clients/#web-client)).
@@ -44,26 +44,26 @@ One Rust module, `capsule-library::export`, owns planning, rendering, naming, si
 
 The option set is a superset of what Apple Photos and Google Takeout offer, with defaults that suit a user who did not open the options.
 
-| Option | Values | Default | Apple Photos | Google Takeout / Drive |
-| --- | --- | --- | --- | --- |
-| Scope | assets, albums, a smart album or search result, a date range, the whole library | the selection | selection | per product |
-| Version | `original` (byte-identical original) or `current` (the asset as the library shows it now) | `current` | Export Unmodified Original or Export N Photos | originals, plus `-edited` copies |
-| Kind (`current` only) | `original`, `jpeg`, `png`, `tiff`, `jxl` | `original` | JPEG, HEIC, TIFF, PNG | — |
-| Quality (JPEG) | low, medium, high, maximum | high | Low to Maximum | — |
-| Size (`current` only) | full; small, medium or large (640, 1280, 2048 px long edge); custom width, height or long edge | full | Small, Medium, Large, Full Size, Custom | — |
-| Colour profile | keep, sRGB | keep | Colour Profile | — |
-| Video | `original` | `original` | 480p to 4K | originals |
-| Paired files | together, still only | together | originals: both files; renditions: still only | both files |
-| Stacks | all members, primary only | all members | — | — |
-| Hidden assets | excluded, included | excluded | — | — |
-| File names | `original`, `title`, `sequential` (with prefix), `id` | `original` | Use File Name, Use Title, Sequential | original name |
-| Subfolders | `none`, `album`, `date` (`YYYY/MM` or `YYYY-MM-DD`), `album/date` | `none` | None, by day or moment | album folders, `Photos from YYYY` |
-| Sidecars | none, XMP, JSON, both | none | Export IPTC as XMP | JSON beside each file |
-| Metadata fields | title and caption, keywords (labels), rating, people (regions) | title, caption, keywords, rating | Title, Caption, Keywords | in the JSON |
-| Location | strip, coarse (stated precision), full | coarse | Location Information on or off | kept |
-| Container | folder, `zip`, `tar`, `tgz` | `zip` for more than one file | folder | `zip` or `tgz` |
-| Split size (archives) | none, 2, 4, 10, 50 GB | 4 GB | — | 1 to 50 GB parts |
-| Checksums manifest | always | always | — | — |
+| Option                | Values                                                                                         | Default                          | Apple Photos                                  | Google Takeout / Drive            |
+| --------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------- | --------------------------------------------- | --------------------------------- |
+| Scope                 | assets, albums, a smart album or search result, a date range, the whole library                | the selection                    | selection                                     | per product                       |
+| Version               | `original` (byte-identical original) or `current` (the asset as the library shows it now)      | `current`                        | Export Unmodified Original or Export N Photos | originals, plus `-edited` copies  |
+| Kind (`current` only) | `original`, `jpeg`, `png`, `tiff`, `jxl`                                                       | `original`                       | JPEG, HEIC, TIFF, PNG                         | —                                 |
+| Quality (JPEG)        | low, medium, high, maximum                                                                     | high                             | Low to Maximum                                | —                                 |
+| Size (`current` only) | full; small, medium or large (640, 1280, 2048 px long edge); custom width, height or long edge | full                             | Small, Medium, Large, Full Size, Custom       | —                                 |
+| Colour profile        | keep, sRGB                                                                                     | keep                             | Colour Profile                                | —                                 |
+| Video                 | `original`                                                                                     | `original`                       | 480p to 4K                                    | originals                         |
+| Paired files          | together, still only                                                                           | together                         | originals: both files; renditions: still only | both files                        |
+| Stacks                | all members, primary only                                                                      | all members                      | —                                             | —                                 |
+| Hidden assets         | excluded, included                                                                             | excluded                         | —                                             | —                                 |
+| File names            | `original`, `title`, `sequential` (with prefix), `id`                                          | `original`                       | Use File Name, Use Title, Sequential          | original name                     |
+| Subfolders            | `none`, `album`, `date` (`YYYY/MM` or `YYYY-MM-DD`), `album/date`                              | `none`                           | None, by day or moment                        | album folders, `Photos from YYYY` |
+| Sidecars              | none, XMP, JSON, both                                                                          | none                             | Export IPTC as XMP                            | JSON beside each file             |
+| Metadata fields       | title and caption, keywords (labels), rating, people (regions)                                 | title, caption, keywords, rating | Title, Caption, Keywords                      | in the JSON                       |
+| Location              | strip, coarse (stated precision), full                                                         | coarse                           | Location Information on or off                | kept                              |
+| Container             | folder, `zip`, `tar`, `tgz`                                                                    | `zip` for more than one file     | folder                                        | `zip` or `tgz`                    |
+| Split size (archives) | none, 2, 4, 10, 50 GB                                                                          | 4 GB                             | —                                             | 1 to 50 GB parts                  |
+| Checksums manifest    | always                                                                                         | always                           | —                                             | —                                 |
 
 - **Version.** `original` writes the imported bytes unchanged, with their embedded metadata as imported. `current` applies the library's current state: the user's capture-time and location corrections, caption, labels and rating go into the sidecars, and a rendition (another kind or size) is encoded from the original. Capsule has no pixel edits today. When it gains them, `current` renders them and `original` stays byte-identical.
 - **Embedded metadata.** `original` cannot strip what the file itself carries, such as EXIF GPS or a camera serial, because it is byte-identical. The plan counts the files that embed location and the run warns before it starts. Stripping embedded metadata needs `current` with a rendition kind, whose output carries only the metadata the export writes. Rewriting an original's embedded metadata in place waits on Rawshift metadata writing.
@@ -161,15 +161,15 @@ The same core reads ZIP through `rc-zip`, so the Google Takeout importer reads T
 
 ## Failure Modes
 
-| Failure | Detected / contained by | Recovery |
-| --- | --- | --- |
-| Crash or kill mid-export | Job journal; temporary names | `capsule export resume`; loss bounded by one part |
-| Local original corrupt | Digest check during the write | The asset is skipped and reported; repair it from the server ([](/design/filesystem/maintenance/)) |
-| Remote original unreachable or wrong | Content-address check while staging | Skipped and reported; resume retries it |
-| Destination full | Sink write error | The run stops resumable; free space and resume |
-| A name a tool rejects | Sanitization at plan time | None needed |
-| Embedded location leaves with an original | Plan-time count and warning | Choose a rendition kind, or strip |
-| A reader that cannot read data descriptors on stored entries | Compatibility matrix ([](#validation)) | Use a central-directory reader; every mainstream one is |
+| Failure                                                      | Detected / contained by                | Recovery                                                                                           |
+| ------------------------------------------------------------ | -------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Crash or kill mid-export                                     | Job journal; temporary names           | `capsule export resume`; loss bounded by one part                                                  |
+| Local original corrupt                                       | Digest check during the write          | The asset is skipped and reported; repair it from the server ([](/design/filesystem/maintenance/)) |
+| Remote original unreachable or wrong                         | Content-address check while staging    | Skipped and reported; resume retries it                                                            |
+| Destination full                                             | Sink write error                       | The run stops resumable; free space and resume                                                     |
+| A name a tool rejects                                        | Sanitization at plan time              | None needed                                                                                        |
+| Embedded location leaves with an original                    | Plan-time count and warning            | Choose a rendition kind, or strip                                                                  |
+| A reader that cannot read data descriptors on stored entries | Compatibility matrix ([](#validation)) | Use a central-directory reader; every mainstream one is                                            |
 
 ## Known Gaps
 

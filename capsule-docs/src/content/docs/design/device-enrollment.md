@@ -6,7 +6,7 @@ audit: none
 
 Each device holds a DSK + DEK cross-signed into the user's device directory ([](/design/cryptography/keys/#device-directory)). Two ceremonies put a device there. Recovery after losing every device is cross-device recovery ([](/design/backup-recovery/#default-mechanisms)), not enrollment.
 
-**Trust split:** account-creation auth ([](/design/authentication/)) establishes *who owns the account* and confers no data access. Data authority is cryptographic: the master key and device keys verified against the directory.
+**Trust split:** account-creation auth ([](/design/authentication/)) establishes _who owns the account_ and confers no data access. Data authority is cryptographic: the master key and device keys verified against the directory.
 
 ## First-Device Enrollment
 
@@ -46,23 +46,23 @@ Precondition: device A is signed in and holds the master key.
 
 The server surface and the CLI path have shipped. The native add UI (QR, safety-code screens) is post-v1.
 
-Cross-device *recovery* reuses the channel and key-transfer steps but is substitutive (devices lost) rather than additive.
+Cross-device _recovery_ reuses the channel and key-transfer steps but is substitutive (devices lost) rather than additive.
 
 ## Failure Modes
 
-| Failure | Outcome |
-| --- | --- |
-| Abandoned mid-flow | Code expires; nothing persisted |
-| Safety codes differ | Abort |
-| Stolen session token | Cannot initiate (step 1) |
-| Counter store unreachable at redemption | Refused (`503`); B retries after `Retry-After`. Never admitted unbudgeted |
-| Fallback budget spent by a flood | The typed code waits for the next minute; scanning the QR still works |
-| Secure element refuses keygen | Fail with actionable error; no partial state |
-| Crash between registering and publishing | The persisted keys resume setup ("finishing setup") under the same anchor |
-| Crash before the type-back confirmation | Setup is unconfirmed: a new recovery secret is generated, and it replaces the pinned recovery key and any stored escrow without the time lock ([](#unconfirmed-setup)) |
-| Server unreachable at publish | Device keys valid locally; retry with backoff, "finishing setup" shown |
-| Never published | The account holds no data and is swept after its window ([](/design/authentication/#the-identity-anchor)); the address can register again |
-| Default-album creation fails | Account still valid; the album is re-derived and created lazily before first import |
+| Failure                                  | Outcome                                                                                                                                                                |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Abandoned mid-flow                       | Code expires; nothing persisted                                                                                                                                        |
+| Safety codes differ                      | Abort                                                                                                                                                                  |
+| Stolen session token                     | Cannot initiate (step 1)                                                                                                                                               |
+| Counter store unreachable at redemption  | Refused (`503`); B retries after `Retry-After`. Never admitted unbudgeted                                                                                              |
+| Fallback budget spent by a flood         | The typed code waits for the next minute; scanning the QR still works                                                                                                  |
+| Secure element refuses keygen            | Fail with actionable error; no partial state                                                                                                                           |
+| Crash between registering and publishing | The persisted keys resume setup ("finishing setup") under the same anchor                                                                                              |
+| Crash before the type-back confirmation  | Setup is unconfirmed: a new recovery secret is generated, and it replaces the pinned recovery key and any stored escrow without the time lock ([](#unconfirmed-setup)) |
+| Server unreachable at publish            | Device keys valid locally; retry with backoff, "finishing setup" shown                                                                                                 |
+| Never published                          | The account holds no data and is swept after its window ([](/design/authentication/#the-identity-anchor)); the address can register again                              |
+| Default-album creation fails             | Account still valid; the album is re-derived and created lazily before first import                                                                                    |
 
 ## Validation
 

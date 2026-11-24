@@ -8,29 +8,29 @@ The single source of truth for primitives: other docs link here and never restat
 
 ## Primitives Inventory
 
-| Primitive | Choice | Used for |
-| --- | --- | --- |
-| [](#cryptographic-hash) | SHA-256 | Content addressing, integrity |
-| [](#key-derivation) | HKDF-SHA512 | Per-file, per-blob, per-album keys |
-| [](#password-based-kdf) | Argon2id, device-tier parameters | Escrow and backup unwrap |
-| [](#bulk-aead) | AES-256-GCM (+ STREAM, [](/design/cryptography/encryption/#stream-construction)) | Asset and metadata ciphertext |
-| [](#mls-control-aead) | ChaCha20-Poly1305 | MLS's own messages |
-| [](#signature-scheme) | Hybrid Ed25519 + ML-DSA-65 | Identity, device, manifest, write tier |
-| [](#kem) | X-Wing (X25519 + ML-KEM-768) | MLS HPKE |
-| [](#mls-ciphersuite) | `MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519` (`0x004D`) | Group key management |
-| [](#randomness) | OS CSPRNG (`getrandom`) | All keys, salts, nonces |
-| [](/design/networking/#transport-security) | TLS 1.3, hybrid X25519+ML-KEM | Client–server, server–server |
+| Primitive                                  | Choice                                                                           | Used for                               |
+| ------------------------------------------ | -------------------------------------------------------------------------------- | -------------------------------------- |
+| [](#cryptographic-hash)                    | SHA-256                                                                          | Content addressing, integrity          |
+| [](#key-derivation)                        | HKDF-SHA512                                                                      | Per-file, per-blob, per-album keys     |
+| [](#password-based-kdf)                    | Argon2id, device-tier parameters                                                 | Escrow and backup unwrap               |
+| [](#bulk-aead)                             | AES-256-GCM (+ STREAM, [](/design/cryptography/encryption/#stream-construction)) | Asset and metadata ciphertext          |
+| [](#mls-control-aead)                      | ChaCha20-Poly1305                                                                | MLS's own messages                     |
+| [](#signature-scheme)                      | Hybrid Ed25519 + ML-DSA-65                                                       | Identity, device, manifest, write tier |
+| [](#kem)                                   | X-Wing (X25519 + ML-KEM-768)                                                     | MLS HPKE                               |
+| [](#mls-ciphersuite)                       | `MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519` (`0x004D`)                       | Group key management                   |
+| [](#randomness)                            | OS CSPRNG (`getrandom`)                                                          | All keys, salts, nonces                |
+| [](/design/networking/#transport-security) | TLS 1.3, hybrid X25519+ML-KEM                                                    | Client–server, server–server           |
 
 ## Versioning Identifiers
 
 Mismatches **fail closed**.
 
-| Identifier | Type | Owner | Carried in |
-| --- | --- | --- | --- |
-| `crypto_suite_id` | `u16` | this doc | every AssetManifest ([](/design/cryptography/provenance/#asset-manifest)), every blob header ([](/design/cryptography/encryption/#blob-header)), backup MANIFEST.cbor ([](/design/backup-recovery/)) |
-| blob `format_version` | `u8` | [](/design/cryptography/encryption/#blob-header) | every blob header |
-| `protocol_version` | `YYYY-MM-DD` | [](/design/versioning/) | every AssetManifest, every request (negotiation: [](/design/threat-model/validation/#protocol-and-capability-negotiation)), the album's MLS pin |
-| `sidecar_schema` | `u16` | [](/design/metadata/#sidecar-schema-v1) | CBOR sidecar field 0 |
+| Identifier            | Type         | Owner                                            | Carried in                                                                                                                                                                                           |
+| --------------------- | ------------ | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `crypto_suite_id`     | `u16`        | this doc                                         | every AssetManifest ([](/design/cryptography/provenance/#asset-manifest)), every blob header ([](/design/cryptography/encryption/#blob-header)), backup MANIFEST.cbor ([](/design/backup-recovery/)) |
+| blob `format_version` | `u8`         | [](/design/cryptography/encryption/#blob-header) | every blob header                                                                                                                                                                                    |
+| `protocol_version`    | `YYYY-MM-DD` | [](/design/versioning/)                          | every AssetManifest, every request (negotiation: [](/design/threat-model/validation/#protocol-and-capability-negotiation)), the album's MLS pin                                                      |
+| `sidecar_schema`      | `u16`        | [](/design/metadata/#sidecar-schema-v1)          | CBOR sidecar field 0                                                                                                                                                                                 |
 
 - `crypto_suite_id = 0x0001` is exactly the inventory above. Retiring a primitive adds a new suite id and never edits the existing row. Old suite ids stay verifiable and decryptable forever.
 - Suite ids are a Capsule namespace, unrelated to MLS ciphersuite codepoints.
@@ -53,14 +53,14 @@ Argon2id with a 32-byte random salt, for recovery and bootstrap only. Cost is ch
 
 The parameters arrive from places the unwrapping device does not control: the server serves the escrow and share-link wrapped secrets, and a link issuer mints a drop passphrase. Unchecked, a hostile blob declaring gigabytes of memory denies recovery by getting the app killed, with no signature or hash failing. So:
 
-| Parameter | Floor | Ceiling |
-| --- | --- | --- |
-| Memory `m` | 128 MiB (the `LowRam` tier) | 1 GiB |
-| Iterations `t` | 3 | 8 |
-| Parallelism `p` | 1 | 4 |
+| Parameter       | Floor                       | Ceiling |
+| --------------- | --------------------------- | ------- |
+| Memory `m`      | 128 MiB (the `LowRam` tier) | 1 GiB   |
+| Iterations `t`  | 3                           | 8       |
+| Parallelism `p` | 1                           | 4       |
 
 - **Wrap** refuses parameters below the floor or above the ceiling.
-- **Unwrap** checks the declared parameters against both bounds *before* running Argon2id and refuses out-of-bounds ones with a typed `params out of bounds` error, distinct from a wrong passphrase, so the user is never told to retype a passphrase that was right.
+- **Unwrap** checks the declared parameters against both bounds _before_ running Argon2id and refuses out-of-bounds ones with a typed `params out of bounds` error, distinct from a wrong passphrase, so the user is never told to retype a passphrase that was right.
 - The floor is consistency, not the brute-force defence: rewriting the declared cost of an existing blob only yields a wrong key, because the attacker cannot re-wrap a secret it does not hold. Brute-force resistance is fixed by the cost the honest writer chose.
 - Raising the ceiling is a release decision, made in this table; a writer never emits parameters an older reader in the supported window would refuse ([](/design/versioning/#update-policy)).
 

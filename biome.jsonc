@@ -1,6 +1,6 @@
 {
     "root": false,
-    "$schema": "https://biomejs.dev/schemas/2.5.6/schema.json",
+    "$schema": "https://biomejs.dev/schemas/2.6.8/schema.json",
     "assist": { "actions": { "source": { "organizeImports": "on" } } },
     "vcs": {
         "enabled": true,
@@ -26,6 +26,19 @@
     "css": {
         "parser": {
             "cssModules": true
+        }
+    },
+    // Biome 2.6 formats Markdown by default. Its parser leaves YAML frontmatter off by
+    // default and then reads it as a heading and a list, which drops keys such as
+    // `draft: true` from a docs page; parse it as frontmatter instead. Two-space indents
+    // match markdownlint's list indent (MD007) and the audit stamp the docs'
+    // `audit-page` script writes into frontmatter.
+    "markdown": {
+        "parser": {
+            "frontmatter": true
+        },
+        "formatter": {
+            "indentWidth": 2
         }
     },
     "linter": {
