@@ -1,7 +1,7 @@
 ---
 title: Visual Language
 description: The brand tokens every Capsule surface shares, how each platform adopts them, and the rules the docs site follows
-status: draft
+audit: none
 ---
 
 This doc owns Capsule's **brand tokens**: the accent, neutral ramp, type, radius and spacing scales
@@ -103,11 +103,22 @@ one is designed.
   is one even pane of tinted glass from its top edge to its bottom edge, the page blurred beneath
   it, so text scrolling under it fades uniformly rather than showing through at the edges. The bar
   is laid out by the window's width alone, so it is identical on every page, the front page
-  included, and a navigation in a browser with view transitions keeps it in place. The section
-  links need a wide window (72rem, where the table of contents also appears); narrower, the sidebar
-  carries the sections, and below 50rem the menu carries the section links and the switcher.
-  Splash pages such as the front page have no menu, so there the sections are reached through the
-  page's own links.
+  included, and a navigation in a browser with view transitions keeps it in place, the mobile menu
+  button with it. The section links take the widest of three forms that fits the free space
+  between the wordmark and the search field: the row as designed, the same row with tighter
+  spacing, or one pill beside the wordmark, named for the current section ("Sections" outside one)
+  and drawn like the version switcher, that opens the same links as a list. They change form only
+  when they would otherwise meet a neighbour, never at a fixed window width, and grow back only
+  with room to spare, so a window resting on a boundary does not flicker. Every change after the
+  page opens animates, unless the reader asks for reduced motion: the links narrow, then fold away into the pill as it slides to the
+  wordmark, and back. The pill is part of the bar, so every page has it, splash pages included. A pill rather than
+  a scrolling strip of tabs: it fits the bar's single row at any width, and a strip would need a
+  second row under the glass or hide sections off its edge. Below 50rem the switcher, GitHub
+  button and theme toggle move into the menu, or on a splash page, which has no menu, into the
+  section pill's list. On a translated route (`/ja/…`) every header, footer and front-page link
+  stays in that language, with the section labels translated, and a page with no translation
+  shows the English page with Starlight's fallback notice. The language picker sits in the bar on
+  wide windows and in the menu, or the section pill's list on a splash page, on narrow ones.
 - **Page transitions.** Moving between pages animates the content, never the chrome: the header
   holds still, the sidebar crossfades so only its current-page pill changes, and the content and
   table of contents fade out as the new page's fade in, the content leaving from where the reader
@@ -119,10 +130,13 @@ one is designed.
   never competes with text. It shows behind the content and the table of contents; the sidebar
   covers it, the header's glass blurs it away, and it is not printed. It stays put while a page
   scrolls; a page transition carries it with the content, so it settles with the new page.
-- **Status badges.** Every authored page carries a review `status`
-  ([](/design/principles/#review-status)). The page title always shows
-  it. The sidebar shows it only for a page that is not `stable`, so the navigation lists exactly what
-  still awaits review.
+- **Status badges.** Every authored page carries an `audit` pin, and its status is computed from it
+  ([](/design/principles/#audit-status)). A splash page such as the support page is the exception: it
+  has no sidebar and may carry none. The page title always shows the status as a badge: Audited
+  (success), Changed since audit (caution) or Unaudited (caution). Under the title, a stamped page
+  names the commit it was audited at, linked to that commit, and the date. The sidebar badges only
+  pages that are not audited, as Changed or Unaudited, so the navigation lists exactly what still
+  needs an audit.
 - **Sidebar.** The same surface as the page, divided from it by a hairline; the current page is an
   accent-tinted pill. Where the table of contents appears beside it, the two columns are the same
   width and the content is centred between them, so the text has equal space on each side at every
@@ -131,8 +145,8 @@ one is designed.
   a one-line status, the differentiators with a link named for the doc behind each, the
   table-stakes tier, why Capsule is built this way, and where to start.
 - **Footer.** On every page, centred: links to the documentation, the blog (once it is live), the
-  roadmap, discussions and the source, then the copyright holder, the licence line and the commit
-  the site was built from, linked to that commit. On a page shorter than the window it rests on
+  roadmap, discussions, the downloads page, the support page and the source, then the copyright
+  holder, the licence line and the commit the site was built from, linked to that commit. On a page shorter than the window it rests on
   the window's bottom edge; on a longer one it follows the content.
 - **Generated reference.** A generated page says so under its title: the surface (REST API, CLI,
   an SDK), a dashed "Generated" tag and its source, and for REST a download of the OpenAPI
@@ -143,13 +157,17 @@ one is designed.
   is laid out the way its readers' own tool lays it out: DocC for Swift (kind eyebrow, abstract,
   Declaration, Overview, Topics), Dokka for Kotlin (name beside signature and KDoc), TypeDoc for
   the browser module (kind chips, Parameters, Returns, where it is defined) and a man page for the
-  CLI (Synopsis, Description, Options). A generated page carries no review status.
+  CLI (Synopsis, Description, Options). A generated page carries no audit status.
+- **Code blocks.** Every code block names its language in a small hairline pill in its top
+  corner: Kotlin, Shell, JSON, and an unlisted language as its fence writes it. Plain text, raw
+  ANSI output and diagrams carry none. The pill is never selected or copied with the code; it
+  gives way to the copy button on hover, and sits beside it where the button always shows.
 - **The blog goes live with its first post.** Until a post is published the production site has no
   blog route, header link, RSS feed, sitemap entry or footer link, so no reader lands on an empty
   index.
 - **Blog.** Announcements, release notes and design write-ups. A post links to the design doc it
   discusses rather than restating its contract. `draft: true` keeps a post unpublished; a published
-  post carries `status: stable`, so it never shows a Draft badge. A published post also carries a
+  post must compute to Audited, so an edit after publishing needs a fresh stamp. A published post also carries a
   title, a description of 50 to 160 characters, a date, at least one configured author and one tag,
   and an `<!-- excerpt -->` marker that ends its teaser on the index. A post's header shows its
   date, reading time and authors with their pictures, and its body is set to a reading measure.
@@ -186,16 +204,22 @@ one is designed.
 
 ## Validation
 
-- `scripts/page-status.test.mjs` fails on any docs page without a `status`, and on a published blog
-  post whose status is not `stable` or that breaks the post contract above
+- `scripts/page-audit.test.mjs` fails on any docs page without a well-formed `audit`, on a page still
+  setting the retired `status`, and on a published blog post that does not compute to Audited or
+  that breaks the post contract above
   (`src/lib/blog-posts.test.mjs` proves the contract check itself).
 - `src/lib/site-nav.test.mjs` proves the header and footer links, their order, the Blog link's
   dependence on the blog being live, and that every internal link resolves to a page.
+- `src/lib/nav-fit.test.mjs` proves which form the section links take for a given free space,
+  the margin before they grow back, and that the header script sets the form before the first
+  frame and enables animation only after it.
 - `src/lib/version-menu.test.mjs` proves what the version switcher lists, where its keyboard focus
   moves and which side of the button it opens on.
 - `src/lib/theme-cycle.test.mjs` proves the toggle's cycle and that it stores what Starlight reads;
   `src/lib/build-commit.test.mjs` proves which commit the footer names.
 - `src/lib/sidebar-status.test.mjs` proves which sidebar entries carry a badge.
+- `src/lib/code-language.test.mjs` proves each code block's language name, which blocks carry
+  none, and that the tag lands once in the block's frame.
 - `src/lib/remark-link-titles.test.mjs`, `remark-library-links.test.mjs` and
   `remark-mermaid.test.mjs` prove the link labels and their parts, the library badges and the
   diagram compiler; the build fails on an empty link whose target is missing, on a link to a docs

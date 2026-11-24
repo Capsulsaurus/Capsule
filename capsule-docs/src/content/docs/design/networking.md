@@ -1,10 +1,21 @@
 ---
 title: Network Resilience
-description: The HTTP transport contract, connection classes and the path snapshot, server advice, retry policy classes, and the adverse-network posture every transfer surface builds on
-status: draft
+description: The one generated HTTP stack, the HTTP transport contract, content coding, connection classes and the path snapshot, per-request admission on metered paths, server advice, retry policy classes, and the adverse-network posture every transfer surface builds on
+audit: none
 ---
 
-This page owns the primitives every transfer surface consumes. Protocol mechanics stay with [](/design/transfer/), [](/design/sync/), [](/design/peering/) and [](/design/federation/).
+This page owns the primitives every transfer surface consumes, and the one HTTP stack every Capsule request leaves through. Protocol mechanics stay with [](/design/transfer/), [](/design/sync/), [](/design/peering/) and [](/design/federation/).
+
+## One HTTP Stack
+
+Every request Capsule sends to a Capsule server is an operation of the committed OpenAPI document ([](/design/api-surfaces/)), built and executed by the client Spargen generates from it. This holds for the SDK every native client and the CLI reach, and for the server's own federation pull. A hand-written request for an operation the document declares is a second parser for a contract that already exists. It drifts from that contract by construction, so it is a defect even when it works.
+
+- **Generated calls only.** Code outside the generated client MUST NOT build a URL, set a header or decode a body for a declared operation. A plain JSON operation the generator already lowers has no exemption.
+- **The backend is Spargen's concern.** Spargen's runtime executes requests through a swappable backend: reqwest today, possibly euriops later. Capsule code MUST NOT name the backend's types outside the one adapter that constructs it. Everything Capsule adds to a request is a layer at Spargen's transport seam, typed in the `http` crate's request and response, so it survives a backend swap. That covers protocol negotiation ([](/design/versioning/#protocol-version-source)), token refresh, [](#admission-and-priority), the HTTP/3 race ([](#http-transport)) and stall bounds.
+- **An exemption is a generator gap with an issue.** A surface Spargen cannot yet express stays hand-written only while an upstream request for the missing capability is open. The exemption ends in the release that closes the request. The open exemptions are listed in [](#known-gaps).
+- **What the generator must provide.** The exemptions close on five capabilities, each requested upstream: `application/cbor` byte bodies; request and response bodies streamed with backpressure and cancellation; `Range` requests with a typed `206` and `416`; per-request context that a caller sets and a transport layer reads (the admission class, the stall bounds); and transport-supplied headers, so a header the transport always sets is not also a per-call argument. Two more are design requests: a resumable-session primitive (create, `HEAD`, a write at an offset, the committed set) for the upload protocol to be expressed over, and a pre-connect socket hook on the backend for [](#packet-marking).
+- **Bodies stream through Rust.** A blob's ciphertext is decrypted as it arrives off the generated client's response body, so the decrypting reader is the backpressure and no layer buffers a whole blob ([](/design/transfer/download/#resumption-and-verification)).
+- **Outside the rule.** The LAN peering channel is the one Capsule surface that is not an HTTP API. It has its own framing and its own wire spec ([](/design/peering/)). A call to an OIDC provider (its discovery document and keys) is not a Capsule operation. It and the server's federation pull ride the same rustls policy ([](#transport-security)). Map tiles are fetched by the platform's map SDK over the platform's own TLS, outside this stack ([](/design/places/)).
 
 ## HTTP Transport
 
@@ -22,6 +33,20 @@ Every Capsule operation is a plain HTTP request and response, and means the same
   - An advertisement is believed only for an `https` origin, and the alternative endpoint must present a certificate valid for the origin.
 - **Parallelism is connections, not streams.** On a lossy or high-latency link a single TCP connection's throughput is bounded by its round trip and loss rate, and HTTP/2 multiplexes every stream onto that one window. Bulk transfers therefore SHOULD spread across several connections, within the in-flight windows ([](/design/transfer/upload/#queueing-across-servers)), where the platform's HTTP stack allows it. Correctness never depends on it.
 - **Windows cover the bandwidth-delay product.** Flow-control and socket buffers (on QUIC, the stream and connection windows and the UDP socket buffers) are sized to the target bandwidth times round trip, within a fixed memory budget. The sender owns congestion control (the client on upload, the server on download), and neither side steers the other's controller.
+- **Bulk and interactive traffic use separate pools.** Each origin has an interactive connection pool and a bulk one. A queue of chunk uploads never holds the connection a login or a visible thumbnail is waiting for. Only bulk sockets are ever marked ([](#packet-marking)).
+- **Every decoded body is bounded.** The client caps each response body, after content decoding, at a limit set per operation, before it parses a byte. A body past the cap is a malformed response and is never retried as is. A client does not trust a server's sizes ([](/design/threat-model/)). An unbounded body, or a small encoded body that inflates, would otherwise exhaust a phone's memory.
+
+## Compression
+
+The server decides what is compressed, per operation. A proxy never decides. [ADR-0019](https://github.com/Capsulsaurus/Capsule/blob/master/adr/0019-the-server-compresses-an-allowlist-of-json-and-cbor-responses.md) records the trade.
+
+- **An explicit allowlist.** The server mounts Kynos's response compression only on the operations it lists by operation id. Each one returns JSON or CBOR, is a list or a feed, and is compressed only above a size threshold. The sync feed, the federation pull listings, the receipt and activity logs, the device list and the public discovery records qualify. An operation absent from the list is sent with identity coding, so a new operation is uncompressed until someone decides otherwise.
+- **Never ciphertext.** `application/octet-stream` is never compressed. Sealed bytes do not compress, and a ranged response's byte offsets name the identity octets.
+- **Never a secret beside attacker input (BREACH).** An operation whose response carries a token, a code, a capability, a TOTP secret or wrapped key material is never on the list, whatever its size. That excludes the `auth`, `totp`, `oidc`, `enrollment` and `escrow` tags, capability minting and refresh, and share and drop provisioning. Compressing such a body would let a party that influences the rest of it read the secret off the length.
+- **Codings.** SDK clients send `Accept-Encoding: zstd, gzip`, and the server prefers zstd. A browser sets `Accept-Encoding` itself, so the web client takes what the browser negotiates and still applies the decoded-body cap. No client compresses a request body. Upload bodies are ciphertext, and no JSON request is large enough to matter.
+- **Caches see the variation.** Kynos's compression layer sends `Vary: Accept-Encoding` on every response it covers, encoded or not.
+- **Proxies are pass-through.** A reverse proxy in front of Capsule MUST NOT add, strip or change a content coding. A proxy that compresses on its own would compress the excluded operations too. [](/guides/self-hosting/) owns the proxy configuration.
+- **Bounded on decode.** The decoded-body cap above applies to the decoded length, so a compressed response cannot become a decompression bomb.
 
 ## Transport Security
 
@@ -48,6 +73,9 @@ Consumers: [](/design/sync/#synchronization-criteria), [](/design/transfer/uploa
 
 A platform shell (or the CLI's flags) reports one normalized sample of the path: **cost** (unmetered, metered, constrained), **reachability**, **interface** (wired, Wi-Fi, cellular, other), **power** (external, battery, low-power), **thermal** state (nominal, fair, serious, critical) and **execution** (foreground, or background with a deadline). The SDK stamps it with a **path generation**.
 
+- **Native shells MUST report the path.** Every native client feeds `FfiSession::set_path` from the OS listeners: `NWPathMonitor` (`isExpensive`, `isConstrained`), thermal-state and low-power notifications on Apple; `ConnectivityManager` network callbacks (`NET_CAPABILITY_NOT_METERED`, Data Saver), `PowerManager` and thermal status on Android. It reports once when a session opens, before any transfer, and again whenever a listener fires. The SDK never probes the network itself.
+- **An unreported path is metered.** Until the shell's first report, a session plans as reachable and `metered`, so a shell that forgets to report loses bulk transfer instead of spending a user's data. Only a desktop shell, or the CLI, may report `unmetered` without an OS signal.
+- **One source of the class.** The connection class every consumer reads (cache budget, staged tiers, admission) derives from this snapshot alone.
 - **The generation advances only when reachability, interface or cost changes.** Power, thermal state and execution change the plan, never the path.
 - **The transfer plan is a pure function** of the snapshot, the link behaviour the `adverse` detector observed, the server's advice ([](#server-advice)), and the client's compiled window bounds. The server is never in the loop; its advice can only lower a window.
 - **Plan rules, in precedence order.**
@@ -55,7 +83,27 @@ A platform shell (or the CLI's flags) reports one normalized sample of the path:
   2. Anything but an unmetered, well-behaved link holds the bulk tiers back, as do low-power mode, a serious thermal state, and a background deadline under one minute. The index tier still runs.
   3. Low-power mode and a serious thermal state narrow a lane to one session.
   4. A user's force-sync consent lifts a hold on cost or link behaviour, never one on the path, power or heat.
-- **A new generation drops what belonged to the old path**: pooled connections are dropped, the `adverse` detector is reset, in-flight work the new plan forbids is cancelled within one scheduling tick, and the work re-plans. A plan that narrows on the same path (a critical thermal state, low-power mode) cancels the same way. Cancelled work resumes from server truth, so a cancel costs at most the bytes in flight.
+- **A new generation drops what belonged to the old path**: pooled connections are dropped, the `adverse` detector is reset, and the work re-plans. Bulk work the new plan forbids pauses at its next chunk boundary: no new upload chunk or `Range` window starts. A request already in flight is cancelled within one scheduling tick if the new path is metered, constrained or gone, and is otherwise allowed to finish. A plan that narrows on the same path (a critical thermal state, low-power mode) pauses the same way. Paused and cancelled work resumes from server truth, so a pause costs at most the bytes in flight.
+
+## Admission and Priority
+
+Whether a request may leave, and in what order, is decided per request, at Spargen's transport seam, before a byte is sent. One layer there reads the request's **class**, the current [](#path-snapshot) and the user's policy. It answers one of four ways: **send**; **hold** until the path changes; **ask** the user; or **refuse**.
+
+- **Every request has a class.** An interactive request is one a person is waiting on: auth, a sync feed page, a control operation, a single metadata record. Bulk requests carry the transfer scheduler's priority class (visible, near-view, user-requested original, prefetch, sync, backup), which the scheduler owns with its ordering and viewport rules ([](/design/transfer/download/#transfer-scheduler)). The SDK maps every generated operation to a default class, and a test fails on an operation that has none. An operation that serves several classes, like a blob read, defaults to its most restrictive one, and the caller raises it.
+- **Cancellation is per request.** The scheduler cancels a request when its reason goes (a cell scrolls away, focus moves). The seam drops its body stream at once, and resume reads server truth.
+- **The policy is per class: allow, ask or deny.** It is set per connection class. On `unmetered` every class is allowed. On `adverse` the bulk classes are held by the plan rules above, and on `offline` every class is held, whatever the policy says. The defaults for the two cost classes:
+
+| Class | `metered` | `constrained` |
+| --- | --- | --- |
+| interactive, and index-tier records ([](/design/transfer/upload/#upload-tiering-staged-uploads)) | allow | allow |
+| visible, near-view (thumbnail and preview rungs) | allow | allow, thumbnail rung only |
+| user-requested original | ask | ask |
+| prefetch, sync (bulk reconciliation), backup | deny | deny |
+
+- **Ask raises `ApprovalRequired`.** The event names the class, the item count, the estimated bytes and the connection class. It goes out once per user action or batch, never once per request. Native code renders it as a platform prompt ([](/design/clients/#metered-prompt)). The answer is *once*, *always on this kind of network* (which changes the user's policy) or *not now* (which holds the work). A consent covers that batch on the current path generation only, and a new generation voids it. In the background, *ask* is *hold*: no prompt is raised from the background.
+- **Deny is not silent.** Held and refused bulk work is counted in the diagnostics snapshot ([](/development/performance/#typed-stage-events-and-the-diagnostics-snapshot)), and a client shows it as waiting for Wi-Fi.
+- **Force sync is consent.** The user's force-sync ([](/design/sync/#notifications)) answers *once* for every bulk class on the current generation.
+- **The layer belongs to the SDK.** Admission sits at the transport seam rather than in each caller, so a hand-written path cannot skip it, and a backend swap keeps it.
 
 ## Server Advice
 
@@ -92,5 +140,27 @@ No correctness or throughput property depends on marking: most access networks s
 
 - **Bulk transfers are marked Lower Effort** (RFC 8622, DSCP 1): `IP_TOS` on a socket carrying IPv4, `IPV6_TCLASS` on one carrying IPv6, set on a socket the SDK holds before its first byte. The peering channel, which carries hand-offs and sync artifacts, is marked on both ends.
 - **Marking is best effort.** A platform that refuses the option, or exposes no setter for the socket's family, leaves the socket unmarked, and the transfer proceeds unchanged.
-- **Interactive traffic and the server stay unmarked.** Marking may only make Capsule's bulk bytes yield; it never slows a request a person is waiting on. A server-side mark would apply to every accepted connection, interactive ones included, so the server marks nothing.
-- **A socket the HTTP stack keeps out of reach stays unmarked.** The SDK's HTTP client dials its own sockets and exposes no hook to them, so HTTP uploads carry the default class until that stack exposes one; the SDK does not reimplement the HTTP connector to reach it.
+- **Interactive traffic and the server stay unmarked.** Marking may only make Capsule's bulk bytes yield; it never slows a request a person is waiting on. The server marks nothing, for two reasons. A server-side mark would apply to every accepted connection, interactive ones included. And past the LAN, transit and access networks bleach the field, so a mark set at a data centre would reach no network that honours it. Marking is a client-side, LAN-side tool only.
+- **A socket the HTTP stack keeps out of reach stays unmarked.** The backend under Spargen's runtime dials its own sockets and exposes no hook to them. HTTP uploads therefore carry the default class until the backend offers a pre-connect socket hook ([](#one-http-stack)). The mark then goes on the bulk pool's sockets only ([](#http-transport)). The SDK does not reimplement the HTTP connector to reach the socket, because that connector is what supplies Happy Eyeballs at dial.
+
+## Known Gaps
+
+- **No native shell reports the path.** Neither app calls `FfiSession::set_path`, and a session starts from the desktop default, so phones plan every transfer as `unmetered` on cellular. The unreported-is-metered default is not implemented either.
+- **Two class sources.** The cache budget samples its own connection-class port (`capsule-sdk::cache_budget`) beside the session's path monitor (`capsule-sdk::net::path`).
+- **No admission layer.** Classes, the allow/ask/deny policy, `ApprovalRequired` and the two connection pools do not exist. The reconciliation gate refuses even metadata-only sync off `unmetered`, against the defaults table.
+- **Hand-written wire.**
+  - The four `application/cbor` operations are omitted from generation (`capsule-sdk/build.rs`), waiting on the generator's CBOR byte bodies.
+  - The chunked upload protocol and its session listing are hand-written (`capsule-sdk::upload`), as is the ranged blob read (`capsule-sdk::fetch`), which buffers each window whole.
+  - Album provisioning (`capsule-sdk::albums`) and storage verification (`capsule-sdk::verify`) are hand-written JSON calls with no exemption.
+  - The SDK names reqwest well beyond the backend adapter: negotiation, refresh, the HTTP/3 router and every hand-written path.
+  - The web client calls the API with hand-written `fetch` (`capsule-web/src/lib/api.ts`) rather than the generated client built for wasm.
+- **Nothing is compressed.** Neither the server's Kynos features nor the SDK's reqwest features enable a content coding. No response body is capped after decoding.
+
+## Validation
+
+- **Generated-only (unit).** A test fails on a request built outside the generated client for an operation the document declares, other than a listed exemption.
+- **Admission (unit).** Every generated operation maps to a class. Each row of the defaults table yields its outcome on each connection class. A new path generation voids a consent. *Ask* in the background holds and raises nothing.
+- **Unreported path (unit).** A session that has had no report plans as `metered`.
+- **Path feeding (smoke, per platform).** A simulated switch from Wi-Fi to cellular reaches `set_path`, and the next chunk is held.
+- **Compression allowlist (unit).** Every allowlisted operation is JSON or CBOR and carries no excluded tag. Every other operation's response has no `Content-Encoding`.
+- **Decode cap (unit).** A gzip or zstd bomb is refused at the cap without allocating past it.

@@ -22,3 +22,4 @@ Keep current:
 - `capsule-cli/cli-surface.json` (`mise run cli-surface`) and the hand-written [CLI reference overview](../../capsule-docs/src/content/docs/reference/cli.md).
 - [Getting started](../../capsule-docs/src/content/docs/guides/getting-started.md) and the [User guide](../../capsule-docs/src/content/docs/guides/user-guide.md) — any command or output a user follows.
 - [Google Photos migration guide](../../capsule-docs/src/content/docs/guides/google-photos-migration.md) — the takeout import command (`tests/takeout_import.rs`).
+- [Troubleshooting](../../capsule-docs/src/content/docs/guides/troubleshooting.md) — the log filter and destinations (`main.rs`, `tui/log.rs`), `capsule status`, and the recovery commands it names (`push`, `verify`, `repair`, `trash restore`).

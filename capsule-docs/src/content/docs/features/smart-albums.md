@@ -1,7 +1,7 @@
 ---
 title: Smart Albums
 description: Albums defined by a query rather than a membership list
-status: draft
+audit: none
 ---
 
 A **smart album** is a saved query. Its contents are whatever currently matches, so nothing is
@@ -15,5 +15,5 @@ The grammar and merge rules are owned by [](/design/organization/#system--smart-
 ## The kinds that depend on machine learning
 
 Albums per person, trip, pet or scene are predicates over on-device model output
-([](/design/ai/)). Model choice is bounded by the weakest supported device, so every device
+([](/design/ai/)). Core-tier model choice is bounded by the weakest supported device, so every device
 organizes a library the same way.

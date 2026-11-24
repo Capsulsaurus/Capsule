@@ -1,7 +1,7 @@
 ---
 title: Client Filesystem
 description: How clients lay out a library on disk — desktop, mobile, local index, and space recovery
-status: draft
+audit: none
 ---
 
 Clients hold keys, so a client stores plaintext. Depending on the sync scope ([](/design/sync/#synchronization-scope)), a library routinely holds assets whose original is server-only, so the layout represents an asset with or without its original. The layout is a contract: rebuild assumes exactly these names. [](/design/local-gallery/) owns the offline-first requirements it serves.
@@ -32,6 +32,8 @@ Clients hold keys, so a client stores plaintext. Depending on the sync scope ([]
 ## Mobile Clients
 
 Android and iOS use the app's private sandbox with the same logical model. Rebuildable derivatives MUST NOT go in OS-managed cache locations: the OS evicts indiscriminately, and an expensive-to-regenerate thumbnail is not disposable.
+
+The library root is **excluded from the OS's own cloud backup and device transfer**, on every platform and API level, by the mechanisms in [](/design/platform-integrations/#the-plaintext-boundary). It holds plaintext originals and sidecars; recovery is Capsule's own ([](/design/backup-recovery/)).
 
 ## Local Index Staleness
 
@@ -67,12 +69,23 @@ The base budget is a user setting (default 2 GiB, `capsule cache budget --set`);
 
 The client surfaces the largest consumers and lets the user delete selectively, pinned content included. It never touches canonical `media/` files, and releasing a device-owned original is gated as above.
 
+**Free Up Space** releases device copies of photos the server already holds, in bulk:
+
+- **Filters.** Captured before a cutoff date; keep chosen device albums, with messaging-app albums kept by default; keep favourites; photos, videos or both.
+- **Review.** A screen lists every candidate and the total bytes it reclaims before anything happens. Candidates that fail the verify-before-destroy gate ([](/design/transfer/durability/#verify-before-destroy)) are listed as kept, with the reason, never released.
+- **Release through the OS.** A copy in the system photo library goes to the OS trash ([PHAssetChangeRequest](https://developer.apple.com/documentation/photokit/phassetchangerequest) deletion on iOS, [`MediaStore.createTrashRequest`](https://developer.android.com/reference/android/provider/MediaStore) on Android 11+), so the OS's own recovery window still applies. A copy in the Capsule library becomes a server-only asset as above.
+- **Never by surprise.** Free Up Space runs only when the user confirms the review; no schedule or rule starts it.
+
+## Known Gaps
+
+- Free Up Space is not implemented: there are no filters, no review screen and no OS-trash hand-off.
+
 ## Validation
 
 - **Init/open round-trip (unit).** Directories and `version`/`config` present; re-open is idempotent.
 - **Date bucketing (unit).** Asset lands in `media/{YYYY}/{YYYY-MM}/`; unexplained drift triggers repair.
 - **Lock contention (smoke).** A second process is refused with a structured error.
-- **Sandbox placement (smoke, per platform).** Library in app-private storage; survives cold start.
+- **Sandbox placement (smoke, per platform).** Library in app-private storage; survives cold start; the root carries the platform's exclude-from-backup marking.
 - **Index rebuild (smoke).** Drop `library.sqlite`; rebuild; every query over sidecar facts matches. Index-only state (cache bookkeeping, upload guards, importer-formed stack placement) is not expected back.
 - **Eviction (unit).** LRU order, tier order at equal recency, recency promotion, pin exemption; no canonical file touched; metadata tier never reclaimed.
 - **Connection-class budget (unit).** Each class yields its budget and bulk deferral; a class change mid-session re-plans without evicting pinned or device-owned originals.

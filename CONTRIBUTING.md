@@ -47,6 +47,7 @@ mise run check-docs-truth  # every name the docs claim resolves in the tree
 mise run check-kotlin      # ktlint + detekt
 mise run check-swift       # format, lint, unit tests, iPhone UI sweep (macOS only)
 mise run check-md          # markdownlint
+mise run lint-check-shell  # shellcheck over the shell scripts, actionlint over the workflows
 ```
 
 The one CI job with no local entrypoint is `rust-cross`: it cross-compiles for Android,

@@ -1,14 +1,14 @@
 ---
 title: Validation Invariants
 description: Server and client refuse-by-default checklists; protocol handshake; idempotency; atomicity
-status: draft
+audit: none
 ---
 
 Refuse-by-default checks every receiver runs before persisting a write, against every client class ([](/design/threat-model/#client-class-taxonomy)).
 
 ## Server-Side Validation Invariants
 
-Key-free **structural** checks. This is the canonical list, and its numbers are stable and cited elsewhere. Request and response shapes per endpoint are in the generated reference ([](/reference/api/upload/), [](/reference/api/albums/), [](/reference/api/drops/), [](/reference/api/federation/)). Every rejection carries an `error.*` code ([](/design/i18n/#server-error-codes); mapping in [](/reference/api/conventions/#errors)) and is logged.
+Key-free **structural** checks. This is the canonical list, and its numbers are stable and cited elsewhere: a new invariant takes the next free number and sits in the section of the surface it guards. Request and response shapes per endpoint are in the generated reference ([](/reference/api/upload/), [](/reference/api/albums/), [](/reference/api/drops/), [](/reference/api/federation/)). Every rejection carries an `error.*` code ([](/design/i18n/#server-error-codes); mapping in [](/reference/api/conventions/#errors)) and is logged.
 
 ### On `POST /v1/upload` (session creation)
 
@@ -18,7 +18,7 @@ Key-free **structural** checks. This is the canonical list, and its numbers are 
 - **4.** `size` ∈ (0, `max_file_size`] → else `400`/`413`.
 - **5.** `content_type` ∈ the closed enum for this protocol version → else `400`.
 - **6.** `album_id` exists, caller has write capability, album's pinned `protocol_version` = request's → else `403`.
-- **7.** `created_by_device` is in the user's device directory with `added_at` before `timestamp` → else `403`.
+- **7.** `created_by_device` is listed and not revoked in the uploader's device directory **version in force when the server receives the request** → else `403`. No `timestamp` is compared: a self-asserted time cannot prove when a device was enrolled, and a backdated one must buy nothing. An account with no published directory has no device and is refused. Re-run at finalization (15), so a device revoked in between is refused; a rebuild re-checks against the version in force at the manifest's ledger position ([](/design/filesystem/server/#rebuild)).
 - **8.** `timestamp` within the gross-drift bound ([](/design/threat-model/schema-rules/#timestamp-grammar)), which is not an authorization control → else `400`.
 
 ### On each `PATCH /v1/upload/{id}` chunk
@@ -31,8 +31,9 @@ Key-free **structural** checks. This is the canonical list, and its numbers are 
 ### At finalization
 
 - **13.** Committed set = `[0, size)`, the claim's precondition.
-- **14.** Recomputed ciphertext hash = declared `hash` → else `FailedProcessing`.
+- **14.** Recomputed ciphertext hash = declared `hash` → else `FailedProcessing`. The server computes it with the same `capsule_core` hasher the client uses, so this check does not catch a hasher bug both share ([](/design/threat-model/risks/)).
 - **15.** 1–8 re-run inside the finalization transaction.
+- **36.** Each blob's header agrees with the signed manifest that names it, checked without a key: known `magic` and `format_version`, reserved bytes zero, `suite_id` = `crypto_suite_id`, `key_epoch` = `0` when `key_mode` is `wrapped` and `amk_version` otherwise, the STREAM nonce prefix = `nonce_prefix`, and `commitment` = the manifest's mirrored commitment ([](/design/cryptography/encryption/#header-and-manifest-agreement)) → else `FailedProcessing` with `error.upload.envelope_rejected`, nothing committed. The address already matched, so a disagreement is the signer's own inconsistency.
 
 ### In the index critical section (every manifest write, upload or lifecycle)
 
@@ -45,7 +46,7 @@ Enforced inside the critical section that mints the sequence number, for lifecyc
 ### On federation pull (server-to-server)
 
 - **19.** Capability verifies, unexpired, `jti` unrevoked (≤ 15 min cache), and recorded here for the member's grant epoch → else `401`/`403`.
-- **20.** 1–18 and 25 re-applied to every pulled entry, each as strict as the compacted feed lets a receiver check it. There are no inbound federated writes yet. Where the feed cannot show what the write-time rule reads, the pull applies it as follows:
+- **20.** 1–18, 25 and 36 re-applied to every pulled entry (36 needs no key, and the pull worker caches pulled blobs), each as strict as the compacted feed lets a receiver check it. There are no inbound federated writes yet. Where the feed cannot show what the write-time rule reads, the pull applies it as follows:
   - **7** is left to the receiving client, which holds the device directory a capability does not reach.
   - **17** refuses a manifest behind the held head and a second `create`. The feed serves only an asset's current manifest, so a pull cannot require `prior_provenance_hash` to equal the held head.
   - **18** holds **per asset**: an asset's `amk_version` never regresses along its own chain. The feed re-mints an asset's position without a new record and replays from zero after a restart, so an honest feed serves an older epoch's record after a newer one. The receiving client checks the epoch against the MLS commit chain.
@@ -60,7 +61,7 @@ Enforced inside the critical section that mints the sequence number, for lifecyc
 
 ### On `PUT /v1/albums/{album_id}/roster` (album roster publish)
 
-- **33.** Canonical, bounded CBOR naming this album, no duplicates, owner excluded (`400`); caller owns the album (`404`); `attester_sig` under a non-revoked caller device (`403`); `roster_version` strictly greater than held or an identical replay, `amk_epoch` non-regressing (`409`); at most 16 above held, so membership cannot be frozen (`400`). Omitted members are marked revoked, never deleted. Owner: [](/design/authorization/).
+- **35.** Canonical, bounded CBOR naming this album, no duplicates, owner excluded (`400`); caller owns the album (`404`); `attester_sig` under a non-revoked caller device (`403`); `roster_version` strictly greater than held or an identical replay, `amk_epoch` non-regressing (`409`); at most 16 above held, so membership cannot be frozen (`400`). Omitted members are marked revoked, never deleted. Owner: [](/design/authorization/).
 
 ### On any write whose bundle carries a metadata blob
 
@@ -76,11 +77,15 @@ A drop ([](/design/web-upload/#security-contract)) has no manifest, so these rep
 - **29.** Owner quota admits the declared size at session creation ([](/design/quota/#enforcement-points)) → else `403`.
 - **30.** `DropDescriptor` well-formed, `kem_ct` length matches the suite; **no** album, `amk_version`, manifest, or provenance field → else `400`.
 - **31.** Rate-limited per `{opaque_id}` and per IP → else `429`.
-- **32.** Adoption: the `create` manifest passes 1–8, 16–18, 25; references a blob in **the caller's own** inbox; `key_mode` closed. Inbox→album promotion and inbox-row delete are one transaction → else `400`/`403`/`409`, nothing written.
+- **32.** Adoption: the `create` manifest passes 1–8, 16–18, 25 and 36 (the drop's blob header against the adopter's manifest, so `key_epoch` is `0`); references a blob in **the caller's own** inbox; `key_mode` closed. Inbox→album promotion and inbox-row delete are one transaction → else `400`/`403`/`409`, nothing written.
+
+### On `POST /v1/auth/register` (password account creation)
+
+- **37.** The request carries the User IK public key and an IK signature over a domain-separated message naming the address and this server's origin, and the signature verifies → else `400`, nothing created. The IK is pinned as the account's identity anchor in the same transaction that creates the account, so no later credential can pin another ([](/design/authentication/#the-identity-anchor)). Every later directory publish verifies under it (23).
 
 ### On custody receipts and signed attestations
 
-- **33.** A `CustodyReceipt` ([](/design/transfer/durability/#custody-receipts)) is signed and persisted only inside the finalization transaction (both or neither); `receipt_seq` strictly monotonic, `prior_receipt_hash` chained, never overwritten. Before `Completed` → `409`.
+- **33.** A `CustodyReceipt` ([](/design/transfer/durability/#custody-receipts)) is signed and persisted only inside the finalization transaction (both or neither); `receipt_seq` strictly monotonic and `prior_receipt_hash` chained within the owner's chain, never overwritten. Before `Completed` → `409`.
 - **34.** A `StorageAttestation` ([](/design/transfer/durability/#signed-storage-attestation)) echoes the client `nonce` and signs the same state read that produced its verdict.
 
 ## Client-Side Validation Invariants
@@ -98,7 +103,21 @@ Run before applying any received data; skipping one makes a client *faulty*.
 - Keep a per-user `directory_version` high-water mark; refuse and surface a regression.
 - Refuse an OR-set remove of an unobserved `add_id`.
 - Refuse a `revoke_all_sessions` without master-key proof.
-- Decode remote-origin bytes only in the sandboxed decoder ([](/design/clients/#sandboxed-decoder)).
+- Decode remote-origin bytes only in the sandboxed decoder ([](/design/clients/#sandboxed-decoder)). Until a platform has it, guest drops are decoded only by the memory-safe core codecs ([](/design/web-upload/#security-contract)); other remote-origin bytes are decoded in process, a documented deviation.
+- Classify a blob that will not open into exactly one state of [](/design/cryptography/encryption/#reading-a-blob): never decrypt on a commitment mismatch, and never report a ranged-read tag failure as *sealed bad at source* before a whole-blob address check.
+- Cap every response body after content decoding, per operation, before parsing it; never size an allocation from a length the server or a peer states ([](/design/networking/#http-transport)).
+- Accept an `AlbumKeyDistribution` only if it equals the receiver's own export for that epoch; never overwrite a held key ([](/design/cryptography/keys/#key-delivery-and-who-may-send-it)).
+
+### Bulk and Automatic Changes
+
+Rules for any operation that changes many assets at once or runs without a per-asset decision: a scan, a watched folder, an import rule, a duplicate review, a migration.
+
+- **Absence is never a delete.** A file missing from a scanned folder, a source that disappears or a scan that matches nothing changes nothing in the library. It is reported, never acted on.
+- **Destructive bulk operations are previewed and capped.** Any bulk trash, release or replace shows a dry-run list first, and a single run past its cap pauses for confirmation ([](/design/organization/#import-rules)). No automatic process deletes or purges.
+- **Merges are reversible operations.** Merging people, duplicates or stacks writes ordinary signed operations that never delete their inputs, so a merge can be undone and a replayed or racing merge is a no-op ([](/design/people/#corrections), [](/design/organization/#near-duplicate-review)).
+- **Upgrades migrate, never reset.** A model bump, schema bump or feature migration carries user corrections forward or keeps them verbatim; it never asks the user to discard names, labels or edits to proceed ([](/design/people/#corrections-outlive-models)).
+- **State applies to a whole stack.** Hiding, trashing or restoring a stack member applies to every member in one atomic batch, so no member is stranded outside the state its stack is in.
+- **The server never moves files a user can see.** Server storage layout is opaque and content-addressed; user-facing folder layouts exist only in exports ([](/design/export/)).
 
 ## Protocol and Capability Negotiation
 
@@ -134,12 +153,23 @@ Duplicates are no-ops; the same key with different content is corruption. An unl
 | Share/upload-link create | Client op id | Returns the minted link |
 | Share/upload-link revoke | `link_id` | No-op |
 | Drop adoption | `drop_id` (invariant 32) | Returns the promoted asset |
-| Album roster publish | `(album_id, roster_version)` (invariant 33) | Identical bytes → `200 replayed`; different → `409 error.album.roster_stale` |
+| Album roster publish | `(album_id, roster_version)` (invariant 35) | Identical bytes → `200 replayed`; different → `409 error.album.roster_stale` |
 
 ## Atomicity Invariants
 
 - **Blob finalization:** each blob of a bundle finalizes on its own, and its index rows and custody receipt commit in one transaction; failure → `FailedProcessing`, partials GC'd ([](/design/filesystem/maintenance/#atomic-writes-and-crash-recovery)). A bundle becomes visible only once its provenance and metadata blobs have finalized (the visibility gate in [](/design/transfer/upload/#what-gets-uploaded)), and a `replace` applies as one act when its manifest lands.
 - **Stack edits:** all `.tmp` staged, renamed together; any failure discards the bundle.
+- **Batch metadata changes** (time corrections, duplicate merges, rule actions, stack-wide hide or trash): staged and committed together under the same rule.
 - **AMK epoch bump + write-tier rotation:** one MLS commit.
 - **Album upgrade:** one MLS commit (`AlbumTombstone`) ([](/design/versioning/#album-upgrade-ceremony)).
 - **Lifecycle manifest + provenance:** the same act, because the entry *is* the manifest plus its chain link.
+
+## Known Gaps
+
+- Hiding or trashing one stack member does not yet carry the rest of the stack with it; the bulk-change rules have no shared preview and cap mechanism.
+
+- **7** compares the device's `added_at` with the manifest's `timestamp` (`capsule-server/src/upload/authority.rs`, `capsule-server/src/album/authority.rs`) instead of reading the directory version in force at receipt.
+- **14** has no independent counterpart: the content address is checked only by the hasher both sides share ([](/design/threat-model/risks/)).
+- **36** cannot run: blobs carry no header yet ([](/design/cryptography/encryption/#known-gaps)).
+- **37** is not enforced: the registration request carries no identity key (`RegisterRequest` in `capsule-server/src/routes/auth.rs`), so a password account's anchor is still pinned by its first directory publish.
+- On the client, no response body is capped after decoding ([](/design/networking/#known-gaps)), and key deliveries are applied without the sender or export check ([](/design/cryptography/keys/#known-gaps)).

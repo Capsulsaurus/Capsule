@@ -1,0 +1,124 @@
+---
+title: Поддержка
+description: Где задать вопрос, сообщить об ошибке, предложить функцию или сообщить об уязвимости в Capsule и что указать, чтобы по обращению можно было действовать.
+template: splash
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+Capsule разрабатывается и поддерживается открыто, силами добровольцев. Платного или закрытого
+канала поддержки нет: каждый вопрос, отчёт и идея проходят через GitHub проекта, где ответить
+может любой, а ответ поможет следующему человеку. Единственное исключение — уязвимость: о ней
+сообщают конфиденциально.
+
+У Capsule ещё не было ни одного выпуска; что работает сегодня и что будет дальше, описано в
+[дорожной карте](https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md).
+
+<a id="before-you-ask"></a>
+
+## Прежде чем спрашивать
+
+Большинство ответов уже есть. Минута, потраченная здесь, обычно избавляет от лишней переписки.
+
+1. **Поищите в документации** с помощью поля поиска вверху каждой страницы и прочитайте
+   [](/guides/troubleshooting/): там описаны частые сбои и способ собрать логи.
+2. **Поищите среди [открытых и закрытых задач](https://github.com/Capsulsaurus/Capsule/issues?q=is%3Aissue)**
+   и в [обсуждениях](https://github.com/Capsulsaurus/Capsule/discussions). Если кто-то уже
+   сообщил о проблеме, поставьте реакцию 👍 или оставьте комментарий с новыми сведениями, а не
+   открывайте дубликат.
+3. **Сверьте флаги команды** в [](/reference/cli/).
+
+<a id="get-help"></a>
+
+## Получить помощь
+
+<CardGrid>
+  <Card title="Задать вопрос" icon="comment">
+    Как сделать…? Так и должно быть? Нужна помощь с настройкой? Спросите в
+    [Discussions › Q&A](https://github.com/Capsulsaurus/Capsule/discussions/categories/q-a).
+    Отметьте ответ, который помог, как решение, чтобы его нашёл следующий человек.
+  </Card>
+  <Card title="Сообщить об ошибке" icon="warning">
+    Что-то сломалось или ведёт себя не так, как описано в документации? Откройте
+    [отчёт об ошибке](https://github.com/Capsulsaurus/Capsule/issues/new?template=bug_report.yml).
+    Форма запрашивает версию, платформу, шаги воспроизведения и логи: отчёт, где всё это есть,
+    можно разобрать без уточняющих вопросов.
+  </Card>
+  <Card title="Предложить функцию" icon="star">
+    Делитесь идеями в
+    [Discussions › Ideas](https://github.com/Capsulsaurus/Capsule/discussions/categories/ideas),
+    где другие могут голосовать за них и дорабатывать их. Когда идею принимают, мейнтейнеры
+    превращают её в задачу, и работа отслеживается уже в ней.
+  </Card>
+  <Card title="Сообщить об уязвимости" icon="padlock">
+    **Никогда не в публичной задаче.** Сообщите о ней конфиденциально через
+    [GitHub security advisory](https://github.com/Capsulsaurus/Capsule/security/advisories/new).
+    В [политике безопасности](https://github.com/Capsulsaurus/Capsule/security/policy) указано,
+    какие версии получают исправления.
+  </Card>
+</CardGrid>
+
+<a id="specific-topics"></a>
+
+## Отдельные темы
+
+<CardGrid>
+  <Card title="Работа сервера" icon="setting">
+    Начните с [](/guides/self-hosting/), затем прочитайте [](/guides/troubleshooting/). Не
+    помогло? Спросите в [Q&A](https://github.com/Capsulsaurus/Capsule/discussions/categories/q-a),
+    указав версию сервера и его журнал запуска.
+  </Card>
+  <Card title="Пропавшие или повреждённые фотографии" icon="information">
+    Остановитесь и ничего не удаляйте. Прочитайте
+    [](/guides/troubleshooting/#check-a-librarys-integrity) и
+    [](/design/backup-recovery/#recovery-paths), прежде чем пытаться что-то исправить. Если
+    данные потеряны или повреждены, сообщите об этом как об ошибке: защита ваших данных —
+    главный приоритет проекта.
+  </Card>
+  <Card title="Переводы" icon="translate">
+    Сообщите о неверной или отсутствующей строке через
+    [translation error](https://github.com/Capsulsaurus/Capsule/issues/new?template=translation-error.md)
+    или попросите добавить новый язык через
+    [language request](https://github.com/Capsulsaurus/Capsule/issues/new?template=language-request.md).
+    Как делаются переводы, описано в
+    [locales/README.md](https://github.com/Capsulsaurus/Capsule/blob/master/locales/README.md).
+  </Card>
+  <Card title="Переезд из Google Photos" icon="external">
+    Прежде чем сообщать о проблеме с импортом, пройдите по [](/guides/google-photos-migration/),
+    включая раздел о том, чего импортёр не может гарантировать.
+  </Card>
+</CardGrid>
+
+<a id="get-involved"></a>
+
+## Как присоединиться
+
+<CardGrid>
+  <Card title="Внести вклад" icon="github">
+    Прочитайте
+    [руководство для участников](https://github.com/Capsulsaurus/Capsule/blob/master/CONTRIBUTING.md),
+    затем выберите задачу с меткой
+    [good first issue](https://github.com/Capsulsaurus/Capsule/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
+    Ответы на вопросы в Discussions помогают ничуть не меньше.
+  </Card>
+  <Card title="Поддержать проект" icon="heart">
+    Capsule бесплатен и открыт. Если он вам полезен,
+    [спонсорство его разработки на GitHub](https://github.com/sponsors/justin13888) помогает
+    проекту развиваться.
+  </Card>
+</CardGrid>
+
+<a id="what-to-expect"></a>
+
+## Чего ожидать
+
+- **Время добровольцев.** На вопросы отвечают сообщество и мейнтейнеры по мере возможности.
+  Гарантированного срока ответа нет.
+- **Полные отчёты рассматриваются первыми.** Отчёт об ошибке с версией, шагами воспроизведения
+  и логами можно подтвердить и исправить. Отчёт без них ждёт ответа, прежде чем кто-либо сможет
+  что-то сделать.
+- **Одна тема — одно обсуждение.** Две проблемы — это два отчёта, чтобы каждую можно было
+  отслеживать и закрывать отдельно.
+- **По умолчанию всё публично.** Всё, кроме сообщений об уязвимостях, публично, поэтому прежде
+  чем вставлять лог, уберите из него парольные фразы, секреты восстановления, токены, адреса
+  серверов и личные пути к файлам.

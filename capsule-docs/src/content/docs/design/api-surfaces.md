@@ -1,10 +1,10 @@
 ---
 title: API Surfaces
 description: Why Capsule's server surface is one REST/OpenAPI contract, and which design doc owns each part of it
-status: draft
+audit: none
 ---
 
-Capsule has one public server transport: [Kynos](https://github.com/getkono/kynos) REST with a
+Capsule has one public server transport: Kynos REST with a
 checked-in OpenAPI 3.2 contract. The wire itself (headers, statuses, the exemptions from protocol
 negotiation, the error contract) is defined in the server's code and published as
 [](/reference/api/conventions/); this page records why the surface has that shape and which design

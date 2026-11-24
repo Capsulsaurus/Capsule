@@ -5,8 +5,10 @@
 // to `locales/config.json`, translate it, regenerate, and import its bundle below.
 
 import arMessages from './messages/ar.json';
+import arXbMessages from './messages/ar-XB.json';
 import deMessages from './messages/de.json';
 import enMessages from './messages/en.json';
+import enXaMessages from './messages/en-XA.json';
 import esMessages from './messages/es.json';
 import frMessages from './messages/fr.json';
 import hiMessages from './messages/hi.json';
@@ -67,6 +69,38 @@ const CATALOGS: Record<string, Messages> = {
     ar: arMessages,
 };
 
+/**
+ * The development pseudo-locales, generated from the source catalog by `mise run i18n`:
+ * `en-XA` (accented, about 40% longer, bracketed) and `ar-XB` (right to left). They are
+ * never in `SUPPORTED_LOCALES`; a development build offers them in the language picker
+ * and a production build compiles them out.
+ */
+export const PSEUDO_LOCALES = ['en-XA', 'ar-XB'] as const;
+
+/** The right-to-left pseudo-locale, laid out as Arabic is. */
+const PSEUDO_RTL_LOCALES: readonly string[] = ['ar-XB'];
+
+/**
+ * Whether this is a development build. Rsbuild replaces `process.env.NODE_ENV` at build
+ * time, so in production the pseudo bundles below are unreachable and tree-shaken.
+ */
+export const isDevelopmentBuild = (): boolean =>
+    process.env.NODE_ENV !== 'production';
+
+const PSEUDO_CATALOGS: Record<string, Messages> =
+    process.env.NODE_ENV === 'production'
+        ? {}
+        : { 'en-XA': enXaMessages, 'ar-XB': arXbMessages };
+
+/** The languages this build can show: the supported set, plus the pseudo-locales in development. */
+export function availableLocales(
+    development: boolean = isDevelopmentBuild(),
+): readonly string[] {
+    return development
+        ? [...SUPPORTED_LOCALES, ...PSEUDO_LOCALES]
+        : SUPPORTED_LOCALES;
+}
+
 /** Pick the best supported locale for the browser, falling back to the source. */
 export function resolveLocale(
     preferred: readonly string[] = navigator.languages,
@@ -92,12 +126,17 @@ export function resolveLocale(
 
 /** The flat ICU message catalog for `locale` (falls back to the source locale). */
 export function messagesFor(locale: string): Messages {
-    return CATALOGS[locale] ?? CATALOGS[SOURCE_LOCALE];
+    return (
+        CATALOGS[locale] ?? PSEUDO_CATALOGS[locale] ?? CATALOGS[SOURCE_LOCALE]
+    );
 }
 
-/** The writing direction for `locale` — `'rtl'` for Arabic, `'ltr'` otherwise. */
+/** The writing direction for `locale` — `'rtl'` for Arabic and `ar-XB`, `'ltr'` otherwise. */
 export function directionFor(locale: string): LayoutDirection {
-    return (RTL_LOCALES as readonly string[]).includes(locale) ? 'rtl' : 'ltr';
+    return (RTL_LOCALES as readonly string[]).includes(locale) ||
+        PSEUDO_RTL_LOCALES.includes(locale)
+        ? 'rtl'
+        : 'ltr';
 }
 
 /**
@@ -117,15 +156,22 @@ export function applyDocumentLocale(
 /** A stored preference: the key in `Storage`, absent meaning "follow the OS". */
 export const LANGUAGE_STORAGE_KEY = 'capsule.language';
 
-/** The supported locale `tag` names exactly (case-insensitively), else `undefined`. */
+/**
+ * The available locale `tag` names exactly (case-insensitively), else `undefined`. A
+ * pseudo-locale is available only in a development build, so a production build ignores
+ * one left in storage and follows the OS instead.
+ */
 export function normalizeLanguage(
     tag: string | null | undefined,
+    development: boolean = isDevelopmentBuild(),
 ): string | undefined {
     if (!tag) {
         return undefined;
     }
     const lower = tag.trim().toLowerCase();
-    return SUPPORTED_LOCALES.find((locale) => locale.toLowerCase() === lower);
+    return availableLocales(development).find(
+        (locale) => locale.toLowerCase() === lower,
+    );
 }
 
 /** The stored language override, or `undefined` when the user follows the OS. */
@@ -171,9 +217,14 @@ export interface LanguageOption {
     name: string;
 }
 
-/** Every supported language with its autonym, in `config.json` order. */
-export function languageOptions(): LanguageOption[] {
-    return SUPPORTED_LOCALES.map((code) => {
+/**
+ * Every supported language with its autonym, in `config.json` order, followed in a
+ * development build by the pseudo-locales.
+ */
+export function languageOptions(
+    development: boolean = isDevelopmentBuild(),
+): LanguageOption[] {
+    return availableLocales(development).map((code) => {
         let name: string | undefined;
         try {
             name = new Intl.DisplayNames([code], { type: 'language' }).of(code);

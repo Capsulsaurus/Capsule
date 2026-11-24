@@ -284,6 +284,19 @@ export function demoteHeadings(markdown, offset) {
     return lines.join('\n');
 }
 
+/**
+ * A rustdoc path: two or more identifiers joined by `::` (`Self::open`,
+ * `crate::ffi::FfiSession::fetch_blob_to_path`).
+ */
+const RUST_PATH = /^[A-Za-z_]\w*(?:::[A-Za-z_]\w*)+$/;
+
+/**
+ * The in-page anchor of the item a rustdoc path names, or `null` when the page does not
+ * document it.
+ *
+ * @typedef {(path: string) => string | null | undefined} RustPathResolver
+ */
+
 /** Where the site's content lives, for turning a repo path into a route. */
 const SITE_CONTENT = 'capsule-docs/src/content/docs';
 
@@ -299,10 +312,14 @@ const SITE_CONTENT = 'capsule-docs/src/content/docs';
  *      equivalent — the Starlight route the same file serves — so it is rewritten, not
  *      dropped: the reader keeps the reference.
  *   2. **A rustdoc intra-doc link.** ``[`revoke_all_signing_bytes`](capsule_core::crypto::revoke::revoke_all_signing_bytes)``
- *      is a path rustdoc resolves and no web server does. There is no equivalent, so the
- *      link is dropped and its text kept.
+ *      is a path rustdoc resolves and no web server does. `resolve` may map it to an anchor
+ *      on the page that documents the same item (the SDK pages do); otherwise the link is
+ *      dropped and its text kept.
  *
- * Absolute URLs, site routes, and anchors are left alone.
+ * Absolute URLs, site routes, and anchors are left alone. A rustdoc path is not a URL even
+ * when its first segment parses as a scheme: `Self::open`, `crate::ffi::…` and `super::…`
+ * read as `Self:`, `crate:` and `super:` to a URL parser, and were once published as
+ * dead `href`s for exactly that reason. A scheme is therefore never followed by `:`.
  *
  * The alternative was to fix the annotations in `capsule-server`, which rule 2 would normally
  * demand. It is the wrong fix here: those links are correct for rustdoc, which is also a
@@ -310,13 +327,16 @@ const SITE_CONTENT = 'capsule-docs/src/content/docs';
  * republishing rather than an error in the source.
  *
  * @param {string} markdown Prose from an artifact.
+ * @param {RustPathResolver} [resolve] Anchor for a rustdoc path the page documents.
  * @returns {string} The prose with its links made meaningful on the site.
  */
-function rewriteLinks(markdown) {
+function rewriteLinks(markdown, resolve) {
     return markdown.replace(
         /(!?\[)([^\]]*)(\]\(\s*)([^)\s]+)(\s*\))/g,
         (whole, open, text, mid, target, close) => {
-            if (/^(?:[a-z][a-z0-9+.-]*:|\/|#)/i.test(target)) return whole;
+            if (/^(?:[a-z][a-z0-9+.-]*:(?!:)|\/|#)/i.test(target)) return whole;
+            const anchor = RUST_PATH.test(target) ? resolve?.(target) : null;
+            if (anchor) return `${open}${text}${mid}#${anchor}${close}`;
             const normalized = target.replace(/^(?:\.\.\/)+/, '');
             if (
                 normalized.startsWith(`${SITE_CONTENT}/`) &&
@@ -338,10 +358,11 @@ function rewriteLinks(markdown) {
  * line. Deliberately does **not** escape — see [`escapeCell`].
  *
  * @param {string} text
+ * @param {RustPathResolver} [resolve]
  * @returns {string}
  */
-function prose(text) {
-    return rewriteLinks(text)
+function prose(text, resolve) {
+    return rewriteLinks(text, resolve)
         .replace(/\s*\n\s*/g, ' ')
         .trim();
 }
@@ -1862,6 +1883,17 @@ export function readBindingsSurface(root) {
         );
     }
     for (const language of ['swift', 'kotlin']) {
+        const platform = dump.languages?.[language]?.platform;
+        if (
+            platform !== undefined &&
+            (typeof platform?.source !== 'string' ||
+                !Array.isArray(platform?.declarations))
+        ) {
+            throw new Error(
+                `${BINDINGS_SURFACE}: the ${language} platform adapters are not a ` +
+                    '`{ source, declarations }` object.',
+            );
+        }
         const declarations = dump.languages?.[language]?.declarations;
         if (!Array.isArray(declarations) || declarations.length === 0) {
             throw new Error(
@@ -1886,26 +1918,41 @@ export function readBindingsSurface(root) {
  * @param {string} doc
  * @param {number} offset Heading levels to demote by.
  * @param {ReadonlyMap<string, string>} [anchors] Symbol name to in-page anchor.
+ * @param {RustPathResolver} [resolve] Anchor for a rustdoc path the page documents.
  * @returns {string}
  */
-export function docProse(doc, offset, anchors = new Map()) {
-    return demoteHeadings(docLinks(rewriteLinks(doc), anchors), offset);
+export function docProse(
+    doc,
+    offset,
+    anchors = new Map(),
+    resolve = undefined,
+) {
+    return demoteHeadings(
+        docLinks(rewriteLinks(doc, resolve), anchors, resolve),
+        offset,
+    );
 }
 
 /**
  * rustdoc's ``[`item`]`` shorthand, resolved: a link to the item's entry when the page
- * documents it, its bare code span otherwise.
+ * documents it, its bare code span otherwise. `item` may be a path (``[`Self::open`]``).
  *
  * @param {string} text
  * @param {ReadonlyMap<string, string>} anchors
+ * @param {RustPathResolver} [resolve]
  * @returns {string}
  */
-function docLinks(text, anchors) {
-    return text.replace(/\[`([^`\]]+)`\](?![([])/g, (_, name) =>
-        anchors.has(name)
-            ? `[\`${name}\`](#${anchors.get(name)})`
-            : `\`${name}\``,
-    );
+function docLinks(text, anchors, resolve) {
+    return text.replace(/\[`([^`\]]+)`\](?![([])/g, (_, name) => {
+        const anchor =
+            anchors.get(name) ??
+            (/^[A-Za-z_]\w*(?:(?:::|\.)[A-Za-z_]\w*)*(?:\([\w:]*\))?$/.test(
+                name,
+            )
+                ? resolve?.(name)
+                : null);
+        return anchor ? `[\`${name}\`](#${anchor})` : `\`${name}\``;
+    });
 }
 
 /**
@@ -1914,10 +1961,11 @@ function docLinks(text, anchors) {
  * @param {string} doc
  * @param {ReadonlyMap<string, string>} anchors
  * @param {'list' | 'cell'} context
+ * @param {RustPathResolver} [resolve]
  * @returns {string}
  */
-function oneLine(doc, anchors, context) {
-    const flat = docLinks(prose(doc), anchors);
+function oneLine(doc, anchors, context, resolve) {
+    const flat = docLinks(prose(doc, resolve), anchors, resolve);
     return context === 'cell' ? escapeCell(flat) : inlineProse(flat);
 }
 
@@ -2022,6 +2070,207 @@ export const SDK_STYLES = {
         callable: new Set(['method']),
     },
 };
+
+/**
+ * Where every declaration and member of one SDK page can be linked to.
+ *
+ * - `anchors`: declaration name to its section's anchor (its heading slug).
+ * - `members`: declaration name to its members, keyed by [`spellingKey`], each to the
+ *   anchor [`memberAnchor`] gives it.
+ * - `names`: [`spellingKey`] of each declaration name to that name, so a Rust spelling
+ *   (`synced_history_sources`) finds the binding's (`syncedHistorySources`).
+ *
+ * @typedef {{
+ *   anchors: Map<string, string>,
+ *   members: Map<string, Map<string, string>>,
+ *   names: Map<string, string>,
+ * }} SdkLinkTargets
+ */
+
+/**
+ * A name with case and underscores folded away: what a Rust identifier and its binding
+ * spelling share. `fetch_blob_to_path`, `fetchBlobToPath`; `Low`, `LOW`, `low`.
+ *
+ * @param {string} name
+ * @returns {string}
+ */
+function spellingKey(name) {
+    return name.replace(/[`_]/g, '').toLowerCase();
+}
+
+/**
+ * The anchor of `member` on `declaration`'s page: unique on the page, because member names
+ * are unique within a declaration and the hyphen keeps it apart from any declaration slug.
+ *
+ * @param {string} declaration
+ * @param {string} member
+ * @returns {string}
+ */
+export function memberAnchor(declaration, member) {
+    return slugify(`${declaration}-${member.replace(/`/g, '')}`);
+}
+
+/**
+ * @param {SurfaceDeclaration[]} declarations One page's declarations.
+ * @returns {SdkLinkTargets}
+ */
+export function sdkLinkTargets(declarations) {
+    /** @type {Map<string, string>} anchor to what claimed it */
+    const claimed = new Map();
+    /** @type {Map<string, string>} spelling key to the name that has it */
+    const names = new Map();
+    const claim = (anchor, owner) => {
+        const previous = claimed.get(anchor);
+        if (previous !== undefined) {
+            throw new Error(
+                `${owner} and ${previous} share the anchor #${anchor}. An overload or two ` +
+                    `names that differ only in case or underscores cannot both be linked; ` +
+                    `teach memberAnchor in ${GENERATED_BY} to tell them apart.`,
+            );
+        }
+        claimed.set(anchor, owner);
+        return anchor;
+    };
+    const keyed = (map, key, name, owner) => {
+        if (map.has(key)) {
+            throw new Error(
+                `${owner}: ${name} and ${map.get(key)} are spelled alike, so a rustdoc path ` +
+                    `cannot tell which it names. Teach spellingKey in ${GENERATED_BY}.`,
+            );
+        }
+        map.set(key, name);
+    };
+    const anchors = new Map();
+    const members = new Map();
+    for (const d of declarations) {
+        anchors.set(d.name, claim(slugify(d.name), d.name));
+        keyed(names, spellingKey(d.name), d.name, 'the page');
+        const own = new Map();
+        const spelled = new Map();
+        for (const m of d.members) {
+            const anchor = claim(
+                memberAnchor(d.name, m.name),
+                `${d.name}.${m.name}`,
+            );
+            keyed(spelled, spellingKey(m.name), m.name, d.name);
+            own.set(spellingKey(m.name), anchor);
+        }
+        members.set(d.name, own);
+    }
+    return { anchors, members, names };
+}
+
+/**
+ * The declaration a Rust name refers to on this page: the name itself, its binding
+ * spelling, or, for a Rust `…Error`, the `…Exception` uniffi renames it to in Kotlin.
+ *
+ * @param {string} name
+ * @param {SdkLinkTargets} targets
+ * @returns {string | undefined}
+ */
+function declarationNamed(name, targets) {
+    if (targets.anchors.has(name)) return name;
+    const exception = name.replace(/Error$/, 'Exception');
+    return (
+        targets.names.get(spellingKey(name)) ??
+        (exception === name
+            ? undefined
+            : targets.names.get(spellingKey(exception)))
+    );
+}
+
+/**
+ * Resolve a rustdoc path (`Self::open`, `crate::ffi::FfiSession::fetch_blob_to_path`,
+ * `FfiError::Auth`, `crate::ffi::synced_history_sources`) to the anchor of the entry that
+ * documents the same item on this page.
+ *
+ * A path is rooted where the binding is: `crate::ffi::…` (or below it), `Self::…`, `self::`,
+ * `super::`, or nothing. A path through any other module (`crate::fetch::render_step`) names
+ * a Rust item the binding does not export, even when an export shares its name, so it
+ * resolves to `null`. What remains is a declaration or `Declaration::member`; `Self` is
+ * `enclosing`. Anything unresolved keeps its words and loses its link: a guessed rustdoc URL
+ * would need an item kind the dump does not carry.
+ *
+ * @param {string} path
+ * @param {SdkLinkTargets} targets
+ * @param {string} [enclosing] The declaration whose prose holds the path.
+ * @returns {string | null}
+ */
+export function resolveRustPath(path, targets, enclosing) {
+    const segments = path.split('::');
+    while (['crate', 'self', 'super'].includes(segments[0])) segments.shift();
+    if (segments[0] === 'ffi') {
+        segments.shift();
+        // Submodules of `ffi` (`ffi::ladder::…`) are still the binding's.
+        while (segments.length > 1 && /^[a-z][a-z0-9_]*$/.test(segments[0])) {
+            segments.shift();
+        }
+    } else if (
+        segments.length > 1 &&
+        segments[0] !== 'Self' &&
+        /^[a-z][a-z0-9_]*$/.test(segments[0])
+    ) {
+        return null; // A module outside the binding.
+    }
+    if (segments[0] === 'Self') {
+        if (!enclosing) return null;
+        segments[0] = enclosing;
+    }
+    if (segments.length === 1) {
+        const declaration = declarationNamed(segments[0], targets);
+        return declaration ? (targets.anchors.get(declaration) ?? null) : null;
+    }
+    if (segments.length === 2) {
+        const owner = declarationNamed(segments[0], targets);
+        return owner
+            ? (targets.members.get(owner)?.get(spellingKey(segments[1])) ??
+                  null)
+            : null;
+    }
+    return null;
+}
+
+/**
+ * How one declaration's prose and signatures link into its page.
+ *
+ * @typedef {{
+ *   anchors: ReadonlyMap<string, string>,
+ *   resolve: RustPathResolver,
+ *   resolveIn: (owner: string) => RustPathResolver,
+ *   types: (signature: string, self: string) => string,
+ * }} PageLinks
+ */
+
+/** Declaration kinds that are callables, never a type a signature can name. */
+const CALLABLE_KINDS = new Set(['fun', 'func', 'function']);
+
+/**
+ * The documented types a signature names, in order, once each, linked: the parameter,
+ * return, and supertypes a reader follows from it. Dokka, DocC and TypeDoc link these inside
+ * the declaration itself; an Expressive Code fence cannot hold a link, so they follow it.
+ *
+ * @param {string} signature
+ * @param {string} self The declaration the signature declares or belongs to, never listed:
+ *   a member's reader is already in its section.
+ * @param {SurfaceDeclaration[]} declarations
+ * @param {SdkLinkTargets} targets
+ * @returns {string} Markdown, or `''` when the signature names none.
+ */
+function signatureTypes(signature, self, declarations, targets) {
+    const types = new Set(
+        declarations
+            .filter((d) => !CALLABLE_KINDS.has(d.kind) && d.name !== self)
+            .map((d) => d.name),
+    );
+    const named = [...new Set(signature.match(/[A-Za-z_]\w*/g) ?? [])].filter(
+        (name) => types.has(name),
+    );
+    if (named.length === 0) return '';
+    const links = named.map(
+        (name) => `[\`${name}\`](#${targets.anchors.get(name)})`,
+    );
+    return `<div class="sdk-types">\n\nTypes: ${links.join(', ')}\n\n</div>`;
+}
 
 /**
  * The first sentence of a doc comment: the one-line abstract DocC and Dokka show in a symbol
@@ -2137,14 +2386,23 @@ function kindChip(style, kind) {
  * A type's members, grouped by `style.topics`: callables as headings of their own (DocC,
  * TypeDoc), values as a list, and in Dokka every member as a table row.
  *
+ * Every member carries the anchor [`memberAnchor`] gives it, as an `<a id>` inside its first
+ * line: a row links its name to it, as Dokka does; a heading stays Markdown, so Starlight
+ * still gives it a permalink button and its code span stays untranslated, and the anchor sits
+ * empty at its start. `id` comes first in the tag because `headingAnchors` reads it there.
+ *
  * @param {SurfaceDeclaration} declaration
  * @param {object} style
  * @param {number} level Heading level of the declaration.
- * @param {ReadonlyMap<string, string>} anchors
+ * @param {PageLinks} links
  * @param {string} source The artifact, for error messages.
  * @returns {string}
  */
-function renderMembers(declaration, style, level, anchors, source) {
+function renderMembers(declaration, style, level, links, source) {
+    const { anchors, types } = links;
+    // An inherited doc was written on the interface, so its `Self` is the interface.
+    const resolverOf = (member) =>
+        member.docOwner ? links.resolveIn(member.docOwner) : links.resolve;
     const known = new Set(style.topics.flatMap(([, kinds]) => kinds));
     for (const member of declaration.members) {
         if (!known.has(member.kind)) {
@@ -2166,12 +2424,22 @@ function renderMembers(declaration, style, level, anchors, source) {
             kinds.some((kind) => style.callable.has(kind))
         ) {
             for (const member of members) {
+                const id = memberAnchor(declaration.name, member.name);
                 const sections = [
-                    `${'#'.repeat(level + 1)} \`${member.name}\``,
+                    `${'#'.repeat(level + 1)} <a id="${id}" class="sdk-anchor"></a>${codeSpan(member.name)}`,
                     `\`\`\`${style.fence} wrap\n${member.signature}\n\`\`\``,
                 ];
+                const used = types(member.signature, declaration.name);
+                if (used) sections.push(used);
                 if (member.doc) {
-                    sections.push(docProse(member.doc, level + 1, anchors));
+                    sections.push(
+                        docProse(
+                            member.doc,
+                            level + 1,
+                            anchors,
+                            resolverOf(member),
+                        ),
+                    );
                 }
                 if (style.tool === 'typedoc') {
                     const call = tsCallParts(member.signature);
@@ -2185,15 +2453,22 @@ function renderMembers(declaration, style, level, anchors, source) {
         // the signature and its full KDoc; DocC and TypeDoc list the declaration and its
         // description. The description keeps its paragraphs and lists, nested in the item.
         const items = members.map((member) => {
+            const id = memberAnchor(declaration.name, member.name);
+            const permalink = (text) =>
+                `- <a id="${id}" class="sdk-anchor" href="#${id}">${text}</a>`;
             const lines =
                 style.tool === 'dokka'
                     ? [
-                          `- ${codeSpan(member.name)}`,
+                          permalink(codeSpan(member.name)),
                           `\`\`\`${style.fence} wrap\n${member.signature}\n\`\`\``,
                       ]
-                    : [`- ${codeSpan(member.signature)}`];
+                    : [permalink(codeSpan(member.signature))];
+            const used = types(member.signature, declaration.name);
+            if (used) lines.push(used);
             if (member.doc) {
-                lines.push(docProse(member.doc, level, anchors));
+                lines.push(
+                    docProse(member.doc, level, anchors, resolverOf(member)),
+                );
             }
             return [lines[0], ...lines.slice(1).map(indentItem)].join('\n\n');
         });
@@ -2228,13 +2503,18 @@ function indentItem(block) {
  *
  * @param {SurfaceDeclaration} declaration
  * @param {object} style
- * @param {ReadonlyMap<string, string>} anchors
+ * @param {PageLinks} links
  * @param {string} source
  * @returns {string}
  */
-function renderSymbol(declaration, style, anchors, source) {
+function renderSymbol(declaration, style, links, source) {
+    const { anchors, resolve } = links;
     const level = 3;
-    const signature = `\`\`\`${style.fence} wrap\n${declaration.signature}\n\`\`\``;
+    const used = links.types(declaration.signature, declaration.name);
+    const signature = [
+        `\`\`\`${style.fence} wrap\n${declaration.signature}\n\`\`\``,
+        ...(used ? [used] : []),
+    ].join('\n\n');
     const sections = [
         `<section class="sdk-symbol" data-tool="${style.tool}">`,
         kindChip(style, declaration.kind),
@@ -2247,27 +2527,27 @@ function renderSymbol(declaration, style, anchors, source) {
             : '';
         if (abstract) {
             sections.push(
-                `<div class="sdk-abstract">\n\n${docProse(abstract, level, anchors)}\n\n</div>`,
+                `<div class="sdk-abstract">\n\n${docProse(abstract, level, anchors, resolve)}\n\n</div>`,
             );
         }
         sections.push('<p class="sdk-label">Declaration</p>', signature);
         if (overview) {
             sections.push(
                 '<p class="sdk-label">Overview</p>',
-                docProse(overview, level, anchors),
+                docProse(overview, level, anchors, resolve),
             );
         }
     } else {
         sections.push(signature);
         if (declaration.doc) {
-            sections.push(docProse(declaration.doc, level, anchors));
+            sections.push(docProse(declaration.doc, level, anchors, resolve));
         }
         if (style.tool === 'typedoc' && declaration.kind === 'function') {
             const call = tsCallParts(declaration.signature);
             if (call) sections.push(call);
         }
     }
-    const members = renderMembers(declaration, style, level, anchors, source);
+    const members = renderMembers(declaration, style, level, links, source);
     if (members) {
         if (style.tool === 'docc') {
             sections.push('<p class="sdk-label sdk-topics">Topics</p>');
@@ -2289,11 +2569,16 @@ function renderSymbol(declaration, style, anchors, source) {
  *
  * @param {Array<[string, SurfaceDeclaration[]]>} groups
  * @param {object} style
- * @param {ReadonlyMap<string, string>} anchors
+ * @param {(declaration: string) => PageLinks} linksFor
  * @returns {string}
  */
-function renderSymbolIndex(groups, style, anchors) {
-    const link = (d) => `[\`${d.name}\`](#${anchors.get(d.name)})`;
+function renderSymbolIndex(groups, style, linksFor) {
+    const link = (d) =>
+        `[\`${d.name}\`](#${linksFor(d.name).anchors.get(d.name)})`;
+    const summary = (d, context) => {
+        const { anchors, resolve } = linksFor(d.name);
+        return oneLine(abstractOf(d.doc), anchors, context, resolve);
+    };
     const body = groups.map(([heading, declarations]) => {
         const label = `<p class="sdk-label">${heading}</p>`;
         if (style.tool === 'dokka') {
@@ -2303,9 +2588,7 @@ function renderSymbolIndex(groups, style, anchors) {
                     ['Name', 'Summary'],
                     declarations.map((d) => [
                         link(d),
-                        d.doc
-                            ? oneLine(abstractOf(d.doc), anchors, 'cell')
-                            : '—',
+                        d.doc ? summary(d, 'cell') : '—',
                     ]),
                 ),
             ].join('\n\n');
@@ -2316,7 +2599,7 @@ function renderSymbolIndex(groups, style, anchors) {
                 declarations
                     .map((d) =>
                         d.doc
-                            ? `- ${link(d)}\n\n  ${oneLine(abstractOf(d.doc), anchors, 'list')}`
+                            ? `- ${link(d)}\n\n  ${summary(d, 'list')}`
                             : `- ${link(d)}`,
                     )
                     .join('\n\n'),
@@ -2334,18 +2617,167 @@ function renderSymbolIndex(groups, style, anchors) {
 }
 
 /**
+ * KDoc's `[Name]`/`[Type.member]` and DocC's ``` ``symbol(label:)`` ``` links, rewritten to
+ * rustdoc's ``[`…`]`` shorthand so [`docLinks`] resolves them like any other.
+ *
+ * Only prose is rewritten: fenced blocks and code spans are left whole, so `keys[keyAlias]`
+ * stays code. In prose, a bracket is left alone when it is a Markdown link (followed by `(`
+ * or `[`, or a reference label after `]`), a reference definition (`[label]:` opening a line),
+ * a task-list box (`- [x]`), or an index (`out[i]`, right after a name).
+ *
+ * @param {string} doc A hand-written adapter's doc comment.
+ * @returns {string}
+ */
+export function nativeDocLinks(doc) {
+    return doc
+        .split(/(^[ \t]*(?:```|~~~)[^\n]*\n[\s\S]*?^[ \t]*(?:```|~~~)[ \t]*$)/m)
+        .map((part, index) => (index % 2 ? part : nativeProseLinks(part)))
+        .join('');
+}
+
+/**
+ * [`nativeDocLinks`] over prose with no fenced block in it.
+ *
+ * @param {string} prose
+ * @returns {string}
+ */
+function nativeProseLinks(prose) {
+    // DocC's double-backtick symbol link first: it would otherwise read as a code span.
+    return prose
+        .replace(/``([^`\s]+)``/g, '[`$1`]')
+        .split(/(`+[^`]*?`+)/)
+        .map((part, index) =>
+            index % 2
+                ? part
+                : part.replace(
+                      /(?<![\w\]])(?<!^[ \t]*(?:[-*+]|\d+[.)])[ \t]+)\[([A-Za-z_][\w.]*)\](?![([])(:)?/gm,
+                      (whole, name, colon, offset, text) =>
+                          // `[label]: target` opening a line is a reference definition.
+                          colon && /(?:^|\n)[ \t]*$/.test(text.slice(0, offset))
+                              ? whole
+                              : `[\`${name}\`]${colon ?? ''}`,
+                  ),
+        )
+        .join('');
+}
+
+/**
+ * The supertypes a Kotlin or Swift class signature lists after its `:`, outside its
+ * constructor's parentheses and its generic parameters (whose bounds are not supertypes).
+ *
+ * @param {string} signature
+ * @returns {string[]}
+ */
+export function supertypesOf(signature) {
+    // Parentheses and generic brackets both hide colons that are not the supertype list's
+    // (`A<T: Equatable>`, `(seed: ByteArray)`); an arrow's `>` closes nothing.
+    let depth = 0;
+    let outside = '';
+    let previous = '';
+    for (const c of signature) {
+        if (c === '(' || c === '<') depth += 1;
+        if (depth === 0) outside += c;
+        if (c === ')' || (c === '>' && previous !== '-')) depth -= 1;
+        previous = c;
+    }
+    const colon = outside.indexOf(':');
+    if (colon < 0) return [];
+    return outside
+        .slice(colon + 1)
+        .split(',')
+        .map(
+            (supertype) =>
+                /^\s*(?:@\w+\s+)*([A-Za-z_]\w*)/.exec(supertype)?.[1],
+        )
+        .filter(Boolean);
+}
+
+/**
+ * Resolve a link written in a hand-written adapter's doc (KDoc or DocC) or a rustdoc path:
+ * `Type.member` is `Type::member`, a DocC argument list is dropped, and a bare name is first
+ * a member of `enclosing`, as KDoc reads it.
+ *
+ * @param {string} path
+ * @param {SdkLinkTargets} targets
+ * @param {string} enclosing
+ * @returns {string | null}
+ */
+function resolveNativePath(path, targets, enclosing) {
+    const bare = path.replace(/\([\w:]*\)$/, '');
+    if (!bare.includes('::') && !bare.includes('.')) {
+        const own = targets.members.get(enclosing)?.get(spellingKey(bare));
+        if (own) return own;
+    }
+    return resolveRustPath(bare.replaceAll('.', '::'), targets, enclosing);
+}
+
+/**
+ * The hand-written adapters, ready to render: their KDoc and DocC links in shorthand, and an
+ * undocumented override given the doc of the interface member it implements, as Dokka and
+ * DocC show it, with a line naming where it came from.
+ *
+ * @param {SurfaceDeclaration[]} adapters
+ * @param {SurfaceDeclaration[]} declarations The generated declarations they implement.
+ * @returns {Array<SurfaceDeclaration & { members: Array<SurfaceDeclaration & { docOwner?: string }> }>}
+ */
+function prepareAdapters(adapters, declarations) {
+    const byName = new Map(declarations.map((d) => [d.name, d]));
+    return adapters.map((adapter) => {
+        // In declaration order: the first supertype that declares the member documents it.
+        const supertypes = supertypesOf(adapter.signature)
+            .map((name) => byName.get(name))
+            .filter(Boolean);
+        return {
+            ...adapter,
+            doc: nativeDocLinks(adapter.doc),
+            members: adapter.members.map((member) => {
+                if (member.doc) {
+                    return { ...member, doc: nativeDocLinks(member.doc) };
+                }
+                for (const supertype of supertypes) {
+                    const implemented = supertype.members.find(
+                        (m) => spellingKey(m.name) === spellingKey(member.name),
+                    );
+                    if (implemented?.doc) {
+                        return {
+                            ...member,
+                            doc: `${implemented.doc}\n\nFrom [\`${supertype.name}.${implemented.name}\`].`,
+                            docOwner: supertype.name,
+                        };
+                    }
+                }
+                return member;
+            }),
+        };
+    });
+}
+
+/**
+ * The hand-written adapters a binding page documents after its generated declarations.
+ *
+ * @typedef {{ source: string, declarations: SurfaceDeclaration[] }} PlatformAdapters
+ */
+
+/** The section, and index label, the adapters are rendered under. */
+const PLATFORM_HEADING = 'Platform adapters';
+
+/**
  * The body of an SDK page: the symbol index, then one section per declaration group, in
- * [`SDK_STYLES`] order.
+ * [`SDK_STYLES`] order, then any hand-written platform adapters in a section of their own.
  *
  * @param {SurfaceDeclaration[]} declarations
  * @param {'swift' | 'kotlin' | 'ts'} language
  * @param {string} source The artifact, for error messages.
+ * @param {PlatformAdapters} [platform]
  * @returns {string}
  */
-export function renderDeclarations(declarations, language, source) {
+export function renderDeclarations(declarations, language, source, platform) {
     const style = SDK_STYLES[language];
     const known = new Set(style.sections.flatMap(([, kinds]) => kinds));
-    for (const declaration of declarations) {
+    const adapters = platform
+        ? prepareAdapters(platform.declarations, declarations)
+        : [];
+    for (const declaration of [...declarations, ...adapters]) {
         if (!known.has(declaration.kind)) {
             throw new Error(
                 `${source}: ${declaration.name} is a ${declaration.kind}, which no section of ` +
@@ -2353,22 +2785,58 @@ export function renderDeclarations(declarations, language, source) {
             );
         }
     }
-    const anchors = new Map(declarations.map((d) => [d.name, slugify(d.name)]));
+    const everything = [...declarations, ...adapters];
+    const targets = sdkLinkTargets(everything);
+    const native = new Set(adapters.map((d) => d.name));
+    /** @type {(owner: string) => RustPathResolver} */
+    const resolveIn = (owner) =>
+        native.has(owner)
+            ? (path) => resolveNativePath(path, targets, owner)
+            : (path) => resolveRustPath(path, targets, owner);
+    /** @type {(declaration: string) => PageLinks} */
+    const linksFor = (declaration) => ({
+        anchors: targets.anchors,
+        resolve: resolveIn(declaration),
+        resolveIn: (owner) => {
+            const inner = resolveIn(owner);
+            // The `From [Type.member]` line is native syntax inside a generated doc.
+            return (path) =>
+                inner(path) ?? resolveNativePath(path, targets, owner);
+        },
+        types: (signature, self) =>
+            signatureTypes(signature, self, everything, targets),
+    });
     const groups = style.sections
         .map(([heading, kinds]) => [
             heading,
             declarations.filter((d) => kinds.includes(d.kind)),
         ])
         .filter(([, matching]) => matching.length > 0);
-    return [
-        renderSymbolIndex(groups, style, anchors),
-        ...groups.map(([heading, matching]) =>
+    const sections = groups.map(([heading, matching]) =>
+        [
+            `## ${heading}`,
+            ...matching.map((d) =>
+                renderSymbol(d, style, linksFor(d.name), source),
+            ),
+        ].join('\n\n'),
+    );
+    if (adapters.length > 0) {
+        groups.push([PLATFORM_HEADING, adapters]);
+        sections.push(
             [
-                `## ${heading}`,
-                ...matching.map((d) => renderSymbol(d, style, anchors, source)),
+                `## ${PLATFORM_HEADING}`,
+                `Hand-written in \`${platform.source}\`, not generated: the classes an app ` +
+                    'constructs and passes where the declarations above take a platform key ' +
+                    'store.',
+                ...adapters.map((d) =>
+                    renderSymbol(d, style, linksFor(d.name), source),
+                ),
             ].join('\n\n'),
-        ),
-    ].join('\n\n');
+        );
+    }
+    return [renderSymbolIndex(groups, style, linksFor), ...sections].join(
+        '\n\n',
+    );
 }
 
 /**
@@ -2412,6 +2880,21 @@ export function renderWasmPage(page, declarations) {
 }
 
 /**
+ * What a binding page says beneath its opening line, by language.
+ *
+ * The Kotlin bindings are written for Kotlin callers: uniffi lowers `async fn` to
+ * `suspend fun` and free functions to top-level ones, and the only caller is the Kotlin app. The page is laid out
+ * after Dokka, not rendered by it; the design doc records why.
+ */
+const BINDINGS_NOTES = {
+    kotlin: [
+        '',
+        'These are Kotlin declarations; calling them from Java is untested. The page follows',
+        'Dokka’s layout without being rendered by it ([](/design/developer-docs/#why-not-dokka)).',
+    ],
+};
+
+/**
  * The generated `/reference/sdk/swift/` or `/reference/sdk/kotlin/` page.
  *
  * @param {import('./reference-groups.mjs').SdkPage} page
@@ -2423,8 +2906,15 @@ export function renderBindingsPage(page, dump) {
     const surface = dump.languages[language];
     const head = sdkHead(page, BINDINGS_SURFACE, [
         `Every declaration the \`${dump.namespace}\` namespace exports, as uniffi ${dump.uniffi} spells it in \`${surface.source}\`.`,
+        ...(BINDINGS_NOTES[language] ?? []),
     ]);
-    return `${tidyBlankLines(`${head}\n\n${renderDeclarations(surface.declarations, language, BINDINGS_SURFACE)}`)}\n`;
+    const body = renderDeclarations(
+        surface.declarations,
+        language,
+        BINDINGS_SURFACE,
+        surface.platform,
+    );
+    return `${tidyBlankLines(`${head}\n\n${body}`)}\n`;
 }
 
 /**

@@ -21,6 +21,11 @@ paths:
 
 ## Docs
 
+Follow:
+
+- [Supply chain](../../capsule-docs/src/content/docs/development/supply-chain.md) — the new-dependency admission policy, advisory scanning with dependable, cargo-deny's licence, ban and source gates, and pinning.
+
 Keep current:
 
 - [Licensing](../../capsule-docs/src/content/docs/design/licensing.md) and the root `NOTICE` — for any licence beyond plain attribution; `mise run license-check` runs `cargo deny`.
+- [Component Map](../../capsule-docs/src/content/docs/development/components.md) — when a dependency between two of the repository's own components is added or removed, or a component is added, renamed or retired.

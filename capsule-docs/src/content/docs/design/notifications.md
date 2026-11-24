@@ -1,7 +1,7 @@
 ---
 title: Notifications
 description: What a key-free server can and cannot tell you — local alerts, the contentless wake tier, and the self-hostability rule that decides the transport matrix
-status: draft
+audit: none
 ---
 
 This doc owns alert delivery and the vocabulary. The server holds only ciphertext, and the short-poll sync feed stays the fallback for any push ([](/design/networking/#adverse-network-posture)), so a server can tell a client *that* something changed, never *what*.
@@ -37,6 +37,9 @@ A closed enum. Thresholds belong to the trigger owner, and parameters are plain 
 | `quota_soft` / `quota_grace_expiring` | [](/design/quota/#thresholds-and-states) | `grace` (`counting`/`expired`), second only | No |
 | `quarantine_pending` | [](/design/threat-model/scenarios/#quarantine-surfaces) | `count` | No |
 | `drop_pending` | [](/design/web-upload/#drop-and-adoption-lifecycle) | `count` | No |
+| `recovery_claim` | [](/design/backup-recovery/#opt-in-trusted-contact-recovery) | `days_left` | No |
+| `album_activity` | [](/design/cryptography/mls/#comments-and-reactions) | `count`, `kind` (`comment`/`reaction`) | No |
+| `drop_sensitive` (**Planned**) | [](/design/ai/#sensitive-content) | `count` (flagged drops not yet reviewed) | No |
 
 ### The Pre-Arm Rule
 
@@ -107,7 +110,7 @@ So no **APNs** or **FCM** (bound to the published app), and no project relay.
 
 ## Non-Goals
 
-Server-composed or rich notifications; APNs, FCM or relays; comment and reaction alerts; email; presence.
+Server-composed or rich notifications; APNs, FCM or relays; comment and reaction alerts composed or relayed by a server (a device raises `album_activity` only after it has synced the activity itself); email; presence.
 
 ## Validation
 

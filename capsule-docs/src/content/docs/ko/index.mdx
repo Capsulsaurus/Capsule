@@ -1,0 +1,107 @@
+---
+title: Capsule
+description: 평생의 사진을 자신의 기기에서 정리하고, 모든 사진을 종단 간 암호화하며, 서버를 넘나들며 공유하도록 만들어진 오픈 소스 사진 라이브러리.
+audit: none
+template: splash
+hero:
+  title: 평생의 사진을, 체계적이고 안전하게
+  tagline: Capsule은 라이브러리 전체를 자신의 기기에서 정리하고, 키를 절대 보관하지 않는 서버에 모든 사진을 종단 간 암호화해 저장하며, 서버를 넘나들며 공유하도록 만들어졌습니다.
+  image:
+    # Raw HTML rather than `file`: Starlight's hero sizes `file` images to a
+    # 400x400 square, which crops a portrait screenshot.
+    html: |
+      <img class="hero-shot hero-shot-light" src="/images/hero-light.webp" width="800" height="1538" alt="iPhone에서 라이브러리 타임라인을 보여 주는 Capsule" />
+      <img class="hero-shot hero-shot-dark" src="/images/hero-dark.webp" width="800" height="1538" alt="iPhone에서 라이브러리 타임라인을 보여 주는 Capsule" />
+  actions:
+    - text: 시작하기
+      link: /guides/getting-started/
+      icon: right-arrow
+    - text: 설계 문서 읽기
+      link: /design/
+      variant: secondary
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+import Feature from '../../../components/Feature.astro';
+import FeatureGrid from '../../../components/FeatureGrid.astro';
+import StatusStrip from '../../../components/StatusStrip.astro';
+
+<StatusStrip
+  text="모바일 클라이언트는 베타 테스터 배포를 앞두고 안정화와 개선 작업을 진행하고 있습니다."
+  href="https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md"
+  linkLabel="로드맵"
+/>
+
+<a id="what-sets-capsule-apart"></a>
+
+## Capsule만의 차별점
+
+<FeatureGrid>
+  <Feature icon="random" title="규모와 상관없는 정리" href="/features/smart-albums/" linkLabel="스마트 앨범">
+    검색, 스마트 앨범, 자동 태깅은 전체 로컬 색인을 바탕으로 기기에서 실행되도록 설계되어,
+    수백만 장의 사진이 담긴 라이브러리도 누군가 손으로 분류하지 않아도 쉽게 둘러볼 수
+    있습니다.
+  </Feature>
+  <Feature icon="padlock" title="키가 없는 서버" href="/design/cryptography/" linkLabel="암호화 설계">
+    서버는 암호문만 저장하고 키를 절대 보관하지 않습니다. 사진도, 캡션도, 앨범 제목도 읽을 수
+    없지만, 받아들인 모든 업로드에 대해 서명된 보관 영수증을 발급합니다.
+  </Feature>
+  <Feature icon="server" title="서버를 넘나드는 공유" href="/design/federation/" linkLabel="페더레이션 설계">
+    신뢰는 서버가 아니라 암호화에 있으므로, 서로 다른 Capsule 서버의 사용자끼리 중간에 어떤
+    중앙 서비스도 거치지 않고 앨범을 공유할 수 있도록 설계되었습니다.
+  </Feature>
+  <Feature icon="laptop" title="오프라인에서도 라이브러리 전체를" href="/features/offline-library/" linkLabel="오프라인 라이브러리">
+    모든 네이티브 앱은 보관한 모든 사진의 전체 색인을 유지하도록 만들어져, 연결이 없어도
+    전부 둘러보고 검색하고 정리할 수 있습니다.
+  </Feature>
+  <Feature icon="approve-check-circle" title="검증 가능한 이력" href="/design/cryptography/provenance/" linkLabel="출처 설계">
+    모든 에셋에는 서명된 추가 전용 출처 체인이 함께하므로, 어떤 사람과 기기가 그것을
+    가져오거나 편집했는지를 믿는 대신 검증할 수 있습니다.
+  </Feature>
+  <Feature icon="database" title="복구를 전제로 한 구조" href="/design/backup-recovery/" linkLabel="백업 및 복구">
+    각 에셋에는 서명된 메타데이터 사이드카가 짝지어져 있어, 데이터베이스 없이도 라이브러리를
+    읽을 수 있고 일부가 손상되어도 다시 구축할 수 있습니다.
+  </Feature>
+</FeatureGrid>
+
+<a id="everything-you-would-expect"></a>
+
+## 기대하는 모든 기능
+
+원본은 최대 품질로 보관되며 바이트 단위로 그대로 복원할 수 있습니다. RAW와 동영상을
+일급 형식으로 지원합니다. 각 플랫폼 고유의 컨트롤로 만든 네이티브 앱을 제공합니다. 앱이
+할 수 있는 모든 일을 CLI와 TUI로도 할 수 있습니다. [](/reference/cli/)를 참고하세요.
+
+<a id="why-it-is-built-this-way"></a>
+
+## 이렇게 만든 이유
+
+대부분의 사진 서비스는 서버가 라이브러리를 읽어서 얻는 기능과, 서버가 읽을 수 없을 때
+얻는 프라이버시 중 하나를 고르게 합니다. Capsule은 프라이버시를 택하고, 오직 기기만
+복호화할 수 있는 데이터를 바탕으로 기기에서 기능을 다시 구현합니다.
+
+이 선택에는 대가가 따르며, 설계 문서는 이를 숨기지 않고 밝힙니다. 키가 없는 서버가 알려
+줄 수 있는 것과 없는 것([](/design/notifications/)), 키를 잃어버렸을 때 일어나는
+일([](/design/backup-recovery/#recovery-paths)), 결함이 있거나 악의적인 클라이언트가 할 수
+없도록 막는 일([](/design/threat-model/))을 다룹니다.
+
+<a id="get-started"></a>
+
+## 시작하기
+
+<CardGrid>
+  <Card title="서버 호스팅하기" icon="server">
+    자신의 하드웨어에서 Capsule을 실행하세요. [](/guides/self-hosting/)
+  </Card>
+  <Card title="Capsule 사용하기" icon="open-book">
+    라이브러리를 가져오고, 정리하고, 둘러보세요. [](/guides/user-guide/)
+  </Card>
+  <Card title="라이브러리 가져오기" icon="cloud-download">
+    Google 포토 Takeout을 메타데이터와 함께 가져오세요.
+    [](/guides/google-photos-migration/)
+  </Card>
+  <Card title="Capsule 개발하기" icon="code-branch">
+    모든 코드는 오픈 소스이며 공개적으로 개발됩니다.
+    [](/development/local-development/)
+  </Card>
+</CardGrid>

@@ -171,6 +171,16 @@ hex = "0.4"
 # Product media decoding stays with Rawshift: no product crate depends on `image` for codecs.
 # The one exception is `capsule-cli` naming it with no features for `ratatui-image`'s buffer.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+# Rawshift, the still-image decode/encode stack behind `capsule_core::media` (its rationale and
+# format set are in `capsule-core/Cargo.toml`). Taken from rawshift's git `master`, pinned to a
+# commit, rather than crates.io: the published 0.1.1 decodes AVIF through `image`'s
+# `avif-native`, which links a system libdav1d through `dav1d-sys`, while master routes every
+# codec through gamut (AVIF through `gamut-avif`, no system library). Pinned here once so every
+# member (and every dev-dependency) resolves the same commit. Keep bumping `rev` to rawshift's
+# latest master, and return to a crates.io version as soon as rawshift publishes a stable
+# release carrying the gamut codecs; `deny.toml` `[sources]` admits this one git repository and
+# no other. Not the `rawshift/` submodule, which is never a path dependency.
+rawshift-image = { git = "https://github.com/visualcommons/rawshift", rev = "2b508669855cfeced8344f3ec54e6948146c283a", default-features = false }
 
 # `panic` stays at its default, `unwind`, in every profile: `capsule-core::media::decode::guarded`
 # catches a panicking third-party codec with `catch_unwind` so the original still imports. Under
@@ -233,10 +243,11 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.fdeflate]
 opt-level = 3
-# The AV1 encoder behind capsule-core's `media-linked-codecs` AVIF variant (#437). Unoptimized,
-# rav1e takes about ten seconds per small frame, which every media test that generates
-# derivatives pays. It is a leaf codec, so optimizing it changes nothing else's build.
-[profile.dev.package.rav1e]
+# The AV1 encoder behind capsule-core's AVIF derivative variant (gamut's, through rawshift-image's
+# `avif-encode`). Every media test that generates derivatives encodes through it, and an
+# unoptimized AV1 encoder multiplies that cost. It is a leaf codec, so optimizing it changes
+# nothing else's build.
+[profile.dev.package.gamut-av1]
 opt-level = 3
 
 # The same settings for the test profile, spelled out rather than inherited.

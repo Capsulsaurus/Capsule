@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
-#MISE description="Build the capsule-sdk FFI and the app umbrella for the Apple targets (macOS only)"
+#MISE description="Build the capsule-sdk FFI and the app umbrella for the Apple targets (macOS; type-checks only elsewhere)"
 set -euo pipefail
-if [ "$(uname)" != "Darwin" ]; then echo "Skipping Apple targets (not macOS)"; exit 0; fi
+# Linking an Apple artifact needs the Xcode SDK, which exists only on macOS. Elsewhere, don't
+# skip (a skip reads as a pass): type-check the same targets through the host-agnostic task.
+if [ "$(uname)" != "Darwin" ]; then
+    echo "build-apple: linking needs macOS + Xcode; type-checking the Apple targets instead (check-targets --apple)"
+    exec "$(dirname "$0")/check-targets" --apple
+fi
 for t in aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios; do
     # The `capsule_sdk` namespace on its own — the library the capsule-core-swift harness links.
     echo ":: building capsule-sdk (ffi) for $t"

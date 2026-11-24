@@ -1,8 +1,14 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Community Discussions
-    url: https://github.com/Capsulsaurus/Capsule/discussions
-    about: Please ask general questions here.
-  - name: Security Policy
-    url: https://github.com/Capsulsaurus/Capsule/security/policy
-    about: Please review our security policy before submitting security issues.
+  - name: Support
+    url: https://capsule.justinchung.net/support/
+    about: Not sure where to go? Start here, and read the troubleshooting guide before filing a bug.
+  - name: Questions
+    url: https://github.com/Capsulsaurus/Capsule/discussions/categories/q-a
+    about: Ask how to do something, or whether a behavior is expected.
+  - name: Ideas
+    url: https://github.com/Capsulsaurus/Capsule/discussions/categories/ideas
+    about: Suggest a feature. Accepted ideas become issues.
+  - name: Report a security vulnerability
+    url: https://github.com/Capsulsaurus/Capsule/security/advisories/new
+    about: Report privately. Never open a public issue for a vulnerability.

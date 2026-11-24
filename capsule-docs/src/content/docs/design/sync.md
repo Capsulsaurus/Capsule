@@ -1,7 +1,7 @@
 ---
 title: Sync
 description: The metadata sync feed — cursors, anti-rewind, stale-revival detection, auto-sync criteria and background execution
-status: draft
+audit: none
 ---
 
 The sync feed tells a client **what changed**; the [](/design/transfer/) moves the bytes. A client never polls assets individually: it holds one opaque cursor and reads everything after it. Server: `capsule-server::sync`; client: `capsule-sdk::sync`, applied by `capsule-library::lifecycle::sync_apply`.
@@ -33,10 +33,11 @@ A delete carries its signed manifest, the `delete` record whose `retention_until
 
 ### Cursor Authenticity and Anti-Rewind
 
-- The cursor is **MAC'd by the server** under a server-only key, bound to the caller and, for an album page, the album (`capsule-server::sync::cursor`). A forged, mutated or foreign cursor is refused, and the client re-syncs from zero.
+- The cursor is **MAC'd by the server** under a server-only key (`capsule-server::sync::cursor`). The tag covers the cursor's own bytes, then the length-prefixed reader (the account, or the peer server for a federation pull), then the scope: the caller's own feed, or one album's page as read by an account, or that page as pulled by a peer, with the album id for both album scopes. A cursor minted for another reader, another album or another scope therefore fails verification, even though neither the reader nor the album is a cursor field. A forged, mutated or foreign cursor is refused, and the client re-syncs from zero.
 - The cursor carries the owner's **sync epoch**. After an index rebuild moves the epoch, an older cursor is refused with `409 error.sync.cursor_stale`. The client drops its cursor and its high-water marks, resyncs from zero, and keeps everything it holds. What it holds that the resynced feed no longer lists it then re-announces: manifests only, which restore the rows whose blobs the server still holds ([](/design/filesystem/server/#sync-epoch-and-client-re-announce)).
 - Every entry carries the album's `protocol_version` and a per-album, strictly increasing `sync_seq`. The client MUST refuse an entry above its maximum known version, and MUST surface, never apply, a page whose `sync_seq` regresses against its high-water mark.
 - The two layers are independent: the MAC stops forgery, but only the client's high-water mark stops a server replaying its own older, valid cursor (the sync-cursor rewind class in [](/design/threat-model/scenarios/#damage-scenario--invariant-map)).
+- **An album page discloses index facts, not content.** A member's page starts at the album's first entry whatever their history policy ([](/design/cryptography/mls/)). So a member who cannot decrypt older epochs still receives every entry's server-visible facts: the count of entries, ciphertext sizes, `content_type`, `changed_at`, the author device and the action history. This is accepted: those facts are the feed's routing data, the server cannot read which epochs a member holds, and one page shape for every reader is what keeps a peer's puller from stalling. The history policy bounds what a member can decrypt, never what the feed lists.
 - A feed manifest is verified with `verify_asset` ([](/design/cryptography/keys/#write-authorization)) over the bytes as received. Bytes that do not decode as a provenance record are quarantined as malformed.
 
 ## Stale-Revival Detection
@@ -58,8 +59,10 @@ On mobile, auto sync uploads new assets and pulls others' assets. When a check f
 
 ### Synchronization Criteria
 
-- **Small reconciliation** (a few assets, metadata-only deltas): any non-metered connection class ([](/design/networking/#connection-classes)).
-- **Large reconciliation** (bulk uploads, original-tier downloads, streaming import): unmetered Wi-Fi only.
+- **Small reconciliation** (feed pages, metadata-only deltas, index-tier records): any usable connection class, metered and constrained included. A user on cellular still sees what changed.
+- **Large reconciliation** (bulk uploads, original-tier downloads, streaming import): `unmetered` only, unless the user consents.
+
+These are the defaults of the per-class admission policy, which owns the rule and the user's overrides ([](/design/networking/#admission-and-priority)).
 
 ### Platform Limitations
 
@@ -71,11 +74,12 @@ Background and OS-scheduled transfer are post-v1 ([](/design/clients/#platform-l
 
 - **Requests are self-contained.** Every chunk `PATCH` and `Range` `GET` is complete in its URL, headers and a body the core has written to a file before queuing it. An OS transfer daemon can run it while the Rust core is suspended, and the core reconciles from server truth when it wakes.
 - **Queued requests outlive the access token.** A request the OS queues may run after the access token has expired, so no queued request may depend on one. The credential that replaces it is specified with background transfer in [](/design/authentication/).
+- **Rust builds, the OS ships.** Where the OS daemon, not the app, runs the transfer, the core seals the chunks to files and builds each request with the generated client ([](/design/networking/#one-http-stack)): URL, method, headers and body file. Native code only hands that spec to the daemon. No native code builds a request, holds a key or sees plaintext.
 
 Per platform:
 
-- **iOS.** Small work rides `BGAppRefreshTask`, and large work requests `BGProcessingTask` with network (and power for very large batches).
-- **Android.** `WorkManager` with explicit constraints (`UNMETERED` for large, `CONNECTED` for small, battery-not-low). A user-initiated large force-sync may run as a foreground service.
+- **iOS.** Small work rides `BGAppRefreshTask`. Automatic large work requests `BGProcessingTask` with network (and power for very large batches). A large job the user started (an import, a force sync) continues under `BGContinuedProcessingTask`, which shows its progress and lets the user cancel it ([](/design/platform-integrations/)). In all three the core runs in process. Uploads that must continue while the app is suspended ride a background `URLSession`, which runs the request specs the core wrote and reports each one's completion when the app next wakes. The core then reads server truth (`HEAD`, the committed set) instead of trusting the daemon's report.
+- **Android.** Automatic work runs under `WorkManager` with explicit constraints (`UNMETERED` for large, `CONNECTED` for small, battery-not-low). A transfer the user started (a backup, a large force sync) runs as a user-initiated data transfer job on Android 14 and later, which the OS does not cap the way it caps a data-sync foreground service ([](/design/platform-integrations/)). Earlier versions use a foreground service. Both run the Rust core in process, so their requests leave through the generated client like any other.
 - **Desktop.** Self-throttled with the maintenance gating rules ([](/design/filesystem/maintenance/#content-validation-expensive-scheduled)).
 - **All platforms.** Every window is preemptible: an OS kill loses at most the chunks in flight, uploads resume from the server's committed set and downloads via `Range`, and there is no "must finish" state. Retries follow the bulk-transfer policy class ([](/design/networking/#retry-policy-classes)).
 

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Archiver companion to scripts/cross/zig-cc: cc-rs needs an archiver that understands every
+# target's object format, on any host. For `*-msvc` targets cc-rs speaks `lib.exe` (`-out:…`),
+# which `zig lib` (llvm-lib) accepts; every other target gets `zig ar` (llvm-ar).
+# CAPSULE_ZIG is the resolved zig binary check-targets exports (see zig-cc for why).
+set -euo pipefail
+zig="${CAPSULE_ZIG:-zig}"
+for a in "$@"; do
+    case "$a" in
+        -out:* | /OUT:* | /out:*) exec "$zig" lib "$@" ;;
+    esac
+done
+exec "$zig" ar "$@"

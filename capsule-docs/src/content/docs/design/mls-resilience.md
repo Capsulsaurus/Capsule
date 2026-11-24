@@ -1,7 +1,7 @@
 ---
 title: MLS Resilience
 description: How Capsule's MLS layer recovers from lost commits, state divergence, and group corruption
-status: draft
+audit: none
 ---
 
 Recovery contracts for the honest MLS failures the base protocol leaves open. The steady state is in [](/design/cryptography/mls/) and attacks in the [](/design/threat-model/). Code: `capsule-core/src/crypto/authority/openmls_authority/resilience.rs`.
@@ -23,10 +23,10 @@ When two admins rotate in the same epoch, MLS ordering decides the winner and th
 
 ### Group re-keying ceremony
 
-A full-group re-key rotates every leaf, the AMK and the write-tier key. It runs as quiesce → commit chain → resume, reusing the crash-resumable, `intent_id`-keyed machinery of the album upgrade ceremony ([](/design/versioning/#album-upgrade-ceremony)). The album stays on the prior epoch until the ceremony completes, so two write-tier keys are never live at once.
+A full-group re-key rotates every leaf and opens a fresh epoch: every member exports that epoch's AMK from the MLS key schedule and escrows it before first use ([](/design/cryptography/keys/#where-an-amk-comes-from)), and the committer mints the epoch's write-tier key. It runs as quiesce → commit chain → resume, reusing the crash-resumable, `intent_id`-keyed machinery of the album upgrade ceremony ([](/design/versioning/#album-upgrade-ceremony)). The album stays on the prior epoch until the ceremony completes, so two write-tier keys are never live at once.
 
 - **Triggers:** admin, suspected compromise, or scheduled policy.
-- **Stalled run:** any owner-set member recovers the AMK lineage from the OGK ([](/design/cryptography/keys/#owner-group-keys-ogks)) and drives a clean epoch.
+- **Stalled run:** any owner-set member recovers the AMK lineage from its account's album key escrow ([](/design/backup-recovery/#album-key-escrow)), which holds every escrowed epoch's AMK and the album's write-tier and admin seeds, and drives a clean epoch. OGKs, which would hold the lineage for the owner set as a whole, are post-v1 ([](/design/cryptography/keys/#owner-group-keys-ogks)).
 
 ## Recovery Posture
 

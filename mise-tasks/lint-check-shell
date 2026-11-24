@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+#MISE description="Lint the shell scripts (shellcheck) and the GitHub workflows (actionlint)"
+# Usage: mise run lint-check-shell
+#
+# Checks every shell script git tracks or would track (so a new one is checked before its first
+# commit) outside legacy-review/ with shellcheck: each file under mise-tasks/ and scripts/ whose
+# shebang names a POSIX shell or bash, and every `*.sh`. actionlint then reads
+# .github/workflows/, and runs the same shellcheck over each workflow's `run:` blocks.
+# Both are pinned in mise.toml [tools]. Verify-only: neither tool has a fix mode.
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$root"
+
+scripts=()
+while IFS= read -r f; do
+    case "$f" in
+        *.sh) scripts+=("$f") ;;
+        *)
+            first=""
+            IFS= read -r first <"$f" || true
+            if [[ "$first" =~ ^#!.*[/\ ](ba|da|k)?sh([[:space:]]|$) ]]; then
+                scripts+=("$f")
+            fi
+            ;;
+    esac
+done < <(git ls-files --cached --others --exclude-standard -- 'mise-tasks/*' 'scripts/**' '*.sh' ':!legacy-review')
+
+# An empty list would pass vacuously; the task scripts exist, so none found means the
+# discovery above broke.
+if [ ${#scripts[@]} -eq 0 ]; then
+    echo "lint-check-shell: found no shell scripts to check; the discovery is broken." >&2
+    exit 1
+fi
+
+echo ":: shellcheck (${#scripts[@]} scripts)"
+shellcheck "${scripts[@]}"
+
+echo ":: actionlint (.github/workflows/)"
+actionlint

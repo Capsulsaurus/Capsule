@@ -6,10 +6,13 @@
 
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { splitLocale } from '../../src/lib/locales.mjs';
 
 /**
  * Resolve a site route (`/design/thumbnails/`) to the content file that
  * serves it, trying the page and then the section index, `.md` before `.mdx`.
+ * A locale's route (`/ja/guides/`) resolves only to that locale's own
+ * translation; see {@link servingFileForRoute} for the English fallback.
  *
  * @param {string} contentDir Directory of the docs collection
  *   (`src/content/docs`), absolute or relative to the working directory.
@@ -27,4 +30,20 @@ export function contentFileForRoute(contentDir, route) {
         }
     }
     return null;
+}
+
+/**
+ * The content file Starlight renders at a route: the locale's translation
+ * when one exists, otherwise, for a route under a locale
+ * (src/lib/locales.mjs), the English page it falls back to.
+ *
+ * @param {string} contentDir
+ * @param {string} route
+ * @returns {string | null}
+ */
+export function servingFileForRoute(contentDir, route) {
+    const own = contentFileForRoute(contentDir, route);
+    if (own !== null) return own;
+    const { locale, path } = splitLocale(`/${route.replace(/^\/+/, '')}`);
+    return locale === undefined ? null : contentFileForRoute(contentDir, path);
 }

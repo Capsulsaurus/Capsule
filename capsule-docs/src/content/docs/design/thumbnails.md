@@ -1,7 +1,7 @@
 ---
 title: Thumbnails and Previews
 description: Format inventory, LQIP scheme, and derivative provenance for photo and video derivatives
-status: draft
+audit: none
 ---
 
 This page is the single source of truth for the LQIP scheme and the derivative formats; other docs link here rather than restate them. The format table is a contract: a receiver, including a federated peer, MUST reject a `DerivativeManifest.format` value not listed here.
@@ -14,7 +14,7 @@ Capsule embraces every format and capability its pinned Rawshift release support
 
 `capsule-core::media` is a thin adapter that owns only what is Capsule's: the pixel budget and decoder sandbox (`catch_unwind`), the tier table ([](#thumbnail-and-preview-formats)), metadata stripping before encryption, and derivative signing ([](#derivative-provenance)). Its tests are lean integration tests over a fixture corpus (one file per supported format and per known-hostile shape), not re-tests of Rawshift.
 
-Code that duplicates Rawshift today, deleted once the Rawshift release it waits for is pinned: Capsule's own format sniffing, the TIFF/RAW IFD pre-walk, EXIF parsing through `kamadak-exif`, the AV1 container pre-check, and the integer resize.
+Code that duplicates Rawshift today, deleted once the Rawshift revision it waits for is pinned: Capsule's own format sniffing, the TIFF/RAW IFD pre-walk, EXIF parsing through `kamadak-exif`, and the integer resize.
 
 **Every file is kept, whatever Rawshift supports.** An original in a format no codec in the build handles, video included, is still imported, encrypted, uploaded, verified and restorable byte for byte. Only its derivatives are absent, recorded as deferred and generated when a later build can. Format support governs previews, never whether Capsule will hold the file.
 
@@ -40,11 +40,13 @@ The table is the contract, not an inventory. Native encoders sit behind the opt-
 
 | Build | Thumbnail | Preview | Missing |
 | --- | --- | --- | --- |
-| `media-linked-codecs` (CLI) | JXL (lossy q=50) + AVIF | JXL + AVIF, q=70 | WebP (`rawshift-image` fails to compile it on aarch64) |
-| `media` only (FFI, cross) | JXL **lossless** (q=50 is advisory) | none | AVIF, lossy JXL (native code), WebP |
-| Either | — | — | All video derivatives (`rawshift-video` 0.1.1 is an unimplemented placeholder) |
+| `media-linked-codecs` (CLI) | JXL (lossy q=50) + AVIF | JXL + AVIF, q=70 | WebP (not enabled) |
+| `media` only (FFI, cross) | AVIF (q=50) | none | JXL (its only encoder, libjxl, is native code), WebP |
+| Either | — | — | All video derivatives (`rawshift-video` is an unimplemented placeholder) |
 
-Decode covers JPEG, PNG, JXL, TIFF, GIF, ARW and DNG in every build, plus AVIF under `media-avif-decode` (system libdav1d; not on Windows). Capsule pre-walks RAW IFD chains to bound value sizes and nesting depth (≤16) before handing them to the RAW reader. **HEIC is refused by decision**: libheif and libde265 are LGPL-3.0 ([](/design/licensing/)). WebP, other RAW families, and AVIF without the feature are recognised and refused.
+Decode covers JPEG, PNG, JXL, TIFF, GIF, ARW and DNG in every build, plus AVIF under `media-avif-decode` (the CLI). Rawshift decodes an AVIF's AV1 codestream only through a hardware decoder (VAAPI on Linux today), so on a host without one, or whose decoder refuses the codestream's profile (VAAPI decodes AV1 Profile 0 only, not 4:4:4 Profile 1), an AVIF is deferred, and its header size is checked before decode and its decoded frame after it, not its coded frame; both gaps are filed upstream ([visualcommons/rawshift#78](https://github.com/visualcommons/rawshift/issues/78), [#79](https://github.com/visualcommons/rawshift/issues/79)). Capsule pre-walks RAW IFD chains to bound value sizes and nesting depth (≤16), the directories, values, strips and tiles a file states (twice its length each) and the SubIFD pointers it follows (≤256), a DNG's black-level pattern (≤8 a side) and bad-pixel lists, and a DNG's stated image and tile sizes, the pixels of every image IFD its eager reader decodes taken together, its `SamplesPerPixel` (≤4) and each lossless-JPEG chunk's own header size, before handing them to the RAW reader. The DNG bounds apply to any file whose IFD0 states `DNGVersion`, whatever its extension, because the reader opens every such file as a DNG ([visualcommons/rawshift#83](https://github.com/visualcommons/rawshift/issues/83)). A Deflate DNG is deferred, because the reader inflates it with no output bound ([visualcommons/rawshift#82](https://github.com/visualcommons/rawshift/issues/82)). **HEIC is refused by decision**: libheif and libde265 are LGPL-3.0 ([](/design/licensing/)). WebP, other RAW families, and AVIF without the feature are recognised and refused.
+
+Rawshift is pinned to a commit of its git `master`, not a crates.io release, because its gamut codecs are unreleased. Keep bumping that pin, and return to a crates.io release once Rawshift is stable.
 
 Nothing is silent. An absent codec is `media::MediaError::UnsupportedFormat`; an unencodable `(tier, format)` pair is recorded as deferred and counted in the import summary while the asset's other derivatives still ship.
 :::
@@ -56,6 +58,16 @@ Video derivatives (first-frame still, H.264 preview) are the planned `capsule-co
 - **Toolchain.** Video derivatives come from `rawshift-video`, never from a codec Capsule links itself. Encode goes through hardware codecs behind Rawshift's `VideoEncoder` seam. FFmpeg is excluded from every build ([](/design/licensing/#the-video-transcoder-seam)).
 - **First frame.** The extracted frame becomes a `DecodedImage`, so the thumbnail tier, the pixel budget and the LQIP are the still path's, unchanged.
 - **Until `rawshift-video` ships.** A video sniffs to no still format and its import reports `DeferredNoCodec`, never a missing asset. The original is stored, signed and verified like any other file.
+
+### Seekable Video Renditions
+
+An original video is one sealed blob, so playing from the middle would mean fetching and decrypting everything before it. A **rendition** makes playback and seeking fetch only what is shown, without the server ever seeing a frame.
+
+- **Shape.** The client transcodes the video to fragmented MP4 at the preview resolution and cuts it at keyframes into segments of about 4 seconds. Each segment is sealed as its own blob, and a **segment index** (each segment's start time, duration and content address) is sealed as one more. The index is the rendition's entry point and is named by a `preview`-role `DerivativeManifest` ([](#derivative-provenance)).
+- **Playback.** The player fetches the index, then the segments around the playhead. A seek fetches the segment that holds the target time and its successor, never the original.
+- **Produced on the client.** The server cannot transcode ciphertext, so the uploading device, or any later device with the album's write tier, produces the rendition through `rawshift-video` as above. Recent short clips get one automatically at import; others on first play or on request.
+- **Derived data.** A rendition is a derivative: it is counted in quota like one ([](/design/quota/#accounting-model)), may be dropped and rebuilt, and never replaces the original.
+- **What the server learns.** Segment count and sizes, which reveal a video's length and rough bitrate. A video's length is already implied by its original's size, so a rendition adds no new class of fact.
 
 ### Embedded Previews
 
@@ -85,6 +97,10 @@ Derivatives are regenerable but not unowned: adding or replacing one is a signed
 
 - A receiver MUST NOT schedule regeneration for a tier the sidecar's `dimensions` show the original already satisfies; the `original` sentinel is local and never shipped.
 - A derivative whose manifest fails verification is discarded (not quarantined) and regenerated from the original, appending a new `derivative-replace` record.
+
+## Known Gaps
+
+- Seekable video renditions are not implemented; they wait on `capsule-core::media::video`.
 
 ## Validation
 

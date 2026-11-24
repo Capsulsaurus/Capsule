@@ -79,11 +79,13 @@ export function stripFrontmatter(source) {
     return match ? blank(match[0]) + source.slice(match[0].length) : source;
 }
 
-/** The review `status` in a page's YAML frontmatter, or undefined. */
-export function frontmatterStatus(source) {
+/** The Starlight `template` in a page's YAML frontmatter, or undefined. */
+export function frontmatterTemplate(source) {
     const block = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/.exec(source);
     if (!block) return undefined;
-    const field = /^status:\s*['"]?([^'"\s#]+)['"]?\s*(#.*)?$/m.exec(block[1]);
+    const field = /^template:\s*['"]?([^'"\s#]+)['"]?\s*(#.*)?$/m.exec(
+        block[1],
+    );
     return field?.[1];
 }
 

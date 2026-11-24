@@ -1,10 +1,11 @@
 ---
 title: Server Architecture
 description: The Kynos REST/OpenAPI server and generated client architecture
-status: draft
+audit: none
 ---
 
-Capsule exposes one REST/OpenAPI contract ([](/design/api-surfaces/)).
+Capsule exposes one REST/OpenAPI contract ([](/design/api-surfaces/)). How every component of the
+repository depends on the others is mapped in [](/development/components/).
 
 ## Data Flow
 
@@ -51,6 +52,11 @@ Kynos owns HTTP and the Tokio runtime, Spargen generates the client, Rawshift ow
 metadata extraction, and Chromahash is called directly. Blob storage, resumable upload, provenance,
 crypto, CRDTs, asset lifecycle and application-state ports stay in Capsule. Each pin carries its
 rationale as a comment beside it in the declaring manifest.
+
+Every crate comes from crates.io except Rawshift, which is pinned to a commit of its git `master`
+(the root `Cargo.toml`, admitted by name in `deny.toml` `[sources]`) because its gamut codecs are
+unreleased. Bump that pin as Rawshift moves, and return to a crates.io release once Rawshift is
+stable.
 
 No reusable infrastructure library is extracted until a stable product-neutral contract has at least
 two real consumers.

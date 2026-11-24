@@ -1,7 +1,7 @@
 ---
 title: Account Activity Log
 description: The durable record of an account's security events, what it may hold under E2EE, and who reads it
-status: draft
+audit: none
 ---
 
 The activity log is the account owner's record of what was done **to and with the account** on this server: sign-ins, sign-outs, revocations, credential changes, device enrollment and the links that open the account to someone else. It answers "was that me?" next to the session list ([](/design/authentication/#explicit-revocation)), and an operator and a user reconstruct an incident from it. Code: `capsule-server::activity`.
@@ -14,7 +14,7 @@ It is neither the provenance chain ([](/design/cryptography/provenance/)), which
 - **Append-only.** An event is never updated. Rows leave the log only by the retention bound below, never by a user or a request.
 - **Identifiers, never content.** The server is end-to-end encrypted, so no field may carry what only clients can read: no asset content, album names, captions, labels, file names or key material. An event names *which* session, share link or drop link by the identifier the server already holds.
 - **Recording never refuses the act.** An event is written after the action it describes. A store that cannot record it is logged at `error` with the event's fields and the action stands, because refusing a sign-out, a revocation or a password change while the log is down would turn an audit outage into a security outage.
-- **Recording never discloses an account.** `sign_in.password_refused` and `sign_in.locked` are written only for an address that has an account, so the sign-in's answer, status and code included, is the one an unknown address gets. The event is written off the response path, since a write the response waited on would show in its timing which addresses exist.
+- **Recording never discloses an account.** `sign_in.password_refused` and `sign_in.throttled` are written only for an address that has an account, so the sign-in's answer, status and code included, is the one an unknown address gets. The event is written off the response path, since a write the response waited on would show in its timing which addresses exist.
 - **The event set is closed per server version.** Every event the server writes is a kind listed below. A new kind is an additive change: a client renders a kind it does not know as a generic entry with its time and never refuses the listing.
 
 ## Events
@@ -24,7 +24,7 @@ It is neither the provenance chain ([](/design/cryptography/provenance/)), which
 | `account.registered` | an account is created, by registration or by the first identity-provider sign-in of an identity | its first session, when registration opened one; absent for an account an identity-provider sign-in created, whose `sign_in.oidc` names the session |
 | `sign_in.password` | a password sign-in opens a session | the new session |
 | `sign_in.password_refused` | a password sign-in is refused because the password is wrong for this account; at most one an hour per account, see [](#retention) | — |
-| `sign_in.locked` | a password sign-in is refused because this account is locked; at most one an hour per account, see [](#retention) | — |
+| `sign_in.throttled` | a password sign-in for this account's address is refused `429` because the address delay has not elapsed ([](/design/authentication/#sign-in-limits)); the account itself is never locked; at most one an hour per account, see [](#retention) | — |
 | `sign_in.second_factor` | a sign-in completes its second factor and opens a session | the new session |
 | `sign_in.second_factor_refused` | a second-factor code is refused for a sign-in whose first factor verified | — |
 | `sign_in.oidc` | an identity-provider sign-in (browser or device flow) opens a session | the new session |
@@ -35,6 +35,7 @@ It is neither the provenance chain ([](/design/cryptography/provenance/)), which
 | `totp.enabled` | a second factor is confirmed | — |
 | `totp.disabled` | a second factor is removed | — |
 | `escrow.replaced` | the master-key escrow ([](/design/backup-recovery/#master-key-escrow)) is stored over an earlier one, so the old recovery secret stops working | — |
+| `escrow.fetched` | a session fetches the master-key escrow or the sealed identity ([](/design/backup-recovery/#master-key-escrow)); every fetch, which the escrow-fetch budget bounds ([](/design/authorization/#rate-limits)) | which escrow was fetched, `master_key` or `identity`; `session_id` names the fetching device's session, and the request log holds its source address. Never any escrowed bytes |
 | `device.enrolled` | a cross-device enrollment code is redeemed | — |
 | `share_link.created` | a share link is created | the link's id |
 | `share_link.revoked` | a share link is revoked | the link's id |
@@ -76,7 +77,7 @@ An account's log keeps events for **90 days** and at most **1,000 events**, whic
 - The sweep is part of `capsule-server gc`, not a request's work. An applied pass deletes every event older than 90 days, across accounts, in batches of at most 1,000 rows so it never holds a long lock on the table. A dry run, the default, reports how many it would delete and deletes nothing. It deletes only activity events past the retention window, never one inside it.
 - The count bound keeps a burst of events (a scripted loop against the second factor) from growing the table without limit. Its cost is that such a flood pushes the account's older events out of its log; the request log still holds them for as long as the operator keeps it.
 
-**Refused sign-ins are coalesced.** Anyone who knows an address can cause `sign_in.password_refused` and `sign_in.locked`, and the password sign-in route charges no budget for them.
+**Refused sign-ins are coalesced.** Anyone who knows an address can cause `sign_in.password_refused` and `sign_in.throttled`. The sign-in budgets ([](/design/authorization/#rate-limits)) are charged per source and per presented address, never per account, so attempts spread across many sources still reach one account's log.
 
 - One of each is written per account per hour, and the attempts after it in that hour are counted into it. The count goes to the operator's log (at `info`) when the window is closed after the hour, by the next attempt of that kind for the account or by a sweep of expired windows (run when many accounts are tracked). An account that goes quiet may never have its count logged above `debug`. Every attempt is still in the request log.
 - A wrong-password flood therefore adds at most two events an hour to an account's log and needs weeks of uninterrupted attempts to push out the events before it. Serving through links and to peers is bounded the same way, at ten events an hour ([](#serving)).
@@ -104,4 +105,9 @@ The log is a durable port in the PostgreSQL family, beside the asset index, acco
 
 ## Rate Limits
 
-No event feeds a counter budget ([](/design/authentication/#the-second-factor)). Budgets are charged at the request edge, before the action, against a counter store built for that, while the log is written to PostgreSQL after the action; a budget fed from the log would make a log outage disable a limiter. Second-factor attempts and link creation are budgeted at the routes that cause them. A password sign-in is bounded by the account lockout, not a budget, so its refusal events are coalesced instead ([](#retention)).
+No event feeds a counter budget ([](/design/authentication/#the-second-factor)). Budgets are charged at the request edge, before the action, against a counter store built for that, while the log is written to PostgreSQL after the action; a budget fed from the log would make a log outage disable a limiter. Every budget, including those on second-factor attempts, link creation and escrow fetches, is declared at the route that causes it ([](/design/authorization/#rate-limits)). A password sign-in is budgeted per source and slowed per presented address, never locked ([](/design/authentication/#sign-in-limits)), so no budget bounds the refusals one account sees and its refusal events are coalesced instead ([](#retention)).
+
+## Known Gaps
+
+- The server still locks an account after repeated failures and writes `sign_in.locked` (`capsule-server/src/activity/mod.rs`) in place of `sign_in.throttled`.
+- The server writes no `escrow.fetched`.

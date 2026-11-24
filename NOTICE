@@ -62,18 +62,6 @@ Capsule's own source code. The unmodified database is available from the
 upstream sources above under the ODbL.
 
 --------------------------------------------------------------------------------
-jpeg-encoder — Independent JPEG Group license (IJG)
---------------------------------------------------------------------------------
-
-`jpeg-encoder` is licensed `(MIT OR Apache-2.0) AND IJG`. The IJG term is a
-conjunctive requirement that cannot be elected away, and it requires the
-following notice:
-
-  This software is based in part on the work of the Independent JPEG Group.
-
-Capsule elects MIT for the disjunctive portion.
-
---------------------------------------------------------------------------------
 webpki-roots — Community Data License Agreement, Permissive, v2.0
 --------------------------------------------------------------------------------
 
@@ -109,11 +97,14 @@ Mozilla Public License 2.0 components
 The following dependencies are licensed under the MPL-2.0. The MPL is a
 file-level copyleft: the obligation is to make the source of these files
 available, and it is satisfied because Capsule links them unmodified from
-their published upstream releases. Source for each is available from crates.io
-and from the upstream repository named in its own package metadata.
+their published upstream sources. Source for each is available from crates.io
+and from the upstream repository named in its own package metadata; the
+rawshift crates (rawshift-core, rawshift-hwdec, rawshift-image and its
+rawshift-image-* format crates) are taken unmodified from
+https://github.com/visualcommons/rawshift at the revision pinned in Cargo.toml.
 
   base64urlsafedata, colored, hpke-rs, hpke-rs-crypto, hpke-rs-libcrux,
-  hpke-rs-rust-crypto, mp4parse, option-ext, rawshift-core, rawshift-image, uniffi,
+  hpke-rs-rust-crypto, option-ext, rawshift-core, rawshift-image, uniffi,
   uniffi_bindgen, uniffi_core, uniffi_internal_macros, uniffi_macros,
   uniffi_meta, uniffi_pipeline, uniffi_udl, webauthn-attestation-ca,
   webauthn-rs, webauthn-rs-core, webauthn-rs-proto
@@ -130,16 +121,9 @@ applies simultaneously and Capsule complies with all of them:
   aws-lc-sys    ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT AND
                 BSD-3-Clause AND (Apache-2.0 OR ISC OR MIT) AND
                 (Apache-2.0 OR ISC OR MIT-0)
-  brotli        BSD-3-Clause AND MIT
   encoding_rs   (Apache-2.0 OR MIT) AND BSD-3-Clause
   matchit       MIT AND BSD-3-Clause
   unicode-ident (MIT OR Apache-2.0) AND Unicode-3.0
-  libfuzzer-sys (MIT OR Apache-2.0) AND NCSA. Capsule elects MIT for the
-                disjunctive part; NCSA is attribution-only. Reached only
-                through rav1e's `cfg(fuzzing)` target dependency (capsule-core's
-                `media-linked-codecs` feature), so no Capsule artefact compiles
-                or links it. It is listed because the licence gate inspects
-                every target configuration.
 
 --------------------------------------------------------------------------------
 License elections

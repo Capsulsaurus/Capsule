@@ -1,0 +1,14 @@
+---
+// A wrapping row of DownloadButtons inside a card on the downloads page.
+---
+
+<div class="download-buttons not-content"><slot /></div>
+
+<style>
+  .download-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 1rem;
+  }
+</style>

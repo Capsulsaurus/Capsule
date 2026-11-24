@@ -30,6 +30,7 @@ jobs:
       docs: ${{ steps.filter.outputs.docs }}
       docs-truth: ${{ steps.filter.outputs.docs-truth }}
       markdown: ${{ steps.filter.outputs.markdown }}
+      shell: ${{ steps.filter.outputs.shell }}
       kotlin: ${{ steps.filter.outputs.kotlin }}
       swift: ${{ steps.filter.outputs.swift }}
     steps:
@@ -46,6 +47,7 @@ jobs:
               - 'Cross.toml'
               - 'mise.toml'
               - 'mise-tasks/**'
+              - 'scripts/cross/**'
               - '.config/nextest.toml'
               - 'hk.pkl'
               - '.cargo/**'
@@ -60,6 +62,11 @@ jobs:
               - 'capsule-wasm/**'
               - 'ptpip-rs/**'
               - 'xtask/**'
+              # `gen-bindings --check` also dumps the hand-written platform
+              # adapters into capsule-sdk/bindings-surface.json, so a change to
+              # one alone must still pay the Rust gate to catch the dump's drift.
+              - 'capsule-core-kotlin/src/main/**'
+              - 'capsule-core-swift/Sources/**'
               # `check-rust` reads the catalogs directly: `i18n-check` and
               # `i18n-guard` are `cargo run -p xtask -- i18n …` over `locales/`,
               # so a catalog-only change must still pay the Rust gate. The
@@ -79,6 +86,8 @@ jobs:
               - 'capsule-web/src/i18n/messages/**'
               - 'capsule-swift/Generated/**'
               - 'capsule-android/src/main/res/values*/strings.xml'
+              # The `prev-release-compat` job's flow.
+              - 'scripts/prev-release-compat.sh'
               # `translate-readme-check` (also in `check-rust`) gates README.md's
               # generated language regions and the translations derived from it,
               # so a README-only edit must still pay the Rust gate.
@@ -171,6 +180,15 @@ jobs:
               - 'mise.toml'
               - 'mise-tasks/**'
               - '.github/workflows/ci.yml'
+            # What `lint-check-shell` reads, plus mise.toml for the shellcheck and
+            # actionlint pins. Same set as hk.pkl's `lint-check-shell` glob; keep the
+            # two in step.
+            shell:
+              - 'mise-tasks/**'
+              - 'scripts/**'
+              - '**/*.sh'
+              - '.github/workflows/**'
+              - 'mise.toml'
             swift:
               - 'capsule-swift/**'
               - 'capsule-core-swift/**'
@@ -230,13 +248,9 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
       # `--workspace` builds capsule-cli, which enables capsule-core's `media-linked-codecs`
-      # (#437): rav1e's x86_64 assembly needs nasm. cmake, a C++ compiler and libclang (for
-      # libjxl and its bindgen bindings) are already on the runner image. It also enables
-      # `media-avif-decode` (#588), whose `dav1d-sys` links the system libdav1d through
-      # pkg-config and has no vendored build, so the headers and `dav1d.pc` come from
-      # libdav1d-dev.
-      - name: Install nasm and libdav1d
-        run: sudo apt-get update && sudo apt-get install -y nasm libdav1d-dev
+      # (#437): libjxl's build needs cmake and a C++ compiler, both already on the runner
+      # image. Its AVIF decode (`media-avif-decode`) goes through rawshift's gamut codecs
+      # (#1320) and links no system codec library, so neither libdav1d nor nasm is installed.
       # check-rust runs the verify-examples smoke via nextest.
       - name: Install nextest
         uses: taiki-e/install-action@v2
@@ -319,10 +333,6 @@ jobs:
         run: rustup toolchain install
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-      # nasm for rav1e's x86_64 assembly (#437) and libdav1d for AVIF decode (#588); see the
-      # `rust` job.
-      - name: Install nasm and libdav1d
-        run: sudo apt-get update && sudo apt-get install -y nasm libdav1d-dev
       - name: Install nextest
         uses: taiki-e/install-action@v2
         with:
@@ -373,10 +383,6 @@ jobs:
         run: rustup toolchain install
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-      # nasm and libdav1d: capsule-e2e links capsule-cli's codecs through capsule-library, as
-      # in the `rust` job.
-      - name: Install nasm and libdav1d
-        run: sudo apt-get update && sudo apt-get install -y nasm libdav1d-dev
       - name: Install nextest
         uses: taiki-e/install-action@v2
         with:
@@ -410,9 +416,6 @@ jobs:
         run: rustup toolchain install
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-      # nasm and libdav1d: capsule-cli's codecs, as in the `rust` job.
-      - name: Install nasm and libdav1d
-        run: sudo apt-get update && sudo apt-get install -y nasm libdav1d-dev
       - name: Install nextest
         uses: taiki-e/install-action@v2
         with:
@@ -457,9 +460,6 @@ jobs:
         run: rustup toolchain install
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-      # nasm and libdav1d: capsule-cli's codecs, as in the `rust` job.
-      - name: Install nasm and libdav1d
-        run: sudo apt-get update && sudo apt-get install -y nasm libdav1d-dev
       - name: Install nextest
         uses: taiki-e/install-action@v2
         with:
@@ -502,6 +502,113 @@ jobs:
         run: |
           cat "$RUNNER_TEMP/capsule-server.log" || true
           docker compose -f capsule-server/compose.yaml --profile oidc logs dex || true
+
+  # The previous release's `capsule` against the server built here, and this build's `capsule`
+  # against the previous release's `capsule-server` (#761), through one fixed flow: register,
+  # login, import, push, status, restore. Inside the server's protocol window the push must reach
+  # verified custody and the restore must match byte for byte; outside it every write must be
+  # refused with `426` and nothing lost. scripts/prev-release-compat.sh owns the flow and resolves
+  # the release: the newest published one whose tag is an ancestor of the commit under test.
+  #
+  # `prev-release` resolves the release first (`--resolve-only`): with none older than the commit
+  # under test its `tag` output is empty and it leaves a notice. The flow's job then runs under
+  # another name, "Compat flow self-test (no release yet)", so no "Compat (previous release)"
+  # result exists - never a pass - until the first release does: it drives this build against
+  # itself through both arms (inside the window, and with the window moved past the build's
+  # protocol version so every write is refused), which keeps the flow's CLI flags and JSON
+  # fields from drifting unnoticed before there is a release to check against. A failed release
+  # listing fails `prev-release`, never reads as "no release". Neither job is in `required`; the
+  # flow's job joins it once it has passed against a real release.
+  # `fetch-depth: 0` because resolving the release walks tag ancestry and reads the release's
+  # protocol version from its tree.
+  prev-release:
+    name: Compat (resolve previous release)
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Resolve the newest release older than this commit
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(scripts/prev-release-compat.sh --resolve-only)
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [ -z "$tag" ]; then
+            echo "::notice title=Compat (previous release) not run::No published release is older than this commit, so there is nothing to check against yet; the flow runs as a self-test against this build instead (#761)."
+          fi
+
+  prev-release-compat:
+    name: ${{ needs.prev-release.outputs.tag != '' && 'Compat (previous release)' || 'Compat flow self-test (no release yet)' }}
+    needs: [changes, prev-release]
+    if: ${{ needs.changes.outputs.rust == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Build the binaries under test
+        run: cargo build -p capsule-cli -p capsule-server --bins
+      - name: Previous release against this build, both directions
+        if: ${{ needs.prev-release.outputs.tag != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/prev-release-compat.sh target/debug
+      # No release yet: this build stands in for the previous one. The second run moves both
+      # servers' window past any protocol version this build can declare, so the refused arm runs.
+      - name: Self-test the flow against this build, both arms
+        if: ${{ needs.prev-release.outputs.tag == '' }}
+        run: |
+          protocol=$(sed -n 's/^pub const PROTOCOL_VERSION: &str = "\([0-9-]*\)";$/\1/p' capsule-core/src/crypto/primitives.rs)
+          [ -n "$protocol" ] || { echo "no PROTOCOL_VERSION in capsule-core/src/crypto/primitives.rs" >&2; exit 1; }
+          scripts/prev-release-compat.sh target/debug --prev-dir target/debug --prev-protocol "$protocol"
+          PROTOCOL_MIN=9999-01-01 PROTOCOL_MAX=9999-12-31 \
+            scripts/prev-release-compat.sh target/debug --prev-dir target/debug --prev-protocol "$protocol"
+      - name: Upload the flows' logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prev-release-compat-logs
+          path: ${{ runner.temp }}/prev-release-compat.*/
+          if-no-files-found: ignore
+
+  # Type-check the FFI for every Tier-1 and Tier-2 cross target from ONE Linux runner, exactly
+  # as a developer runs it locally (`mise run check-targets`, C through zig). This is the proof
+  # that the cross-target gate does not need each platform's runner. Tier 1 gates; Tier 2 is
+  # best-effort, matching `rust-cross` below.
+  rust-cross-check:
+    name: Rust cross check (Linux host)
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: cross-check
+      - name: Set up mise (task runner + zig)
+        uses: jdx/mise-action@v2
+        with:
+          install_args: zig
+      - name: Check Tier 1 targets
+        run: mise run check-targets --tier 1
+      - name: Check Tier 2 targets (best-effort)
+        continue-on-error: true
+        run: mise run check-targets --tier 2
 
   # Verify the app FFI — capsule-sdk with `--features ffi`, plus the capsule-core-ffi
   # umbrella on Apple, both linking capsule-core — cross-compiles to the formally
@@ -557,12 +664,12 @@ jobs:
         if: matrix.name == 'android'
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-ndk
+          tool: cargo-ndk@4.1.2 # matches the mise.toml pin
       - name: Install cross
         if: matrix.name == 'linux-arm64'
         uses: taiki-e/install-action@v2
         with:
-          tool: cross
+          tool: cross@0.2.5 # matches the mise.toml pin
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
@@ -684,6 +791,22 @@ jobs:
       - name: Check (markdown lint)
         run: mise run check-md
 
+  # shellcheck over the shell scripts and actionlint over every workflow (#1343). The two
+  # tools are [tools] pins, and MISE_AUTO_INSTALL is off, so they are asked for by name.
+  shell:
+    name: Shell + workflows (shellcheck + actionlint)
+    needs: changes
+    if: ${{ needs.changes.outputs.shell == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up mise (task runner + shellcheck + actionlint)
+        uses: jdx/mise-action@v2
+        with:
+          install_args: shellcheck actionlint
+      - name: Check (shellcheck + actionlint)
+        run: mise run lint-check-shell
+
   kotlin:
     name: Kotlin (ktlint + detekt)
     needs: changes
@@ -750,17 +873,23 @@ jobs:
   # Single aggregated status check. Mark THIS ("CI / required") as the required
   # check in branch protection — path-filtered jobs report "skipped", which this
   # treats as a pass. Every job in `needs` is verified below: the loop covers the
-  # eleven gates (`rust-test` included — see the
+  # fourteen gates (`rust-test` included — see the
   # note on that job — `rust-containers`, blocking from the start, #514, `rust-oidc`, #640, and
   # `rust-advisories`, unfiltered, #507), and `changes` is checked ahead of it under a stricter rule,
   # because "skipped" is only trustworthy when the filter that skipped it ran.
   # A job in `needs` but absent from both checks is a gate that cannot fail.
+  # `rust-cross-check` gates on purpose (#1310): a Tier-1 target that no longer type-checks
+  # through `mise run check-targets` blocks the merge, as a Tier-1 `rust-cross` failure does.
+  # `shell` (#1343) gates every shell script and workflow, this file included.
+  # `prev-release` and `prev-release-compat` are absent from both on purpose (#761): until a release
+  # exists the flow runs only as a self-test against this build, and it joins `needs` and the loop
+  # once it has passed against a real release.
   required:
     name: required
     if: always()
     # TODO(track:deferred): re-add `kotlin` and `swift` here and to the loop below when mobile
     # resumes — see #389 (Android) and #391–#393 (Apple). Both jobs are disabled (`if: false`).
-    needs: [changes, commit-lint, rust, rust-advisories, rust-test, rust-containers, rust-kill-anywhere, rust-oidc, rust-cross, web, docs, docs-truth, markdown]
+    needs: [changes, commit-lint, rust, rust-advisories, rust-test, rust-containers, rust-kill-anywhere, rust-oidc, rust-cross-check, rust-cross, web, docs, docs-truth, markdown, shell]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs succeeded
@@ -782,10 +911,10 @@ jobs:
                    "${{ needs.rust-advisories.result }}" \
                    "${{ needs.rust-test.result }}" "${{ needs.rust-containers.result }}" \
                    "${{ needs.rust-kill-anywhere.result }}" \
-                   "${{ needs.rust-oidc.result }}" "${{ needs.rust-cross.result }}" \
+                   "${{ needs.rust-oidc.result }}" "${{ needs.rust-cross-check.result }}" "${{ needs.rust-cross.result }}" \
                    "${{ needs.web.result }}" \
                    "${{ needs.docs.result }}" "${{ needs.docs-truth.result }}" \
-                   "${{ needs.markdown.result }}"; do
+                   "${{ needs.markdown.result }}" "${{ needs.shell.result }}"; do
             if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
               echo "A required job did not pass (result: $r)."
               exit 1

@@ -21,6 +21,7 @@ import {
     docProse,
     exampleFor,
     generate,
+    nativeDocLinks,
     OPENAPI_DOCUMENT,
     OPENAPI_DOWNLOAD,
     operationAnchor,
@@ -34,6 +35,9 @@ import {
     renderCliPage,
     renderConventionsPage,
     renderWasmPage,
+    resolveRustPath,
+    sdkLinkTargets,
+    supertypesOf,
     tsSignature,
     WASM_SURFACE,
 } from './gen-reference.mjs';
@@ -482,11 +486,11 @@ describe('renderCliPage', () => {
         expect(page).toContain('Import files into a local Capsule library');
     });
 
-    it('opens with generated frontmatter and no review status', () => {
+    it('opens with generated frontmatter and no audit', () => {
         const page = renderCliPage(MINIMAL_CLI);
         expect(page.startsWith('---\n')).toBe(true);
         expect(page).toMatch(/^generated:$/m);
-        expect(page).not.toMatch(/^status:/m);
+        expect(page).not.toMatch(/^audit:/m);
         expect(page).toMatch(/^title: "Commands"$/m);
     });
 
@@ -679,7 +683,7 @@ describe('generate', () => {
             root,
             'capsule-docs/src/content/docs/reference/api/retired-group.md',
         );
-        writeFileSync(orphan, '---\ntitle: Gone\nstatus: stable\n---\n');
+        writeFileSync(orphan, '---\ntitle: Gone\naudit: none\n---\n');
         generate(root);
         expect(existsSync(orphan)).toBe(false);
     });
@@ -694,7 +698,7 @@ describe('generate', () => {
             root,
             'capsule-docs/src/content/docs/reference/cli.md',
         );
-        writeFileSync(overview, '---\ntitle: CLI\nstatus: draft\n---\n');
+        writeFileSync(overview, '---\ntitle: CLI\naudit: none\n---\n');
         generate(root);
         expect(existsSync(overview)).toBe(true);
     });
@@ -709,8 +713,8 @@ describe('generate', () => {
         mkdirSync(sdk, { recursive: true });
         const rust = join(sdk, 'rust.md');
         const orphan = join(sdk, 'retired-language.md');
-        writeFileSync(rust, '---\ntitle: Rust\nstatus: draft\n---\n');
-        writeFileSync(orphan, '---\ntitle: Gone\nstatus: stable\n---\n');
+        writeFileSync(rust, '---\ntitle: Rust\naudit: none\n---\n');
+        writeFileSync(orphan, '---\ntitle: Gone\naudit: none\n---\n');
         const written = generate(root);
         expect(existsSync(rust)).toBe(true);
         expect(existsSync(orphan)).toBe(false);
@@ -794,7 +798,9 @@ describe('the SDK pages', () => {
             '```ts wrap\nexport function shareIsPassphraseProtected(wrapped_scope_b64: string): boolean;\n```',
         );
         expect(page).toContain('## Classes');
-        expect(page).toContain('#### `scopeKind`');
+        expect(page).toContain(
+            '#### <a id="sharescope-scopekind" class="sdk-anchor"></a>`scopeKind`',
+        );
         expect(page).not.toContain('private constructor');
         // rustdoc's shorthand link is unwrapped to its code span, not printed with brackets.
         expect(page).toContain('Calls `open_share` next.');
@@ -806,7 +812,7 @@ describe('the SDK pages', () => {
         const swiftPage = renderBindingsPage(swift, MINIMAL_BINDINGS);
         const kotlinPage = renderBindingsPage(kotlin, MINIMAL_BINDINGS);
         expect(swiftPage).toContain('```swift wrap\nopen class FfiWorkspace');
-        expect(swiftPage).toContain('#### `sealAsset`');
+        expect(swiftPage).toContain('class="sdk-anchor"></a>`sealAsset`');
         expect(swiftPage).not.toContain('```kotlin');
         expect(kotlinPage).toContain('```kotlin wrap\nfun `evaluateAlerts`');
         expect(kotlinPage).not.toContain('FfiWorkspace');
@@ -816,8 +822,8 @@ describe('the SDK pages', () => {
         );
     });
 
-    it('opens every SDK page as generated, with no review status', () => {
-        // A generated page tracks its artifact; it has no review state, and
+    it('opens every SDK page as generated, with no audit', () => {
+        // A generated page tracks its artifact; it has no audit state, and
         // PageTitle.astro refuses a page that claims both.
         for (const page of [
             renderWasmPage(wasm, parseWasmSurface(MINIMAL_WASM)),
@@ -826,7 +832,7 @@ describe('the SDK pages', () => {
         ]) {
             const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec(page);
             expect(frontmatter?.[1]).toMatch(/^generated:$/m);
-            expect(frontmatter?.[1]).not.toMatch(/^status:/m);
+            expect(frontmatter?.[1]).not.toMatch(/^audit:/m);
         }
     });
 
@@ -852,6 +858,10 @@ describe('the SDK pages', () => {
         empty.languages.kotlin.declarations = [];
         writeSdk(empty);
         expect(() => readBindingsSurface(root)).toThrow(/no kotlin/);
+        const platform = structuredClone(MINIMAL_BINDINGS);
+        platform.languages.swift.platform = { source: 'x', declarations: {} };
+        writeSdk(platform);
+        expect(() => readBindingsSurface(root)).toThrow(/swift platform/);
     });
 
     it('puts the generated conventions page right after the REST overview', () => {
@@ -890,7 +900,9 @@ describe('the native SDK layouts', () => {
         expect(page).toContain('<p class="sdk-label">Declaration</p>');
         expect(page).toContain('<p class="sdk-label sdk-topics">Topics</p>');
         expect(page).toContain('<p class="sdk-label">Instance Methods</p>');
-        expect(page).toMatch(/^#### `sealAsset`$/m);
+        expect(page).toContain(
+            '#### <a id="ffiworkspace-sealasset" class="sdk-anchor"></a>`sealAsset`',
+        );
         // The abstract is the first sentence; the rest is the Overview.
         expect(page).toMatch(
             /<div class="sdk-abstract">\n\nA local workspace\.\n\n<\/div>/,
@@ -982,6 +994,603 @@ describe('the native SDK layouts', () => {
             ],
             returns: 'R',
         });
+    });
+});
+
+/** A dump shaped like the real one where rustdoc paths cross languages. */
+const LINKED_BINDINGS = {
+    schema: 1,
+    namespace: 'capsule_sdk',
+    uniffi: '0.31.1',
+    languages: {
+        swift: {
+            source: 'capsule_sdk.swift',
+            declarations: [
+                {
+                    kind: 'class',
+                    name: 'FfiWorkspace',
+                    signature: 'open class FfiWorkspace: FfiWorkspaceProtocol',
+                    doc: 'A workspace.',
+                    members: [
+                        {
+                            kind: 'static func',
+                            name: 'create',
+                            signature:
+                                'public static func create(tier: FfiDeviceTier) throws -> FfiWorkspace',
+                            doc: 'Create one.',
+                            members: [],
+                        },
+                        {
+                            kind: 'func',
+                            name: 'applySyncEntry',
+                            signature:
+                                'open func applySyncEntry(entry: FfiSyncEntry) throws',
+                            doc: 'As [`create`](Self::create), then see [`fetch`](crate::ffi::FfiSession::fetch_blob_to_path) and [`HistorySources`](crate::sync::HistorySources).',
+                            members: [],
+                        },
+                    ],
+                },
+                {
+                    kind: 'class',
+                    name: 'FfiSession',
+                    signature: 'open class FfiSession: FfiSessionProtocol',
+                    doc: '',
+                    members: [
+                        {
+                            kind: 'func',
+                            name: 'fetchBlobToPath',
+                            signature:
+                                'open func fetchBlobToPath(path: String) async throws',
+                            doc: '',
+                            members: [],
+                        },
+                    ],
+                },
+                {
+                    kind: 'enum',
+                    name: 'FfiDeviceTier',
+                    signature: 'public enum FfiDeviceTier',
+                    doc: '',
+                    members: [
+                        {
+                            kind: 'case',
+                            name: 'low',
+                            signature: 'case low',
+                            doc: 'See [`FfiError::Auth`].',
+                            members: [],
+                        },
+                    ],
+                },
+            ],
+        },
+        kotlin: {
+            source: 'uniffi/capsule_sdk/capsule_sdk.kt',
+            declarations: [
+                {
+                    kind: 'fun',
+                    name: 'syncedHistorySources',
+                    signature:
+                        'fun `syncedHistorySources`(`entry`: FfiSyncEntry): FfiSyncEntry',
+                    doc: '',
+                    members: [],
+                },
+                {
+                    kind: 'class',
+                    name: 'FfiWorkspace',
+                    signature: 'open class FfiWorkspace: FfiWorkspaceInterface',
+                    doc: 'Built by [`synced_history_sources`](crate::ffi::synced_history_sources).',
+                    members: [
+                        {
+                            kind: 'fun',
+                            name: 'create',
+                            signature:
+                                '@Throws(FfiException::class) fun create(tier: FfiDeviceTier): FfiWorkspace',
+                            doc: 'Create one; [`Self::open`] reopens it.',
+                            members: [],
+                        },
+                        {
+                            kind: 'fun',
+                            name: 'open',
+                            signature: 'fun open(): FfiWorkspace',
+                            doc: '',
+                            members: [],
+                        },
+                    ],
+                },
+                {
+                    kind: 'enum class',
+                    name: 'FfiDeviceTier',
+                    signature: 'enum class FfiDeviceTier',
+                    doc: '',
+                    members: [
+                        {
+                            kind: 'entry',
+                            name: 'LOW',
+                            signature: 'LOW',
+                            doc: '',
+                            members: [],
+                        },
+                    ],
+                },
+                {
+                    kind: 'sealed class',
+                    name: 'FfiException',
+                    signature: 'sealed class FfiException: kotlin.Exception()',
+                    doc: '',
+                    members: [
+                        {
+                            kind: 'variant',
+                            name: 'Auth',
+                            signature: 'class Auth(): FfiException()',
+                            doc: 'Rejected; compare [`FfiDeviceTier::Low`](Self::Auth).',
+                            members: [],
+                        },
+                    ],
+                },
+            ],
+        },
+    },
+};
+
+describe('rustdoc paths in SDK prose', () => {
+    const swift = SDK_PAGES.find((page) => page.slug === 'swift');
+    const kotlin = SDK_PAGES.find((page) => page.slug === 'kotlin');
+    const kotlinTargets = sdkLinkTargets(
+        LINKED_BINDINGS.languages.kotlin.declarations,
+    );
+
+    it('resolves Self, a crate path, a type path and a free function to anchors', () => {
+        expect(
+            resolveRustPath('Self::open', kotlinTargets, 'FfiWorkspace'),
+        ).toBe('ffiworkspace-open');
+        expect(
+            resolveRustPath('crate::ffi::FfiWorkspace::create', kotlinTargets),
+        ).toBe('ffiworkspace-create');
+        expect(resolveRustPath('FfiDeviceTier::Low', kotlinTargets)).toBe(
+            'ffidevicetier-low',
+        );
+        expect(
+            resolveRustPath(
+                'crate::ffi::synced_history_sources',
+                kotlinTargets,
+            ),
+        ).toBe('syncedhistorysources');
+        expect(resolveRustPath('FfiWorkspace', kotlinTargets)).toBe(
+            'ffiworkspace',
+        );
+    });
+
+    it('never links a path through another module to the export that shares its name', () => {
+        // `crate::fetch::render_step` is the internal function; the export of the same
+        // name lives in `crate::ffi`.
+        expect(
+            resolveRustPath(
+                'crate::fetch::synced_history_sources',
+                kotlinTargets,
+            ),
+        ).toBeNull();
+        expect(
+            resolveRustPath(
+                'crate::ffi::ladder::synced_history_sources',
+                kotlinTargets,
+            ),
+        ).toBe('syncedhistorysources');
+        expect(
+            resolveRustPath('super::synced_history_sources', kotlinTargets),
+        ).toBe('syncedhistorysources');
+    });
+
+    it('spells a Rust error type as the Kotlin exception uniffi renames it to', () => {
+        expect(resolveRustPath('FfiError::Auth', kotlinTargets)).toBe(
+            'ffiexception-auth',
+        );
+    });
+
+    it('resolves nothing the page does not document', () => {
+        expect(
+            resolveRustPath('crate::sync::HistorySources', kotlinTargets),
+        ).toBeNull();
+        expect(resolveRustPath('Self::open', kotlinTargets)).toBeNull();
+        expect(
+            resolveRustPath(
+                'crate::recovery::FfiWorkspace::open',
+                kotlinTargets,
+            ),
+        ).toBeNull();
+        expect(resolveRustPath('FfiMissing::open', kotlinTargets)).toBeNull();
+        expect(
+            resolveRustPath('FfiWorkspace::open::deeper', kotlinTargets),
+        ).toBeNull();
+        expect(
+            resolveRustPath('Self::missing', kotlinTargets, 'FfiWorkspace'),
+        ).toBeNull();
+    });
+
+    it('never publishes a rustdoc path as a link target', () => {
+        for (const page of [
+            renderBindingsPage(swift, LINKED_BINDINGS),
+            renderBindingsPage(kotlin, LINKED_BINDINGS),
+        ]) {
+            expect(page).not.toMatch(/\]\((?:Self|crate|super)::/);
+            expect(page).not.toMatch(/\]\(Ffi\w+::/);
+        }
+    });
+
+    it('links a rustdoc path to the member it names, in the reader’s spelling', () => {
+        const page = renderBindingsPage(swift, LINKED_BINDINGS);
+        expect(page).toContain('As [`create`](#ffiworkspace-create)');
+        expect(page).toContain('see [`fetch`](#ffisession-fetchblobtopath)');
+        // Not on the page: the words stay, the link goes.
+        expect(page).toContain('and `HistorySources`.');
+    });
+
+    it('resolves a rustdoc path written as shorthand', () => {
+        const page = renderBindingsPage(kotlin, LINKED_BINDINGS);
+        expect(page).toContain('[`Self::open`](#ffiworkspace-open) reopens it');
+        expect(page).toContain(
+            'Built by [`synced_history_sources`](#syncedhistorysources).',
+        );
+        // Swift documents no FfiError, so the shorthand unwraps.
+        expect(renderBindingsPage(swift, LINKED_BINDINGS)).toContain(
+            'See `FfiError::Auth`.',
+        );
+    });
+
+    it('drops a rustdoc path link on a REST page, whatever its first segment', () => {
+        const document = structuredClone(MINIMAL_OPENAPI);
+        document.paths['/v1/auth/login'].post.description =
+            'See [`a`](Self::a), [`b`](super::b), [`c`](crate::c) and [`d`](FfiWorkspace::d).';
+        const rendered = renderApiPage(
+            API_GROUPS.find((entry) => entry.slug === 'auth'),
+            bucketOperations(document).get('auth'),
+            document,
+        );
+        expect(rendered).toContain('See `a`, `b`, `c` and `d`.');
+    });
+});
+
+describe('SDK member permalinks and signature types', () => {
+    const swift = SDK_PAGES.find((page) => page.slug === 'swift');
+    const kotlin = SDK_PAGES.find((page) => page.slug === 'kotlin');
+
+    it('gives every member a stable anchor, linked from its name in a member list', () => {
+        const page = renderBindingsPage(kotlin, LINKED_BINDINGS);
+        expect(page).toContain(
+            '- <a id="ffiworkspace-create" class="sdk-anchor" href="#ffiworkspace-create">`create`</a>',
+        );
+        expect(page).toContain('id="ffidevicetier-low"');
+        expect(page).toContain('id="ffiexception-auth"');
+    });
+
+    it('anchors a member rendered as a heading inside a Markdown heading', () => {
+        // A Markdown heading keeps Starlight's permalink button and the untranslated code
+        // span; the anchor's `id` leads its tag, where headingAnchors reads it.
+        const page = renderBindingsPage(swift, LINKED_BINDINGS);
+        expect(page).toMatch(
+            /^#### <a id="ffiworkspace-create" class="sdk-anchor"><\/a>`create`$/m,
+        );
+        expect(headingAnchors(page).has('ffiworkspace-create')).toBe(true);
+        expect(headingAnchors(page).has('ffiworkspace-applysyncentry')).toBe(
+            true,
+        );
+    });
+
+    it('lists the documented types a signature names, linked, once each', () => {
+        const page = renderBindingsPage(kotlin, LINKED_BINDINGS);
+        // A member signature: every documented type it names, in order, its own type left
+        // out, since the reader is already in that type's section.
+        const create = page.slice(
+            page.indexOf('id="ffiworkspace-create"'),
+            page.indexOf('id="ffiworkspace-open"'),
+        );
+        expect(create).toContain(
+            'Types: [`FfiException`](#ffiexception), [`FfiDeviceTier`](#ffidevicetier)\n',
+        );
+        expect(create).not.toContain('[`FfiWorkspace`](#ffiworkspace)');
+        // A declaration does not list itself.
+        const tier = page.slice(
+            page.indexOf('### `FfiDeviceTier`'),
+            page.indexOf('id="ffidevicetier-low"'),
+        );
+        expect(tier).not.toContain('Types:');
+    });
+
+    it('names each type once, and never a function', () => {
+        const bindings = structuredClone(LINKED_BINDINGS);
+        bindings.languages.kotlin.declarations[1].members[1].signature =
+            'fun open(a: FfiDeviceTier, b: FfiDeviceTier, syncedHistorySources: FfiDeviceTier): FfiDeviceTier';
+        const page = renderBindingsPage(kotlin, bindings);
+        const open = page.slice(page.indexOf('id="ffiworkspace-open"'));
+        expect(open).toContain('Types: [`FfiDeviceTier`](#ffidevicetier)\n');
+        expect(open).not.toContain('(#syncedhistorysources)');
+    });
+
+    it('refuses two members that would share an anchor or a spelling', () => {
+        const overload = structuredClone(LINKED_BINDINGS);
+        const members = overload.languages.kotlin.declarations[1].members;
+        members.push({ ...members[0] });
+        expect(() => renderBindingsPage(kotlin, overload)).toThrow(
+            /share the anchor #ffiworkspace-create/,
+        );
+        const alike = structuredClone(LINKED_BINDINGS);
+        alike.languages.kotlin.declarations[1].members.push({
+            ...members[0],
+            name: 'o_pen',
+        });
+        expect(() => renderBindingsPage(kotlin, alike)).toThrow(
+            /spelled alike/,
+        );
+    });
+
+    it('says Java callers are untested, and why the page is not Dokka', () => {
+        const page = renderBindingsPage(kotlin, MINIMAL_BINDINGS);
+        expect(page).toContain('calling them from Java is untested');
+        expect(page).toContain('[](/design/developer-docs/#why-not-dokka)');
+        expect(renderBindingsPage(swift, MINIMAL_BINDINGS)).not.toContain(
+            'Java',
+        );
+    });
+
+    it('lists no types for a signature that names none on the page', () => {
+        const page = renderBindingsPage(kotlin, MINIMAL_BINDINGS);
+        expect(page).not.toContain('Types:');
+    });
+});
+
+/** LINKED_BINDINGS with the callback interfaces and the adapters that implement them. */
+const PLATFORM_BINDINGS = (() => {
+    const dump = structuredClone(LINKED_BINDINGS);
+    const signerDoc = {
+        enroll: 'Create the key under `key_alias`, as [`Self::classical_public_key`] returns it.',
+        assertNonExportable: '',
+    };
+    dump.languages.kotlin.declarations.push(
+        {
+            kind: 'interface',
+            name: 'FfiHardwareSigner',
+            signature: 'interface FfiHardwareSigner',
+            doc: 'A platform key store.',
+            members: [
+                {
+                    kind: 'fun',
+                    name: 'enroll',
+                    signature:
+                        'fun enroll(keyAlias: kotlin.String): kotlin.ByteArray',
+                    doc: signerDoc.enroll,
+                    members: [],
+                },
+                {
+                    kind: 'fun',
+                    name: 'classicalPublicKey',
+                    signature:
+                        'fun classicalPublicKey(keyAlias: kotlin.String): kotlin.ByteArray',
+                    doc: '',
+                    members: [],
+                },
+            ],
+        },
+        {
+            kind: 'sealed class',
+            name: 'FfiHardwareSignerException',
+            signature:
+                'sealed class FfiHardwareSignerException: kotlin.Exception()',
+            doc: '',
+            members: [
+                {
+                    kind: 'variant',
+                    name: 'Exportable',
+                    signature:
+                        'class Exportable(): FfiHardwareSignerException()',
+                    doc: '',
+                    members: [],
+                },
+            ],
+        },
+    );
+    dump.languages.kotlin.platform = {
+        source: 'capsule-core-kotlin/src/main/kotlin/com/justin13888/capsule/hardware',
+        declarations: [
+            {
+                kind: 'class',
+                name: 'SoftwareSigner',
+                signature:
+                    'class SoftwareSigner(seed: ByteArray) : FfiHardwareSigner',
+                doc: 'Software [FfiHardwareSigner]: [assertNonExportable] throws [FfiHardwareSignerException.Exportable]; seeded from [seed].',
+                members: [
+                    {
+                        kind: 'constructor',
+                        name: 'SoftwareSigner',
+                        signature: 'constructor(seed: ByteArray)',
+                        doc: '',
+                        members: [],
+                    },
+                    {
+                        kind: 'fun',
+                        name: 'enroll',
+                        signature:
+                            'override fun enroll(keyAlias: String): ByteArray',
+                        doc: '',
+                        members: [],
+                    },
+                    {
+                        kind: 'fun',
+                        name: 'assertNonExportable',
+                        signature:
+                            'override fun assertNonExportable(keyAlias: String)',
+                        doc: 'Always throws.',
+                        members: [],
+                    },
+                ],
+            },
+        ],
+    };
+    dump.languages.swift.declarations.push({
+        kind: 'protocol',
+        name: 'FfiHardwareSigner',
+        signature: 'public protocol FfiHardwareSigner: AnyObject, Sendable',
+        doc: '',
+        members: [
+            {
+                kind: 'func',
+                name: 'assertNonExportable',
+                signature: 'func assertNonExportable(keyAlias: String) throws',
+                doc: '',
+                members: [],
+            },
+        ],
+    });
+    dump.languages.swift.platform = {
+        source: 'capsule-core-swift/Sources/CapsuleHardware',
+        declarations: [
+            {
+                kind: 'class',
+                name: 'SoftwareSigner',
+                signature:
+                    'public final class SoftwareSigner: FfiHardwareSigner, @unchecked Sendable',
+                doc: 'A software ``FfiHardwareSigner``; see ``assertNonExportable(keyAlias:)``.',
+                members: [
+                    {
+                        kind: 'func',
+                        name: 'assertNonExportable',
+                        signature:
+                            'public func assertNonExportable(keyAlias: String) throws',
+                        doc: '',
+                        members: [],
+                    },
+                ],
+            },
+        ],
+    };
+    return dump;
+})();
+
+describe('the platform adapters on the binding pages', () => {
+    const swift = SDK_PAGES.find((page) => page.slug === 'swift');
+    const kotlin = SDK_PAGES.find((page) => page.slug === 'kotlin');
+
+    it('follows the generated declarations with the adapters, named as hand-written', () => {
+        const page = renderBindingsPage(kotlin, PLATFORM_BINDINGS);
+        const section = page.indexOf('## Platform adapters');
+        expect(section).toBeGreaterThan(page.indexOf('## Classes'));
+        expect(page.slice(section)).toContain(
+            'Hand-written in `capsule-core-kotlin/src/main/kotlin/com/justin13888/capsule/hardware`',
+        );
+        expect(page.slice(section)).toContain('### `SoftwareSigner`');
+        // The index lists them too, under their own label.
+        const index = page.slice(0, page.indexOf('</nav>'));
+        expect(index).toContain('<p class="sdk-label">Platform adapters</p>');
+        expect(index).toContain('[`SoftwareSigner`](#softwaresigner)');
+    });
+
+    it('resolves KDoc links, the enclosing class’s members included', () => {
+        const page = renderBindingsPage(kotlin, PLATFORM_BINDINGS);
+        expect(page).toContain(
+            'Software [`FfiHardwareSigner`](#ffihardwaresigner): [`assertNonExportable`](#softwaresigner-assertnonexportable) throws [`FfiHardwareSignerException.Exportable`](#ffihardwaresignerexception-exportable); seeded from `seed`.',
+        );
+    });
+
+    it('leaves Markdown links and reference definitions alone', () => {
+        expect(
+            nativeDocLinks(
+                '[a](https://x.invalid) [b][c]\n[c]: https://y.invalid',
+            ),
+        ).toBe('[a](https://x.invalid) [b][c]\n[c]: https://y.invalid');
+        expect(nativeDocLinks('See [Type.member]: it.')).toBe(
+            'See [`Type.member`]: it.',
+        );
+    });
+
+    it('leaves code, indexes and task-list boxes alone', () => {
+        expect(nativeDocLinks('Reads `keys[keyAlias]` and out[i].')).toBe(
+            'Reads `keys[keyAlias]` and out[i].',
+        );
+        expect(
+            nativeDocLinks('```kotlin\nval x = arr[index]\n```\nSee [A].'),
+        ).toBe('```kotlin\nval x = arr[index]\n```\nSee [`A`].');
+        expect(nativeDocLinks('- [x] done\n- [ ] not\n1. [x] first')).toBe(
+            '- [x] done\n- [ ] not\n1. [x] first',
+        );
+    });
+
+    it('takes supertypes from after the colon, never from constructor parameters', () => {
+        expect(
+            supertypesOf(
+                'class A(tier: FfiDeviceTier) : FfiHardwareSigner, B<T>',
+            ),
+        ).toEqual(['FfiHardwareSigner', 'B']);
+        expect(
+            supertypesOf(
+                'public final class A: FfiHardwareSigner, @unchecked Sendable',
+            ),
+        ).toEqual(['FfiHardwareSigner', 'Sendable']);
+        expect(supertypesOf('class A(seed: ByteArray)')).toEqual([]);
+        expect(
+            supertypesOf(
+                'public final class A<T: Equatable>: FfiHardwareSigner',
+            ),
+        ).toEqual(['FfiHardwareSigner']);
+        expect(
+            supertypesOf(
+                'class A<T : Any>(x: (T) -> Unit) : FfiHardwareSigner',
+            ),
+        ).toEqual(['FfiHardwareSigner']);
+    });
+
+    it('never inherits a doc from a constructor parameter’s type', () => {
+        const bindings = structuredClone(PLATFORM_BINDINGS);
+        const adapter = bindings.languages.kotlin.platform.declarations[0];
+        // FfiWorkspace has a `create`; the adapter's `create` implements nothing of it.
+        adapter.signature =
+            'class SoftwareSigner(workspace: FfiWorkspace) : FfiHardwareSigner';
+        adapter.members.push({
+            kind: 'fun',
+            name: 'create',
+            signature: 'fun create()',
+            doc: '',
+            members: [],
+        });
+        const page = renderBindingsPage(kotlin, bindings);
+        const create = page.slice(page.indexOf('id="softwaresigner-create"'));
+        expect(create).not.toContain('Create one');
+    });
+
+    it('resolves DocC symbol links', () => {
+        const page = renderBindingsPage(swift, PLATFORM_BINDINGS);
+        expect(page).toContain(
+            'A software [`FfiHardwareSigner`](#ffihardwaresigner); see [`assertNonExportable(keyAlias:)`](#softwaresigner-assertnonexportable).',
+        );
+    });
+
+    it('shows an undocumented override the doc of the member it implements', () => {
+        const page = renderBindingsPage(kotlin, PLATFORM_BINDINGS);
+        const enroll = page.slice(
+            page.indexOf('id="softwaresigner-enroll"'),
+            page.indexOf('id="softwaresigner-assertnonexportable"'),
+        );
+        // The interface's own `Self` is the interface: its member, not the adapter's.
+        expect(enroll).toContain(
+            'Create the key under `key_alias`, as [`Self::classical_public_key`](#ffihardwaresigner-classicalpublickey) returns it.',
+        );
+        expect(enroll).toContain(
+            'From [`FfiHardwareSigner.enroll`](#ffihardwaresigner-enroll).',
+        );
+        // A documented override keeps its own doc.
+        expect(page).toContain('Always throws.');
+        expect(page).not.toMatch(/Always throws\.\s+From/);
+    });
+
+    it('adds nothing to a page whose dump carries no adapters', () => {
+        expect(renderBindingsPage(kotlin, MINIMAL_BINDINGS)).not.toContain(
+            'Platform adapters',
+        );
+    });
+
+    it('refuses an adapter named like a generated declaration', () => {
+        const clash = structuredClone(PLATFORM_BINDINGS);
+        clash.languages.kotlin.platform.declarations[0].name = 'FfiWorkspace';
+        expect(() => renderBindingsPage(kotlin, clash)).toThrow(
+            /share the anchor #ffiworkspace/,
+        );
     });
 });
 
@@ -1521,7 +2130,7 @@ describe('renderApiPage', () => {
         const rendered = page();
         expect(rendered.startsWith('---\n')).toBe(true);
         expect(rendered).toMatch(/^generated:$/m);
-        expect(rendered).not.toMatch(/^status:/m);
+        expect(rendered).not.toMatch(/^audit:/m);
         expect(rendered).toMatch(/^title: "[^"]+"$/m);
     });
 
@@ -1701,6 +2310,17 @@ describe('the committed artifacts', () => {
                 ]),
             );
         }
+        // The adapters the apps construct, beside the interfaces they implement.
+        const adapters = (language) =>
+            bindings.languages[language].platform.declarations.map(
+                (declaration) => declaration.name,
+            );
+        expect(adapters('kotlin')).toEqual(
+            expect.arrayContaining(['StrongBoxSigner', 'SoftwareSigner']),
+        );
+        expect(adapters('swift')).toEqual(
+            expect.arrayContaining(['SecureEnclaveSigner', 'SoftwareSigner']),
+        );
         const wasm = readWasmSurface(repoRoot).map(
             (declaration) => declaration.name,
         );

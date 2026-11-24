@@ -1,0 +1,81 @@
+---
+title: 支援
+description: 在哪裡提問、回報錯誤、建議功能或回報 Capsule 的安全性弱點，以及需要提供哪些資訊才能讓問題獲得處理。
+template: splash
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+Capsule 由志工以公開方式打造與支援。專案沒有付費或私人的支援管道：所有問題、回報與想法都透過專案的 GitHub 提出，任何人都可以回答，而這些回答也能幫助下一個人。安全性弱點是唯一的例外，需要私下回報。
+
+Capsule 尚未發布任何版本；目前可用的功能與接下來的計畫請見[路線圖](https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md)。
+
+<a id="before-you-ask"></a>
+
+## 提問之前
+
+大多數問題都已經有答案。在這裡花上一分鐘，通常就能省去一次往返溝通。
+
+1. **搜尋文件**：使用每個頁面頂端的搜尋框，並閱讀 [](/guides/troubleshooting/)，其中涵蓋常見的故障以及如何收集日誌。
+2. **搜尋[未關閉與已關閉的 issue](https://github.com/Capsulsaurus/Capsule/issues?q=is%3Aissue)** 以及[討論區](https://github.com/Capsulsaurus/Capsule/discussions)。如果已經有人回報過，請加上 👍 表情回應，或發表包含新資訊的留言，而不要重複提出。
+3. **查閱指令接受的確切旗標**：請見 [](/reference/cli/)。
+
+<a id="get-help"></a>
+
+## 取得協助
+
+<CardGrid>
+  <Card title="提問" icon="comment">
+    該怎麼做……？這是預期的行為嗎？需要設定方面的協助？請在 [Discussions › Q&A](https://github.com/Capsulsaurus/Capsule/discussions/categories/q-a) 中提問。請把解決問題的回覆標記為答案，方便下一個人找到。
+  </Card>
+  <Card title="回報錯誤" icon="warning">
+    有東西壞了，或行為與文件不符？請提交[錯誤回報](https://github.com/Capsulsaurus/Capsule/issues/new?template=bug_report.yml)。表單會要求填寫版本、平台、重現步驟與日誌：資訊齊全的回報不需反覆溝通即可完成分類。
+  </Card>
+  <Card title="建議功能" icon="star">
+    請在 [Discussions › Ideas](https://github.com/Capsulsaurus/Capsule/discussions/categories/ideas) 中分享想法，其他人可以為它投票並加以完善。想法獲得採納後，維護者會將其轉為 issue，後續工作都在該 issue 中追蹤。
+  </Card>
+  <Card title="回報安全性弱點" icon="padlock">
+    **絕對不要在公開的 issue 中回報**。請透過 [GitHub 安全性公告](https://github.com/Capsulsaurus/Capsule/security/advisories/new)私下回報。[安全性政策](https://github.com/Capsulsaurus/Capsule/security/policy)說明了哪些版本會獲得修正。
+  </Card>
+</CardGrid>
+
+<a id="specific-topics"></a>
+
+## 特定主題
+
+<CardGrid>
+  <Card title="執行伺服器" icon="setting">
+    請先閱讀 [](/guides/self-hosting/)，再閱讀 [](/guides/troubleshooting/)。仍然無法解決？請在 [Q&A](https://github.com/Capsulsaurus/Capsule/discussions/categories/q-a) 中提問，並附上伺服器的版本及其啟動日誌。
+  </Card>
+  <Card title="相片遺失或損毀" icon="information">
+    請先停下來，不要刪除任何東西。在嘗試修復之前，請先閱讀 [](/guides/troubleshooting/#check-a-librarys-integrity) 與 [](/design/backup-recovery/#recovery-paths)。如果資料遺失或損毀，請以錯誤回報提出：保護您的資料是專案的首要任務。
+  </Card>
+  <Card title="翻譯" icon="translate">
+    可透過[翻譯錯誤](https://github.com/Capsulsaurus/Capsule/issues/new?template=translation-error.md)回報錯誤或缺漏的字串，或透過[語言申請](https://github.com/Capsulsaurus/Capsule/issues/new?template=language-request.md)申請新增語言。翻譯的製作方式請見 [locales/README.md](https://github.com/Capsulsaurus/Capsule/blob/master/locales/README.md)。
+  </Card>
+  <Card title="從 Google 相簿搬移" icon="external">
+    在回報匯入問題之前，請依照 [](/guides/google-photos-migration/) 操作，並了解其中說明的匯入工具無法保證的內容。
+  </Card>
+</CardGrid>
+
+<a id="get-involved"></a>
+
+## 參與其中
+
+<CardGrid>
+  <Card title="貢獻" icon="github">
+    請閱讀[貢獻指南](https://github.com/Capsulsaurus/Capsule/blob/master/CONTRIBUTING.md)，然後挑選一個標有 [good first issue](https://github.com/Capsulsaurus/Capsule/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) 的 issue。在 Discussions 中回答問題同樣很有幫助。
+  </Card>
+  <Card title="贊助專案" icon="heart">
+    Capsule 免費且開源。如果它對您有幫助，[在 GitHub 上贊助其開發](https://github.com/sponsors/justin13888)能協助專案持續發展。
+  </Card>
+</CardGrid>
+
+<a id="what-to-expect"></a>
+
+## 您可以期待什麼
+
+- **志工的時間**。問題由社群與維護者在有空時回答，沒有保證的回應時間。
+- **完整的回報優先處理**。附有版本、重現步驟與日誌的錯誤回報可以被確認並修正。缺少這些資訊的回報需要先等待補充回覆，之後才有人能著手處理。
+- **一個主題一則討論**。兩個問題應分成兩份回報，以便各自追蹤與關閉。
+- **預設公開**。除了安全性弱點回報之外，所有內容都是公開的，因此在貼上日誌之前，請刪去密碼短語、復原憑證、權杖、伺服器位址與個人檔案路徑。
