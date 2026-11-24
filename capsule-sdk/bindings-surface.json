@@ -3269,7 +3269,7 @@
               {
                 "kind": "func",
                 "name": "assertNonExportable",
-                "signature": "public func assertNonExportable(keyAlias: String) throws",
+                "signature": "public func assertNonExportable(keyAlias _: String) throws",
                 "doc": "",
                 "members": []
               }
@@ -3312,7 +3312,7 @@
               {
                 "kind": "func",
                 "name": "assertNonExportable",
-                "signature": "public func assertNonExportable(keyAlias: String) throws",
+                "signature": "public func assertNonExportable(keyAlias _: String) throws",
                 "doc": "",
                 "members": []
               }
@@ -3355,7 +3355,7 @@
               {
                 "kind": "func",
                 "name": "assertNonExportable",
-                "signature": "public func assertNonExportable(keyAlias: String) throws",
+                "signature": "public func assertNonExportable(keyAlias _: String) throws",
                 "doc": "",
                 "members": []
               }
