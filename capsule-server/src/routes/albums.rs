@@ -96,7 +96,7 @@ pub enum ProvisionRejection {
     InvalidId {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The id cannot be bound to this account. One answer for every reason.
@@ -105,7 +105,7 @@ pub enum ProvisionRejection {
     NotAvailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The store could not answer.
@@ -114,7 +114,7 @@ pub enum ProvisionRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -130,7 +130,7 @@ pub async fn provision_album(
 ) -> Result<ProvisionReply, ProvisionRejection> {
     if !is_canonical_album_id(&request.album_id) {
         return Err(ProvisionRejection::InvalidId {
-            code: error_codes::ALBUM_INVALID_ID,
+            code: error_codes::ALBUM_INVALID_ID.into(),
         });
     }
 
@@ -150,7 +150,7 @@ pub async fn provision_album(
         .map_err(|error| {
             tracing::error!(%error, %owner, "the album store could not provision");
             ProvisionRejection::Unavailable {
-                code: error_codes::ALBUM_UNAVAILABLE,
+                code: error_codes::ALBUM_UNAVAILABLE.into(),
             }
         })?;
 
@@ -160,7 +160,7 @@ pub async fn provision_album(
             Ok(ProvisionReply::AlreadyProvisioned(describe(&record, false)))
         }
         ProvisionOutcome::NotAvailable => Err(ProvisionRejection::NotAvailable {
-            code: error_codes::ALBUM_NOT_AVAILABLE,
+            code: error_codes::ALBUM_NOT_AVAILABLE.into(),
         }),
     }
 }

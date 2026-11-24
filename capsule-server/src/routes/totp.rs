@@ -173,7 +173,7 @@ pub enum EnrollRejection {
     AlreadyActive {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A collaborator could not answer.
@@ -182,7 +182,7 @@ pub enum EnrollRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -198,7 +198,7 @@ pub enum ConfirmRejection {
     InvalidCode {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// Nothing is waiting to be confirmed.
@@ -207,7 +207,7 @@ pub enum ConfirmRejection {
     NotPending {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A collaborator could not answer.
@@ -216,7 +216,7 @@ pub enum ConfirmRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -229,7 +229,7 @@ pub enum DisableRejection {
     InvalidCode {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// There is no confirmed second factor.
@@ -238,7 +238,7 @@ pub enum DisableRejection {
     NotEnrolled {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A collaborator could not answer.
@@ -247,7 +247,7 @@ pub enum DisableRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -260,7 +260,7 @@ pub enum VerifyLoginRejection {
     ChallengeInvalid {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The code did not verify, or had already been used.
@@ -269,7 +269,7 @@ pub enum VerifyLoginRejection {
     InvalidCode {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// Too many codes have been tried against this one challenge.
@@ -278,7 +278,7 @@ pub enum VerifyLoginRejection {
     TooManyAttempts {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A collaborator could not answer.
@@ -287,7 +287,7 @@ pub enum VerifyLoginRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -320,7 +320,7 @@ pub async fn totp_enroll(
         .map_err(|error| {
             tracing::error!(%error, %user, "a generated second-factor secret is unusable");
             EnrollRejection::Unavailable {
-                code: error_codes::AUTH_UNAVAILABLE,
+                code: error_codes::AUTH_UNAVAILABLE.into(),
             }
         })?;
 
@@ -338,14 +338,14 @@ pub async fn totp_enroll(
         .map_err(|error: DirectoryError| {
             tracing::error!(%error, %user, "the second-factor store could not start an enrollment");
             EnrollRejection::Unavailable {
-                code: error_codes::AUTH_UNAVAILABLE,
+                code: error_codes::AUTH_UNAVAILABLE.into(),
             }
         })? {
         BeginOutcome::Started => {}
         BeginOutcome::AlreadyActive => {
             tracing::info!(%user, "an enrollment was refused: a second factor is already active");
             return Err(EnrollRejection::AlreadyActive {
-                code: error_codes::AUTH_TOTP_ALREADY_ACTIVE,
+                code: error_codes::AUTH_TOTP_ALREADY_ACTIVE.into(),
             });
         }
     }
@@ -381,14 +381,14 @@ pub async fn totp_verify_enrollment(
         .map_err(|error: DirectoryError| {
             tracing::error!(%error, %user, "the second-factor store could not answer");
             ConfirmRejection::Unavailable {
-                code: error_codes::AUTH_UNAVAILABLE,
+                code: error_codes::AUTH_UNAVAILABLE.into(),
             }
         })?
         .filter(|held| held.state == EnrollmentState::Pending)
         .ok_or_else(|| {
             tracing::info!(%user, "a confirmation was refused: nothing is pending");
             ConfirmRejection::NotPending {
-                code: error_codes::AUTH_TOTP_NOT_PENDING,
+                code: error_codes::AUTH_TOTP_NOT_PENDING.into(),
             }
         })?;
 
@@ -401,13 +401,13 @@ pub async fn totp_verify_enrollment(
             // succeed.
             tracing::error!(%error, %user, "a stored second-factor secret is unusable");
             ConfirmRejection::Unavailable {
-                code: error_codes::AUTH_UNAVAILABLE,
+                code: error_codes::AUTH_UNAVAILABLE.into(),
             }
         })?
         .ok_or_else(|| {
             tracing::info!(%user, "a confirmation was refused: the code did not verify");
             ConfirmRejection::InvalidCode {
-                code: error_codes::AUTH_TOTP_INVALID_CODE,
+                code: error_codes::AUTH_TOTP_INVALID_CODE.into(),
             }
         })?;
 
@@ -418,7 +418,7 @@ pub async fn totp_verify_enrollment(
         .map_err(|error: DirectoryError| {
             tracing::error!(%error, %user, "the second-factor store could not activate");
             ConfirmRejection::Unavailable {
-                code: error_codes::AUTH_UNAVAILABLE,
+                code: error_codes::AUTH_UNAVAILABLE.into(),
             }
         })? {
         ActivateOutcome::Activated => {}
@@ -426,7 +426,7 @@ pub async fn totp_verify_enrollment(
             // The enrollment was confirmed or abandoned between the read and this write.
             tracing::info!(%user, "a confirmation lost a race: nothing was pending by the write");
             return Err(ConfirmRejection::NotPending {
-                code: error_codes::AUTH_TOTP_NOT_PENDING,
+                code: error_codes::AUTH_TOTP_NOT_PENDING.into(),
             });
         }
     }
@@ -466,14 +466,14 @@ pub async fn totp_disable(
         .map_err(|error: DirectoryError| {
             tracing::error!(%error, %user, "the second-factor store could not answer");
             DisableRejection::Unavailable {
-                code: error_codes::AUTH_UNAVAILABLE,
+                code: error_codes::AUTH_UNAVAILABLE.into(),
             }
         })?
         .filter(|held| held.state == EnrollmentState::Active)
         .ok_or_else(|| {
             tracing::info!(%user, "a disable was refused: no active second factor");
             DisableRejection::NotEnrolled {
-                code: error_codes::AUTH_TOTP_NOT_ENROLLED,
+                code: error_codes::AUTH_TOTP_NOT_ENROLLED.into(),
             }
         })?;
 
@@ -483,13 +483,13 @@ pub async fn totp_disable(
         .map_err(|error| {
             tracing::error!(%error, %user, "a stored second-factor secret is unusable");
             DisableRejection::Unavailable {
-                code: error_codes::AUTH_UNAVAILABLE,
+                code: error_codes::AUTH_UNAVAILABLE.into(),
             }
         })?
         .ok_or_else(|| {
             tracing::info!(%user, "a disable was refused: the code did not verify");
             DisableRejection::InvalidCode {
-                code: error_codes::AUTH_TOTP_INVALID_CODE,
+                code: error_codes::AUTH_TOTP_INVALID_CODE.into(),
             }
         })?;
 
@@ -502,14 +502,14 @@ pub async fn totp_disable(
         .map_err(|error: DirectoryError| {
             tracing::error!(%error, %user, "the second-factor store could not consume a step");
             DisableRejection::Unavailable {
-                code: error_codes::AUTH_UNAVAILABLE,
+                code: error_codes::AUTH_UNAVAILABLE.into(),
             }
         })? {
         ConsumeOutcome::Fresh => {}
         ConsumeOutcome::Replayed | ConsumeOutcome::NotEnrolled => {
             tracing::warn!(%user, "a disable was refused: the code had already been used");
             return Err(DisableRejection::InvalidCode {
-                code: error_codes::AUTH_TOTP_INVALID_CODE,
+                code: error_codes::AUTH_TOTP_INVALID_CODE.into(),
             });
         }
     }
@@ -521,7 +521,7 @@ pub async fn totp_disable(
         .map_err(|error: DirectoryError| {
             tracing::error!(%error, %user, "the second-factor store could not remove an enrollment");
             DisableRejection::Unavailable {
-                code: error_codes::AUTH_UNAVAILABLE,
+                code: error_codes::AUTH_UNAVAILABLE.into(),
             }
         })?;
 
@@ -565,7 +565,7 @@ pub async fn totp_verify_login(
         .map_err(|error| {
             tracing::info!(%error, "a second factor was refused: the challenge did not verify");
             VerifyLoginRejection::ChallengeInvalid {
-                code: error_codes::AUTH_TOTP_CHALLENGE_INVALID,
+                code: error_codes::AUTH_TOTP_CHALLENGE_INVALID.into(),
             }
         })?;
     let user = verified.user;
@@ -583,13 +583,13 @@ pub async fn totp_verify_login(
             // limiter — and the thing being guessed here is six digits.
             tracing::error!(%error, "the second-factor attempt counter could not be reached");
             VerifyLoginRejection::Unavailable {
-                code: error_codes::AUTH_UNAVAILABLE,
+                code: error_codes::AUTH_UNAVAILABLE.into(),
             }
         })?;
     if !verdict.admits() {
         tracing::warn!(%user, challenge_id = %verified.challenge, "a second factor was rate-limited");
         return Err(VerifyLoginRejection::TooManyAttempts {
-            code: error_codes::AUTH_RATE_LIMITED,
+            code: error_codes::AUTH_RATE_LIMITED.into(),
         });
     }
 
@@ -600,7 +600,7 @@ pub async fn totp_verify_login(
         .map_err(|error: DirectoryError| {
             tracing::error!(%error, %user, "the second-factor store could not answer");
             VerifyLoginRejection::Unavailable {
-                code: error_codes::AUTH_UNAVAILABLE,
+                code: error_codes::AUTH_UNAVAILABLE.into(),
             }
         })?
         .filter(|held| held.state == EnrollmentState::Active)
@@ -611,7 +611,7 @@ pub async fn totp_verify_login(
             // attempt will not ask for a code at all.
             tracing::info!(%user, "a second factor was refused: no active enrollment");
             VerifyLoginRejection::ChallengeInvalid {
-                code: error_codes::AUTH_TOTP_CHALLENGE_INVALID,
+                code: error_codes::AUTH_TOTP_CHALLENGE_INVALID.into(),
             }
         })?;
 
@@ -622,7 +622,7 @@ pub async fn totp_verify_login(
         .map_err(|error| {
             tracing::error!(%error, %user, "a stored second-factor secret is unusable");
             VerifyLoginRejection::Unavailable {
-                code: error_codes::AUTH_UNAVAILABLE,
+                code: error_codes::AUTH_UNAVAILABLE.into(),
             }
         })?
     else {
@@ -633,7 +633,7 @@ pub async fn totp_verify_login(
             .record(&user, ActivityKind::SignInSecondFactorRefused, None, None)
             .await;
         return Err(VerifyLoginRejection::InvalidCode {
-            code: error_codes::AUTH_TOTP_INVALID_CODE,
+            code: error_codes::AUTH_TOTP_INVALID_CODE.into(),
         });
     };
 
@@ -646,7 +646,7 @@ pub async fn totp_verify_login(
         .map_err(|error: DirectoryError| {
             tracing::error!(%error, %user, "the second-factor store could not consume a step");
             VerifyLoginRejection::Unavailable {
-                code: error_codes::AUTH_UNAVAILABLE,
+                code: error_codes::AUTH_UNAVAILABLE.into(),
             }
         })? {
         ConsumeOutcome::Fresh => {}
@@ -656,7 +656,7 @@ pub async fn totp_verify_login(
                 .record(&user, ActivityKind::SignInSecondFactorRefused, None, None)
                 .await;
             return Err(VerifyLoginRejection::InvalidCode {
-                code: error_codes::AUTH_TOTP_INVALID_CODE,
+                code: error_codes::AUTH_TOTP_INVALID_CODE.into(),
             });
         }
     }
@@ -677,7 +677,7 @@ pub async fn totp_verify_login(
     .map_err(|error| {
         tracing::error!(%error, %user, "a session could not be opened after a second factor");
         VerifyLoginRejection::Unavailable {
-            code: error_codes::AUTH_UNAVAILABLE,
+            code: error_codes::AUTH_UNAVAILABLE.into(),
         }
     })?;
 

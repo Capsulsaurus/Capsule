@@ -10319,6 +10319,11 @@
     "origin": "machine",
     "source": "594d0bec965c42ab"
   },
+  "error.request.timeout": {
+    "message": "La richiesta ha impiegato troppo tempo ad arrivare. Riprova.",
+    "origin": "machine",
+    "source": "e71726a2a0e9960e"
+  },
   "error.request.too_early": {
     "message": "La richiesta è stata inviata troppo presto. Riprova.",
     "origin": "machine",

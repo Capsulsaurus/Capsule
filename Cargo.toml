@@ -66,9 +66,10 @@ subtle = "2.6.1"
 # recorded while it was a git dependency. `openapi32` is a strict, purely additive
 # superset of the default `openapi31`, and Capsule emits a 3.2 document. The feature alone does
 # not select 3.2: the server emits with `openapi_as(SpecVersion::V3_2)`. No secondary public
-# transport. Held at 0.4 while the 0.6 port lands on its own (#1344): 0.5 describes a problem
-# extension by its type's schema, which every `code: &'static str` field lacks.
-kynos = { version = "0.4.0", features = ["openapi32"] }
+# transport. Since 0.5 a problem extension is described by its type's schema, so a rejection's
+# `code` is `capsule_server::problem::Code`, a `&'static str` with a string schema. No `time-*`
+# feature: no schema type names a date-time crate, and if one ever does it is `time-jiff1`.
+kynos = { version = "0.6.2", features = ["openapi32"] }
 base64 = "0.23.1"
 bytes = "1.12.1"
 # Reading a response body back to bytes, for the coded-problem interceptor.

@@ -487,7 +487,8 @@ pub(crate) fn describe_raw_byte_payloads(document: &mut Document) {
         for operation in slots.into_iter().filter_map(|slot| slot.as_deref_mut()) {
             if let Some(kynos::openapi::RefOr::Item(body)) = operation.request_body.as_mut() {
                 for media in RAW_BYTE_MEDIA {
-                    if let Some(entry) = body.content.get_mut(*media) {
+                    // A referenced media type is a component this crate does not emit.
+                    if let Some(kynos::openapi::RefOr::Item(entry)) = body.content.get_mut(*media) {
                         fill_binary(&mut entry.schema);
                     }
                 }
@@ -497,7 +498,9 @@ pub(crate) fn describe_raw_byte_payloads(document: &mut Document) {
                     continue;
                 };
                 for media in RAW_BYTE_MEDIA {
-                    if let Some(entry) = response.content.get_mut(*media) {
+                    if let Some(kynos::openapi::RefOr::Item(entry)) =
+                        response.content.get_mut(*media)
+                    {
                         fill_binary(&mut entry.schema);
                     }
                 }
@@ -758,7 +761,9 @@ fn point_at_capsule_problems(operation: &mut kynos::openapi::Operation) {
             // every operation sharing it rather than this one.
             continue;
         };
-        let Some(media) = response.content.get_mut(PROBLEM_JSON) else {
+        // A referenced media type is skipped for the reason a referenced response is.
+        let Some(kynos::openapi::RefOr::Item(media)) = response.content.get_mut(PROBLEM_JSON)
+        else {
             continue;
         };
         let component = key

@@ -108,7 +108,7 @@ pub enum RosterRejection {
         detail: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The roster is not attested by a live device in the album owner's published directory.
@@ -117,7 +117,7 @@ pub enum RosterRejection {
     AttesterNotAuthorized {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// No such album, or not this caller's. One answer for both.
@@ -126,7 +126,7 @@ pub enum RosterRejection {
     NotFound {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The roster's version is so far above the held one that accepting it would put the
@@ -165,7 +165,7 @@ pub enum RosterRejection {
         max_version: u64,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The server already holds a roster this one does not supersede.
@@ -177,7 +177,7 @@ pub enum RosterRejection {
         current_version: u64,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A collaborator could not answer.
@@ -186,7 +186,7 @@ pub enum RosterRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -195,28 +195,28 @@ impl RosterRejection {
     fn malformed(detail: impl Into<String>) -> Self {
         Self::Malformed {
             detail: detail.into(),
-            code: error_codes::ALBUM_ROSTER_MALFORMED,
+            code: error_codes::ALBUM_ROSTER_MALFORMED.into(),
         }
     }
 
     /// The attester did not verify.
     fn attester() -> Self {
         Self::AttesterNotAuthorized {
-            code: error_codes::ALBUM_ROSTER_ATTESTER,
+            code: error_codes::ALBUM_ROSTER_ATTESTER.into(),
         }
     }
 
     /// No such album, or not this caller's.
     fn not_found() -> Self {
         Self::NotFound {
-            code: error_codes::ALBUM_ROSTER_NOT_FOUND,
+            code: error_codes::ALBUM_ROSTER_NOT_FOUND.into(),
         }
     }
 
     /// A collaborator could not answer.
     fn unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::ALBUM_UNAVAILABLE,
+            code: error_codes::ALBUM_UNAVAILABLE.into(),
         }
     }
 }
@@ -407,7 +407,7 @@ pub async fn publish_album_roster(
         RosterOutcome::Replayed(record) => Ok(Json(describe(&record, member_count, true))),
         RosterOutcome::Stale { current_version } => Err(RosterRejection::Stale {
             current_version,
-            code: error_codes::ALBUM_ROSTER_STALE,
+            code: error_codes::ALBUM_ROSTER_STALE.into(),
         }),
         RosterOutcome::VersionLeap {
             current_version,
@@ -424,7 +424,7 @@ pub async fn publish_album_roster(
                 declared: signed.roster.roster_version,
                 current_version,
                 max_version,
-                code: error_codes::ALBUM_ROSTER_VERSION_LEAP,
+                code: error_codes::ALBUM_ROSTER_VERSION_LEAP.into(),
             })
         }
         RosterOutcome::EpochRegressed {
@@ -441,7 +441,7 @@ pub async fn publish_album_roster(
             // for: the roster it holds is not the one the server does.
             Err(RosterRejection::Stale {
                 current_version,
-                code: error_codes::ALBUM_ROSTER_STALE,
+                code: error_codes::ALBUM_ROSTER_STALE.into(),
             })
         }
         RosterOutcome::EpochNotAdvanced {

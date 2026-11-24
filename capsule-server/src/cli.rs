@@ -610,6 +610,12 @@ async fn serve(config: &Config) -> Result<ExitCode> {
         // The header-read and keep-alive idle bound (#717): explicit rather than Kynos's default,
         // so the number transfer/upload.md's per-connection bound rests on is this deployment's.
         .http1(crate::limits::http1(config.header_read_timeout))
+        // The request-body idle bound: explicit too, so Kynos's 30 s default cannot cut a chunk
+        // before the configured CHUNK_STALL_TIMEOUT_SECONDS does.
+        .request_body_idle_timeout(Some(crate::limits::request_body_idle_timeout(
+            config.header_read_timeout,
+            config.chunk_pace.stall,
+        )))
         .prepare()
         .await
         .map_err(|error| eyre!("binding {}: {error}", config.listen))?;

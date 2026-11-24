@@ -235,16 +235,4 @@ impl<C: Sync> Authenticator<AccessToken, C> for AuthContext {
             last_active_at: record.last_active_at,
         })
     }
-
-    async fn authorize(
-        &self,
-        _credential: &AuthenticatedSession,
-        _scopes: &[kynos::security::Unscoped],
-        _context: &C,
-    ) -> Result<(), AuthRejection> {
-        // Bearer access tokens carry no scopes — [`TokenKind`] is the whole of what a Capsule
-        // token grants, and it is checked in `authenticate`. This exists because the trait
-        // requires it; `Auth<S>` never calls it, and no operation here takes a `Scoped<S, R>`.
-        Ok(())
-    }
 }

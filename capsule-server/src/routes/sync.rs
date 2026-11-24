@@ -256,7 +256,7 @@ pub enum SyncRejection {
     CursorInvalid {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The cursor is authentic but was minted before the owner's sync epoch moved (#697).
@@ -268,7 +268,7 @@ pub enum SyncRejection {
     CursorStale {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The album is not the caller's and the caller is not on its roster.
@@ -279,7 +279,7 @@ pub enum SyncRejection {
     AlbumAccessDenied {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The capability is revoked.
@@ -288,7 +288,7 @@ pub enum SyncRejection {
     CapabilityRevoked {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The capability is for another album, or no album was named.
@@ -297,7 +297,7 @@ pub enum SyncRejection {
     AudienceMismatch {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The peer is on this server's blocklist.
@@ -306,7 +306,7 @@ pub enum SyncRejection {
     PeerBlocked {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The peer's events-per-hour budget is spent (invariant 21).
@@ -315,7 +315,7 @@ pub enum SyncRejection {
     RateLimited {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A collaborator could not answer.
@@ -324,7 +324,7 @@ pub enum SyncRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -332,35 +332,35 @@ impl SyncRejection {
     /// The album page is not the caller's to read.
     fn album_access_denied() -> Self {
         Self::AlbumAccessDenied {
-            code: error_codes::SYNC_ALBUM_ACCESS_DENIED,
+            code: error_codes::SYNC_ALBUM_ACCESS_DENIED.into(),
         }
     }
 
     /// The one cursor rejection.
     fn cursor_invalid() -> Self {
         Self::CursorInvalid {
-            code: error_codes::SYNC_CURSOR_INVALID,
+            code: error_codes::SYNC_CURSOR_INVALID.into(),
         }
     }
 
     /// The cursor predates the owner's current sync epoch.
     fn cursor_stale() -> Self {
         Self::CursorStale {
-            code: error_codes::SYNC_CURSOR_STALE,
+            code: error_codes::SYNC_CURSOR_STALE.into(),
         }
     }
 
     /// The one collaborator rejection.
     fn unavailable() -> Self {
         Self::Unavailable {
-            code: error_codes::SYNC_UNAVAILABLE,
+            code: error_codes::SYNC_UNAVAILABLE.into(),
         }
     }
 
     /// The capability names another album, or none was asked for.
     fn audience_mismatch() -> Self {
         Self::AudienceMismatch {
-            code: error_codes::FEDERATION_AUDIENCE_MISMATCH,
+            code: error_codes::FEDERATION_AUDIENCE_MISMATCH.into(),
         }
     }
 }
@@ -369,16 +369,16 @@ impl From<Refusal> for SyncRejection {
     fn from(refusal: Refusal) -> Self {
         match refusal {
             Refusal::Revoked => Self::CapabilityRevoked {
-                code: error_codes::FEDERATION_CAPABILITY_REVOKED,
+                code: error_codes::FEDERATION_CAPABILITY_REVOKED.into(),
             },
             Refusal::PeerBlocked => Self::PeerBlocked {
-                code: error_codes::MODERATION_SERVER_BLOCKED,
+                code: error_codes::MODERATION_SERVER_BLOCKED.into(),
             },
             Refusal::RateLimited { .. } => Self::RateLimited {
-                code: error_codes::FEDERATION_RATE_BUDGET_EXCEEDED,
+                code: error_codes::FEDERATION_RATE_BUDGET_EXCEEDED.into(),
             },
             Refusal::Unavailable => Self::Unavailable {
-                code: error_codes::FEDERATION_UNAVAILABLE,
+                code: error_codes::FEDERATION_UNAVAILABLE.into(),
             },
         }
     }

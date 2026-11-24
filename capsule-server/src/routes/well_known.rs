@@ -311,7 +311,7 @@ pub async fn revoked_jti(
     let published = discovery.revocations().published().await.map_err(|error| {
         tracing::error!(%error, "the revocation list could not be read");
         RevokedJtiError::Unavailable {
-            code: error_codes::FEDERATION_REVOCATIONS_UNAVAILABLE,
+            code: error_codes::FEDERATION_REVOCATIONS_UNAVAILABLE.into(),
         }
     })?;
 
@@ -339,7 +339,7 @@ pub enum RevokedJtiError {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 

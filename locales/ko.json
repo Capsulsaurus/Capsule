@@ -10319,6 +10319,11 @@
     "origin": "machine",
     "source": "594d0bec965c42ab"
   },
+  "error.request.timeout": {
+    "message": "요청이 도착하는 데 너무 오래 걸렸습니다. 다시 시도해 주세요.",
+    "origin": "machine",
+    "source": "e71726a2a0e9960e"
+  },
   "error.request.too_early": {
     "message": "요청이 너무 일찍 전송되었습니다. 다시 시도해 주세요.",
     "origin": "machine",

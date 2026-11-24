@@ -2063,6 +2063,7 @@
   "error.request.not_found": "[Çåþšûļé çöûļðñ'ţ ƒîñð ţĥåţ. one two three]",
   "error.request.not_implemented": "[Çåþšûļé çöûļðñ'ţ ĥåñðļé ţĥåţ ŕéǫûéšţ. one two three]",
   "error.request.range_not_satisfiable": "[Çåþšûļé çöûļðñ'ţ šéñð ţĥåţ þåŕţ öƒ ţĥé ƒîļé. one two three four]",
+  "error.request.timeout": "[Ţĥåţ ŕéǫûéšţ ţööķ ţöö ļöñĝ ţö åŕŕîṽé. Þļéåšé ţŕý åĝåîñ. one two three four]",
   "error.request.too_early": "[Ţĥåţ ŕéǫûéšţ ŵåš šéñţ ţöö éåŕļý. Þļéåšé ţŕý åĝåîñ. one two three four]",
   "error.request.too_large": "[Ţĥåţ ŕéǫûéšţ ŵåš ţöö ļåŕĝé ţö åççéþţ. one two three]",
   "error.request.unauthenticated": "[Þļéåšé šîĝñ îñ åĝåîñ. one two]",

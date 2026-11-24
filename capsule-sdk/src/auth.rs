@@ -874,6 +874,7 @@ impl AuthClient {
                 map_rest_error(Endpoint::OidcAuthorize, error, |refused| match refused {
                     rest::BeginOidcLoginError::Status400(problem)
                     | rest::BeginOidcLoginError::Status404(problem)
+                    | rest::BeginOidcLoginError::Status408(problem)
                     | rest::BeginOidcLoginError::Status415(problem)
                     | rest::BeginOidcLoginError::Status422(problem)
                     | rest::BeginOidcLoginError::Status425(problem)
@@ -951,6 +952,7 @@ impl AuthClient {
                 map_rest_error(Endpoint::OidcCallback, error, |refused| match refused {
                     rest::CompleteOidcLoginError::Status400(problem)
                     | rest::CompleteOidcLoginError::Status401(problem)
+                    | rest::CompleteOidcLoginError::Status408(problem)
                     | rest::CompleteOidcLoginError::Status409(problem)
                     | rest::CompleteOidcLoginError::Status415(problem)
                     | rest::CompleteOidcLoginError::Status422(problem)
@@ -1017,6 +1019,7 @@ impl AuthClient {
                 map_rest_error(Endpoint::OidcDevice, error, |refused| match refused {
                     rest::BeginOidcDeviceLoginError::Status400(problem)
                     | rest::BeginOidcDeviceLoginError::Status404(problem)
+                    | rest::BeginOidcDeviceLoginError::Status408(problem)
                     | rest::BeginOidcDeviceLoginError::Status415(problem)
                     | rest::BeginOidcDeviceLoginError::Status422(problem)
                     | rest::BeginOidcDeviceLoginError::Status425(problem)
@@ -1091,6 +1094,7 @@ impl AuthClient {
                         match refused {
                             rest::PollOidcDeviceLoginError::Status400(problem)
                             | rest::PollOidcDeviceLoginError::Status401(problem)
+                            | rest::PollOidcDeviceLoginError::Status408(problem)
                             | rest::PollOidcDeviceLoginError::Status409(problem)
                             | rest::PollOidcDeviceLoginError::Status415(problem)
                             | rest::PollOidcDeviceLoginError::Status422(problem)

@@ -189,7 +189,7 @@ pub enum ProfileRejection {
     NotFound {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A collaborator could not answer.
@@ -198,7 +198,7 @@ pub enum ProfileRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -213,7 +213,7 @@ pub enum UpdateProfileRejection {
         detail: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The credential is valid and names an account the directory does not hold.
@@ -222,7 +222,7 @@ pub enum UpdateProfileRejection {
     NotFound {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A collaborator could not answer.
@@ -231,7 +231,7 @@ pub enum UpdateProfileRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -246,7 +246,7 @@ pub enum ChangePasswordRejection {
         detail: String,
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The current password did not match.
@@ -258,7 +258,7 @@ pub enum ChangePasswordRejection {
     CurrentPasswordInvalid {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The account is refusing credential attempts.
@@ -267,7 +267,7 @@ pub enum ChangePasswordRejection {
     AccountLocked {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// The credential is valid and names an account the directory does not hold.
@@ -276,7 +276,7 @@ pub enum ChangePasswordRejection {
     NotFound {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 
     /// A collaborator could not answer.
@@ -285,7 +285,7 @@ pub enum ChangePasswordRejection {
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
-        code: &'static str,
+        code: crate::problem::Code,
     },
 }
 
@@ -313,14 +313,14 @@ pub async fn get_profile(
         .map_err(|error: DirectoryError| {
             tracing::error!(%error, %user, "the account directory could not read a profile");
             ProfileRejection::Unavailable {
-                code: error_codes::AUTH_UNAVAILABLE,
+                code: error_codes::AUTH_UNAVAILABLE.into(),
             }
         })?
         .ok_or_else(|| {
             // A live session naming a deleted account. The server is fine; the account is not.
             tracing::warn!(%user, "a live session names an account that no longer exists");
             ProfileRejection::NotFound {
-                code: error_codes::AUTH_PROFILE_NOT_FOUND,
+                code: error_codes::AUTH_PROFILE_NOT_FOUND.into(),
             }
         })?;
 
@@ -359,13 +359,13 @@ pub async fn update_profile(
         .map_err(|error: DirectoryError| {
             tracing::error!(%error, %user, "the account directory could not update a profile");
             UpdateProfileRejection::Unavailable {
-                code: error_codes::AUTH_UNAVAILABLE,
+                code: error_codes::AUTH_UNAVAILABLE.into(),
             }
         })?
         .ok_or_else(|| {
             tracing::warn!(%user, "a live session names an account that no longer exists");
             UpdateProfileRejection::NotFound {
-                code: error_codes::AUTH_PROFILE_NOT_FOUND,
+                code: error_codes::AUTH_PROFILE_NOT_FOUND.into(),
             }
         })?;
 
@@ -433,20 +433,20 @@ pub async fn change_password(
         .map_err(|error: DirectoryError| {
             tracing::error!(%error, %user, "the account directory could not verify a password");
             ChangePasswordRejection::Unavailable {
-                code: error_codes::AUTH_UNAVAILABLE,
+                code: error_codes::AUTH_UNAVAILABLE.into(),
             }
         })? {
         Authentication::Granted(_) => {}
         Authentication::Locked(_) => {
             tracing::warn!(%user, "a password change was refused: the account is locked");
             return Err(ChangePasswordRejection::AccountLocked {
-                code: error_codes::AUTH_ACCOUNT_LOCKED,
+                code: error_codes::AUTH_ACCOUNT_LOCKED.into(),
             });
         }
         Authentication::Refused(_) => {
             tracing::info!(%user, "a password change was refused: the current password is wrong");
             return Err(ChangePasswordRejection::CurrentPasswordInvalid {
-                code: error_codes::AUTH_CURRENT_PASSWORD_INVALID,
+                code: error_codes::AUTH_CURRENT_PASSWORD_INVALID.into(),
             });
         }
     }
@@ -459,7 +459,7 @@ pub async fn change_password(
         .map_err(|error: DirectoryError| {
             tracing::error!(%error, %user, "the account directory could not change a password");
             ChangePasswordRejection::Unavailable {
-                code: error_codes::AUTH_UNAVAILABLE,
+                code: error_codes::AUTH_UNAVAILABLE.into(),
             }
         })? {
         PasswordChanged::Yes => {}
@@ -468,7 +468,7 @@ pub async fn change_password(
             // landed between the two calls rather than a wrong credential.
             tracing::warn!(%user, "an account was deleted during its own password change");
             return Err(ChangePasswordRejection::NotFound {
-                code: error_codes::AUTH_PROFILE_NOT_FOUND,
+                code: error_codes::AUTH_PROFILE_NOT_FOUND.into(),
             });
         }
     }
@@ -533,7 +533,7 @@ impl UpdateProfileRejection {
     fn invalid(error: &MalformedProfile) -> Self {
         Self::Invalid {
             detail: error.to_string(),
-            code: error_codes::AUTH_PROFILE_INVALID,
+            code: error_codes::AUTH_PROFILE_INVALID.into(),
         }
     }
 }
@@ -543,7 +543,7 @@ impl ChangePasswordRejection {
     fn invalid(detail: impl Into<String>) -> Self {
         Self::Invalid {
             detail: detail.into(),
-            code: error_codes::AUTH_PASSWORD_INVALID,
+            code: error_codes::AUTH_PASSWORD_INVALID.into(),
         }
     }
 }

@@ -646,17 +646,6 @@ impl Authenticator<ReadBearer, App> for FederationContext {
             foreseen,
         })))
     }
-
-    async fn authorize(
-        &self,
-        _credential: &Principal,
-        _scopes: &[kynos::security::Unscoped],
-        _context: &App,
-    ) -> Result<(), AuthRejection> {
-        // Neither token type carries OAuth-style scopes; a capability's `scope` is decided
-        // against a blob's role by the route. Exists because the trait requires it.
-        Ok(())
-    }
 }
 
 #[cfg(test)]
