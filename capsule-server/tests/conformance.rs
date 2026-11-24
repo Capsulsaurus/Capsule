@@ -135,8 +135,34 @@ async fn version_reports_the_server_identity() {
 /// across four operations at the time of writing — is driven here in order, and the two
 /// collaborators are broken for one request each and repaired, which is what
 /// [`support::SwitchableSessions`] and the directory's switch exist for.
-#[tokio::test]
-async fn every_declared_response_is_exercised() {
+///
+/// The walk runs on a thread of its own with [`WALK_STACK_BYTES`] of stack, on the
+/// current-thread runtime `#[tokio::test]` would build. Its `poll` is one frame holding every
+/// section's locals, and an unoptimized build lays them out side by side: under Kynos 0.6 that
+/// frame passed the test harness's default 2 MiB stack and aborted the process. Boxing the
+/// future moves its state to the heap but not that frame, so the stack is what has to grow.
+#[test]
+fn every_declared_response_is_exercised() {
+    std::thread::Builder::new()
+        .name("every-declared-response".to_owned())
+        .stack_size(WALK_STACK_BYTES)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("a test runtime")
+                .block_on(walk_every_declared_response());
+        })
+        .expect("the walk's thread starts")
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+}
+
+/// The walk's stack: four times what it measured needing (between 2 and 4 MiB, unoptimized).
+const WALK_STACK_BYTES: usize = 16 * 1024 * 1024;
+
+/// The walk [`every_declared_response_is_exercised`] drives.
+async fn walk_every_declared_response() {
     // Finite-but-large limits rather than `Fixture::working`'s unlimited ones: the drop path's
     // `403` is a *quota* refusal, and an unlimited ledger can never produce one. A hundred and
     // twenty-eight mebibytes is orders of magnitude above everything this walk uploads, so it
@@ -3908,6 +3934,9 @@ async fn every_declared_response_is_exercised() {
         .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
     fixture.index.set_unavailable(false);
 
+    // ── A body that stalls (Kynos 0.6) ───────────────────────────────────────────
+    stalled_bodies_block(client, &bearer).await;
+
     // ── The global sign-out ceremony ─────────────────────────────────────────────
     // Last, because a successful revoke closes every session this walk has been using. The
     // directory block above anchored the account to `account_ik`, which is the key the proof
@@ -4028,6 +4057,44 @@ async fn every_declared_response_is_exercised() {
     // was left unproduced.
     client.assert_conformance();
     client.assert_declared_responses_covered();
+}
+
+/// 408 is declared on every operation that reads a JSON body, because Kynos 0.6's body
+/// extractors answer a body that stops arriving part-way with it (`BodyRejection::Stalled`).
+/// So every such operation produces one here, from a body declared one octet long that never
+/// arrives, and the coded-problem interceptor codes it `error.request.timeout`.
+///
+/// The two chunk routes declare a 408 of their own, `error.upload.chunk_timeout`, from
+/// [`capsule_server::upload`]'s paced read over an octet-stream body; the upload walk produces
+/// those, so they are left out by the media type they read.
+async fn stalled_bodies_block(client: &support::Client, bearer: &str) {
+    let document = capsule_server::openapi().expect("router describes itself");
+    let document = serde_json::to_value(&document).expect("a document serializes");
+    let mut stalled = 0_usize;
+    for (method, template, operation) in operations(&document) {
+        if operation.pointer("/responses/408").is_none()
+            || operation
+                .pointer("/requestBody/content/application~1json")
+                .is_none()
+        {
+            continue;
+        }
+        let verb = kynos::http::Method::from_bytes(method.as_bytes()).expect("a method");
+        let problem: serde_json::Value = client
+            .method(verb, &concrete(&template))
+            .header("authorization", bearer)
+            .stalled_body("application/json")
+            .send()
+            .await
+            .assert_status(StatusCode::REQUEST_TIMEOUT)
+            .json();
+        assert_eq!(
+            problem["code"], "error.request.timeout",
+            "{method} {template}: a stalled body's 408 carries the generic timeout code"
+        );
+        stalled += 1;
+    }
+    assert!(stalled > 20, "only {stalled} operations read a JSON body");
 }
 
 // ===========================================================================================
