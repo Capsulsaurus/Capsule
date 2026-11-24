@@ -84,7 +84,7 @@ Re-encrypting under a derived key would upload and store every asset twice. Rewr
 
 - **Leaked link:** bounded by caps, quota, rate limits and revocation; it cannot inject into the library.
 - **Server reads drops:** impossible without `{drop_pubkey}`, which it never receives, while it serves honest code ([](#two-confidentiality-properties)).
-- **Hostile file:** decoded only in the sandbox, after owner review; until the sandbox ships, only by the memory-safe default codecs ([](#security-contract)).
+- **Hostile file:** decoded only in the sandbox, for the sensitive-content check on arrival ([](/design/ai/#sensitive-content)) and after owner review; until the sandbox ships, only by the memory-safe default codecs ([](#security-contract)).
 - **Captured passphrase proof:** fresh for minutes and single-use.
 - **Guest-chosen STREAM parameters:** refused unless the drop is the canonical encryption of its plaintext.
 - **Forged `wrapped_file_key` or mismatched `key_mode`:** covered by `device_sig` and `write_sig`; fails `verify_asset` and is quarantined.

@@ -25,7 +25,7 @@ Incremental, so a new import never re-clusters the library:
 3. **Deferred faces.** A face that is not core is deferred and, once the core pass ends, joins the cluster of its nearest core face if that face is within `max_distance`. Otherwise it stays unassigned. Low-quality faces (small boxes, low detector score) use a stricter distance and are never core.
 4. **Corrections override.** The correction rules below are applied after clustering and always win.
 
-`min_faces` and `max_distance` are per-model constants recorded with the model's inventory row ([](/design/ai/#models-and-algorithms)), never user settings, so two devices cannot cluster the same faces differently.
+`min_faces` and `max_distance` are per-model task constants carried by the model's weight-registry release record ([](/design/ai/#weight-registry)), never user settings, so two devices cannot cluster the same faces differently.
 
 ## Corrections
 

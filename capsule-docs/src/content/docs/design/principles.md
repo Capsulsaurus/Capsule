@@ -37,7 +37,7 @@ Every primitive, construction, format or component identity is **declared in exa
 | Provenance chains, signed manifests | [](/design/cryptography/provenance/) |
 | MLS resilience | [](/design/mls-resilience/) |
 | Device enrollment | [](/design/device-enrollment/) |
-| ML model identities, embedding provenance | [](/design/ai/) |
+| ML pipelines, weight registry, model identities, embedding provenance | [](/design/ai/) |
 | Face clustering, people corrections | [](/design/people/) |
 | Memory generators, memory state | [](/design/memories/) |
 | LQIP, thumbnail/preview formats | [](/design/thumbnails/) |

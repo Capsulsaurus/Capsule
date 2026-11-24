@@ -140,8 +140,9 @@ fn embedding_format_is_model_scoped() {
 
 #[test]
 fn canonical_rows_match_the_docs_committed_slots() {
-    // The four v1-committed slots, verbatim from ai.md § v1-Committed Slots: the model id, its
-    // display label, output kind, and the named fallback the contract keeps for the slot.
+    // The four compiled-in slots (ai.md § Pipeline Slots): the model id, its display label, output
+    // kind, and fallback. These ids are fixture placeholders, not release candidates; the weight
+    // registry replaces this inventory (`capsule-core::ml::weights`).
     let reg = Registry::canonical();
     // Exactly the four committed slots — no more.
     assert_eq!(reg.rows().len(), 4);

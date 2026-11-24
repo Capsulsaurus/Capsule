@@ -33,6 +33,7 @@ SidecarV1 {
   caption_lww:           Option<{ value: String, ts: RFC3339, by: device_id }>,  // value ≤ 4096 bytes; ts and by are audit-only
   superseded_captions:   Vec<{ value: String, written_by: device_id, ts: RFC3339 }>,  // ≤ 16
   rating_lww:            Option<{ value: u8, ts: RFC3339, by: device_id }>,
+  sensitivity_ai:        Lww<Option<{ flagged: bool, model_id: String, model_version: String }>>,  // AI-only; wire-absent when never written
 
   // organization (semantics owned by Asset Organization); LWW, wire-absent when never written
   stack_membership:      Lww<Option<StackMembership>>,  // leave = a stamped None
@@ -87,7 +88,9 @@ Region {
 }
 ```
 
-`tags_user` holds the asset's user **labels** and `regions` its labelled image regions. [](/design/organization/#labels) specifies both, with the stack and album label records. `regions` was added without a `sidecar_schema` bump: older readers keep it verbatim as an unknown key. `media_subtype`, `original_filename`, `capture_settings`, `video` and `edits` are additive top-level keys under the same rule. They are top-level rather than nested in an existing value because an older reader drops an unknown key nested inside a known one and would re-sign without it.
+`tags_user` holds the asset's user **labels** and `regions` its labelled image regions. [](/design/organization/#labels) specifies both, with the stack and album label records. `regions` was added without a `sidecar_schema` bump: older readers keep it verbatim as an unknown key. `media_subtype`, `original_filename`, `capture_settings`, `video`, `edits` and `sensitivity_ai` are additive top-level keys under the same rule. They are top-level rather than nested in an existing value because an older reader drops an unknown key nested inside a known one and would re-sign without it.
+
+`sensitivity_ai` holds the sensitive-content flag ([](/design/ai/#sensitive-content)). The AI writes it. A user can only dismiss it, which writes `flagged: false` under the same `model_id` and `model_version`. It merges as an LWW register like the fields under [](#collaborative-metadata).
 
 ### Original File Name
 
@@ -237,6 +240,7 @@ When an asset crosses a trust boundary (a share link for a non-member, a plainte
 | Personal contact tags (faces matched to a known person) | Stripped with `regions`, the only field that names a face | Retained |
 | Image regions and their labels (`regions`) | Stripped | Retained |
 | Original file name (`original_filename`) | Stripped | Retained |
+| Sensitive-content flag (`sensitivity_ai`) | Stripped; the recipient's client may flag it again | Retained |
 
 - `capture_settings`, `video`, `media_subtype` and the camera model identify no one and leave unchanged.
 - Keys the exporting reader does not know (`_unknown`) are always dropped, under every opt-in: a key a newer schema added may itself be a boundary-crossing field.
@@ -295,7 +299,7 @@ This page owns the envelope, keying, versioning and merge. [](/design/organizati
 | --- | --- | --- |
 | Tags (`tags_user` / `tags_ai`) | OR-set | Add/remove keyed by `add_id`; commutative, associative, idempotent |
 | Regions (`regions`) | Map of LWW registers, each holding an OR-set of labels | Merged as a semilattice: a delete is final, live writes keep the later shape and the union of labels |
-| Caption / rating / `capture_timestamp_user` / `gps_user` / `stack_membership` / `cull` / `hidden` | LWW register | Total order by provenance-chain position; replay is a no-op |
+| Caption / rating / `capture_timestamp_user` / `gps_user` / `stack_membership` / `cull` / `hidden` / `sensitivity_ai` | LWW register | Total order by provenance-chain position; replay is a no-op |
 | Smart albums, unnamed people clusters, aggregated federated albums ([](/design/federation/)) | Computed views | Nothing stored; membership is a deterministic function of inputs ([](/design/organization/#system--smart-albums-views), [](/design/ai/#ai-output-containment)) |
 | People corrections (names, merges, assignments) | LWW maps in the library-settings document | People are a pure function of faces plus corrections, so devices that hold the same corrections show the same people ([](/design/people/)) |
 | Container-album membership | Single home + ordered lifecycle ops | One container per asset; a replayed move no-ops ([](/design/organization/#container-albums)); concurrency ordered by MLS commits |
@@ -306,7 +310,7 @@ Album membership is not a CRDT: MLS commits ([](/design/cryptography/mls/)) alre
 
 User and AI tags are **structurally separate** OR-sets (`tags_user`, `tags_ai`), so an AI tag can never overwrite user intent.
 
-- Every `tags_ai` entry carries `model_id` and `model_version` ([](/design/ai/#embedding-provenance)). When the canonical model changes, old tags are stale; cross-model comparison is forbidden ([](/design/threat-model/validation/#client-side-validation-invariants)).
+- Every `tags_ai` entry carries `model_id` and `model_version` ([](/design/ai/#embedding-provenance)). When a new release completes its generation cutover ([](/design/ai/#generation-cutover)), old tags are stale; cross-model comparison is forbidden ([](/design/threat-model/validation/#client-side-validation-invariants)).
 - **Promote**: an explicit, signed user action, never automatic, copies the entry to `tags_user` with a fresh `add_id`.
 - **Dismiss**: an OR-set remove on `tags_ai` by the original `add_id`.
 
@@ -340,7 +344,7 @@ Each MUST above is a unit test, and the canonical-CBOR known-answer vectors are 
 - Each privacy-table row strips by default and leaves the local sidecar unchanged.
 - A WGS-84 sidecar encodes byte-identically to the pre-`datum` vector.
 - A far-future `ts` on a register write loses to a later write on the chain.
-- A sidecar with no `media_subtype`, `original_filename`, `capture_settings` or `video` encodes byte-identically to the pre-field vector; an older reader keeps each verbatim and re-signs nothing.
+- A sidecar with no `media_subtype`, `original_filename`, `capture_settings`, `video` or `sensitivity_ai` encodes byte-identically to the pre-field vector; an older reader keeps each verbatim and re-signs nothing.
 - `video` keeps a fixture's `30000/1001` frame rate exactly, is absent on a still, and drops a zero-term rate and an empty codec.
 - `capture_settings` round-trips each EXIF fixture's rationals exactly; a zero denominator, an over-long or NUL-padded string, and a lens serial are each handled as specified.
 - A one-byte local mutation fails the local–server equivalence check.

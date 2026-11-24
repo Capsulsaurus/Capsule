@@ -39,6 +39,7 @@ A closed enum. Thresholds belong to the trigger owner, and parameters are plain 
 | `drop_pending` | [](/design/web-upload/#drop-and-adoption-lifecycle) | `count` | No |
 | `recovery_claim` | [](/design/backup-recovery/#opt-in-trusted-contact-recovery) | `days_left` | No |
 | `album_activity` | [](/design/cryptography/mls/#comments-and-reactions) | `count`, `kind` (`comment`/`reaction`) | No |
+| `drop_sensitive` (**Planned**) | [](/design/ai/#sensitive-content) | `count` (flagged drops not yet reviewed) | No |
 
 ### The Pre-Arm Rule
 

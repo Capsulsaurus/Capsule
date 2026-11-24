@@ -23,13 +23,13 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// A canonical ML task — the v1-committed launch pipeline ([AI/ML — v1-Committed Slots]).
+/// A canonical ML task — the v1-committed launch pipeline ([AI/ML — Pipeline Slots]).
 ///
 /// Closed enum per protocol version: an unknown value is a **structural error**, never a
 /// "future value to ignore". Post-v1 candidate tasks each commit to a full inventory row (and a
 /// new variant here) when they ship.
 ///
-/// [AI/ML — v1-Committed Slots]: https://docs/design/ai/#v1-committed-slots
+/// [AI/ML — Pipeline Slots]: https://docs/design/ai/#pipeline-slots
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TaskKind {
