@@ -30,10 +30,10 @@ public final class PeeringViewModel {
 
     private let peering: any PeeringPort
     private let connectivity: SharingConnectivity
-    // Not observed and not isolated: it is a cancellation handle, never
-    // rendered, and `deinit` must be able to cancel it without hopping actors.
+    /// Not observed and not isolated: it is a cancellation handle, never
+    /// rendered, and `deinit` must be able to cancel it without hopping actors.
     @ObservationIgnored
-    private nonisolated(unsafe) var observation: Task<Void, Never>?
+    nonisolated(unsafe) private var observation: Task<Void, Never>?
 
     public init(
         peering: any PeeringPort,

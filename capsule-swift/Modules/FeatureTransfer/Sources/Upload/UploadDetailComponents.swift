@@ -44,7 +44,6 @@ struct SessionStateTrack: View {
         .accessibilityLabel("app.transfer.session.track")
     }
 
-    @ViewBuilder
     private var steps: some View {
         ForEach(Self.happyPath, id: \.rawValue) { step in
             Label(LocalizedStringKey(step.badge.titleKey), systemImage: symbol(for: step))

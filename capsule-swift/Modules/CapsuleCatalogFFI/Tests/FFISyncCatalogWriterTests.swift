@@ -1,8 +1,7 @@
-import Foundation
-import Testing
-
 import CapsuleCatalog
 @testable import CapsuleCatalogFFI
+import Foundation
+import Testing
 
 private let assetID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a7a"
 private let albumID = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a7b"

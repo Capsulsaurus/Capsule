@@ -1,7 +1,6 @@
+@testable import CapsuleCatalogFFI
 import CapsuleDomain
 import Testing
-
-@testable import CapsuleCatalogFFI
 
 /// The Rust-backed alert predicate, called through the uniffi boundary.
 ///

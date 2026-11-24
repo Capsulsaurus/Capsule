@@ -38,23 +38,23 @@ public enum SettingsRootCatalog {
     public static let groups: [SettingsRootGroup] = [
         SettingsRootGroup(
             titleKey: "app.settings.group.account",
-            sections: [.account, .server, .keysAndDevices, .backupAndRecovery],
+            sections: [.account, .server, .keysAndDevices, .backupAndRecovery]
         ),
         SettingsRootGroup(
             titleKey: "app.settings.group.library",
-            sections: [.importAndScopes, .aiAndModels, .appearance, .language, .notifications],
+            sections: [.importAndScopes, .aiAndModels, .appearance, .language, .notifications]
         ),
         SettingsRootGroup(
             titleKey: "app.settings.group.sync_storage",
-            sections: [.sync, .storage, .maintenance],
+            sections: [.sync, .storage, .maintenance]
         ),
         SettingsRootGroup(
             titleKey: "app.settings.group.privacy",
-            sections: [.security, .moderation, .diagnostics],
+            sections: [.security, .moderation, .diagnostics]
         ),
         SettingsRootGroup(
             titleKey: "app.settings.group.advanced",
-            sections: [.federation, .advanced, .about],
+            sections: [.federation, .advanced, .about]
         ),
     ]
 

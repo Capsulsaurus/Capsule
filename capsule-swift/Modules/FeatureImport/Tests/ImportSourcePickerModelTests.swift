@@ -1,7 +1,6 @@
 import CapsuleDomain
-import Testing
-
 @testable import FeatureImport
+import Testing
 
 /// The picker's one non-negotiable rule: a source the platform cannot provide is
 /// **absent**, not disabled.

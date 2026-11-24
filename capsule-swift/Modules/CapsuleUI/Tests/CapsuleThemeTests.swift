@@ -1,7 +1,6 @@
+@testable import CapsuleUI
 import SwiftUI
 import Testing
-
-@testable import CapsuleUI
 
 @Suite("Design tokens")
 struct CapsuleThemeTests {

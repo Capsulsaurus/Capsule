@@ -1,8 +1,7 @@
+@testable import CapsuleFoundation
 import Foundation
 import os
 import Testing
-
-@testable import CapsuleFoundation
 
 @Suite("Diagnostics emit API")
 struct DiagnosticsEmitTests {

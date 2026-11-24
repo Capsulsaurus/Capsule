@@ -1,9 +1,8 @@
+@testable import CapsuleAlerts
 import CapsuleDomain
 import CapsuleMock
 import CapsulePorts
 import Testing
-
-@testable import CapsuleAlerts
 
 /// Recovery has no change stream, so the wrapper is what keeps the recovery
 /// alarm and its badge current after a verify or snooze anywhere in the app.

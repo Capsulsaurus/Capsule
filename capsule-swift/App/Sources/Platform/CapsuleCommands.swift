@@ -164,8 +164,8 @@ private extension View {
     }
 }
 
-// Internal rather than private: the culling surface matches key presses against
-// the same catalog on a phone, where no menu delivers them.
+/// Internal rather than private: the culling surface matches key presses against
+/// the same catalog on a phone, where no menu delivers them.
 extension KeyEquivalent {
     /// The catalog spells arrows as cases because `CapsuleNavigation` may not
     /// import SwiftUI; this is where they become key equivalents.

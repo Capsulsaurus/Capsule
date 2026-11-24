@@ -2,12 +2,12 @@
 import Foundation
 import PackageDescription
 
-// Standalone harness that links the compiled `capsule-sdk` and proves the `capsule_sdk` uniffi Swift
-// bindings work before any app integration. Run `./stage-bindings.sh` first: it builds
-// libcapsule_sdk.dylib and stages the generated `capsule_sdk.swift` + `capsule_sdkFFI.h`.
-//
-// Absolute path to the repo's cargo target dir, so the linker and the runtime loader find the
-// dylib regardless of the directory `swift test` runs from.
+/// Standalone harness that links the compiled `capsule-sdk` and proves the `capsule_sdk` uniffi Swift
+/// bindings work before any app integration. Run `./stage-bindings.sh` first: it builds
+/// libcapsule_sdk.dylib and stages the generated `capsule_sdk.swift` + `capsule_sdkFFI.h`.
+///
+/// Absolute path to the repo's cargo target dir, so the linker and the runtime loader find the
+/// dylib regardless of the directory `swift test` runs from.
 let targetDebug = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent() // capsule-core-swift/
     .deletingLastPathComponent() // repo root

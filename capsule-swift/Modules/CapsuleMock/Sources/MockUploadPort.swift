@@ -71,8 +71,7 @@ extension MockTransferStore: UploadPort {
     /// photo" and "the client never uploaded it" are symmetric unfalsifiable
     /// claims.
     public func custodyReceipts(for assetID: AssetID) async throws -> [CustodyReceipt] {
-        guard let ref = MockAssetRef.decode(assetID), store.library.contains(ref) else { return [] }
-        guard let asset = await store.engine.asset(for: assetID), asset.syncState == .durable else {
+        guard let ref = MockAssetRef.decode(assetID), store.library.contains(ref), let asset = await store.engine.asset(for: assetID), asset.syncState == .durable else {
             return []
         }
         return [BlobRole.original, .metadata, .provenance].enumerated().map { position, role in
@@ -80,7 +79,7 @@ extension MockTransferStore: UploadPort {
         }
     }
 
-    public nonisolated func changes() -> AsyncStream<[UploadSession]> {
+    nonisolated public func changes() -> AsyncStream<[UploadSession]> {
         uploadChanges.subscribe()
     }
 

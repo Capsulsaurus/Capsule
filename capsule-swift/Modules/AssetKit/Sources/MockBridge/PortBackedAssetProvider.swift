@@ -120,7 +120,7 @@ public struct PortBackedAssetProvider: AssetProvider, AssetLocationSource {
     /// an `IndexSet` here would mean guessing at a window this adapter does not
     /// own — and a wrong delta animates rows into the wrong places, which is
     /// worse than a reload.
-    public nonisolated func changes() -> AsyncStream<AssetChange> {
+    nonisolated public func changes() -> AsyncStream<AssetChange> {
         AsyncStream { continuation in
             let task = Task {
                 for await _ in library.changes() {
@@ -146,8 +146,7 @@ public struct PortBackedAssetProvider: AssetProvider, AssetLocationSource {
     /// flattened ``LibraryAsset``. So an un-favourite is a sidecar read followed
     /// by one remove per entry.
     public func setFavorite(_ isFavorite: Bool, for id: AssetID) async throws {
-        guard let asset = try await library.asset(for: id) else { return }
-        guard isFavorite != asset.isFavorite else { return }
+        guard let asset = try await library.asset(for: id), isFavorite != asset.isFavorite else { return }
         if isFavorite {
             try await organize.addUserTag(Asset.favoriteTag, to: [id])
             return

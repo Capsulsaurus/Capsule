@@ -45,7 +45,6 @@ public struct ImportHistoryView: View {
         }
     }
 
-    @ViewBuilder
     private func sessionRows(_ session: ImportSessionRecord) -> some View {
         Section {
             ImportHistoryHeaderRow(
@@ -124,15 +123,13 @@ private struct ImportHistoryOutcomeRows: View {
     let albumName: String?
 
     var body: some View {
-        Group {
-            destinationRow
-            ImportValueRow(labelKey: "app.import.history.imported", value: ImportFormat.count(session.summary.importedCount))
-            ImportValueRow(labelKey: "app.import.history.skipped", value: ImportFormat.count(session.summary.skippedCount))
-            deferredRow
-            failedRow
-            ImportValueRow(labelKey: "app.import.history.mode", value: String(localized: String.LocalizationValue(session.mode.titleKey)))
-            ImportValueRow(labelKey: "app.import.history.elapsed", value: ImportFormat.elapsed(from: session.startedAt, to: session.finishedAt))
-        }
+        destinationRow
+        ImportValueRow(labelKey: "app.import.history.imported", value: ImportFormat.count(session.summary.importedCount))
+        ImportValueRow(labelKey: "app.import.history.skipped", value: ImportFormat.count(session.summary.skippedCount))
+        deferredRow
+        failedRow
+        ImportValueRow(labelKey: "app.import.history.mode", value: String(localized: String.LocalizationValue(session.mode.titleKey)))
+        ImportValueRow(labelKey: "app.import.history.elapsed", value: ImportFormat.elapsed(from: session.startedAt, to: session.finishedAt))
     }
 
     private var destinationRow: some View {

@@ -22,9 +22,9 @@ public final class AssetViewerModel {
 
     private let provider: any AssetProvider
     private let albumProvider: any AlbumProvider
-    // `nonisolated(unsafe)` so `deinit` can cancel it; only touched on the main
-    // actor during the model's life.
-    private nonisolated(unsafe) var slideshowTask: Task<Void, Never>?
+    /// `nonisolated(unsafe)` so `deinit` can cancel it; only touched on the main
+    /// actor during the model's life.
+    nonisolated(unsafe) private var slideshowTask: Task<Void, Never>?
 
     public init(
         assets: [Asset],

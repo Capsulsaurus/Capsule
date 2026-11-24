@@ -1,8 +1,7 @@
 import CapsuleDomain
 import CoreGraphics
-import Testing
-
 @testable import FeatureViewer
+import Testing
 
 /// Regions are fractions of the image; the editor draws the image aspect-fit.
 /// These pin the conversions a drag, a pinch and every drawn outline rely on.

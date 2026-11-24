@@ -150,7 +150,7 @@ extension AppEnvironment {
         }
     }
 
-    private nonisolated static func refresh(
+    nonisolated private static func refresh(
         _ alerts: AlertCoordinator,
         onEach changes: AsyncStream<some Any>
     ) async {

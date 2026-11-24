@@ -1,7 +1,6 @@
+@testable import CapsuleCatalogFFI
 import Foundation
 import Testing
-
-@testable import CapsuleCatalogFFI
 
 private let firstAsset = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a6a"
 private let secondAsset = "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a6b"

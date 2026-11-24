@@ -57,10 +57,10 @@ public final class FederationViewModel {
     private let federation: any FederationPort
     private let moderation: any ModerationPort
     private let connectivity: SharingConnectivity
-    // Not observed and not isolated: it is a cancellation handle, never
-    // rendered, and `deinit` must be able to cancel it without hopping actors.
+    /// Not observed and not isolated: it is a cancellation handle, never
+    /// rendered, and `deinit` must be able to cancel it without hopping actors.
     @ObservationIgnored
-    private nonisolated(unsafe) var observation: Task<Void, Never>?
+    nonisolated(unsafe) private var observation: Task<Void, Never>?
 
     /// The default downtime budget: 30 days of failed pulls before an album is
     /// marked as owned by an unreachable server.

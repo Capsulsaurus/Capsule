@@ -1,9 +1,8 @@
 import CapsuleDomain
 import CapsuleFoundation
 import CapsulePorts
-import Foundation
-
 @testable import FeatureImport
+import Foundation
 
 // MARK: - StubImportPort
 

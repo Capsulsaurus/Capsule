@@ -1,8 +1,7 @@
+@testable import CapsuleAlerts
 import CapsuleDomain
 import CapsulePorts
 import Testing
-
-@testable import CapsuleAlerts
 
 @Suite("The timer plan reconciles armed alarms against the per-class deadlines")
 struct AlertTimerPlanTests {

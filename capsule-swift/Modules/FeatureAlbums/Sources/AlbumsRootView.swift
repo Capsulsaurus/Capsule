@@ -88,7 +88,6 @@ public struct AlbumsRootView: View {
     /// by what is in it long before it is identified by its name — and because
     /// the container/view distinction the design docs insist on is carried by
     /// the tile's own glyph, which a text row has nowhere to put.
-    @ViewBuilder
     private func albumSection(_ titleKey: LocalizedStringKey, _ albums: [AlbumSummary]) -> some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.small) {
             Text(titleKey)

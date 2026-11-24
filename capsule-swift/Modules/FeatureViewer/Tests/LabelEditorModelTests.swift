@@ -2,9 +2,8 @@ import CapsuleDomain
 import CapsuleFoundation
 import CapsuleMock
 import CapsulePorts
-import Testing
-
 @testable import FeatureViewer
+import Testing
 
 /// The editor writes through the port, redraws from its answers, and leaves
 /// its state as it was when a write is refused.
@@ -138,7 +137,7 @@ struct LabelEditorModelTests {
     }
 
     @Test("Finishing a region keeps a draft that replaced it during the write")
-    func finishKeepsNewerDraft() async throws {
+    func finishKeepsNewerDraft() async {
         let gate = Gate()
         let model = LabelEditorModel(subject: .asset(asset), port: GatedLabelPort(inner: port(), gate: gate))
         await model.load()

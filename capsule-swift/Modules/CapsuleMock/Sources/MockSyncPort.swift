@@ -82,7 +82,7 @@ extension MockTransferStore: SyncPort {
         return fetched
     }
 
-    public nonisolated func changes() -> AsyncStream<SyncStatus> {
+    nonisolated public func changes() -> AsyncStream<SyncStatus> {
         syncChanges.subscribe()
     }
 

@@ -1,9 +1,8 @@
+@testable import CapsuleCatalogFFI
 import CapsuleDomain
 import CapsuleFoundation
 import Foundation
 import Testing
-
-@testable import CapsuleCatalogFFI
 
 /// A scripted subscription: answers its items in order, then `nil` forever,
 /// counting every pull.

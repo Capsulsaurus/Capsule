@@ -1,11 +1,10 @@
-import Foundation
-import Testing
-
 import AssetKit
 import CapsuleCatalog
 import CapsuleFoundation
 import CapsuleTestSupport
+import Foundation
 import ManagedStore
+import Testing
 
 @Suite("Composite trash provider")
 struct CompositeTrashProviderTests {

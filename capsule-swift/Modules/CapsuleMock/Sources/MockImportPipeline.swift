@@ -37,7 +37,7 @@ extension MockTransferStore {
     /// directory walk, a mounted volume, and a Takeout archive do not, and a
     /// mock that invented a total for them would let a determinate progress bar
     /// ship without anyone noticing it cannot exist.
-    public nonisolated func scanStream(_ scope: ImportScope) -> AsyncStream<ImportScanEvent> {
+    nonisolated public func scanStream(_ scope: ImportScope) -> AsyncStream<ImportScanEvent> {
         AsyncStream { continuation in
             Task {
                 let scan = try? await self.scan(scope)
@@ -76,7 +76,7 @@ extension MockTransferStore {
     }
 
     /// Whether the source can state its own size before it is walked.
-    private nonisolated static func declaresTotal(_ kind: SourceKind) -> Bool {
+    nonisolated private static func declaresTotal(_ kind: SourceKind) -> Bool {
         switch kind {
         case .cameraRoll, .screenshots, .appCollection: true
         case .folder, .watchedDirectory, .removableVolume, .takeoutArchive, .unknown: false

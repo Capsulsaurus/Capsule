@@ -1,10 +1,9 @@
 import CapsuleDomain
 import CapsuleFoundation
+@testable import CapsuleMock
 import CoreGraphics
 import Foundation
 import Testing
-
-@testable import CapsuleMock
 
 // MARK: - Thumbnails
 
@@ -28,7 +27,7 @@ struct MockThumbnailTests {
     /// all. If the placeholder and the loaded tile disagreed, every tile in the
     /// grid would flash a different colour as it arrived.
     @Test("The rendered colour is the LQIP's dominant colour")
-    func thumbnailMatchesPlaceholder() async throws {
+    func thumbnailMatchesPlaceholder() async {
         let library = makeLibrary()
         let renderer = MockThumbnailRenderer(library: library)
         for index in [0, 7, 128, 399] {
@@ -74,7 +73,7 @@ struct MockThumbnailTests {
     }
 
     @Test("Rendering is deterministic for the same asset")
-    func renderingIsDeterministic() async throws {
+    func renderingIsDeterministic() async {
         let library = makeLibrary()
         let first = MockThumbnailRenderer(library: library)
         let second = MockThumbnailRenderer(library: library)
@@ -87,7 +86,7 @@ struct MockThumbnailTests {
     /// A scroll that re-visits a tile must not repaint it, or the cache is not
     /// doing its job.
     @Test("A repeated request is served from the cache")
-    func cacheAvoidsRepeatedWork() async throws {
+    func cacheAvoidsRepeatedWork() async {
         let library = makeLibrary()
         let renderer = MockThumbnailRenderer(library: library)
         let asset = library.asset(at: 5)
@@ -103,7 +102,7 @@ struct MockThumbnailTests {
     /// A tile for an asset this library does not derive shows its absence
     /// rather than a plausible photograph.
     @Test("An unknown identifier renders nothing")
-    func unknownIdentifierRendersNothing() async throws {
+    func unknownIdentifierRendersNothing() async {
         let renderer = MockThumbnailRenderer(library: makeLibrary())
         #expect(await renderer.thumbnail(for: .photoKit(localIdentifier: "X"), edge: 32) == nil)
         let outOfRange = MockAssetRef(kind: .live, index: 100000).identifier(seed: 0x0C0F_FEE0_1234_5678)

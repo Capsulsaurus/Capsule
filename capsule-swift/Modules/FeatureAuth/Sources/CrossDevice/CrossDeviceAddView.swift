@@ -93,7 +93,6 @@ public struct CrossDeviceAddView: View {
 
     // MARK: Awaiting redemption
 
-    @ViewBuilder
     private var awaitingStep: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.large) {
             AuthSectionHeader(

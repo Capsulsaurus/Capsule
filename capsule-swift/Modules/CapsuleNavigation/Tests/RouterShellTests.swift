@@ -1,9 +1,8 @@
-import Foundation
-import Testing
-
 import CapsuleDomain
 import CapsuleFoundation
 import CapsuleNavigation
+import Foundation
+import Testing
 
 /// The split shell's extra column, and the compact shell's lack of one.
 @Suite("Content and detail columns")

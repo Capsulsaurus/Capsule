@@ -1,7 +1,6 @@
+@testable import CapsuleCatalogFFI
 import Foundation
 import Testing
-
-@testable import CapsuleCatalogFFI
 
 extension FFISyncDriverFixture {
     @Suite("FFISyncDriver — the managed lane's sync over a persisted cursor")

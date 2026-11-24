@@ -35,8 +35,7 @@ public struct MockQueryEngine: Sendable {
     /// the tombstone-with-history rule — so the activity view still answers
     /// "what happened to this photo" for a photo that is gone.
     public func asset(for identifier: AssetID) -> LibraryAsset? {
-        guard let ref = MockAssetRef.decode(identifier), library.contains(ref) else { return nil }
-        guard overlay.patch(for: identifier)?.isPurged != true else { return nil }
+        guard let ref = MockAssetRef.decode(identifier), library.contains(ref), overlay.patch(for: identifier)?.isPurged != true else { return nil }
         return patched(library.asset(for: ref), identifier: identifier)
     }
 

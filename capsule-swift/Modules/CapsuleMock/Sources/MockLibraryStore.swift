@@ -19,8 +19,8 @@ import Foundation
 /// Writes are real. Every mutation lands in the overlay, is visible to every
 /// later read, and emits on the streams that care.
 public actor MockLibraryStore {
-    public nonisolated let library: MockLibrary
-    public nonisolated let configuration: MockConfiguration
+    nonisolated public let library: MockLibrary
+    nonisolated public let configuration: MockConfiguration
 
     private var overlay = MockOverlay()
     private var containers: [AlbumID: ContainerAlbum]

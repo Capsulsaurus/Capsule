@@ -48,11 +48,7 @@ public struct ThroughputSampler: Sendable, Equatable {
         }
         guard let previousOffset = lastOffset, let previousInstant = lastSampledAt else { return }
         let elapsed = instant.epochSeconds - previousInstant.epochSeconds
-        guard elapsed > 0, elapsed <= Self.staleAfterSeconds else {
-            smoothed = nil
-            return
-        }
-        guard offset >= previousOffset else {
+        guard elapsed > 0, elapsed <= Self.staleAfterSeconds, offset >= previousOffset else {
             smoothed = nil
             return
         }

@@ -1,9 +1,8 @@
-import Foundation
-import Testing
-
 import CapsuleDomain
 import CapsuleMock
 import FeatureTransfer
+import Foundation
+import Testing
 
 /// The documented sweep (*Filesystem — Client: Automatic cache management*).
 @Suite("Eviction plan preview")

@@ -38,7 +38,7 @@ public actor ConsentStore: ConsentReading {
         return updated
     }
 
-    public nonisolated func changes() -> AsyncStream<DiagnosticsConsent> {
+    nonisolated public func changes() -> AsyncStream<DiagnosticsConsent> {
         AsyncStream { continuation in
             let token = UUID()
             Task { await self.register(continuation, token: token) }

@@ -97,7 +97,6 @@ public struct TransferCenterView: View {
 
     // MARK: Content
 
-    @ViewBuilder
     private var content: some View {
         List {
             Section {

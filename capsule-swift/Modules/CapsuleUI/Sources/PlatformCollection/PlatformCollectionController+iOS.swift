@@ -45,10 +45,8 @@
     /// A generic `NSObject` subclass cannot vend `@objc` entry points, so every
     /// delegate callback and gesture action arrives through the non-generic
     /// ``PlatformCollectionBridge``.
-    public final class PlatformCollectionController<SectionID, Item, ItemContent, HeaderContent>:
-        UIViewController
-        where SectionID: Hashable & Sendable, Item: Hashable & Sendable,
-        ItemContent: View, HeaderContent: View {
+    public final class PlatformCollectionController<SectionID: Hashable & Sendable, Item: Hashable & Sendable, ItemContent: View, HeaderContent: View>:
+        UIViewController {
         var itemContent: (SectionID, Item) -> ItemContent
         var headerContent: (SectionID) -> HeaderContent
         var onSelect: ((SectionID, Item) -> Void)?
@@ -91,32 +89,30 @@
             return view
         }()
 
-        private lazy var cellRegistration = UICollectionView
-            .CellRegistration<UICollectionViewCell, Item> { [weak self] cell, indexPath, item in
-                guard let self, let sectionID = sectionID(at: indexPath.section) else { return }
-                // `UIHostingConfiguration` is what makes a cell's content plain
-                // SwiftUI: reuse, sizing, and teardown stay UIKit's job, while the
-                // pixels are the same view the Mac renders. Margins are zeroed
-                // because a photo tile is edge-to-edge by definition.
-                cell.contentConfiguration = UIHostingConfiguration {
-                    itemContent(sectionID, item)
-                }
-                .margins(.all, 0)
+        private lazy var cellRegistration = UICollectionView.CellRegistration<UICollectionViewCell, Item> { [weak self] cell, indexPath, item in
+            guard let self, let sectionID = sectionID(at: indexPath.section) else { return }
+            // `UIHostingConfiguration` is what makes a cell's content plain
+            // SwiftUI: reuse, sizing, and teardown stay UIKit's job, while the
+            // pixels are the same view the Mac renders. Margins are zeroed
+            // because a photo tile is edge-to-edge by definition.
+            cell.contentConfiguration = UIHostingConfiguration {
+                itemContent(sectionID, item)
             }
+            .margins(.all, 0)
+        }
 
-        private lazy var headerRegistration = UICollectionView
-            .SupplementaryRegistration<UICollectionViewCell>(
-                elementKind: PlatformCollectionLayoutBuilder.headerElementKind
-            ) { [weak self] view, _, indexPath in
-                guard let self, let sectionID = sectionID(at: indexPath.section) else { return }
-                // A `UICollectionViewCell` is used as the supplementary view purely
-                // because it is the reusable view that accepts a content
-                // configuration; nothing about it behaves like a cell here.
-                view.contentConfiguration = UIHostingConfiguration {
-                    headerContent(sectionID)
-                }
-                .margins(.all, 0)
+        private lazy var headerRegistration = UICollectionView.SupplementaryRegistration<UICollectionViewCell>(
+            elementKind: PlatformCollectionLayoutBuilder.headerElementKind
+        ) { [weak self] view, _, indexPath in
+            guard let self, let sectionID = sectionID(at: indexPath.section) else { return }
+            // A `UICollectionViewCell` is used as the supplementary view purely
+            // because it is the reusable view that accepts a content
+            // configuration; nothing about it behaves like a cell here.
+            view.contentConfiguration = UIHostingConfiguration {
+                headerContent(sectionID)
             }
+            .margins(.all, 0)
+        }
 
         private lazy var dataSource = makeDataSource()
 
@@ -267,12 +263,11 @@
         /// scroll callback is what keeps this from driving a SwiftUI update per
         /// frame during a fling — a tile spans many frames of scrolling.
         private func reportLeadingVisibleItem() {
-            guard let onLeadingVisibleItem else { return }
-            guard let indexPath = collectionView.indexPathsForVisibleItems.min(),
+            guard let onLeadingVisibleItem,
+                  let indexPath = collectionView.indexPathsForVisibleItems.min(),
                   let item = dataSource.itemIdentifier(for: indexPath),
-                  let sectionID = sectionID(at: indexPath.section)
-            else { return }
-            guard item != reportedLeadingItem else { return }
+                  let sectionID = sectionID(at: indexPath.section),
+                  item != reportedLeadingItem else { return }
             reportedLeadingItem = item
             onLeadingVisibleItem(sectionID, item)
         }

@@ -1,7 +1,6 @@
 import CapsuleDomain
-import Testing
-
 @testable import FeatureImport
+import Testing
 
 /// The scan screen's state machine, driven by hand-written event sequences.
 ///

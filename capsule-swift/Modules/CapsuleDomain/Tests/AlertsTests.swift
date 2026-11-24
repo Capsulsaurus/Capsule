@@ -1,7 +1,6 @@
+import CapsuleDomain
 import Foundation
 import Testing
-
-import CapsuleDomain
 
 /// The alert vocabulary: wire names, catalog keys, and where a tap leads
 /// (*Notifications — Alert Classes*).

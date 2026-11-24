@@ -78,7 +78,6 @@ public struct ExportSheet: View {
         }
     }
 
-    @ViewBuilder
     private func outcomeSection(_ outcome: ExportViewModel.Outcome) -> some View {
         Section {
             switch outcome {

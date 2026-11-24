@@ -1,8 +1,7 @@
-import Foundation
-
 import CapsuleDomain
 import CapsuleFoundation
 import CapsuleNavigation
+import Foundation
 
 /// One sample of every `Route` case, with the section that must own it.
 ///

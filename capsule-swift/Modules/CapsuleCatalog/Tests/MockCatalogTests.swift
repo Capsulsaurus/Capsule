@@ -1,8 +1,7 @@
-import Foundation
-import Testing
-
 import CapsuleCatalog
 import CapsuleTestSupport
+import Foundation
+import Testing
 
 /// Verifies that `MockCatalog` is a *faithful* ``AssetCatalog`` — it must obey
 /// the same documented semantics as the real catalog, or every consumer test

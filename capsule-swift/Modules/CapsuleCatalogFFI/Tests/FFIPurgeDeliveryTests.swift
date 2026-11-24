@@ -1,8 +1,7 @@
 import CapsuleCatalog
+@testable import CapsuleCatalogFFI
 import Foundation
 import Testing
-
-@testable import CapsuleCatalogFFI
 
 /// A purged asset's id as the workspace names it, and the same id as another
 /// device's feed may spell it.

@@ -1,8 +1,7 @@
-import Foundation
-import Testing
-
 import CapsuleCatalog
 @testable import CapsuleCatalogFFI
+import Foundation
+import Testing
 
 /// Exercises the real ``CapsuleCatalog`` against an in-memory SQLite database
 /// through the Rust UniFFI boundary — the Phase 1 exit criterion that the

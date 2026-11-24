@@ -93,7 +93,6 @@ public struct SearchRootView: View {
         }
     }
 
-    @ViewBuilder
     private var suggestionList: some View {
         ForEach(model.visibleSuggestions) { suggestion in
             Button { model.apply(suggestion) } label: {

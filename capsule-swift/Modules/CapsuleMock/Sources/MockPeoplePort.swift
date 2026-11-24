@@ -103,7 +103,7 @@ extension MockIntelligenceStore: PeoplePort {
         await peopleChanges.send(())
     }
 
-    public nonisolated func changes() -> AsyncStream<Void> {
+    nonisolated public func changes() -> AsyncStream<Void> {
         peopleChanges.subscribe()
     }
 }

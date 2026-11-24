@@ -27,10 +27,10 @@ public final class DropInboxViewModel {
     private let dropPort: any DropPort
     private let connectivity: SharingConnectivity
     private let pageSize: Int
-    // Not observed and not isolated: it is a cancellation handle, never
-    // rendered, and `deinit` must be able to cancel it without hopping actors.
+    /// Not observed and not isolated: it is a cancellation handle, never
+    /// rendered, and `deinit` must be able to cancel it without hopping actors.
     @ObservationIgnored
-    private nonisolated(unsafe) var observation: Task<Void, Never>?
+    nonisolated(unsafe) private var observation: Task<Void, Never>?
 
     public init(
         drops dropPort: any DropPort,

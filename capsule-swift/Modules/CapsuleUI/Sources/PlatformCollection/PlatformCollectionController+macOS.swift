@@ -48,10 +48,8 @@
     ///   `AnyView`. The content itself is still the same view the iPhone renders.
     /// * `NSCollectionView` is not a scroll view, so it is installed as the
     ///   document view of an `NSScrollView` the controller owns.
-    public final class PlatformCollectionController<SectionID, Item, ItemContent, HeaderContent>:
-        NSViewController
-        where SectionID: Hashable & Sendable, Item: Hashable & Sendable,
-        ItemContent: View, HeaderContent: View {
+    public final class PlatformCollectionController<SectionID: Hashable & Sendable, Item: Hashable & Sendable, ItemContent: View, HeaderContent: View>:
+        NSViewController {
         var itemContent: (SectionID, Item) -> ItemContent
         var headerContent: (SectionID) -> HeaderContent
         var onSelect: ((SectionID, Item) -> Void)?
@@ -254,12 +252,11 @@
         /// Report the topmost visible item, when it is not the one last
         /// reported. The iOS twin of this, callback for callback.
         private func reportLeadingVisibleItem() {
-            guard let onLeadingVisibleItem else { return }
-            guard let indexPath = collectionView.indexPathsForVisibleItems().min(),
+            guard let onLeadingVisibleItem,
+                  let indexPath = collectionView.indexPathsForVisibleItems().min(),
                   let item = dataSource.itemIdentifier(for: indexPath),
-                  let sectionID = sectionID(at: indexPath.section)
-            else { return }
-            guard item != reportedLeadingItem else { return }
+                  let sectionID = sectionID(at: indexPath.section),
+                  item != reportedLeadingItem else { return }
             reportedLeadingItem = item
             onLeadingVisibleItem(sectionID, item)
         }

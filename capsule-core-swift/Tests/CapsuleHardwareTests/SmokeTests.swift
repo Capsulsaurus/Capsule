@@ -1,8 +1,7 @@
+@testable import CapsuleHardware
 import CryptoKit
 import Foundation
 import Testing
-
-@testable import CapsuleHardware
 
 /// Proves the compiled `capsule-core` works when consumed from Swift over the `capsule_sdk` uniffi
 /// namespace — the Apple analogue of the Rust Linux software smoke. Run `./stage-bindings.sh` first.
@@ -140,7 +139,7 @@ struct SmokeTests {
 
         let (outcome, bytes) = try p256RoundTrip(signer)
         #expect({ if case .accept = outcome { return true } else { return false } }(),
-                 "a manifest signed by the P-256 hybrid must verify through verify_asset")
+                "a manifest signed by the P-256 hybrid must verify through verify_asset")
         #expect(bytes == image)
     }
 
@@ -157,7 +156,7 @@ struct SmokeTests {
         let enclave = SecureEnclaveSigner()
         let (outcome, bytes) = try p256RoundTrip(enclave)
         #expect({ if case .accept = outcome { return true } else { return false } }(),
-                 "a manifest signed by the SE-composed P-256 hybrid must verify")
+                "a manifest signed by the SE-composed P-256 hybrid must verify")
         #expect(bytes == image)
         // The private key never leaves the enclave — a throw here fails the test.
         try enclave.assertNonExportable(keyAlias: "device-dsk")

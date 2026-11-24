@@ -15,7 +15,7 @@ extension MockIntelligenceStore: AIPort {
     /// Progress is emitted in fixed steps rather than on a timer, so a test can
     /// consume the whole stream deterministically and a demo shows the same
     /// sequence every time.
-    public nonisolated func downloadModel(slot: ModelSlot) -> AsyncStream<AIModelStatus> {
+    nonisolated public func downloadModel(slot: ModelSlot) -> AsyncStream<AIModelStatus> {
         AsyncStream { continuation in
             Task {
                 for step in 1 ... 8 {
@@ -50,7 +50,7 @@ extension MockIntelligenceStore: AIPort {
 
     /// Re-run a slot over the assets whose output went stale after a model
     /// change.
-    public nonisolated func regenerate(slot: ModelSlot) -> AsyncStream<AIModelStatus> {
+    nonisolated public func regenerate(slot: ModelSlot) -> AsyncStream<AIModelStatus> {
         AsyncStream { continuation in
             Task {
                 let total = await self.pendingCount(slot: slot)
@@ -65,7 +65,7 @@ extension MockIntelligenceStore: AIPort {
         }
     }
 
-    public nonisolated func changes() -> AsyncStream<[AIModelStatus]> {
+    nonisolated public func changes() -> AsyncStream<[AIModelStatus]> {
         modelChanges.subscribe()
     }
 

@@ -24,10 +24,9 @@ struct RouteDestination: View {
     let route: Route
     let environment: AppEnvironment
 
-    // Thirty-odd branches is what "every destination in the app" costs. The
-    // complexity score is the guarantee, not a smell: collapsing it would mean
-    // giving up the compile error.
-    @ViewBuilder
+    /// Thirty-odd branches is what "every destination in the app" costs. The
+    /// complexity score is the guarantee, not a smell: collapsing it would mean
+    /// giving up the compile error.
     var body: some View {
         switch route {
         // MARK: Library

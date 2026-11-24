@@ -1,8 +1,7 @@
+@testable import CapsuleUI
 import CoreGraphics
 import Foundation
 import Testing
-
-@testable import CapsuleUI
 
 // MARK: - Counting double
 
