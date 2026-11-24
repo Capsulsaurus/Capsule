@@ -316,6 +316,80 @@ mod postgres_conformance {
         assert_eq!(applied, expected);
     }
 
+    /// The versions `ledger` records, oldest first.
+    async fn ledger_versions(
+        connection: &sea_orm::DatabaseConnection,
+        ledger: &str,
+    ) -> Vec<String> {
+        connection
+            .query_all_raw(sea_orm::Statement::from_string(
+                sea_orm::DbBackend::Postgres,
+                format!("SELECT version FROM {ledger} ORDER BY version"),
+            ))
+            .await
+            .expect("the ledger is readable")
+            .iter()
+            .map(|row| row.try_get("", "version").expect("a version column"))
+            .collect()
+    }
+
+    /// One step down removes the newest migration from both ledgers in the transaction that
+    /// rolls it back, `status` reports exactly that migration pending, and one step up restores
+    /// both rows.
+    #[tokio::test]
+    async fn one_step_down_and_up_moves_both_ledgers_and_the_status() {
+        let Some(database) = testing::start("the one-step migration round trip").await else {
+            return;
+        };
+        let connection = database.connection();
+        let names: Vec<String> = EXPECTED_MIGRATIONS
+            .iter()
+            .map(|migration| migration.name.to_owned())
+            .collect();
+        let (newest, older) = names.split_last().expect("at least one migration");
+
+        let status = server_migration::Migrator::status(connection)
+            .await
+            .expect("the status of a migrated database");
+        assert!(
+            status
+                .iter()
+                .all(|(_, status)| *status == server_migration::MigrationStatus::Applied),
+            "{status:?}"
+        );
+        assert_eq!(ledger_versions(connection, "seaql_migrations").await, names);
+        assert_eq!(ledger_versions(connection, CHECKSUM_LEDGER).await, names);
+
+        server_migration::Migrator::down(connection, Some(1))
+            .await
+            .expect("the newest migration rolls back");
+        assert_eq!(ledger_versions(connection, "seaql_migrations").await, older);
+        assert_eq!(ledger_versions(connection, CHECKSUM_LEDGER).await, older);
+        let status = server_migration::Migrator::status(connection)
+            .await
+            .expect("the status after one rollback");
+        let pending: Vec<&str> = status
+            .iter()
+            .filter(|(_, status)| *status == server_migration::MigrationStatus::Pending)
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert_eq!(pending, [newest.as_str()]);
+        assert_eq!(
+            status.iter().map(|(name, _)| name).collect::<Vec<_>>(),
+            names.iter().collect::<Vec<_>>(),
+            "status lists every migration, oldest first"
+        );
+
+        server_migration::Migrator::up(connection, Some(1))
+            .await
+            .expect("the newest migration re-applies");
+        assert_eq!(ledger_versions(connection, "seaql_migrations").await, names);
+        assert_eq!(ledger_versions(connection, CHECKSUM_LEDGER).await, names);
+        assert_schema_current(connection)
+            .await
+            .expect("the schema is current again");
+    }
+
     /// Whether `share_serves` carries an index named `idx_share_serves_address` whose only
     /// key is `address`.
     async fn has_address_index(connection: &sea_orm::DatabaseConnection) -> bool {
