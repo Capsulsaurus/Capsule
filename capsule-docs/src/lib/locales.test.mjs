@@ -150,24 +150,25 @@ describe('TRANSLATED_PAGES', () => {
         }
     });
 
-    it.each(
-        LOCALE_KEYS,
-    )('is exactly what src/content/docs/%s/ holds', (key) => {
-        const pages = readdirSync(at(`../content/docs/${key}`), {
-            recursive: true,
-            withFileTypes: true,
-        })
-            .filter((entry) => entry.isFile())
-            .map((entry) =>
-                relative(
-                    at(`../content/docs/${key}`),
-                    join(entry.parentPath, entry.name),
-                )
-                    .split(sep)
-                    .join('/'),
-            );
-        expect(pages.sort()).toEqual([...TRANSLATED_PAGES].sort());
-    });
+    it.each(LOCALE_KEYS)(
+        'is exactly what src/content/docs/%s/ holds',
+        (key) => {
+            const pages = readdirSync(at(`../content/docs/${key}`), {
+                recursive: true,
+                withFileTypes: true,
+            })
+                .filter((entry) => entry.isFile())
+                .map((entry) =>
+                    relative(
+                        at(`../content/docs/${key}`),
+                        join(entry.parentPath, entry.name),
+                    )
+                        .split(sep)
+                        .join('/'),
+                );
+            expect(pages.sort()).toEqual([...TRANSLATED_PAGES].sort());
+        },
+    );
 });
 
 describe('script-tagged Chinese UI strings', () => {

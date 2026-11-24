@@ -31,6 +31,10 @@ in a client or server artifact.
   what Astro's own Markdown pipeline uses, named directly because the remark plugins in `src/lib`
   import them: the same slugger Astro gives headings, so an empty-label link resolves exactly the
   anchor the page renders.
+- **`vitest` (dev):** runs under Bun on the `threads` pool (`--pool=threads` in the `test`
+  script). From 5.1.1 the default `forks` pool starts a watchdog child and calls
+  `child.channel.unref()`, which Bun's `child_process` does not implement, so every forks worker
+  fails to start.
 
 ## Development
 

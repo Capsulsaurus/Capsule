@@ -9,7 +9,7 @@
         "build": "bun scripts/gen-reference.mjs && bunx --bun astro build",
         "preview": "bun run build && wrangler pages dev ./dist",
         "astro": "bunx --bun astro",
-        "test": "bunx --bun vitest run",
+        "test": "bunx --bun vitest run --pool=threads",
         "audit-page": "bun scripts/audit-page.mjs"
     },
     "dependencies": {

@@ -108,12 +108,13 @@ describe('LLMS_SETS', () => {
         expect(new Set(labels).size).toBe(labels.length);
     });
 
-    it.each(
-        LLMS_SETS.map((set) => [set.label, set]),
-    )('%s has a description and paths', (_, set) => {
-        expect(set.description.trim()).not.toBe('');
-        expect(set.paths.length).toBeGreaterThan(0);
-    });
+    it.each(LLMS_SETS.map((set) => [set.label, set]))(
+        '%s has a description and paths',
+        (_, set) => {
+            expect(set.description.trim()).not.toBe('');
+            expect(set.paths.length).toBeGreaterThan(0);
+        },
+    );
 
     // A renamed, moved or drafted page would otherwise drop out of its bundle unnoticed.
     it.each(
@@ -132,12 +133,12 @@ describe('LLMS_SETS', () => {
 
 describe('LLMS_SMALL_EXCLUDE and LLMS_PROMOTE', () => {
     // Drafts count: `blog/**` must keep excluding posts once they publish.
-    it.each([
-        ...LLMS_SMALL_EXCLUDE,
-        ...LLMS_PROMOTE,
-    ])('%s matches a page', (glob) => {
-        expect(micromatch(ALL_IDS, glob)).not.toEqual([]);
-    });
+    it.each([...LLMS_SMALL_EXCLUDE, ...LLMS_PROMOTE])(
+        '%s matches a page',
+        (glob) => {
+            expect(micromatch(ALL_IDS, glob)).not.toEqual([]);
+        },
+    );
 
     it('keeps the guides in llms-small', () => {
         expect(micromatch(['guides/self-hosting'], LLMS_SMALL_EXCLUDE)).toEqual(
