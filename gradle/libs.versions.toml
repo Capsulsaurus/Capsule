@@ -14,7 +14,7 @@ coil = "3.6.3"
 # Jetpack Compose BOM: pins every androidx.compose artifact to one tested set (Compose 1.12,
 # Material 3 1.4). The 2026.11 BOM's Compose 1.13 needs compileSdk 37.1, so it waits on that
 # platform.
-compose-bom = "2026.09.00"
+compose-bom = "2026.11.01"
 koin = "4.2.2"
 kotlin = "2.4.21"
 kotlinx-serialization = "1.13.0"
