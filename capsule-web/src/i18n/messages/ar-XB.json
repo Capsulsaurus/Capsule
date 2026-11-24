@@ -2063,6 +2063,7 @@
   "error.request.not_found": "\u200f\u202eCapsule couldn't find that.\u202c\u200f",
   "error.request.not_implemented": "\u200f\u202eCapsule couldn't handle that request.\u202c\u200f",
   "error.request.range_not_satisfiable": "\u200f\u202eCapsule couldn't send that part of the file.\u202c\u200f",
+  "error.request.timeout": "\u200f\u202eThat request took too long to arrive. Please try again.\u202c\u200f",
   "error.request.too_early": "\u200f\u202eThat request was sent too early. Please try again.\u202c\u200f",
   "error.request.too_large": "\u200f\u202eThat request was too large to accept.\u202c\u200f",
   "error.request.unauthenticated": "\u200f\u202ePlease sign in again.\u202c\u200f",

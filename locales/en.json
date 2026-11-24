@@ -8275,6 +8275,10 @@
     "message": "Capsule couldn't send that part of the file.",
     "context": "HTTP 416 on a blob read: the requested byte range starts past the end of the blob. A client resuming a download with a stale offset reaches it; re-fetching from the start recovers."
   },
+  "error.request.timeout": {
+    "message": "That request took too long to arrive. Please try again.",
+    "context": "HTTP 408: the request body stopped arriving partway through, so the server gave up on it before a handler saw it. Usually a stalled or very slow connection; re-sending the same request recovers."
+  },
   "error.request.too_early": {
     "message": "That request was sent too early. Please try again.",
     "context": "HTTP 425: a write (any non-safe method) reached the server as TLS early data, which a replay could repeat, so it was refused before its body was read. Clients re-send the same request once the handshake has completed and rarely show this; it surfaces only when the retries give up."

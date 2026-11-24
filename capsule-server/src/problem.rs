@@ -117,6 +117,8 @@ pub fn code_for(status: u16) -> &'static str {
         404 => error_codes::REQUEST_NOT_FOUND,
         405 => error_codes::REQUEST_METHOD_NOT_ALLOWED,
         406 => error_codes::REQUEST_NOT_ACCEPTABLE,
+        // Kynos's body extractors, for a body that stalled before it arrived whole.
+        408 => error_codes::REQUEST_TIMEOUT,
         413 => error_codes::REQUEST_TOO_LARGE,
         415 => error_codes::REQUEST_UNSUPPORTED_MEDIA_TYPE,
         // The blob reads' `Delivery`, for a range that starts past the last byte.

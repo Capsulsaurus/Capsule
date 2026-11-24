@@ -10319,6 +10319,11 @@
     "origin": "machine",
     "source": "594d0bec965c42ab"
   },
+  "error.request.timeout": {
+    "message": "Cette requête a mis trop de temps à arriver. Veuillez réessayer.",
+    "origin": "machine",
+    "source": "e71726a2a0e9960e"
+  },
   "error.request.too_early": {
     "message": "Cette requête a été envoyée trop tôt. Veuillez réessayer.",
     "origin": "machine",
