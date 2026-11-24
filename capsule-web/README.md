@@ -61,6 +61,9 @@ Until then this path works and is tested; it is not dead code.
   submenus open to the right and arrow keys run backwards under Arabic.
 - **Guest share crypto:** `capsule-wasm` (`mise run build-wasm`), generated and never committed.
 - **Lint / format:** Biome. **Runtime, package manager and test runner:** bun.
+- **Type checking:** TypeScript, run by `mise run typecheck-web` in `check-web`. `@types/bun`
+  types the `bun:test` suites and the `node:` builtins they read fixtures with; the tsconfig
+  names it in `types` because TypeScript 7 no longer loads every `@types` package by itself.
 
 ## Development
 

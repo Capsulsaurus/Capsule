@@ -126,7 +126,7 @@ run = [
 
 [tasks.check-web]
 description = "Web CI gate"
-depends = ["format-check-web", "lint-check-web", "test-web", "build-web", "wasm-surface-check"]
+depends = ["format-check-web", "lint-check-web", "typecheck-web", "test-web", "build-web", "wasm-surface-check"]
 
 [tasks.check-docs]
 description = "Docs CI gate"
@@ -636,6 +636,16 @@ run = "cargo run -q -p xtask -- drop-kat"
 dir = "capsule-web"
 depends = ["drop-kat"]
 run = "bun test"
+
+# Neither rsbuild (which strips types) nor `bun test` runs the TypeScript compiler, so without
+# this gate type errors in capsule-web reach master unseen. It depends on `build-wasm` because
+# the share and drop modules import the generated glue's declarations; the wasm build is the one
+# `test-web` and `build-web` already share, so this adds no cargo run to the graph.
+[tasks.typecheck-web]
+description = "Type-check capsule-web, its bun tests included"
+dir = "capsule-web"
+depends = ["build-wasm"]
+run = "bunx tsc --noEmit -p ."
 
 # build-web bundles the guest share viewer, which imports the generated wasm glue.
 [tasks.build-web]
