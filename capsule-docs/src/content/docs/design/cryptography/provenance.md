@@ -12,22 +12,22 @@ Structs live in `capsule-core/src/crypto/provenance/`. Verification is the `veri
 
 A signed manifest, not a Merkle tree: STREAM ([](/design/cryptography/encryption/#stream-construction)) already catches chunk tampering, truncation and reordering. Load-bearing fields:
 
-| Field | Rule |
-| --- | --- |
-| `crypto_suite_id`, `protocol_version` | Signed suite ([](/design/cryptography/primitives/#versioning-identifiers)) and album protocol pin; not downgradable. |
-| `file_id`, `album_id`, `amk_version` | `amk_version` selects the epoch whose write-tier key verifies `write_sig`. |
-| `ciphertext_hash` | Content address of the original blob, header included ([](/design/cryptography/encryption/#content-address)), hashed while streaming. |
-| `key_commitment` | The original blob's key commitment, mirrored from its header ([](/design/cryptography/encryption/#key-commitment)). Present wherever `ciphertext_hash` is. |
+| Field                                           | Rule                                                                                                                                                                                                       |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `crypto_suite_id`, `protocol_version`           | Signed suite ([](/design/cryptography/primitives/#versioning-identifiers)) and album protocol pin; not downgradable.                                                                                       |
+| `file_id`, `album_id`, `amk_version`            | `amk_version` selects the epoch whose write-tier key verifies `write_sig`.                                                                                                                                 |
+| `ciphertext_hash`                               | Content address of the original blob, header included ([](/design/cryptography/encryption/#content-address)), hashed while streaming.                                                                      |
+| `key_commitment`                                | The original blob's key commitment, mirrored from its header ([](/design/cryptography/encryption/#key-commitment)). Present wherever `ciphertext_hash` is.                                                 |
 | `metadata_blob_hash`, `metadata_key_commitment` | Content address and key commitment of the encrypted metadata blob ([](/design/cryptography/encryption/#metadata-encryption)). Present on `create`, `replace`, `metadata-update` only, and always together. |
-| `plaintext_size`, `chunk_size`, `nonce_prefix` | STREAM parameters; `nonce_prefix` is random per file and equals the blob header's. |
-| `key_mode`, `wrapped_file_key` | `derived` (default) or `wrapped` (key sealed under the AMK). See below. |
-| `created_by_user`, `created_by_device` | The **signer of this record**; the creator is the `create` record's signer. |
-| `client_version` | Exact build ([](#client-build-identification)); audit-only. |
-| `timestamp` | Self-asserted; audit-only. |
-| `action` | Closed set owned by [](/design/authorization/#the-closed-action-set). |
-| `prior_provenance_hash` | SHA-256 of the previous manifest. Null **only** on `create`, else rejected by client and server. |
-| `retention_until` | Set only on `delete` (retention window: [](/design/organization/#retention-window)). |
-| `device_sig`, `write_sig` | Hybrid Ed25519 + ML-DSA-65 over all fields. **Both, and both halves, must verify.** |
+| `plaintext_size`, `chunk_size`, `nonce_prefix`  | STREAM parameters; `nonce_prefix` is random per file and equals the blob header's.                                                                                                                         |
+| `key_mode`, `wrapped_file_key`                  | `derived` (default) or `wrapped` (key sealed under the AMK). See below.                                                                                                                                    |
+| `created_by_user`, `created_by_device`          | The **signer of this record**; the creator is the `create` record's signer.                                                                                                                                |
+| `client_version`                                | Exact build ([](#client-build-identification)); audit-only.                                                                                                                                                |
+| `timestamp`                                     | Self-asserted; audit-only.                                                                                                                                                                                 |
+| `action`                                        | Closed set owned by [](/design/authorization/#the-closed-action-set).                                                                                                                                      |
+| `prior_provenance_hash`                         | SHA-256 of the previous manifest. Null **only** on `create`, else rejected by client and server.                                                                                                           |
+| `retention_until`                               | Set only on `delete` (retention window: [](/design/organization/#retention-window)).                                                                                                                       |
+| `device_sig`, `write_sig`                       | Hybrid Ed25519 + ML-DSA-65 over all fields. **Both, and both halves, must verify.**                                                                                                                        |
 
 `device_sig` proves provenance: it is by the uploading DSK ([](/design/cryptography/keys/#device-keys)), chained to the user IK via the device directory ([](/design/cryptography/keys/#device-directory)). `write_sig` proves write authority at `amk_version`: it is by the epoch's write-tier key ([](/design/cryptography/keys/#album-master-keys-amks)).
 
@@ -107,12 +107,12 @@ It travels as the `derivative_manifest` blob, served verbatim. Only it carries t
 
 ## Failure Modes
 
-| Failure | Detected / contained by | Recovery |
-| --- | --- | --- |
-| Stale revival (an old, valid manifest re-served) | `prior_provenance_hash` chain, client and server ([](/design/threat-model/validation/)) | Quarantine; chain advance refused |
-| Suite downgrade | Both signatures cover `crypto_suite_id` and `protocol_version` | Quarantine |
-| Derivative poisoning | `DerivativeManifest` chain ([](#derivative-provenance)) | Unsigned overwrite rejected; existing derivative kept |
-| Blob header disagrees with its manifest | Keyless header check at finalize and on read ([](/design/cryptography/encryption/#header-and-manifest-agreement)) | Refused at upload; *sealed bad at source* on read |
+| Failure                                          | Detected / contained by                                                                                           | Recovery                                              |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| Stale revival (an old, valid manifest re-served) | `prior_provenance_hash` chain, client and server ([](/design/threat-model/validation/))                           | Quarantine; chain advance refused                     |
+| Suite downgrade                                  | Both signatures cover `crypto_suite_id` and `protocol_version`                                                    | Quarantine                                            |
+| Derivative poisoning                             | `DerivativeManifest` chain ([](#derivative-provenance))                                                           | Unsigned overwrite rejected; existing derivative kept |
+| Blob header disagrees with its manifest          | Keyless header check at finalize and on read ([](/design/cryptography/encryption/#header-and-manifest-agreement)) | Refused at upload; _sealed bad at source_ on read     |
 
 ## Known Gaps
 

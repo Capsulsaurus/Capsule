@@ -4,7 +4,7 @@ description: 使用 capsule CLI 日常使用 Capsule 照片库：导入、备份
 audit: none
 ---
 
-本指南介绍参考客户端 `capsule` CLI。标有（*计划中*）的命令已列入[路线图](https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md)，但目前尚不可用。参数以 `capsule <command> --help` 为准；CLI 参考（[](/reference/cli/)）列出了全部参数。
+本指南介绍参考客户端 `capsule` CLI。标有（_计划中_）的命令已列入[路线图](https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md)，但目前尚不可用。参数以 `capsule <command> --help` 为准；CLI 参考（[](/reference/cli/)）列出了全部参数。
 
 :::caution
 Capsule 目前处于 Alpha 阶段。在首个内部试用（dogfood）版本发布之前，请为你导入的每个原始文件另外保留一份独立备份。
@@ -26,15 +26,15 @@ Capsule 目前处于 Alpha 阶段。在首个内部试用（dogfood）版本发�
 - `capsule push` 上传照片库。上传会从中断处继续，因此重新运行 `push` 始终是安全的。每上传完一个资源，`push` 都会请求服务器确认它已持久保存每个 blob，并将服务器签发的托管回执保存在照片库中。某个资源失败时会被报告，运行仍会继续。只要有任何资源失败，命令就会以非零状态退出，`--json` 会列出每个资源的结果。
 - `capsule import --push` 一步完成以上两项操作。
 - **在托管得到验证之前，请保留原始文件**。只有当服务器报告某个资源已持久保存，并签发了经过签名的托管回执（`push` 会将其报告为已验证）后，该资源才算安全存储。在此之前不要删除源文件。`import --move --push` 仅在每个资源通过验证后才删除对应的源文件。不带 `--push` 时，`--move` 会保留所有源文件并给出说明；之后对同一批文件运行 `import --move --push` 即可将其释放。
-- `capsule restore`（*计划中*）会下载原始文件，并逐字节核对它们与导入时签名的内容是否一致。
+- `capsule restore`（_计划中_）会下载原始文件，并逐字节核对它们与导入时签名的内容是否一致。
 
 <a id="organize"></a>
 
 ## 整理
 
-- **标签**可以自由填写，可附加到资源、堆叠（RAW+JPEG 配对、连拍、包围曝光）、相册或图像中的某个区域。你添加的标签与 AI 建议的标签分开保存，你可以采纳或忽略某条建议。资源标签目前已可用；堆叠、相册和区域标签则是（*计划中*）功能。
+- **标签**可以自由填写，可附加到资源、堆叠（RAW+JPEG 配对、连拍、包围曝光）、相册或图像中的某个区域。你添加的标签与 AI 建议的标签分开保存，你可以采纳或忽略某条建议。资源标签目前已可用；堆叠、相册和区域标签则是（_计划中_）功能。
 - `capsule show <asset>` 会打印资源的签名元数据所记录的内容：说明文字、评分、标签、位置、拍摄时间。
-- `capsule repair capture-time` 会查找拍摄时间与原始文件 EXIF 不一致的资源，加上 `--apply` 时会予以更正。位置编辑功能（*计划中*）。
+- `capsule repair capture-time` 会查找拍摄时间与原始文件 EXIF 不一致的资源，加上 `--apply` 时会予以更正。位置编辑功能（_计划中_）。
 
 每次编辑都是一次经过签名、只可追加的更改：先前的值会保留在资源的来源历史中，来自两台设备的并发编辑会以确定性的方式合并。
 

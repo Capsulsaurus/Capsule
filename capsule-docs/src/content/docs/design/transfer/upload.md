@@ -70,13 +70,13 @@ A session's bytes are the whole blob, its header included: the declared `size` a
 
 **Admission** is decided atomically per session against the committed set and the ranges in flight, **before any byte is written**:
 
-| The range is… | Answer |
-| --- | --- |
-| disjoint from every committed and in-flight range | claimed in flight, written, fsynced, recorded as committed, then `204` |
-| wholly inside the committed set | `204` with the session's current state; nothing is written |
+| The range is…                                       | Answer                                                                                                           |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| disjoint from every committed and in-flight range   | claimed in flight, written, fsynced, recorded as committed, then `204`                                           |
+| wholly inside the committed set                     | `204` with the session's current state; nothing is written                                                       |
 | exactly an in-flight range (same offset and length) | waits a bounded time for that attempt to end, then is decided again: a duplicate if it committed, a claim if not |
-| overlapping an in-flight range | `409 error.upload.range_conflict` with `X-Capsule-Committed` and `Retry-After`; nothing is written |
-| partly committed and partly not | `409 error.upload.range_conflict` with `X-Capsule-Committed`; nothing is written |
+| overlapping an in-flight range                      | `409 error.upload.range_conflict` with `X-Capsule-Committed` and `Retry-After`; nothing is written               |
+| partly committed and partly not                     | `409 error.upload.range_conflict` with `X-Capsule-Committed`; nothing is written                                 |
 
 No write can touch a committed byte, and no two requests write the same byte concurrently. A claim is released only once every write issued under it has returned, so a write its request abandoned never lands after a retry of the same range commits. A range wholly inside the committed set is a duplicate without any byte comparison. The server keeps no per-write record, and a client that re-sends different bytes over committed ones is told nothing, because those bytes are never written. The source guards ([](/design/cryptography/encryption/#encryption-workflow)) stop a changed source on the client, and the finalize re-hash refuses a blob whose newly committed ranges came from a changed source. The full idempotency contract is [](/design/threat-model/validation/#idempotency-invariants).
 
@@ -184,28 +184,28 @@ The server can verify only ciphertext; the client verifies plaintext on download
 
 Client recovery matrix (`capsule-sdk::upload`):
 
-| Code | Client action |
-| --- | --- |
-| `error.upload.range_conflict` | Re-plan from the committed set the refusal carries (or `HEAD`), after its `Retry-After` when it names one |
-| `error.upload.too_fragmented` | Let its own in-flight ranges finish and wait its `Retry-After` when it names one, then re-plan to fill the lowest gap first |
-| `error.upload.too_many_in_flight` | Wait its `Retry-After`, narrow the session's window to the advertised `ranges` and to the ranges it still had in flight, then continue |
-| `error.upload.content_hash_mismatch` (on `HEAD`) | Check the source identity. Changed: fail the blob with the client's own `error.upload.source_changed` and cancel the session. Affirmed unchanged: re-create the session once. Not affirmable: fail the blob with the refusal and send nothing again, since re-sealed bytes that differ would reuse the original's STREAM nonces |
-| a lost answer (reset, or no response within the response wait) | Read `HEAD` before sending anything again, then re-plan from its committed set |
-| a session gone (`404` on `HEAD`) before finalization | Re-create the session, restart the blob |
-| `error.upload.checksum_mismatch` | Re-send the same chunk |
-| `error.upload.storage_failed` (on a chunk or `HEAD`) | Back off per `Retry-After` (else the retry engine's backoff), then re-create the session and restart the blob, charging the transfer's recovery budget |
-| `error.upload.chunk_timeout` (`408`) | Re-send the same offset with a shorter range ([](#adaptive-chunk-sizing)) |
-| `error.upload.session_not_found` | Re-create the session, restart the blob |
-| `error.upload.duplicate_blob` | Resolve as a merge ([](#deduplication-and-merge)) |
-| `error.upload.replace_incomplete` | Upload the rest of the bundle, retry the manifest |
-| `error.upload.stale_revival` | Re-read the asset and rebase |
-| `error.upload.handoff_closed` | Courier only: stop uploading the hand-off, keep the copy, and drop it once it fetches custody of every member itself ([](/design/peering/#delegation)) |
-| `error.request.too_early` (`425`) | Re-send the same request once the handshake completes, outside early data ([](/design/networking/#http-transport)) |
-| `error.protocol.version_unsupported` (`426`) | Stop; prompt to update |
-| `error.quota.exceeded` | Pause; surface the remediable state |
-| `error.upload.rate_limited`, `unavailable`, `storage_full` | Back off per `Retry-After`, then resume from `HEAD` |
-| `error.upload.storage_inconsistent` (`500`), and any other `5xx`, `408` or `425`, coded or not | Back off per `Retry-After` (else the retry engine's backoff), then resume from `HEAD` |
-| other `4xx` | Fail the blob; never retry unchanged |
+| Code                                                                                           | Client action                                                                                                                                                                                                                                                                                                                   |
+| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `error.upload.range_conflict`                                                                  | Re-plan from the committed set the refusal carries (or `HEAD`), after its `Retry-After` when it names one                                                                                                                                                                                                                       |
+| `error.upload.too_fragmented`                                                                  | Let its own in-flight ranges finish and wait its `Retry-After` when it names one, then re-plan to fill the lowest gap first                                                                                                                                                                                                     |
+| `error.upload.too_many_in_flight`                                                              | Wait its `Retry-After`, narrow the session's window to the advertised `ranges` and to the ranges it still had in flight, then continue                                                                                                                                                                                          |
+| `error.upload.content_hash_mismatch` (on `HEAD`)                                               | Check the source identity. Changed: fail the blob with the client's own `error.upload.source_changed` and cancel the session. Affirmed unchanged: re-create the session once. Not affirmable: fail the blob with the refusal and send nothing again, since re-sealed bytes that differ would reuse the original's STREAM nonces |
+| a lost answer (reset, or no response within the response wait)                                 | Read `HEAD` before sending anything again, then re-plan from its committed set                                                                                                                                                                                                                                                  |
+| a session gone (`404` on `HEAD`) before finalization                                           | Re-create the session, restart the blob                                                                                                                                                                                                                                                                                         |
+| `error.upload.checksum_mismatch`                                                               | Re-send the same chunk                                                                                                                                                                                                                                                                                                          |
+| `error.upload.storage_failed` (on a chunk or `HEAD`)                                           | Back off per `Retry-After` (else the retry engine's backoff), then re-create the session and restart the blob, charging the transfer's recovery budget                                                                                                                                                                          |
+| `error.upload.chunk_timeout` (`408`)                                                           | Re-send the same offset with a shorter range ([](#adaptive-chunk-sizing))                                                                                                                                                                                                                                                       |
+| `error.upload.session_not_found`                                                               | Re-create the session, restart the blob                                                                                                                                                                                                                                                                                         |
+| `error.upload.duplicate_blob`                                                                  | Resolve as a merge ([](#deduplication-and-merge))                                                                                                                                                                                                                                                                               |
+| `error.upload.replace_incomplete`                                                              | Upload the rest of the bundle, retry the manifest                                                                                                                                                                                                                                                                               |
+| `error.upload.stale_revival`                                                                   | Re-read the asset and rebase                                                                                                                                                                                                                                                                                                    |
+| `error.upload.handoff_closed`                                                                  | Courier only: stop uploading the hand-off, keep the copy, and drop it once it fetches custody of every member itself ([](/design/peering/#delegation))                                                                                                                                                                          |
+| `error.request.too_early` (`425`)                                                              | Re-send the same request once the handshake completes, outside early data ([](/design/networking/#http-transport))                                                                                                                                                                                                              |
+| `error.protocol.version_unsupported` (`426`)                                                   | Stop; prompt to update                                                                                                                                                                                                                                                                                                          |
+| `error.quota.exceeded`                                                                         | Pause; surface the remediable state                                                                                                                                                                                                                                                                                             |
+| `error.upload.rate_limited`, `unavailable`, `storage_full`                                     | Back off per `Retry-After`, then resume from `HEAD`                                                                                                                                                                                                                                                                             |
+| `error.upload.storage_inconsistent` (`500`), and any other `5xx`, `408` or `425`, coded or not | Back off per `Retry-After` (else the retry engine's backoff), then resume from `HEAD`                                                                                                                                                                                                                                           |
+| other `4xx`                                                                                    | Fail the blob; never retry unchanged                                                                                                                                                                                                                                                                                            |
 
 With several ranges in flight, a row that waits, reads `HEAD` or re-creates the session is taken once every range in flight has returned, and ranges refused together share one wait. The client also guards its source and its own view of the session:
 
@@ -227,21 +227,21 @@ Which ranges are in flight, and in what order, is the client's schedule, never p
 
 Clients branch on `error.*` codes ([](/design/i18n/#server-error-codes)), never on bare statuses. The status mapping is the shared error contract ([](/reference/api/conventions/#errors)), and the authoritative list per endpoint is [](/reference/api/upload/). Unprefixed codes below are `error.upload.*`.
 
-| Status | Codes |
-| --- | --- |
-| `400` | `malformed_request`, `unknown_crypto_suite`, `invalid_hash`, `invalid_size`, `unsupported_content_type`, `unknown_derivative_format`, `envelope_mismatch`, `timestamp_out_of_range`, `invalid_action`, `empty_chunk`, `chunk_not_aligned`, `missing_offset`, `missing_checksum`, `checksum_mismatch`, `size_exceeded`, `content_hash_mismatch`, `envelope_rejected`, `invalid_status_filter` |
-| `403` | `album_access_denied`, `device_not_authorized`, `owner_not_permitted`, `error.quota.exceeded` |
-| `404` | `session_not_found` |
-| `408` | `chunk_timeout` |
-| `409` | `duplicate_blob`, `range_conflict`, `too_fragmented`, `too_many_in_flight`, `session_not_active`, `receipt_not_available`, `replace_incomplete`, `stale_revival`, `handoff_closed` |
-| `413` | `file_too_large`, `chunk_too_large` |
-| `415` | `unsupported_media_type` |
-| `425` | `error.request.too_early` |
-| `426` | `error.protocol.version_unsupported` |
-| `429` | `rate_limited` |
-| `500` | `storage_inconsistent`, `storage_failed` |
-| `503` | `unavailable` |
-| `507` | `storage_full` |
+| Status | Codes                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | `malformed_request`, `unknown_crypto_suite`, `invalid_hash`, `invalid_size`, `unsupported_content_type`, `unknown_derivative_format`, `envelope_mismatch`, `timestamp_out_of_range`, `invalid_action`, `empty_chunk`, `chunk_not_aligned`, `missing_offset`, `missing_checksum`, `checksum_mismatch`, `size_exceeded`, `content_hash_mismatch`, `envelope_rejected`, `invalid_status_filter` |
+| `403`  | `album_access_denied`, `device_not_authorized`, `owner_not_permitted`, `error.quota.exceeded`                                                                                                                                                                                                                                                                                                |
+| `404`  | `session_not_found`                                                                                                                                                                                                                                                                                                                                                                          |
+| `408`  | `chunk_timeout`                                                                                                                                                                                                                                                                                                                                                                              |
+| `409`  | `duplicate_blob`, `range_conflict`, `too_fragmented`, `too_many_in_flight`, `session_not_active`, `receipt_not_available`, `replace_incomplete`, `stale_revival`, `handoff_closed`                                                                                                                                                                                                           |
+| `413`  | `file_too_large`, `chunk_too_large`                                                                                                                                                                                                                                                                                                                                                          |
+| `415`  | `unsupported_media_type`                                                                                                                                                                                                                                                                                                                                                                     |
+| `425`  | `error.request.too_early`                                                                                                                                                                                                                                                                                                                                                                    |
+| `426`  | `error.protocol.version_unsupported`                                                                                                                                                                                                                                                                                                                                                         |
+| `429`  | `rate_limited`                                                                                                                                                                                                                                                                                                                                                                               |
+| `500`  | `storage_inconsistent`, `storage_failed`                                                                                                                                                                                                                                                                                                                                                     |
+| `503`  | `unavailable`                                                                                                                                                                                                                                                                                                                                                                                |
+| `507`  | `storage_full`                                                                                                                                                                                                                                                                                                                                                                               |
 
 ## Deduplication and Merge
 
@@ -272,11 +272,11 @@ A per-device **upload policy** orders sessions; the server has no mode branch.
 - **`full`** (default) — every session of a bundle is eligible at once, within the in-flight windows ([](#queueing-across-servers)), on a connection that permits bulk transfers. On any other connection a push runs `staged`, since the cache plan ([](/design/filesystem/client/#automatic-cache-management)) defers bulk work.
 - **`staged`** — sessions open in tier order per asset:
 
-| Tier | Roles | Opens when |
-| --- | --- | --- |
-| **T0 — index** | provenance + metadata | any usable connection |
-| **T1 — preview** | derivatives (+ derivative manifests) | any non-metered connection |
-| **T2 — original** | original | unmetered Wi-Fi, or explicit force-sync |
+| Tier              | Roles                                | Opens when                              |
+| ----------------- | ------------------------------------ | --------------------------------------- |
+| **T0 — index**    | provenance + metadata                | any usable connection                   |
+| **T1 — preview**  | derivatives (+ derivative manifests) | any non-metered connection              |
+| **T2 — original** | original                             | unmetered Wi-Fi, or explicit force-sync |
 
 T0 is exactly the visibility gate, so a staged asset is visible to other devices as soon as T0 finalizes, in the awaiting-original state ([](/design/transfer/download/#awaiting-original)). Connection rules are [](/design/sync/#synchronization-criteria). Types: `capsule-core::import::upload`; scheduler: `capsule-sdk::staged`.
 

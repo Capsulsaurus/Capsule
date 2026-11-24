@@ -4,7 +4,7 @@ description: Der tägliche Umgang mit einer Capsule-Bibliothek über die capsule
 audit: none
 ---
 
-Dieses Handbuch behandelt die `capsule`-CLI, den Referenz-Client. Mit *(geplant)* markierte
+Dieses Handbuch behandelt die `capsule`-CLI, den Referenz-Client. Mit _(geplant)_ markierte
 Befehle stehen auf der [Roadmap](https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md)
 und sind noch nicht verfügbar. Maßgeblich für die Flags ist `capsule <command> --help`; die
 CLI-Referenz ([](/reference/cli/)) listet sie alle auf.
@@ -47,7 +47,7 @@ Sie importieren, eine unabhängige Sicherung auf.
   nicht vorher. `import --move --push` löscht jede Quelle erst, nachdem ihr Asset verifiziert
   ist. Ohne `--push` behält `--move` alle Quellen und weist darauf hin; ein späteres
   `import --move --push` über dieselben Dateien gibt sie frei.
-- `capsule restore` *(geplant)* lädt Originale herunter und prüft sie Byte für Byte gegen das,
+- `capsule restore` _(geplant)_ lädt Originale herunter und prüft sie Byte für Byte gegen das,
   was beim Import signiert wurde.
 
 <a id="organize"></a>
@@ -58,12 +58,12 @@ Sie importieren, eine unabhängige Sicherung auf.
   Serienaufnahme, Belichtungsreihe), einem Album oder einem Bildbereich. Von Ihnen vergebene Labels
   werden getrennt von KI-Vorschlägen gespeichert, und Sie können einen Vorschlag übernehmen oder
   verwerfen. Asset-Labels gibt es heute; Labels für Stapel, Alben und Bildbereiche sind
-  *(geplant)*.
+  _(geplant)_.
 - `capsule show <asset>` gibt aus, was die signierten Metadaten eines Assets festhalten:
   Bildunterschrift, Bewertung, Labels, Ort, Aufnahmezeit.
 - `capsule repair capture-time` findet Assets, deren Aufnahmezeit nicht mit den EXIF-Daten des
   Originals übereinstimmt, und korrigiert sie mit `--apply`. Das Bearbeiten des Orts ist
-  *(geplant)*.
+  _(geplant)_.
 
 Jede Bearbeitung ist eine signierte, nur anhängende Änderung: Der frühere Wert bleibt im
 Herkunftsverlauf des Assets erhalten, und gleichzeitige Bearbeitungen von zwei Geräten werden

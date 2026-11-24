@@ -146,13 +146,13 @@ correcto. Manténgalo sincronizado con NTP (chrony o systemd-timesyncd) en el ho
 el reloj del host, así que sincronice el host. El desfase DEBERÍA mantenerse dentro de un segundo, y
 DEBE mantenerse dentro de 30 segundos. Más allá de esos límites:
 
-| Desfase | Qué falla |
-| --- | --- |
-| Más de 30 s | Los códigos del segundo factor empiezan a fallar: un código solo se acepta dentro de un intervalo de 30 s respecto al reloj del servidor ([](/design/authentication/)) |
-| Más de 5 min | La federación se detiene en ambas direcciones: los pares rechazan las solicitudes, indicaciones e informes firmados de este servidor, y este rechaza los suyos ([](/design/federation/)) |
+| Desfase          | Qué falla                                                                                                                                                                                                                                             |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Más de 30 s      | Los códigos del segundo factor empiezan a fallar: un código solo se acepta dentro de un intervalo de 30 s respecto al reloj del servidor ([](/design/authentication/))                                                                                |
+| Más de 5 min     | La federación se detiene en ambas direcciones: los pares rechazan las solicitudes, indicaciones e informes firmados de este servidor, y este rechaza los suyos ([](/design/federation/))                                                              |
 | Reloj adelantado | La papelera se purga antes de que termine su plazo de retención, y se rechaza una restauración hecha a tiempo ([](/design/organization/#retention-window)). Las sesiones, los enlaces para compartir y las sesiones de subida caducan antes de tiempo |
-| Reloj atrasado | Las sesiones, los enlaces para compartir y los contadores caducados siguen siendo válidos más tiempo del configurado |
-| Desfase enorme | Los clientes rechazan los recibos de custodia cuyo `received_at` no es verosímil ([](/design/transfer/durability/)) |
+| Reloj atrasado   | Las sesiones, los enlaces para compartir y los contadores caducados siguen siendo válidos más tiempo del configurado                                                                                                                                  |
+| Desfase enorme   | Los clientes rechazan los recibos de custodia cuyo `received_at` no es verosímil ([](/design/transfer/durability/))                                                                                                                                   |
 
 Inicie `serve` solo cuando el reloj esté sincronizado. Con systemd, ordénelo después de
 `time-sync.target` con `chrony-wait.service` o `systemd-time-wait-sync.service` habilitado. Una
@@ -174,14 +174,14 @@ transcodifica contenido multimedia, nunca cifra ni descifra, y deja TLS al proxy
 de una subida nunca se almacena en búfer más allá de un fragmento, así que la memoria no crece con el
 tamaño del archivo.
 
-| | Mínimo | Recomendado |
-| --- | --- | --- |
-| **CPU** | 2 núcleos, x86_64 o arm64 | 4 núcleos. Las instrucciones SHA-2 (SHA-NI en x86_64, las extensiones criptográficas de Armv8) aceleran el cálculo de hashes |
-| **RAM** | 2 GB | De 4 a 8 GB. Más ayuda a la caché de PostgreSQL en una biblioteca grande, pero el almacenamiento compensa antes |
-| **Almacenamiento del sistema** | SSD, 10 GB libres | SSD o NVMe para PostgreSQL |
-| **Almacenamiento de blobs** | El tamaño de su biblioteca, más espacio para las subidas en curso | Discos redundantes (espejo, RAID o ZFS) dimensionados para varios años de crecimiento. Los discos mecánicos sirven |
-| **Red** | 10 Mbit/s de subida | Gigabit en la LAN, y 50 Mbit/s o más de subida si los dispositivos sincronizan desde fuera de ella |
-| **Alimentación** | — | Un SAI, para que un corte de corriente no interrumpa a PostgreSQL a mitad de una escritura |
+|                                | Mínimo                                                            | Recomendado                                                                                                                  |
+| ------------------------------ | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| **CPU**                        | 2 núcleos, x86_64 o arm64                                         | 4 núcleos. Las instrucciones SHA-2 (SHA-NI en x86_64, las extensiones criptográficas de Armv8) aceleran el cálculo de hashes |
+| **RAM**                        | 2 GB                                                              | De 4 a 8 GB. Más ayuda a la caché de PostgreSQL en una biblioteca grande, pero el almacenamiento compensa antes              |
+| **Almacenamiento del sistema** | SSD, 10 GB libres                                                 | SSD o NVMe para PostgreSQL                                                                                                   |
+| **Almacenamiento de blobs**    | El tamaño de su biblioteca, más espacio para las subidas en curso | Discos redundantes (espejo, RAID o ZFS) dimensionados para varios años de crecimiento. Los discos mecánicos sirven           |
+| **Red**                        | 10 Mbit/s de subida                                               | Gigabit en la LAN, y 50 Mbit/s o más de subida si los dispositivos sincronizan desde fuera de ella                           |
+| **Alimentación**               | —                                                                 | Un SAI, para que un corte de corriente no interrumpa a PostgreSQL a mitad de una escritura                                   |
 
 - **`BLOB_ROOT` permanece en un único sistema de archivos.** El árbol completo, `incoming/` incluido,
   debe ser un único sistema de archivos, así que no puede dividirse entre un SSD y una cabina de
@@ -191,8 +191,8 @@ tamaño del archivo.
   de las solicitudes además de al índice de la biblioteca. Las sesiones, las sesiones de subida y los
   contadores son pequeños, y el servidor los elimina en cuanto caducan.
 - **El ancho de banda de subida es el límite para los dispositivos remotos.** Un teléfono fuera de
-  su red sube a la velocidad de *descarga* de su conexión, pero cada obtención de una vista previa o
-  de un original sale a la velocidad de *subida*. Un fragmento solo se corta cuando deja de llegar,
+  su red sube a la velocidad de _descarga_ de su conexión, pero cada obtención de una vista previa o
+  de un original sale a la velocidad de _subida_. Un fragmento solo se corta cuando deja de llegar,
   nunca por tardar mucho, y un cliente dimensiona sus fragmentos para terminar en un tiempo objetivo
   corto a la velocidad que mide, así que un enlace lento sube a su propio ritmo. Mantenga el umbral
   de bloqueo del servidor por debajo del tiempo de inactividad de su proxy, para que el servidor
@@ -272,11 +272,11 @@ La configuración se hace solo mediante el entorno. `capsule-server/.env.example
 de partida, y esta página nombra las variables que debe decidir quien opera el servidor. Un servidor
 duradero se niega a arrancar (salida 2), indicando todas las variables que faltan a la vez, sin:
 
-| Variable | Finalidad |
-| --- | --- |
-| `DATABASE_URL` | Conexión a PostgreSQL |
-| `BLOB_ROOT` | Directorio de blobs |
-| `JWT_ED25519_DER` | Clave Ed25519 en Base64 que firma los tokens de sesión |
+| Variable               | Finalidad                                                                                         |
+| ---------------------- | ------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`         | Conexión a PostgreSQL                                                                             |
+| `BLOB_ROOT`            | Directorio de blobs                                                                               |
+| `JWT_ED25519_DER`      | Clave Ed25519 en Base64 que firma los tokens de sesión                                            |
 | `ATTESTATION_KEY_SEED` | Semilla en Base64 que firma los recibos de custodia; debe ser independiente de la clave de tokens |
 
 - **Proteja la clave de tokens por encima de todo.** La base de datos no contiene ningún secreto de
@@ -306,10 +306,10 @@ explícitamente. La federación está desactivada salvo que se definan `FEDERATI
 
 Indique su proxy inverso para que los límites de frecuencia por origen vean al cliente y no al proxy.
 
-| Variable | Significado |
-| --- | --- |
-| `TRUSTED_PROXIES` | Direcciones y redes CIDR separadas por comas (`10.0.0.0/8`). Una red `/0` se rechaza, porque se fiaría de cualquier remitente. |
-| `TRUSTED_PROXY_HOPS` | Confía en ese número de saltos de reenvío más cercanos al servidor, sea cual sea su dirección. |
+| Variable               | Significado                                                                                                                                                      |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TRUSTED_PROXIES`      | Direcciones y redes CIDR separadas por comas (`10.0.0.0/8`). Una red `/0` se rechaza, porque se fiaría de cualquier remitente.                                   |
+| `TRUSTED_PROXY_HOPS`   | Confía en ese número de saltos de reenvío más cercanos al servidor, sea cual sea su dirección.                                                                   |
 | `TRUSTED_PROXY_HEADER` | El único campo de reenvío que lee el servidor: `x-forwarded-for` (el predeterminado) o `forwarded` (RFC 7239). Con cualquier otro valor, el servidor no arranca. |
 
 Si no están definidas, no se confía en ninguna cabecera de reenvío. Es seguro, pero entonces todos

@@ -6,10 +6,10 @@ audit: none
 
 All asset bytes (originals, derivatives) and metadata blobs are encrypted client-side before crossing a network boundary. `capsule-core::crypto::encryption` is the only caller of AES-256-GCM for user data. Every encrypted blob is one [](#blob-header) followed by the output of one of two constructions:
 
-| Payload | Construction | Why |
-| --- | --- | --- |
-| Asset bytes (original, derivative) | [](#stream-construction) | Large, streamed, ranged reads, per-chunk authentication |
-| Metadata blob, signed album and group documents, share metadata record | Single-shot AEAD ([](#metadata-blob-wire-format)) | Small, always fetched whole, content-addressed |
+| Payload                                                                | Construction                                      | Why                                                     |
+| ---------------------------------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------- |
+| Asset bytes (original, derivative)                                     | [](#stream-construction)                          | Large, streamed, ranged reads, per-chunk authentication |
+| Metadata blob, signed album and group documents, share metadata record | Single-shot AEAD ([](#metadata-blob-wire-format)) | Small, always fetched whole, content-addressed          |
 
 A **blob** here is any encrypted byte string stored under its content address. Key envelopes (the wrapped file key, the drop KEM-DEM wrap, the share scope wrap, the master-key seal, the password-wrapped secret) are fields inside a signed or server record, not blobs, and keep their compact formats; see [](#key-envelopes).
 
@@ -28,10 +28,10 @@ offset len field          value
 24     32  commitment     key commitment, see below
 ```
 
-- **Read order.** A reader checks `magic`, then `format_version`, then `kind` and `suite_id`, before it touches anything else. An unknown value of any of them is *unsupported* ([](#reading-a-blob)), never a guess. The leading `0x89` is outside ASCII, so a text-mode or 7-bit mangling breaks the magic rather than yielding a plausible header.
+- **Read order.** A reader checks `magic`, then `format_version`, then `kind` and `suite_id`, before it touches anything else. An unknown value of any of them is _unsupported_ ([](#reading-a-blob)), never a guess. The leading `0x89` is outside ASCII, so a text-mode or 7-bit mangling breaks the magic rather than yielding a plausible header.
 - **`format_version` fixes the layout and the STREAM geometry.** Version 1 means this header, 65,520-byte plaintext chunks and the AAD rule below. Changing any of them is a new `format_version`; changing a primitive is a new `suite_id` ([](/design/cryptography/primitives/#versioning-identifiers)).
 - **Reserved bytes are zero.** A STREAM header whose nonce bytes 7–11 are non-zero is malformed.
-- **`key_epoch`** names which AMK the reader needs, so *key not held* is decidable from the blob. It is `key_mode = wrapped ? 0 : amk_version` for an asset blob ([](#asset-key-derivation)). A blob whose key is not derived from an AMK carries `0`: a share metadata record, keyed from the link secret, and a wrapped-mode asset, whose key a guest drew before any AMK was involved. A reader of a wrapped asset takes the epoch from the manifest's `amk_version`, which names the AMK that unwraps `wrapped_file_key`. The server already sees `amk_version` in the manifest, so the field discloses nothing new.
+- **`key_epoch`** names which AMK the reader needs, so _key not held_ is decidable from the blob. It is `key_mode = wrapped ? 0 : amk_version` for an asset blob ([](#asset-key-derivation)). A blob whose key is not derived from an AMK carries `0`: a share metadata record, keyed from the link secret, and a wrapped-mode asset, whose key a guest drew before any AMK was involved. A reader of a wrapped asset takes the epoch from the manifest's `amk_version`, which names the AMK that unwraps `wrapped_file_key`. The server already sees `amk_version` in the manifest, so the field discloses nothing new.
 - **The header is a deterministic function of the key, `kind`, `suite_id`, `key_epoch` and the nonce.** An upload that re-derives a ciphertext range from the plaintext ([](#encryption-workflow)) therefore re-derives the same header bytes.
 
 ### Key Commitment
@@ -61,7 +61,7 @@ The content address is SHA-256 over the **whole blob, header included**. The hea
 
 The content address alone already detects corruption without a key: a fetch hashes the bytes against the address it asked for and discards a mismatch (`capsule-sdk/src/fetch.rs`, `FetchError::IntegrityFailed`). The header is not for corruption. It earns its 56 bytes for three things the address cannot do:
 
-1. **Wrong-key diagnosis.** Without a commitment, a hash-correct blob that fails its tag could be a wrong or stale AMK, a forged key delivery or an uploader bug, and today's fetch path reports all of them as one `FetchError::Corrupt`. The commitment splits *wrong key* from *sealed bad at source*, which have opposite remedies.
+1. **Wrong-key diagnosis.** Without a commitment, a hash-correct blob that fails its tag could be a wrong or stale AMK, a forged key delivery or an uploader bug, and today's fetch path reports all of them as one `FetchError::Corrupt`. The commitment splits _wrong key_ from _sealed bad at source_, which have opposite remedies.
 2. **Checks with no manifest pairing.** A delegation courier, a backup verifier or a share viewer can see a blob's format, suite and epoch from the blob alone, and the server can check that a bundle's blobs agree with its manifest keylessly.
 3. **Authenticated suite dispatch.** The suite id is bound by AEAD, not only by a manifest comparison.
 
@@ -69,25 +69,25 @@ The content address alone already detects corruption without a key: a fetch hash
 
 A reader classifies a blob that will not open into exactly one state, in this order, and each state has one client action. The first failing test wins.
 
-| # | State | Test | Client action |
-| --- | --- | --- | --- |
-| 1 | **Corrupt** | SHA-256 of the bytes differs from the expected content address | Discard the bytes; re-fetch from another copy (path 6 of [](/design/backup-recovery/#recovery-paths)) and report the bad copy's holder. Never decrypt. |
-| 2 | **Unsupported** | `magic` is right but `format_version`, `kind` or `suite_id` is unknown to this build | Keep the blob and its records untouched; prompt an upgrade (invariants 2 and 5 of [](/design/versioning/#system-invariants)). Never delete. |
-| 3 | **Sealed bad at source** (structural) | Address matches, but `magic` is wrong, reserved bytes are set, or the header disagrees with the manifest ([](#header-and-manifest-agreement)) | As state 6. |
-| 4 | **Key not held** | The AMK for `key_epoch` (for a wrapped asset, the AMK for the manifest's `amk_version`; for a share record, the share-scope key) is not held | Within the attested epoch range: *pending*, fetch the key (AlbumKeyDistribution, album escrow) and retry ([](/design/cryptography/keys/#write-authorization)). Outside the album's history entitlement: a placeholder, not an error. Beyond the attested ceiling: terminal-reject. |
-| 5 | **Wrong key** | The derived commitment differs from the header's | Do not decrypt. Re-obtain the AMK from the authority or the album escrow and retry once. A mismatch that survives the refresh is a key divergence: surface it and run the re-keying ceremony ([](/design/mls-resilience/#group-re-keying-ceremony)). |
-| 6 | **Sealed bad at source** | Commitment matches, a tag fails | The bytes are exactly what the uploader produced, so a re-fetch cannot help. Mark the asset unreadable, surface it against `created_by_device`, and report it to the uploader, which re-seals from its plaintext with a `replace` if it still holds it. |
+| #   | State                                 | Test                                                                                                                                          | Client action                                                                                                                                                                                                                                                                      |
+| --- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | **Corrupt**                           | SHA-256 of the bytes differs from the expected content address                                                                                | Discard the bytes; re-fetch from another copy (path 6 of [](/design/backup-recovery/#recovery-paths)) and report the bad copy's holder. Never decrypt.                                                                                                                             |
+| 2   | **Unsupported**                       | `magic` is right but `format_version`, `kind` or `suite_id` is unknown to this build                                                          | Keep the blob and its records untouched; prompt an upgrade (invariants 2 and 5 of [](/design/versioning/#system-invariants)). Never delete.                                                                                                                                        |
+| 3   | **Sealed bad at source** (structural) | Address matches, but `magic` is wrong, reserved bytes are set, or the header disagrees with the manifest ([](#header-and-manifest-agreement)) | As state 6.                                                                                                                                                                                                                                                                        |
+| 4   | **Key not held**                      | The AMK for `key_epoch` (for a wrapped asset, the AMK for the manifest's `amk_version`; for a share record, the share-scope key) is not held  | Within the attested epoch range: _pending_, fetch the key (AlbumKeyDistribution, album escrow) and retry ([](/design/cryptography/keys/#write-authorization)). Outside the album's history entitlement: a placeholder, not an error. Beyond the attested ceiling: terminal-reject. |
+| 5   | **Wrong key**                         | The derived commitment differs from the header's                                                                                              | Do not decrypt. Re-obtain the AMK from the authority or the album escrow and retry once. A mismatch that survives the refresh is a key divergence: surface it and run the re-keying ceremony ([](/design/mls-resilience/#group-re-keying-ceremony)).                               |
+| 6   | **Sealed bad at source**              | Commitment matches, a tag fails                                                                                                               | The bytes are exactly what the uploader produced, so a re-fetch cannot help. Mark the asset unreadable, surface it against `created_by_device`, and report it to the uploader, which re-seals from its plaintext with a `replace` if it still holds it.                            |
 
 Rules:
 
-- **Without an expected address** (a blob alone), test 1 cannot run: a wrong `magic` is then *corrupt*, not *sealed bad at source*.
+- **Without an expected address** (a blob alone), test 1 cannot run: a wrong `magic` is then _corrupt_, not _sealed bad at source_.
 - **A ranged read cannot classify a tag failure.** It has not hashed the whole blob, so a failed chunk tag may be corruption at rest. The reader MUST escalate to a whole-blob address check (or the server's storage verify, [](/design/transfer/durability/)) before it reports state 6, and treats the window as corrupt until then.
 - **Discarded bytes are discarded.** A decrypting writer that has emitted plaintext from a blob later classified 1, 5 or 6 MUST discard that plaintext, as a streamed fetch already does for unverified bytes.
 - The states are typed outcomes across the SDK, FFI and `--json` surfaces, never one undifferentiated "corrupt".
 
 ### Header and Manifest Agreement
 
-A manifest-holding reader, and the server at finalize, check without any key that each blob's header agrees with the signed manifest that names it: `suite_id = crypto_suite_id`, `key_epoch = (key_mode = wrapped ? 0 : amk_version)`, the STREAM nonce prefix equals `nonce_prefix`, and `commitment` equals the mirrored commitment. The address matched, so a disagreement is the signer's own inconsistency: the server refuses the bundle and a client classifies it *sealed bad at source*.
+A manifest-holding reader, and the server at finalize, check without any key that each blob's header agrees with the signed manifest that names it: `suite_id = crypto_suite_id`, `key_epoch = (key_mode = wrapped ? 0 : amk_version)`, the STREAM nonce prefix equals `nonce_prefix`, and `commitment` equals the mirrored commitment. The address matched, so a disagreement is the signer's own inconsistency: the server refuses the bundle and a client classifies it _sealed bad at source_.
 
 ## Authenticated Asset Encryption
 
@@ -98,8 +98,8 @@ An asset is content-addressed by the hash of its blob and encrypted under a per-
 - An album carries a versioned AMK ledger (`AMK_v1..v_n`, 32 bytes each, a new version per epoch bump), held on each member device and escrowed. How each epoch's AMK comes to exist, and who may deliver it, is owned by [](/design/cryptography/keys/#album-master-keys-amks).
 - **Derived mode** (default): `file_key = HKDF-SHA512(ikm = AMK_v{amk_version}, salt = file_id || nonce_prefix, info = "asset-file/v1", L = 32)`. Never stored. The file key is the blob's content key `K`; the AES key is derived from it ([](#key-commitment)).
 - `nonce_prefix` is a fresh CSPRNG draw on **every** encryption, so the file key is unique per encryption even for the same `file_id` and epoch. This lets the STREAM counter start at zero without nonce reuse.
-- **Wrapped mode** is for external-origin assets only, e.g. an adopted web-upload drop ([](/design/web-upload/)). The guest's random key `K` cannot be re-derived, so it is carried as `wrapped_file_key = wrap_nonce || AES-256-GCM(wrap_key, K)` with `wrap_key = HKDF-SHA512(AMK_v{n}, salt = file_id || wrap_nonce, info = "asset-keywrap/v1")`, and recorded as `key_mode = wrapped` in the signed manifest ([](/design/cryptography/provenance/#asset-manifest)). The guest sealed its blob with `key_epoch = 0` and the adopter does not rewrite it, so the header keeps `0` and the manifest's `amk_version` names the unwrapping AMK ([](#blob-header)). Only the adopting `create` sets it; any later `replace` re-encrypts under a derived key. It is the only stored per-file key ([](/design/cryptography/keys/#key-chain)). The guest's blob carries a header like any other, so a wrong wrapped key is *wrong key*, not *sealed bad at source*.
-- **Distribution lag is not failure.** A manifest whose `amk_version` is within the MLS-attested epoch range ([](/design/cryptography/keys/#write-authorization)) but whose AMK has not arrived is *pending* and retried. Only a version beyond the attested epoch, or one still missing after the retry timeout, is escalated.
+- **Wrapped mode** is for external-origin assets only, e.g. an adopted web-upload drop ([](/design/web-upload/)). The guest's random key `K` cannot be re-derived, so it is carried as `wrapped_file_key = wrap_nonce || AES-256-GCM(wrap_key, K)` with `wrap_key = HKDF-SHA512(AMK_v{n}, salt = file_id || wrap_nonce, info = "asset-keywrap/v1")`, and recorded as `key_mode = wrapped` in the signed manifest ([](/design/cryptography/provenance/#asset-manifest)). The guest sealed its blob with `key_epoch = 0` and the adopter does not rewrite it, so the header keeps `0` and the manifest's `amk_version` names the unwrapping AMK ([](#blob-header)). Only the adopting `create` sets it; any later `replace` re-encrypts under a derived key. It is the only stored per-file key ([](/design/cryptography/keys/#key-chain)). The guest's blob carries a header like any other, so a wrong wrapped key is _wrong key_, not _sealed bad at source_.
+- **Distribution lag is not failure.** A manifest whose `amk_version` is within the MLS-attested epoch range ([](/design/cryptography/keys/#write-authorization)) but whose AMK has not arrived is _pending_ and retried. Only a version beyond the attested epoch, or one still missing after the retry timeout, is escalated.
 
 ### Encryption Workflow
 
@@ -132,11 +132,11 @@ AES-256-GCM under STREAM (Hoang–Reyhanitabar–Rogaway–Vizár 2015) via Rust
 
 ## Metadata Encryption
 
-| Data | Server view |
-| --- | --- |
-| CBOR metadata blob (incl. `dominant_color` and the LQIP from [](/design/thumbnails/#lqip)) | Encrypted under the AMK; versioned and signed like a manifest |
-| `owner_id`, blob hash, blob size | Plaintext, because routing and quota need them |
-| AI embeddings (search, faces) | Plaintext locally only; always encrypted at rest on the server |
+| Data                                                                                       | Server view                                                    |
+| ------------------------------------------------------------------------------------------ | -------------------------------------------------------------- |
+| CBOR metadata blob (incl. `dominant_color` and the LQIP from [](/design/thumbnails/#lqip)) | Encrypted under the AMK; versioned and signed like a manifest  |
+| `owner_id`, blob hash, blob size                                                           | Plaintext, because routing and quota need them                 |
+| AI embeddings (search, faces)                                                              | Plaintext locally only; always encrypted at rest on the server |
 
 The blob plaintext is the signed `SidecarV1` ([](/design/metadata/#sidecar-schema-v1)) in canonical CBOR ([](/design/metadata/#canonical-cbor-encoding)). Deterministic encoding is mandatory: the blob hash is signed, so encoder drift breaks cross-peer verification.
 
@@ -160,15 +160,15 @@ A key envelope (`nonce || ciphertext || tag` around a key) is a field of a signe
 
 ## Failure Modes
 
-| Failure | Detected / contained by | Recovery |
-| --- | --- | --- |
-| Corruption, truncation or reorder at rest or in transit | Content address over header and ciphertext; STREAM tags | Re-fetch a content-addressed copy (path 6 of [](/design/backup-recovery/#recovery-paths)) |
-| Wrong, stale or forged AMK | Key commitment ([](#reading-a-blob), state 5) | Re-obtain the key; re-key on a persistent divergence |
-| Uploader sealed a blob that does not open | Commitment matches, tag fails (state 6) | Report to the uploader; `replace` from its plaintext |
-| Unknown format or suite | Header read order (state 2) | Upgrade; the blob is kept |
-| Header tampered or swapped | Address; header as AAD; commitment salt | As corruption |
-| Nonce reuse | Prevented structurally (a fresh prefix per encryption); a repeat that slips through is detected and reported at finalize, not contained, since the server already holds both ciphertexts ([](#re-keying-on-rewrite)) | The writer re-seals the asset with a `replace` under a fresh prefix; the exposure is confined to that one file key |
-| Sealed bytes that do not open | Open after seal, before signing ([](#encryption-workflow)) | The write aborts; the source is kept |
+| Failure                                                 | Detected / contained by                                                                                                                                                                                              | Recovery                                                                                                           |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Corruption, truncation or reorder at rest or in transit | Content address over header and ciphertext; STREAM tags                                                                                                                                                              | Re-fetch a content-addressed copy (path 6 of [](/design/backup-recovery/#recovery-paths))                          |
+| Wrong, stale or forged AMK                              | Key commitment ([](#reading-a-blob), state 5)                                                                                                                                                                        | Re-obtain the key; re-key on a persistent divergence                                                               |
+| Uploader sealed a blob that does not open               | Commitment matches, tag fails (state 6)                                                                                                                                                                              | Report to the uploader; `replace` from its plaintext                                                               |
+| Unknown format or suite                                 | Header read order (state 2)                                                                                                                                                                                          | Upgrade; the blob is kept                                                                                          |
+| Header tampered or swapped                              | Address; header as AAD; commitment salt                                                                                                                                                                              | As corruption                                                                                                      |
+| Nonce reuse                                             | Prevented structurally (a fresh prefix per encryption); a repeat that slips through is detected and reported at finalize, not contained, since the server already holds both ciphertexts ([](#re-keying-on-rewrite)) | The writer re-seals the asset with a `replace` under a fresh prefix; the exposure is confined to that one file key |
+| Sealed bytes that do not open                           | Open after seal, before signing ([](#encryption-workflow))                                                                                                                                                           | The write aborts; the source is kept                                                                               |
 
 ## Known Gaps
 
@@ -181,7 +181,7 @@ The header, commitment and classification are not implemented. Today blobs are h
 - A ranged read of chunk `i` at `56 + i × ciphertext_chunk` matches the plaintext slice; stitched ranges equal sequential decrypt.
 - **Classification:** one fixture per state of [](#reading-a-blob), each mapped to its typed outcome, plus a ranged-read tag failure that stays unclassified until the whole-blob check.
 - **Commitment:** a ciphertext crafted to open under two keys is rejected under the key whose commitment it does not carry; the commitment compare is constant-time.
-- **Header and manifest agreement:** each disagreeing field is refused at finalize and classified *sealed bad at source* by a client; a wrapped-mode asset with `key_epoch = 0` and a non-zero `amk_version` agrees, and one with `key_epoch = amk_version` does not.
+- **Header and manifest agreement:** each disagreeing field is refused at finalize and classified _sealed bad at source_ by a client; a wrapped-mode asset with `key_epoch = 0` and a non-zero `amk_version` agrees, and one with `key_epoch = amk_version` does not.
 - Metadata blob determinism against the shared canonical-CBOR vectors, a **blocking** cross-language gate.
 - Rewrite re-roll: the same id and epoch yield a different key, nonce and commitment; a reused nonce is refused.
 - Sidecar → blob → sidecar is byte-identical and hash-matches; a one-byte local mutation fails.

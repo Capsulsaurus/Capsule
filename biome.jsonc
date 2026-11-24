@@ -28,11 +28,17 @@
             "cssModules": true
         }
     },
-    // Biome 2.6 began formatting Markdown. markdownlint-cli2 (`lint-check-md`) owns Markdown
-    // style here, and two formatters on one file disagree (emphasis markers, for one).
+    // Biome 2.6 formats Markdown by default. Its parser leaves YAML frontmatter off by
+    // default and then reads it as a heading and a list, which drops keys such as
+    // `draft: true` from a docs page; parse it as frontmatter instead. Two-space indents
+    // match markdownlint's list indent (MD007) and the audit stamp the docs'
+    // `audit-page` script writes into frontmatter.
     "markdown": {
+        "parser": {
+            "frontmatter": true
+        },
         "formatter": {
-            "enabled": false
+            "indentWidth": 2
         }
     },
     "linter": {

@@ -152,13 +152,13 @@ exactitude. Gardez-la synchronisée par NTP (chrony ou systemd-timesyncd) sur l'
 lit l'horloge de l'hôte : synchronisez donc l'hôte. Le décalage DEVRAIT (SHOULD) rester sous une
 seconde, et DOIT (MUST) rester sous 30 secondes. Au-delà :
 
-| Décalage | Ce qui casse |
-| --- | --- |
-| Plus de 30 s | Les codes de second facteur commencent à échouer : un code n'est accepté qu'à un pas de 30 s près de l'horloge du serveur ([](/design/authentication/)) |
-| Plus de 5 min | La fédération s'arrête dans les deux sens : les pairs refusent les requêtes, indications et rapports signés de ce serveur, et il refuse les leurs ([](/design/federation/)) |
+| Décalage          | Ce qui casse                                                                                                                                                                                                                                 |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Plus de 30 s      | Les codes de second facteur commencent à échouer : un code n'est accepté qu'à un pas de 30 s près de l'horloge du serveur ([](/design/authentication/))                                                                                      |
+| Plus de 5 min     | La fédération s'arrête dans les deux sens : les pairs refusent les requêtes, indications et rapports signés de ce serveur, et il refuse les leurs ([](/design/federation/))                                                                  |
 | Horloge en avance | La corbeille est purgée avant la fin de son délai de conservation, et une restauration faite à temps est refusée ([](/design/organization/#retention-window)). Les sessions, liens de partage et sessions de téléversement expirent trop tôt |
-| Horloge en retard | Les sessions, liens de partage et compteurs expirés restent valides plus longtemps que configuré |
-| Décalage grossier | Les clients refusent les reçus de conservation dont le `received_at` est invraisemblable ([](/design/transfer/durability/)) |
+| Horloge en retard | Les sessions, liens de partage et compteurs expirés restent valides plus longtemps que configuré                                                                                                                                             |
+| Décalage grossier | Les clients refusent les reçus de conservation dont le `received_at` est invraisemblable ([](/design/transfer/durability/))                                                                                                                  |
 
 Ne démarrez `serve` qu'une fois l'horloge synchronisée. Sous systemd, ordonnez-le après
 `time-sync.target` avec `chrony-wait.service` ou `systemd-time-wait-sync.service` activé. Une
@@ -183,14 +183,14 @@ de médias, ne chiffre ni ne déchiffre jamais rien, et laisse le TLS au proxy i
 téléversement n'est jamais mis en tampon au-delà d'un morceau : la mémoire n'augmente donc pas
 avec la taille des fichiers.
 
-| | Minimum | Recommandé |
-| --- | --- | --- |
-| **CPU** | 2 cœurs, x86_64 ou arm64 | 4 cœurs. Les instructions SHA-2 (SHA-NI sur x86_64, les extensions cryptographiques Armv8) accélèrent le hachage |
-| **RAM** | 2 Go | 4 à 8 Go. Davantage profite au cache de PostgreSQL sur une grande bibliothèque, mais le stockage rapporte en premier |
-| **Stockage système** | SSD, 10 Go libres | SSD ou NVMe pour PostgreSQL |
+|                        | Minimum                                                                            | Recommandé                                                                                                                             |
+| ---------------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **CPU**                | 2 cœurs, x86_64 ou arm64                                                           | 4 cœurs. Les instructions SHA-2 (SHA-NI sur x86_64, les extensions cryptographiques Armv8) accélèrent le hachage                       |
+| **RAM**                | 2 Go                                                                               | 4 à 8 Go. Davantage profite au cache de PostgreSQL sur une grande bibliothèque, mais le stockage rapporte en premier                   |
+| **Stockage système**   | SSD, 10 Go libres                                                                  | SSD ou NVMe pour PostgreSQL                                                                                                            |
 | **Stockage des blobs** | La taille de votre bibliothèque, plus de la place pour les téléversements en cours | Des disques redondants (miroir, RAID ou ZFS) dimensionnés pour plusieurs années de croissance. Des disques durs à plateaux conviennent |
-| **Réseau** | 10 Mbit/s en envoi | Gigabit sur le réseau local, et 50 Mbit/s ou plus en envoi si des appareils se synchronisent depuis l'extérieur |
-| **Alimentation** | — | Un onduleur, pour qu'une coupure de courant n'interrompe pas PostgreSQL en pleine écriture |
+| **Réseau**             | 10 Mbit/s en envoi                                                                 | Gigabit sur le réseau local, et 50 Mbit/s ou plus en envoi si des appareils se synchronisent depuis l'extérieur                        |
+| **Alimentation**       | —                                                                                  | Un onduleur, pour qu'une coupure de courant n'interrompe pas PostgreSQL en pleine écriture                                             |
 
 - **`BLOB_ROOT` reste sur un seul système de fichiers.** L'arborescence entière, `incoming/`
   compris, doit constituer un seul système de fichiers : elle ne peut donc pas être répartie entre
@@ -200,8 +200,8 @@ avec la taille des fichiers.
   sert donc le chemin des requêtes autant que l'index de la bibliothèque. Les sessions, sessions de
   téléversement et compteurs sont petits, et le serveur les supprime une fois expirés.
 - **La bande passante montante est la limite pour les appareils distants.** Un téléphone hors de
-  votre réseau téléverse à la vitesse de *réception* de votre connexion, mais chaque récupération
-  d'un aperçu ou d'un original part à votre vitesse d'*envoi*. Un morceau n'est coupé que lorsqu'il
+  votre réseau téléverse à la vitesse de _réception_ de votre connexion, mais chaque récupération
+  d'un aperçu ou d'un original part à votre vitesse d'_envoi_. Un morceau n'est coupé que lorsqu'il
   cesse d'arriver, jamais parce qu'il prend du temps, et un client dimensionne ses morceaux pour
   qu'ils se terminent en un court délai cible à la vitesse qu'il mesure : une liaison lente
   téléverse donc à son propre rythme. Gardez le seuil de blocage du serveur sous le délai
@@ -283,11 +283,11 @@ La configuration passe uniquement par l'environnement. `capsule-server/.env.exam
 de départ, et cette page nomme les variables qu'un opérateur doit choisir. Un serveur durable
 refuse de démarrer (code de sortie 2), en nommant d'un coup chaque variable manquante, sans :
 
-| Variable | Rôle |
-| --- | --- |
-| `DATABASE_URL` | Connexion à PostgreSQL |
-| `BLOB_ROOT` | Répertoire de blobs |
-| `JWT_ED25519_DER` | Clé Ed25519 en Base64 qui signe les jetons de session |
+| Variable               | Rôle                                                                                               |
+| ---------------------- | -------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`         | Connexion à PostgreSQL                                                                             |
+| `BLOB_ROOT`            | Répertoire de blobs                                                                                |
+| `JWT_ED25519_DER`      | Clé Ed25519 en Base64 qui signe les jetons de session                                              |
 | `ATTESTATION_KEY_SEED` | Graine en Base64 qui signe les reçus de conservation ; doit être indépendante de la clé des jetons |
 
 - **Protégez avant tout la clé des jetons.** La base de données ne contient aucun secret porteur :
@@ -318,10 +318,10 @@ définissez explicitement. La fédération est désactivée tant que `FEDERATION
 Nommez votre proxy inverse pour que les limites de débit par source voient le client plutôt que
 le proxy.
 
-| Variable | Signification |
-| --- | --- |
-| `TRUSTED_PROXIES` | Adresses et réseaux CIDR séparés par des virgules (`10.0.0.0/8`). Un réseau `/0` est refusé, car il ferait confiance à n'importe quel expéditeur. |
-| `TRUSTED_PROXY_HOPS` | Fait confiance à ce nombre de sauts de transfert les plus proches du serveur, quelle que soit leur adresse. |
+| Variable               | Signification                                                                                                                                      |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TRUSTED_PROXIES`      | Adresses et réseaux CIDR séparés par des virgules (`10.0.0.0/8`). Un réseau `/0` est refusé, car il ferait confiance à n'importe quel expéditeur.  |
+| `TRUSTED_PROXY_HOPS`   | Fait confiance à ce nombre de sauts de transfert les plus proches du serveur, quelle que soit leur adresse.                                        |
 | `TRUSTED_PROXY_HEADER` | Le seul champ de transfert que lit le serveur : `x-forwarded-for` (par défaut) ou `forwarded` (RFC 7239). Toute autre valeur empêche le démarrage. |
 
 Si rien n'est défini, aucun en-tête de transfert n'est pris en compte. C'est sûr, mais tous les

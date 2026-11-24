@@ -17,12 +17,12 @@ map renderer port native apps implement.
 
 ## Where It Lives
 
-| Surface | Module | Status |
-| --- | --- | --- |
-| Cell math, pyramid aggregation, cluster merge, place-name lookup policy | `capsule-core::places` | Planned |
-| Location index, pyramid tables, place-name cache, CLI and FFI verbs | `capsule-library::places` | Planned |
-| Web Mercator, tiles, antimeridian-aware bounds, geodesy, GCJ-02 conversion | geocoordinates | Planned dependency, waiting on its next release |
-| Reverse and forward geocoding | the external geocoder ([](#the-geocoder)) | Planned, separate project |
+| Surface                                                                    | Module                                    | Status                                          |
+| -------------------------------------------------------------------------- | ----------------------------------------- | ----------------------------------------------- |
+| Cell math, pyramid aggregation, cluster merge, place-name lookup policy    | `capsule-core::places`                    | Planned                                         |
+| Location index, pyramid tables, place-name cache, CLI and FFI verbs        | `capsule-library::places`                 | Planned                                         |
+| Web Mercator, tiles, antimeridian-aware bounds, geodesy, GCJ-02 conversion | geocoordinates                            | Planned dependency, waiting on its next release |
+| Reverse and forward geocoding                                              | the external geocoder ([](#the-geocoder)) | Planned, separate project                       |
 
 The cluster code lives in the stateless core so that the native apps (through the FFI), the CLI and
 the web client (through wasm) run the same arithmetic. Apps reach it as the three verbs of the
@@ -41,7 +41,7 @@ Every spatial structure on this page uses **one grid: Web Mercator (EPSG:3857) X
 addressed as a level and a Z-order (quadkey) integer.
 
 - **Why Mercator tiles.** Every map renderer Capsule targets draws Web Mercator, so a tile at level
-  *ℓ* is a fixed number of screen pixels at every latitude. A cluster radius in pixels is then a
+  _ℓ_ is a fixed number of screen pixels at every latitude. A cluster radius in pixels is then a
   fixed number of cells, which is what keeps pins evenly spaced on screen. A geohash cell is fixed
   in degrees and so stretches on screen toward the poles, and its levels step by 32 rather than 4,
   out of step with zoom. H3 hexagons do not nest exactly, so a parent's count is not the sum of its
@@ -94,7 +94,7 @@ rebuilds on a mismatch.
 
 ### Decision: Persisted Pyramid, On-Demand Above It
 
-- **Zoom ≤ 16** reads the pyramid at level *z* + 2. That is 64 px cells on 256 px tiles, the
+- **Zoom ≤ 16** reads the pyramid at level _z_ + 2. That is 64 px cells on 256 px tiles, the
   convention the map renderer port reports zoom in ([](/design/clients/)).
 - **Zoom > 16** covers a few square kilometres at most, so it clusters on demand from the location
   index's exact coordinates in the viewport.
@@ -111,7 +111,7 @@ rows, and an edit writes 19.
 ### Merging Within Blocks
 
 A pure grid splits two pins a pixel apart across a cell edge. So the cells of a level are merged
-**within their 8 × 8 block** (the level *ℓ* − 3 parent):
+**within their 8 × 8 block** (the level _ℓ_ − 3 parent):
 
 1. Visit the block's occupied cells in order of count (descending), then cell id.
 2. Each unvisited cell absorbs every unvisited cell in the block whose centroid lies within 64 px of
@@ -130,13 +130,13 @@ ranges, never one span around the globe. Output is capped at 4,096 clusters.
 The scale benchmark ([](/development/performance/)) measures these on the parity phone. They are
 unmeasured targets until it runs.
 
-| Measure | 1,000,000 geotagged assets | 5,000,000 geotagged assets |
-| --- | --- | --- |
-| Clusters for any viewport at any zoom (p95, warm) | < 16 ms, one frame at 60 Hz | < 100 ms |
-| Location index and pyramid on disk | < 64 MiB | < 320 MiB |
-| One edit's index and pyramid update | < 2 ms | < 2 ms |
-| Full rebuild of index and pyramid | < 60 s | < 5 min |
-| First full place-name pass, bundled tier | < 10 min | < 30 min |
+| Measure                                           | 1,000,000 geotagged assets  | 5,000,000 geotagged assets |
+| ------------------------------------------------- | --------------------------- | -------------------------- |
+| Clusters for any viewport at any zoom (p95, warm) | < 16 ms, one frame at 60 Hz | < 100 ms                   |
+| Location index and pyramid on disk                | < 64 MiB                    | < 320 MiB                  |
+| One edit's index and pyramid update               | < 2 ms                      | < 2 ms                     |
+| Full rebuild of index and pyramid                 | < 60 s                      | < 5 min                    |
+| First full place-name pass, bundled tier          | < 10 min                    | < 30 min                   |
 
 ### Consistency Across Devices
 
@@ -177,7 +177,7 @@ drawn as local overlays.
 
 **Maps are on by default, and the disclosure is shown before the first tile.**
 
-- **On by default.** A per-device setting, *Show maps*, starts on.
+- **On by default.** A per-device setting, _Show maps_, starts on.
 - **Told once, in context.** The first time a map would load on a device (the Places map or an info
   page's map preview), a one-time notice appears in place before any tile is requested. It names
   that device's tile provider, says that tiles reveal the area viewed and its zoom but never a
@@ -185,7 +185,7 @@ drawn as local overlays.
   Dismissing it loads the map and it is not shown again on that device.
 - **Per device, never synced.** Each device has its own provider and its own notice, so a notice
   shown for Apple on an iPhone says nothing about Google on an Android phone.
-- **Off means nothing is fetched.** With *Show maps* off, no renderer is created and no tile is
+- **Off means nothing is fetched.** With _Show maps_ off, no renderer is created and no tile is
   requested. The Places surface shows the place list, grouped by place name and ordered by asset
   count, and the info page shows the place name and coordinates without a map. Clusters, place
   names and search all keep working, because none of them needs a basemap.

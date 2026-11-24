@@ -64,12 +64,12 @@ hash.
 
 ## How Capsule reads a Takeout export
 
-| From Takeout | Becomes |
-| --- | --- |
+| From Takeout         | Becomes                                                                             |
+| -------------------- | ----------------------------------------------------------------------------------- |
 | Capture time and GPS | The file's own EXIF wins; the JSON fills gaps. Google's `(0, 0)` means no location. |
-| Description | Caption |
-| Favorite | 5-star rating (Capsule has no separate favorite flag) |
-| Album | A user tag with the album title; assets land in the library's default album |
+| Description          | Caption                                                                             |
+| Favorite             | 5-star rating (Capsule has no separate favorite flag)                               |
+| Album                | A user tag with the album title; assets land in the library's default album         |
 
 A location taken from the JSON is recorded as **manual**, not EXIF, because it did not come from
 the file's bytes.

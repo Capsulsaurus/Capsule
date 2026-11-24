@@ -4,7 +4,7 @@ description: L'usage quotidien d'une bibliothèque Capsule avec la CLI capsule �
 audit: none
 ---
 
-Ce guide couvre la CLI `capsule`, le client de référence. Les commandes marquées *(prévu)*
+Ce guide couvre la CLI `capsule`, le client de référence. Les commandes marquées _(prévu)_
 figurent sur la [feuille de route](https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md)
 et ne sont pas encore disponibles. `capsule <command> --help` fait foi pour les options ; la
 référence de la CLI ([](/reference/cli/)) les liste toutes.
@@ -46,7 +46,7 @@ indépendante de chaque original que vous importez.
   `import --move --push` ne supprime chaque source qu'après la vérification de son élément. Sans
   `--push`, `--move` conserve toutes les sources et l'indique ; un `import --move --push` ultérieur
   sur les mêmes fichiers les libère.
-- `capsule restore` *(prévu)* télécharge les originaux et les compare octet pour octet à ce qui a
+- `capsule restore` _(prévu)_ télécharge les originaux et les compare octet pour octet à ce qui a
   été signé lors de l'import.
 
 <a id="organize"></a>
@@ -57,12 +57,12 @@ indépendante de chaque original que vous importez.
   rafale, bracketing), à un album ou à une région d'une image. Les étiquettes que vous ajoutez sont
   conservées séparément de celles suggérées par l'IA, et vous pouvez promouvoir ou écarter une
   suggestion. Les étiquettes d'élément existent aujourd'hui ; celles de pile, d'album et de région
-  sont *(prévues)*.
+  sont _(prévues)_.
 - `capsule show <asset>` affiche ce que les métadonnées signées d'un élément enregistrent :
   légende, note, étiquettes, lieu, date de prise de vue.
 - `capsule repair capture-time` trouve les éléments dont la date de prise de vue ne concorde pas
   avec l'EXIF de l'original et, avec `--apply`, les corrige. La modification du lieu est
-  *(prévue)*.
+  _(prévue)_.
 
 Chaque modification est un changement signé, en ajout seul : la valeur précédente reste dans
 l'historique de provenance de l'élément, et les modifications simultanées depuis deux appareils

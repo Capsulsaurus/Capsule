@@ -4,7 +4,7 @@ description: Platform tiers and design language, what every client must validate
 audit: none
 ---
 
-Clients are native per platform. Cross-platform logic (`verify_asset` per [](/design/cryptography/keys/#write-authorization), the [](/design/import/pipeline/), the library layout of [](/design/filesystem/client/)) lives in `capsule-core`, reached through `capsule-sdk`; a client owns rendering, input and platform integration. This doc owns what every client MUST do, since skipping it makes the client *faulty* ([](/design/threat-model/#client-class-taxonomy)), the standards every client is built to, and the sandboxed decoder. [](/design/local-gallery/) owns the offline-first requirements.
+Clients are native per platform. Cross-platform logic (`verify_asset` per [](/design/cryptography/keys/#write-authorization), the [](/design/import/pipeline/), the library layout of [](/design/filesystem/client/)) lives in `capsule-core`, reached through `capsule-sdk`; a client owns rendering, input and platform integration. This doc owns what every client MUST do, since skipping it makes the client _faulty_ ([](/design/threat-model/#client-class-taxonomy)), the standards every client is built to, and the sandboxed decoder. [](/design/local-gallery/) owns the offline-first requirements.
 
 ## Design Priorities
 
@@ -15,13 +15,13 @@ Clients are native per platform. Cross-platform logic (`verify_asset` per [](/de
 
 Every native client is meant to end up fully featured and platform-integrated; tiers are an ordering, not a hierarchy.
 
-| Tier | Platforms | Meaning |
-| --- | --- | --- |
-| 1 — stabilizing now | iOS, Android (phone) | Every feature lands here first. |
-| 2 — next | iPadOS, Android tablet | Large-screen adaptations of tier 1. |
-| 3 — after | macOS | Shares its views with iPadOS. |
-| Deferred | Windows, Linux | Real targets, not started. |
-| Not on the ladder | Web | Permanently read-only; see [](#web-client). |
+| Tier                | Platforms              | Meaning                                     |
+| ------------------- | ---------------------- | ------------------------------------------- |
+| 1 — stabilizing now | iOS, Android (phone)   | Every feature lands here first.             |
+| 2 — next            | iPadOS, Android tablet | Large-screen adaptations of tier 1.         |
+| 3 — after           | macOS                  | Shares its views with iPadOS.               |
+| Deferred            | Windows, Linux         | Real targets, not started.                  |
+| Not on the ladder   | Web                    | Permanently read-only; see [](#web-client). |
 
 ### What Clients Share
 
@@ -89,7 +89,7 @@ Every client's info page for an asset (the CLI's `capsule show`, the Apple info 
   4. **Location.** The effective fix, with its datum when it is not WGS-84, and the place name ([](/design/places/)). The as-imported fix when an edit overrides it. A map preview through the [](#map-renderer-port).
   5. **Organization.** Rating, labels, AI tags, albums, stack placement, cull flag, hidden, and whether the asset is in trash.
   6. **Library.** Import time, availability (original on this device, awaiting original, or on the server only), the plaintext content hash, and the number of provenance records.
-- **No row is hidden for being empty.** An absent value is a fact the user may have come to check. A field the user can set and has not reads *not set*. A field the source never recorded reads *not recorded*. Both strings are catalog keys of the row ([](/design/i18n/#catalogs)).
+- **No row is hidden for being empty.** An absent value is a fact the user may have come to check. A field the user can set and has not reads _not set_. A field the source never recorded reads _not recorded_. Both strings are catalog keys of the row ([](/design/i18n/#catalogs)).
 - **Typed values, platform formatting.** The projection carries instants, rationals (shutter speed), numbers and coordinates, never formatted strings. Each platform formats them for the user's region ([](/design/i18n/#language-and-region)).
 - **The sidecar alone.** The projection reads only the sidecar and the catalog, so the page is complete offline with only a thumbnail on the device ([](/design/local-gallery/)). The camera rows therefore come from fields the sidecar records at import, never from parsing an original the device may not hold: `camera_id` and `capture_settings` ([](/design/metadata/#capture-settings)), `video` ([](/design/metadata/#video-info)) and `original_filename` ([](/design/metadata/#original-file-name)).
 
@@ -109,11 +109,11 @@ Maps are computed in Rust and only drawn natively. The core answers each viewpor
 - **The renderer declares its basemap datum**, `wgs84` or `gcj02`, when it attaches and again whenever its basemap changes. The core positions every cluster and pin in that datum.
 - **What the core returns.** Each cluster carries an id, a coordinate in the declared datum, a count, a representative asset and an `approximate` flag. A pin for a single asset carries the same flag. `approximate` is set when the position rests on an inexact datum conversion ([](/design/places/#datum-and-basemaps)), and the renderer draws such a point visibly as approximate.
 
-| Platform | Renderer |
-| --- | --- |
-| Apple | MapKit |
-| Android | Google Maps SDK in v1; MapLibre after v1, behind the same port |
-| Web | A web map renderer, fed clusters by `capsule-wasm` |
+| Platform | Renderer                                                       |
+| -------- | -------------------------------------------------------------- |
+| Apple    | MapKit                                                         |
+| Android  | Google Maps SDK in v1; MapLibre after v1, behind the same port |
+| Web      | A web map renderer, fed clusters by `capsule-wasm`             |
 
 - **Clusters only.** The renderer receives the viewport's clusters, never the library's coordinates in bulk, and sends no coordinate beyond the tile requests its viewport needs. Tile requests still tell the map provider which regions a user looks at. [](/design/places/) owns that disclosure and the setting that turns maps off.
 - **Replaceable.** A renderer is swapped without touching the core, and a fake renderer drives the port in the core's tests.
@@ -123,9 +123,9 @@ Maps are computed in Rust and only drawn natively. The core answers each viewpor
 The native rendering of `ApprovalRequired` ([](/design/networking/#admission-and-priority)): a standard alert on Apple and a Material dialog on Android, each in its platform's idiom.
 
 - **It says what and how much.** The prompt names the work and its estimated size, formatted by the platform's byte formatter: "Download 3 originals (412 MB) on this metered network?". When the OS data saver is on, the prompt says so, because the OS asked the user's apps to save data.
-- **Three answers.** *Download* (this batch), *Always on this kind of network* (changes the user's policy for that class on metered or constrained paths) and *Not now* (holds the batch).
+- **Three answers.** _Download_ (this batch), _Always on this kind of network_ (changes the user's policy for that class on metered or constrained paths) and _Not now_ (holds the batch).
 - **One at a time.** There is one prompt per user action. Prompts never stack and never come from the background. Held work shows as waiting for Wi-Fi in the transfer surface, where the user looks for it.
-- **Reversible.** A network settings page lists every class with its allow, ask or deny on metered and on constrained paths, so the user can undo an *Always* in a place they can see it.
+- **Reversible.** A network settings page lists every class with its allow, ask or deny on metered and on constrained paths, so the user can undo an _Always_ in a place they can see it.
 
 ### Platform Parity
 
@@ -200,5 +200,5 @@ Per-platform pins; library pins carry their rationale beside the pin in each man
 - **Sandbox crash and boundary (smoke, per platform).** A CVE corpus never kills the host; the asset becomes "unreadable on this device"; the sandbox cannot read host files, open sockets or write outside scratch.
 - **Info projection (unit).** Every row reports its state for a set, an unset and a never-recorded field. The CLI's `--json` output and the FFI return the same rows in the same order, from a sidecar with no original present.
 - **Map port (unit).** A fake renderer's viewport yields the core's clusters, and a tap on a cluster resolves through the core.
-- **Metered prompt (smoke, per platform).** A batch of originals on a metered path raises one prompt, and *Not now* holds the whole batch.
+- **Metered prompt (smoke, per platform).** A batch of originals on a metered path raises one prompt, and _Not now_ holds the whole batch.
 - **Forbidden-behaviour tripwire (unit).** Each forbidden behaviour reachable through a `capsule-core` API returns a structural error; auth-surface items are tested server-side.

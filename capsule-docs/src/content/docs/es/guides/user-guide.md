@@ -4,7 +4,7 @@ description: El uso diario de una biblioteca de Capsule con la CLI capsule — i
 audit: none
 ---
 
-Esta guía cubre la CLI `capsule`, el cliente de referencia. Los comandos marcados como *(previsto)*
+Esta guía cubre la CLI `capsule`, el cliente de referencia. Los comandos marcados como _(previsto)_
 están en la [hoja de ruta](https://github.com/Capsulsaurus/Capsule/blob/master/ROADMAP.md) y aún no
 están disponibles. `capsule <command> --help` es la referencia autorizada para las opciones; la
 referencia de la CLI ([](/reference/cli/)) las enumera todas.
@@ -45,7 +45,7 @@ independiente de cualquier original que importe.
   `import --move --push` elimina cada origen solo después de que su recurso se haya verificado. Sin
   `--push`, `--move` conserva todos los orígenes y lo indica, y un `import --move --push` posterior
   sobre los mismos archivos los libera.
-- `capsule restore` *(previsto)* descarga los originales y los compara byte por byte con lo que se
+- `capsule restore` _(previsto)_ descarga los originales y los compara byte por byte con lo que se
   firmó en la importación.
 
 <a id="organize"></a>
@@ -55,11 +55,11 @@ independiente de cualquier original que importe.
 - Las **etiquetas** son de formato libre y se asocian a un recurso, una pila (par RAW+JPEG, ráfaga,
   horquillado), un álbum o una región de una imagen. Las etiquetas que añade se mantienen separadas
   de las sugeridas por la IA, y puede aceptar o descartar una sugerencia. Las etiquetas de recursos
-  ya existen; las de pilas, álbumes y regiones están *(previstas)*.
+  ya existen; las de pilas, álbumes y regiones están _(previstas)_.
 - `capsule show <asset>` muestra lo que registran los metadatos firmados de un recurso: pie de foto,
   valoración, etiquetas, ubicación y hora de captura.
 - `capsule repair capture-time` encuentra los recursos cuya hora de captura no coincide con el EXIF
-  del original y, con `--apply`, la corrige. La edición de la ubicación está *(prevista)*.
+  del original y, con `--apply`, la corrige. La edición de la ubicación está _(prevista)_.
 
 Cada edición es un cambio firmado y de solo anexado: el valor anterior permanece en el historial de
 procedencia del recurso, y las ediciones simultáneas desde dos dispositivos se fusionan de forma

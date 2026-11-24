@@ -32,7 +32,7 @@ drop in later:
 Reads return key-free shells: ids, album membership and counts, and
 awaiting-original state are real; titles, cover art, capture dates, dimensions,
 LQIP and locations live in encrypted metadata and stay absent until a decode and
-verify boundary lands *below* `CapsuleGateway`. That boundary is post-v1. With no
+verify boundary lands _below_ `CapsuleGateway`. That boundary is post-v1. With no
 reachable server the store stays empty and the app renders empty states rather
 than failing.
 

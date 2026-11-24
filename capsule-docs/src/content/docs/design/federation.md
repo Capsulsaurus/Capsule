@@ -31,12 +31,12 @@ Open: counting pulled blobs in the receiver's `quota_used`. A peer whose key no 
 
 Federation introduces **no new data protocol**. A peer reads the same content-addressed primitives a client uses ([](/design/sync/#discovering-what-changed), [](/design/api-surfaces/#surfaces)):
 
-| Operation | Purpose |
-| --- | --- |
-| `GET /v1/sync?album_id=…&cursor=…` | Metadata changes after a cursor, for an album the peer holds a capability for. |
-| `GET /v1/blob/{hash}` (HTTP `Range`) | An opaque ciphertext blob by content address. |
-| `Authorization: Bearer <capability>` | Presents a federation capability ([](#federation-capabilities)). |
-| `X-Capsule-Request-Signature` | Binds that presentation to the peer named in `sub` ([](#request-signatures)). |
+| Operation                            | Purpose                                                                        |
+| ------------------------------------ | ------------------------------------------------------------------------------ |
+| `GET /v1/sync?album_id=…&cursor=…`   | Metadata changes after a cursor, for an album the peer holds a capability for. |
+| `GET /v1/blob/{hash}` (HTTP `Range`) | An opaque ciphertext blob by content address.                                  |
+| `Authorization: Bearer <capability>` | Presents a federation capability ([](#federation-capabilities)).               |
+| `X-Capsule-Request-Signature`        | Binds that presentation to the peer named in `sub` ([](#request-signatures)).  |
 
 Rejections follow [](/reference/api/conventions/#errors). Hints ([](/design/notifications/#vocabulary)) and presence ride a separate low-trust channel and never feed validation. Capsule recomputes every blob's content hash on arrival, so a peer cannot lie about what a hash contains.
 
@@ -46,7 +46,7 @@ Peers **pull** and never push into Capsule's database. Capsule fetches on its ow
 
 ## Album Ownership (v1: Single Home Server)
 
-**Each album has exactly one home server**, the authoritative origin for every blob in it; other servers hold caches, never origins. Only the home server serves an asset's *current* manifest. This rules out split-brain ownership, cross-server delete races and conflicting epoch advances without cross-server consensus. Multi-writer albums across servers are v2 (open question #1 in [](/design/threat-model/schema-rules/#open-questions)); until then, aggregated albums provide multi-party sharing.
+**Each album has exactly one home server**, the authoritative origin for every blob in it; other servers hold caches, never origins. Only the home server serves an asset's _current_ manifest. This rules out split-brain ownership, cross-server delete races and conflicting epoch advances without cross-server consensus. Multi-writer albums across servers are v2 (open question #1 in [](/design/threat-model/schema-rules/#open-questions)); until then, aggregated albums provide multi-party sharing.
 
 ## Federated Shared Albums (Aggregated Albums)
 
@@ -54,7 +54,7 @@ An **aggregated album** is N ordinary single-writer container albums, one per co
 
 ### The Album-Group Assertion
 
-The creator mints a `group_id` (UUIDv7) and shares it in the invite. Each contributor writes an assertion into *their own* album's encrypted collaborative-metadata stream ([](/design/metadata/#how-operations-travel)). This doc owns the schema:
+The creator mints a `group_id` (UUIDv7) and shares it in the invite. Each contributor writes an assertion into _their own_ album's encrypted collaborative-metadata stream ([](/design/metadata/#how-operations-travel)). This doc owns the schema:
 
 ```rust
 AlbumGroupAssertion {
@@ -86,15 +86,15 @@ Sharing an album with `alice@other.tld` gives her server an **album-scoped capab
 
 The format is normative; every peer parses it. It is signed with the home server's operational key, classical Ed25519 (a carve-out in [](/design/cryptography/primitives/#signature-scheme)).
 
-| Claim | Meaning |
-| --- | --- |
-| `iss` | Issuing home server. |
-| `sub` | Peer server identity. |
-| `aud` | Album id (`urn:capsule:album:UUID`). Verifiers MUST match `aud` against the album, never against themselves. |
-| `scope` | `read` or `read-derivative-only`. Derivative-only refuses any `/blob/{hash}` whose server-visible role is `original`. |
-| `iat`, `nbf` | Issued-at; not-before (clock-skew tolerance). |
-| `exp` | MUST be ≤ `iat` + **24 h**. |
-| `jti` | UUIDv7; the revocation key. |
+| Claim                  | Meaning                                                                                                                                           |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `iss`                  | Issuing home server.                                                                                                                              |
+| `sub`                  | Peer server identity.                                                                                                                             |
+| `aud`                  | Album id (`urn:capsule:album:UUID`). Verifiers MUST match `aud` against the album, never against themselves.                                      |
+| `scope`                | `read` or `read-derivative-only`. Derivative-only refuses any `/blob/{hash}` whose server-visible role is `original`.                             |
+| `iat`, `nbf`           | Issued-at; not-before (clock-skew tolerance).                                                                                                     |
+| `exp`                  | MUST be ≤ `iat` + **24 h**.                                                                                                                       |
+| `jti`                  | UUIDv7; the revocation key.                                                                                                                       |
 | `min_protocol_version` | The album's pinned `protocol_version`, which selects the peer's parser. The issuer's supported window comes from `server-info`, never this claim. |
 
 ### Token Lifecycle and Chain of Trust
@@ -117,22 +117,22 @@ The header is declared on the three operations a capability is presented to: `GE
 X-Capsule-Request-Signature: t=1767225600, n=AZQ3hW1ae6qB2vX9k0cR0w, s=<signature>
 ```
 
-| Member | Meaning |
-| --- | --- |
-| `t` | When the peer signed, in decimal Unix seconds. |
-| `n` | A nonce the peer never signs twice: 22 to 128 characters of the unpadded base64url alphabet, so at least 16 bytes. |
-| `s` | The Ed25519 signature, unpadded base64url (64 bytes). |
+| Member | Meaning                                                                                                            |
+| ------ | ------------------------------------------------------------------------------------------------------------------ |
+| `t`    | When the peer signed, in decimal Unix seconds.                                                                     |
+| `n`    | A nonce the peer never signs twice: 22 to 128 characters of the unpadded base64url alphabet, so at least 16 bytes. |
+| `s`    | The Ed25519 signature, unpadded base64url (64 bytes).                                                              |
 
 The signed bytes are the canonical CBOR of this map, the encoding every other signed document in Capsule uses:
 
-| Key | Value |
-| --- | --- |
-| `context` | The text `capsule-federation-request-v1`, so the signature cannot be mistaken for any other this key makes. |
-| `method` | The request method, upper case. |
-| `path` | The operation's path as the issuer routes it (`/v1/sync`, `/v1/blob/{hash}` with the hash filled in, `/v1/federation/capabilities/refresh`), without query or fragment. A path prefix in the issuer's base URL is not part of it: a prefixed deployment strips it before routing, so the issuer verifies the path it routed and the peer signs the operation's path whatever its base URL says. Every path segment of the three operations is unreserved characters, so there is no percent-encoding to agree on. |
-| `token_sha256` | The lowercase hex SHA-256 of the presented capability: exactly the token bytes after the `Bearer` scheme and its single space. |
-| `signed_at` | `t`, as an integer. |
-| `nonce` | `n`, as text. |
+| Key            | Value                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `context`      | The text `capsule-federation-request-v1`, so the signature cannot be mistaken for any other this key makes.                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `method`       | The request method, upper case.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `path`         | The operation's path as the issuer routes it (`/v1/sync`, `/v1/blob/{hash}` with the hash filled in, `/v1/federation/capabilities/refresh`), without query or fragment. A path prefix in the issuer's base URL is not part of it: a prefixed deployment strips it before routing, so the issuer verifies the path it routed and the peer signs the operation's path whatever its base URL says. Every path segment of the three operations is unreserved characters, so there is no percent-encoding to agree on. |
+| `token_sha256` | The lowercase hex SHA-256 of the presented capability: exactly the token bytes after the `Bearer` scheme and its single space.                                                                                                                                                                                                                                                                                                                                                                                    |
+| `signed_at`    | `t`, as an integer.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `nonce`        | `n`, as text.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 The issuer refuses the request `401` when the header is absent or malformed, when `t` is more than **5 minutes** from its own clock either way, when the peer has no pinned key, when the signature does not verify, or when this peer used the nonce within the last **10 minutes** (the span in which a signature can still be fresh). These are structural refusals, uncoded like every other the authenticator makes.
 
@@ -161,13 +161,13 @@ Every federated write is checked against [](/design/threat-model/validation/#ser
 
 Each peer is its own blast radius. Transfer budgets per peer cover events, bytes and CPU per hour, and excess is queued or dropped. The amounts, and the tighter amounts on probation, are in [](/design/authorization/#rate-limits).
 
-| Budget | Serving side | Receiving side |
-| --- | --- | --- |
-| Events | Per peer origin, charged per capability presentation | — |
-| Bytes | Per peer origin, charged per blob delivery | — |
-| CPU | — | Pull validation time per source peer |
-| Errors | — | Validation failures per source peer, then the circuit breaker opens |
-| Storage | — | per-`(receiving_user, source_peer)` caching budget, default 25% of the receiver's hard limit |
+| Budget  | Serving side                                         | Receiving side                                                                               |
+| ------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Events  | Per peer origin, charged per capability presentation | —                                                                                            |
+| Bytes   | Per peer origin, charged per blob delivery           | —                                                                                            |
+| CPU     | —                                                    | Pull validation time per source peer                                                         |
+| Errors  | —                                                    | Validation failures per source peer, then the circuit breaker opens                          |
+| Storage | —                                                    | per-`(receiving_user, source_peer)` caching budget, default 25% of the receiver's hard limit |
 
 - **Serving windows** are fixed and keyed on the peer's origin. Every `GET /v1/blob/{hash}` that carries bytes (`200`, `206`) charges the blob's whole size in one atomic weighted charge before the body is sent. A delivery that does not fit what is left of the window is refused whole, `429 error.federation.rate_budget_exceeded`; a revalidation (`304`) is not charged.
 - **Receiving CPU** is the pull worker's ([](#egress-pull-worker)) validation time per source peer, the one per-peer CPU this server spends that it can meter. It is charged in milliseconds after each pull, at least one for any validation. A pull whose validation would take the open window past its budget spends what is left, so the peer's other jobs read it as spent. A pull abandoned at its deadline charges nothing, since its validation time is lost with it; it is a transport failure, and its back-off bounds how often a peer can cost a deadline's worth. A spent peer's jobs are queued to the window's end, neither failed nor backed off.
@@ -190,7 +190,14 @@ The receiving half of [](#pull-only-federation): what fetches from a peer, when,
 A home server tells a receiving server that an album has news with `POST /v1/federation/hints`. A hint is advice only: it carries no data, never reaches validation, and its only effect is the schedule rule above. It names the job pulling `album_id` from the server that signed it, so a peer can hint only about albums the receiver pulls from that peer. It adds no job, changes nothing about what is pulled or from where, and does not reach past a back-off or an open circuit. The format is normative; every peer produces it.
 
 ```json
-{ "home_server": "home.example", "recipient_server": "receiver.example", "nonce": "0192f1a8-7c4e-4b6a-9d3e-5f7a8b9c0d1e", "album_id": "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e60", "sent_at": "2026-09-02T00:00:00Z", "signature": "<base64>" }
+{
+    "home_server": "home.example",
+    "recipient_server": "receiver.example",
+    "nonce": "0192f1a8-7c4e-4b6a-9d3e-5f7a8b9c0d1e",
+    "album_id": "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e60",
+    "sent_at": "2026-09-02T00:00:00Z",
+    "signature": "<base64>"
+}
 ```
 
 `signature` is the home server's operational Ed25519 key over the canonical CBOR of a map holding the other five fields, each whitespace-trimmed and otherwise exactly as sent, plus `context`, the text `capsule-federation-hint-v1`, so the signature cannot be mistaken for any other this key makes. `nonce` is 16 to 64 bytes and never signed twice.

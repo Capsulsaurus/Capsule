@@ -74,12 +74,12 @@ A person's name is private to its owner by default: the library-settings documen
 
 ## Failure Modes
 
-| Failure | Detected / contained by | Recovery |
-| --- | --- | --- |
-| Two devices merge the same people concurrently | LWW on `merged_into` | The later write wins; the other merge is a no-op or is undone by clearing |
-| A merge cycle | Chain walk | Resolves to the smallest `person_id`; surfaced for the user to fix |
-| A model bump re-detects faces | IoU anchor match | Assignments carried over; unmatched anchors surfaced |
-| A co-member's shared record names the wrong person | Suggestion only | Nothing changes in the receiver's library until they accept |
+| Failure                                            | Detected / contained by | Recovery                                                                  |
+| -------------------------------------------------- | ----------------------- | ------------------------------------------------------------------------- |
+| Two devices merge the same people concurrently     | LWW on `merged_into`    | The later write wins; the other merge is a no-op or is undone by clearing |
+| A merge cycle                                      | Chain walk              | Resolves to the smallest `person_id`; surfaced for the user to fix        |
+| A model bump re-detects faces                      | IoU anchor match        | Assignments carried over; unmatched anchors surfaced                      |
+| A co-member's shared record names the wrong person | Suggestion only         | Nothing changes in the receiver's library until they accept               |
 
 ## Known Gaps
 

@@ -4,7 +4,7 @@ description: Identity, account portability, session and access tokens
 audit: none
 ---
 
-The server can prove a request comes from a session it issued, not who the user is. The **master key**, held client-side, is the identity root. Every login credential authenticates a *session* only, and the master key never derives from, and is never visible to, the credential verifier. Endpoint shapes and status codes are in [](/reference/api/auth/).
+The server can prove a request comes from a session it issued, not who the user is. The **master key**, held client-side, is the identity root. Every login credential authenticates a _session_ only, and the master key never derives from, and is never visible to, the credential verifier. Endpoint shapes and status codes are in [](/reference/api/auth/).
 
 ## Account Types
 
@@ -21,7 +21,7 @@ Registration takes **an address, a password and the account's identity anchor**,
 - A taken address is `409 error.auth.user_already_exists`, an account oracle by decision, bounded by the per-source registration budget ([](/design/authorization/#rate-limits)). Every attempt whose body parses, refused ones included, is charged, so probing costs the prober whatever the answer.
 - **Open registration needs a default quota.** The server refuses to start with password registration enabled and no default quota limit, unless the operator sets the default to `unlimited` explicitly ([](/design/quota/#thresholds-and-states)), so accounts minted for free cannot fill the disk.
 - A new account has **no device directory and therefore cannot write** (invariant 7 of [](/design/threat-model/validation/#server-side-validation-invariants)), so the client publishes its first directory immediately after registering ([](/design/device-enrollment/#first-device-enrollment)).
-- There is no token introspection, since the session ledger is read on every request and validation *is* the request. There is no password reset, since the server cannot re-wrap a master key it never saw; recovery is the escrow blob ([](/design/backup-recovery/)).
+- There is no token introspection, since the session ledger is read on every request and validation _is_ the request. There is no password reset, since the server cannot re-wrap a master key it never saw; recovery is the escrow blob ([](/design/backup-recovery/)).
 
 ### The Identity Anchor
 
@@ -128,14 +128,14 @@ Headless clients use the device authorization grant (RFC 8628): `capsule auth lo
 - **The server proxies the provider and the `device_code` never leaves it.** Begin takes a `binding_challenge` and answers a server-minted 128-bit `handle`, `user_code`, `verification_uri` (+ `_complete` if given), `interval` and `expires_by` (the minimum of the provider's `expires_in` and 15 min).
 - **Polling** takes `handle`, `binding_verifier` and the advisory `cohort_hash`/`device_id`. Success answers as the callback does (tokens or `202`). Otherwise:
 
-  | Provider answer | Capsule answer | Ceremony |
-  | --- | --- | --- |
-  | `authorization_pending` | `400 error.auth.oidc_device_pending` | kept |
-  | `slow_down`, or poll sooner than one interval | `429 error.auth.oidc_device_slow_down`, interval += 5 s | kept |
-  | `access_denied` | `401 error.auth.oidc_device_denied` | burned |
-  | `expired_token`; unknown/spent handle; binding mismatch | `401 error.auth.oidc_device_expired` | burned |
-  | other refusal | `401 error.auth.oidc_exchange_failed` | burned |
-  | unreachable | `500 error.auth.oidc_unavailable` | kept |
+  | Provider answer                                         | Capsule answer                                          | Ceremony |
+  | ------------------------------------------------------- | ------------------------------------------------------- | -------- |
+  | `authorization_pending`                                 | `400 error.auth.oidc_device_pending`                    | kept     |
+  | `slow_down`, or poll sooner than one interval           | `429 error.auth.oidc_device_slow_down`, interval += 5 s | kept     |
+  | `access_denied`                                         | `401 error.auth.oidc_device_denied`                     | burned   |
+  | `expired_token`; unknown/spent handle; binding mismatch | `401 error.auth.oidc_device_expired`                    | burned   |
+  | other refusal                                           | `401 error.auth.oidc_exchange_failed`                   | burned   |
+  | unreachable                                             | `500 error.auth.oidc_unavailable`                       | kept     |
 
 - **The interval is server-enforced** at the provider's value, ≥5 s, and an early poll is refused without asking the provider. A client that waits one interval before every poll and adds 5 s per `slow_down` stays in step.
 - **The ID token passes every callback check except the nonce, which MUST be absent**: a token carrying a nonce was minted for another authorization request. The back-channel request with a server-held device code replaces the nonce's binding.
@@ -157,13 +157,13 @@ Handles are `user@server.tld` (Matrix-style). **`.well-known/` never enumerates 
 
 All are public and take no credential. A new path MUST add a row.
 
-| Path | Contents | Owner |
-| --- | --- | --- |
-| `server-info` | Server-scoped facts above. Never a user list. | [](#identity-and-discovery) |
-| `moved/{user}` | IK-signed moved certificate (post-v1). | [](#account-portability) |
-| `revoked-jti` | Federation capability revocations (≤24 h). | [](/design/federation/#token-lifecycle-and-chain-of-trust) |
-| `deprecation` | Min-supported-client announcements. | [](/design/threat-model/schema-rules/#min-supported-client-deprecation-policy) |
-| `attestation-keys` | Storage-attestation public keys + append-only history. | [](/design/transfer/durability/) |
+| Path               | Contents                                               | Owner                                                                          |
+| ------------------ | ------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| `server-info`      | Server-scoped facts above. Never a user list.          | [](#identity-and-discovery)                                                    |
+| `moved/{user}`     | IK-signed moved certificate (post-v1).                 | [](#account-portability)                                                       |
+| `revoked-jti`      | Federation capability revocations (≤24 h).             | [](/design/federation/#token-lifecycle-and-chain-of-trust)                     |
+| `deprecation`      | Min-supported-client announcements.                    | [](/design/threat-model/schema-rules/#min-supported-client-deprecation-policy) |
+| `attestation-keys` | Storage-attestation public keys + append-only history. | [](/design/transfer/durability/)                                               |
 
 ## Account Portability
 
@@ -191,7 +191,7 @@ The **refresh token**: a JWT naming the account, the session id and the session'
 
 ### Access Token
 
-A **15-minute** JWT issued against the session token, presented as the bearer credential on every authenticated request. The lifetime is fixed, not configurable: it bounds what a *lost* access token buys, not what a *revoked* one does ([](#explicit-revocation)).
+A **15-minute** JWT issued against the session token, presented as the bearer credential on every authenticated request. The lifetime is fixed, not configurable: it bounds what a _lost_ access token buys, not what a _revoked_ one does ([](#explicit-revocation)).
 
 ### Token Lineage and Reuse
 
@@ -233,7 +233,7 @@ Revoke-all is two requests. An authenticated `POST /v1/auth/logout/all/challenge
 
 Invariants:
 
-- **Revocation is immediate.** The bearer scheme reads the ledger on every authenticated request, so an in-flight access token is refused on next use. The access-token lifetime bounds a *lost* token, not a *revoked* one.
+- **Revocation is immediate.** The bearer scheme reads the ledger on every authenticated request, so an in-flight access token is refused on next use. The access-token lifetime bounds a _lost_ token, not a _revoked_ one.
 - **An unreadable ledger refuses** (fail closed) with `503 error.auth.unavailable` and `Retry-After`, never `401`. A client that read an outage as an expiry would discard a live session and send its user to a sign-in that cannot succeed until the store is back ([](/design/authorization/#when-the-counter-store-fails)).
 - **Last-used is coarse**: at most one write per minute per session.
 - **Nothing revokes a session automatically except reuse.** The server never revokes on a heuristic, because that bypasses the user-initiated audit trail. The one automatic revocation is a lineage whose refresh token was replayed ([](#token-lineage-and-reuse)), recorded in the account's activity log.
@@ -245,13 +245,13 @@ Reinstalling re-enrolls with a new `device_id`, because device keys are hardware
 
 ### Per-Platform Primary Identifier
 
-| Platform | Primary identifier | App reinstall | OS reinstall | Factory reset |
-| --- | --- | --- | --- | --- |
-| iOS | Keychain random 128-bit seed, `ThisDeviceOnly`, non-synchronized | yes (not guaranteed) | no | no |
-| Android | SSAID (signing-key-scoped `ANDROID_ID`) | yes | no | no |
-| macOS | `IOPlatformUUID` | yes | yes | yes |
-| Windows | `MachineGuid` | yes | no | no |
-| Linux | `/etc/machine-id` (only ever hashed) | yes | no | no |
+| Platform | Primary identifier                                               | App reinstall        | OS reinstall | Factory reset |
+| -------- | ---------------------------------------------------------------- | -------------------- | ------------ | ------------- |
+| iOS      | Keychain random 128-bit seed, `ThisDeviceOnly`, non-synchronized | yes (not guaranteed) | no           | no            |
+| Android  | SSAID (signing-key-scoped `ANDROID_ID`)                          | yes                  | no           | no            |
+| macOS    | `IOPlatformUUID`                                                 | yes                  | yes          | yes           |
+| Windows  | `MachineGuid`                                                    | yes                  | no           | no            |
+| Linux    | `/etc/machine-id` (only ever hashed)                             | yes                  | no           | no            |
 
 The promise is **reinstall-stable everywhere, reset-stable only on macOS**. A factory-reset phone is a new cohort.
 
@@ -273,7 +273,7 @@ The input is canonical CBOR ([](/design/metadata/#canonical-cbor-encoding)) with
 - The session record carries `cohort_hash`, and a durable `device_cohorts(user_id, cohort_hash, first_seen, last_seen)` map outlives session expiry.
 - Recording a cohort **never fails a sign-in**: it is written after the session, and a failure is logged and dropped.
 - It appears only in the session listing. There is no filter by cohort and no "revoke cohort" verb; revocation names a `session_id`.
-- The UX asserts ("a device you've used before, last seen *date*") with no "not my device" toggle. Disputes go through a support report bundling `{cohort_hash, [(device_id, session_id, first_seen, last_seen)]}`.
+- The UX asserts ("a device you've used before, last seen _date_") with no "not my device" toggle. Disputes go through a support report bundling `{cohort_hash, [(device_id, session_id, first_seen, last_seen)]}`.
 
 ## Known Gaps
 

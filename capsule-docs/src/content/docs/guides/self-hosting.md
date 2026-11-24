@@ -123,13 +123,13 @@ it synchronized with NTP (chrony, or systemd-timesyncd) on the host. A container
 clock, so synchronize the host. The offset SHOULD stay within one second, and MUST stay within 30
 seconds. Past those bounds:
 
-| Offset | What breaks |
-| --- | --- |
-| Over 30 s | Second-factor codes start failing: a code is accepted only within one 30 s step of the server's clock ([](/design/authentication/)) |
-| Over 5 min | Federation stops in both directions: peers refuse this server's signed requests, hints and reports, and it refuses theirs ([](/design/federation/)) |
-| Clock ahead | Trash is purged before its retention window ends, and a restore made in time is refused ([](/design/organization/#retention-window)). Sessions, share links and upload sessions expire early |
-| Clock behind | Expired sessions, share links and counters stay valid for longer than configured |
-| Gross | Clients refuse custody receipts whose `received_at` is implausible ([](/design/transfer/durability/)) |
+| Offset       | What breaks                                                                                                                                                                                  |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Over 30 s    | Second-factor codes start failing: a code is accepted only within one 30 s step of the server's clock ([](/design/authentication/))                                                          |
+| Over 5 min   | Federation stops in both directions: peers refuse this server's signed requests, hints and reports, and it refuses theirs ([](/design/federation/))                                          |
+| Clock ahead  | Trash is purged before its retention window ends, and a restore made in time is refused ([](/design/organization/#retention-window)). Sessions, share links and upload sessions expire early |
+| Clock behind | Expired sessions, share links and counters stay valid for longer than configured                                                                                                             |
+| Gross        | Clients refuse custody receipts whose `received_at` is implausible ([](/design/transfer/durability/))                                                                                        |
 
 Start `serve` only once the clock is synchronized. Under systemd, order it after
 `time-sync.target` with `chrony-wait.service` or `systemd-time-wait-sync.service` enabled. A virtual
@@ -160,14 +160,14 @@ way, and runs Argon2id once per password login (about 19 MiB each). It never dec
 transcodes media, never encrypts or decrypts, and leaves TLS to the reverse proxy. An upload's body
 is never buffered beyond one chunk, so memory does not grow with file size.
 
-| | Minimum | Recommended |
-| --- | --- | --- |
-| **CPU** | 2 cores, x86_64 or arm64 | 4 cores. SHA-2 instructions (SHA-NI on x86_64, the Armv8 crypto extensions) speed up hashing |
-| **RAM** | 2 GB | 4 to 8 GB. More helps PostgreSQL's cache on a large library, but storage pays back first |
-| **System storage** | SSD, 10 GB free | SSD or NVMe for PostgreSQL |
-| **Blob storage** | Your library's size, plus room for uploads in flight | Redundant disks (mirror, RAID or ZFS) sized for several years of growth. Spinning disks are fine |
-| **Network** | 10 Mbit/s upstream | Gigabit on the LAN, and 50 Mbit/s or more upstream if devices sync from outside it |
-| **Power** | — | A UPS, so a power cut does not interrupt PostgreSQL mid-write |
+|                    | Minimum                                              | Recommended                                                                                      |
+| ------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| **CPU**            | 2 cores, x86_64 or arm64                             | 4 cores. SHA-2 instructions (SHA-NI on x86_64, the Armv8 crypto extensions) speed up hashing     |
+| **RAM**            | 2 GB                                                 | 4 to 8 GB. More helps PostgreSQL's cache on a large library, but storage pays back first         |
+| **System storage** | SSD, 10 GB free                                      | SSD or NVMe for PostgreSQL                                                                       |
+| **Blob storage**   | Your library's size, plus room for uploads in flight | Redundant disks (mirror, RAID or ZFS) sized for several years of growth. Spinning disks are fine |
+| **Network**        | 10 Mbit/s upstream                                   | Gigabit on the LAN, and 50 Mbit/s or more upstream if devices sync from outside it               |
+| **Power**          | —                                                    | A UPS, so a power cut does not interrupt PostgreSQL mid-write                                    |
 
 - **`BLOB_ROOT` stays on one filesystem.** The whole tree, `incoming/` included, must be one
   filesystem, so it cannot be split across an SSD and a disk array or across two ZFS datasets. Put
@@ -177,8 +177,8 @@ is never buffered beyond one chunk, so memory does not grow with file size.
   request path as well as the library index. Sessions, upload sessions and counters are small, and
   the server deletes them once expired.
 - **Upstream bandwidth is the limit for remote devices.** A phone outside your network uploads at
-  your connection's *download* speed, but every fetch of a preview or original leaves at your
-  *upstream* speed. A chunk is cut only when it stops arriving, never for taking long, and a client
+  your connection's _download_ speed, but every fetch of a preview or original leaves at your
+  _upstream_ speed. A chunk is cut only when it stops arriving, never for taking long, and a client
   sizes its chunks to finish in a short target time at the speed it measures, so a slow link uploads
   at its own rate. Keep the server's stall bound below your proxy's idle timeout, so the server
   answers a stalled chunk before the proxy cuts it.
@@ -243,11 +243,11 @@ Configuration is environment only. `capsule-server/.env.example` is a starting t
 page names the variables an operator must decide. A durable server refuses to start (exit 2),
 naming every missing variable at once, without:
 
-| Variable | Purpose |
-| --- | --- |
-| `DATABASE_URL` | PostgreSQL connection |
-| `BLOB_ROOT` | Blob directory |
-| `JWT_ED25519_DER` | Base64 Ed25519 key that signs session tokens |
+| Variable               | Purpose                                                                       |
+| ---------------------- | ----------------------------------------------------------------------------- |
+| `DATABASE_URL`         | PostgreSQL connection                                                         |
+| `BLOB_ROOT`            | Blob directory                                                                |
+| `JWT_ED25519_DER`      | Base64 Ed25519 key that signs session tokens                                  |
 | `ATTESTATION_KEY_SEED` | Base64 seed that signs custody receipts; must be independent of the token key |
 
 - **Guard the token key above all.** The database holds no bearer secret, so a leaked database
@@ -273,10 +273,10 @@ invalidates outstanding sync cursors unless you set it explicitly. Federation is
 
 Name your reverse proxy so the per-source rate limits see the client rather than the proxy.
 
-| Variable | Meaning |
-| --- | --- |
-| `TRUSTED_PROXIES` | Comma-separated addresses and CIDR networks (`10.0.0.0/8`). A network of `/0` is refused, because it would believe every sender. |
-| `TRUSTED_PROXY_HOPS` | Trusts that many forwarding hops nearest the server, whatever their address. |
+| Variable               | Meaning                                                                                                                                 |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `TRUSTED_PROXIES`      | Comma-separated addresses and CIDR networks (`10.0.0.0/8`). A network of `/0` is refused, because it would believe every sender.        |
+| `TRUSTED_PROXY_HOPS`   | Trusts that many forwarding hops nearest the server, whatever their address.                                                            |
 | `TRUSTED_PROXY_HEADER` | The one forwarding field the server reads: `x-forwarded-for` (the default) or `forwarded` (RFC 7239). Any other value refuses to start. |
 
 Unset, no forwarding header is believed. That is safe, but every client behind the proxy then

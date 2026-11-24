@@ -194,7 +194,7 @@ Conformance is a **blocking cross-language gate** against shared known-answer ve
 
 ### Local and Server Metadata Equivalence
 
-The plaintext of the server's encrypted metadata blob *is* this signed `SidecarV1`, the same bytes the client stores at `media/{uuid}.cbor`:
+The plaintext of the server's encrypted metadata blob _is_ this signed `SidecarV1`, the same bytes the client stores at `media/{uuid}.cbor`:
 
 - The signed manifest ([](/design/cryptography/provenance/#asset-manifest)) commits to `metadata_blob_hash` on every `create`, `replace` and `metadata-update`.
 - A client that decrypts the blob MUST find it byte-identical to its locally stored signed sidecar, and the blob's content hash MUST equal `metadata_blob_hash`.
@@ -230,17 +230,17 @@ The sidecar `uuid`, manifest `file_id`, provenance/server `asset_id` and metadat
 
 When an asset crosses a trust boundary (a share link for a non-member, a plaintext export or an external backup handed off, or a federated peer outside the owner's home server; see [](/design/share-links/), [](/design/export/) and [](/design/federation/)), these fields are stripped unless the user opts in **per export**:
 
-| Field | Default on export | Opt-in retains |
-| --- | --- | --- |
-| Camera serial number (the `serial` of `camera_id`; the model stays) | Emptied | Full value |
-| Device identifier (`device_id`, every register stamp's device, every OR-set `add_id` device) | Nil UUID; OR-set elements re-issued under it, tombstones dropped | Full value |
-| Session ID | Nil UUID | Full value |
-| Edit history (the `superseded` log of every LWW register: prior captions, ratings, capture times, flags, locations, region versions) | Emptied; only each register's current value leaves | Retained |
-| GPS coordinates (`gps` and every `gps_user` value, superseded ones included when the history is retained) | Rounded to 2 decimal places (≈1 km) | Full precision |
-| Personal contact tags (faces matched to a known person) | Stripped with `regions`, the only field that names a face | Retained |
-| Image regions and their labels (`regions`) | Stripped | Retained |
-| Original file name (`original_filename`) | Stripped | Retained |
-| Sensitive-content flag (`sensitivity_ai`) | Stripped; the recipient's client may flag it again | Retained |
+| Field                                                                                                                                | Default on export                                                | Opt-in retains |
+| ------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------- | -------------- |
+| Camera serial number (the `serial` of `camera_id`; the model stays)                                                                  | Emptied                                                          | Full value     |
+| Device identifier (`device_id`, every register stamp's device, every OR-set `add_id` device)                                         | Nil UUID; OR-set elements re-issued under it, tombstones dropped | Full value     |
+| Session ID                                                                                                                           | Nil UUID                                                         | Full value     |
+| Edit history (the `superseded` log of every LWW register: prior captions, ratings, capture times, flags, locations, region versions) | Emptied; only each register's current value leaves               | Retained       |
+| GPS coordinates (`gps` and every `gps_user` value, superseded ones included when the history is retained)                            | Rounded to 2 decimal places (≈1 km)                              | Full precision |
+| Personal contact tags (faces matched to a known person)                                                                              | Stripped with `regions`, the only field that names a face        | Retained       |
+| Image regions and their labels (`regions`)                                                                                           | Stripped                                                         | Retained       |
+| Original file name (`original_filename`)                                                                                             | Stripped                                                         | Retained       |
+| Sensitive-content flag (`sensitivity_ai`)                                                                                            | Stripped; the recipient's client may flag it again               | Retained       |
 
 - `capture_settings`, `video`, `media_subtype` and the camera model identify no one and leave unchanged.
 - Keys the exporting reader does not know (`_unknown`) are always dropped, under every opt-in: a key a newer schema added may itself be a boundary-crossing field.
@@ -295,14 +295,14 @@ This page owns the envelope, keying, versioning and merge. [](/design/organizati
 
 **Every grouping operation, manual or AI, is idempotent and order-independent** by construction:
 
-| Structure | Mechanism | Why it converges |
-| --- | --- | --- |
-| Tags (`tags_user` / `tags_ai`) | OR-set | Add/remove keyed by `add_id`; commutative, associative, idempotent |
-| Regions (`regions`) | Map of LWW registers, each holding an OR-set of labels | Merged as a semilattice: a delete is final, live writes keep the later shape and the union of labels |
-| Caption / rating / `capture_timestamp_user` / `gps_user` / `stack_membership` / `cull` / `hidden` / `sensitivity_ai` | LWW register | Total order by provenance-chain position; replay is a no-op |
-| Smart albums, unnamed people clusters, aggregated federated albums ([](/design/federation/)) | Computed views | Nothing stored; membership is a deterministic function of inputs ([](/design/organization/#system--smart-albums-views), [](/design/ai/#ai-output-containment)) |
-| People corrections (names, merges, assignments) | LWW maps in the library-settings document | People are a pure function of faces plus corrections, so devices that hold the same corrections show the same people ([](/design/people/)) |
-| Container-album membership | Single home + ordered lifecycle ops | One container per asset; a replayed move no-ops ([](/design/organization/#container-albums)); concurrency ordered by MLS commits |
+| Structure                                                                                                            | Mechanism                                              | Why it converges                                                                                                                                               |
+| -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tags (`tags_user` / `tags_ai`)                                                                                       | OR-set                                                 | Add/remove keyed by `add_id`; commutative, associative, idempotent                                                                                             |
+| Regions (`regions`)                                                                                                  | Map of LWW registers, each holding an OR-set of labels | Merged as a semilattice: a delete is final, live writes keep the later shape and the union of labels                                                           |
+| Caption / rating / `capture_timestamp_user` / `gps_user` / `stack_membership` / `cull` / `hidden` / `sensitivity_ai` | LWW register                                           | Total order by provenance-chain position; replay is a no-op                                                                                                    |
+| Smart albums, unnamed people clusters, aggregated federated albums ([](/design/federation/))                         | Computed views                                         | Nothing stored; membership is a deterministic function of inputs ([](/design/organization/#system--smart-albums-views), [](/design/ai/#ai-output-containment)) |
+| People corrections (names, merges, assignments)                                                                      | LWW maps in the library-settings document              | People are a pure function of faces plus corrections, so devices that hold the same corrections show the same people ([](/design/people/))                     |
+| Container-album membership                                                                                           | Single home + ordered lifecycle ops                    | One container per asset; a replayed move no-ops ([](/design/organization/#container-albums)); concurrency ordered by MLS commits                               |
 
 Album membership is not a CRDT: MLS commits ([](/design/cryptography/mls/)) already give a total order.
 
@@ -322,10 +322,10 @@ GPS is stored in the datum the source supplied (`gps.datum`, [](#closed-enum-val
 
 ## Failure Modes
 
-| Failure | Detected / contained by | Recovery |
-| --- | --- | --- |
-| CBOR non-determinism | [](#canonical-cbor-encoding) | Byte-identical re-encode |
-| Old client strips unknown sidecar fields | Signature covers all bytes; writes above the client's max `sidecar_schema` refused | Quarantine |
+| Failure                                  | Detected / contained by                                                            | Recovery                 |
+| ---------------------------------------- | ---------------------------------------------------------------------------------- | ------------------------ |
+| CBOR non-determinism                     | [](#canonical-cbor-encoding)                                                       | Byte-identical re-encode |
+| Old client strips unknown sidecar fields | Signature covers all bytes; writes above the client's max `sidecar_schema` refused | Quarantine               |
 
 ## Known Gaps
 

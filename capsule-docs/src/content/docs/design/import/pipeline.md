@@ -4,7 +4,7 @@ description: How Capsule scans, plans, and executes a local import on a single d
 audit: none
 ---
 
-The import pipeline runs entirely client-side in `capsule-library::import`, over the pure grouping, scope and upload-policy half in `capsule-core::import`. No server is contacted until bytes are handed to the upload protocol ([](/design/transfer/upload/)). Every import is **deterministic**, **idempotent** and resumable by *import id*. The planner is pure, so most of the pipeline is testable without I/O.
+The import pipeline runs entirely client-side in `capsule-library::import`, over the pure grouping, scope and upload-policy half in `capsule-core::import`. No server is contacted until bytes are handed to the upload protocol ([](/design/transfer/upload/)). Every import is **deterministic**, **idempotent** and resumable by _import id_. The planner is pure, so most of the pipeline is testable without I/O.
 
 ```mermaid title="Import pipeline stages"
 flowchart TB
@@ -62,7 +62,7 @@ For a storage-constrained device, streaming mode (`capsule-library::import::stre
 4. only then release the local original and delete any Move-mode source;
 5. advance.
 
-- The plan MUST have headroom for its **largest single asset**; otherwise confirmation fails with a "free *Y* to import *X*" error.
+- The plan MUST have headroom for its **largest single asset**; otherwise confirmation fails with a "free _Y_ to import _X_" error.
 - On lost connectivity or exhausted quota ([](/design/quota/#enforcement-points)) the window **pauses**, admitting no new source files, and in-flight uploads resume from the server's committed set. No original is released for an asset that did not upload.
 - Streaming is a large reconciliation under the synchronization criteria ([](/design/sync/#synchronization-criteria)), and is mutually exclusive with a staged upload policy ([](/design/transfer/upload/#upload-tiering-staged-uploads)).
 
@@ -72,12 +72,12 @@ An importer is a **source adapter** (`capsule-library::import::importers`) on th
 
 Google Takeout is implemented; iCloud Photos and Immich are planned post-v1. Camera import ([](/design/import/camera-import/)) uses the same seam. Fixed Takeout mappings:
 
-| Exporter field | Written as | Why |
-| --- | --- | --- |
-| Favourite | `rating = 5` | Capsule has no favourite; writing a `cull` pick would fabricate a review decision ([](/design/organization/#culling)). |
-| Album membership | `tags_user` entries | An import may not invent container albums ([](/design/organization/#the-default-album)); tags are searchable and rebuildable as smart albums. |
-| Exporter GPS fix | `GpsSource::Manual` | `Exif` would be false inside a signed record. |
-| Over-long description | truncated on a char boundary, with a warning | Truncation loses less than dropping. |
+| Exporter field        | Written as                                   | Why                                                                                                                                           |
+| --------------------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Favourite             | `rating = 5`                                 | Capsule has no favourite; writing a `cull` pick would fabricate a review decision ([](/design/organization/#culling)).                        |
+| Album membership      | `tags_user` entries                          | An import may not invent container albums ([](/design/organization/#the-default-album)); tags are searchable and rebuildable as smart albums. |
+| Exporter GPS fix      | `GpsSource::Manual`                          | `Exif` would be false inside a signed record.                                                                                                 |
+| Over-long description | truncated on a char boundary, with a warning | Truncation loses less than dropping.                                                                                                          |
 
 At the write site, capture time is the file's EXIF instant, else the adapter's **folded** value, else the import clock. It is never the raw exporter value, which would beat a floating EXIF time the precedence rule says should win.
 

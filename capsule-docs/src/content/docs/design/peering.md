@@ -6,9 +6,9 @@ audit: none
 
 Peering connects **one user's own devices** directly; server-to-server sharing is [](/design/federation/). It has two uses:
 
-| Use | What moves | Who ends up holding it |
-| --- | --- | --- |
-| **Sync** | A delta of what one device has and the other lacks | Both devices |
+| Use            | What moves                                          | Who ends up holding it                        |
+| -------------- | --------------------------------------------------- | --------------------------------------------- |
+| **Sync**       | A delta of what one device has and the other lacks  | Both devices                                  |
 | **Delegation** | Sealed upload bundles a device has not yet uploaded | The delegate, until the server issues custody |
 
 Peering is an **accelerator, never a replacement** for the server. It moves bytes at LAN speed and lets devices converge while the server is unreachable, but a copy on another device is **never custody**: only a server custody receipt releases a local original (invariant 7 of [](/design/versioning/#system-invariants)). Implementation: `capsule-sdk::peering`.
@@ -58,42 +58,42 @@ The peer channel is the one Capsule surface that is not an HTTP API, so it has n
 
 **Exporters.** Both are RFC 5705 exporters of 32 bytes with a 32-byte all-zero context:
 
-| Label | Use |
-| --- | --- |
-| `EXPORTER-capsule-peering-hybrid-v1` | The channel binding each hello's proof signs |
+| Label                                  | Use                                               |
+| -------------------------------------- | ------------------------------------------------- |
+| `EXPORTER-capsule-peering-hybrid-v1`   | The channel binding each hello's proof signs      |
 | `EXPORTER-capsule-peering-artifact-v1` | The per-session secret that seals a sync artifact |
 
 **Hello.** Each side sends exactly one hello, framed as a big-endian `u32` length followed by that many bytes of JSON, at most 64 KiB. The listener reads first and then writes; the dialer writes first and then reads. The whole handshake (TLS, both hellos and the hybrid check) is bounded at 15 s.
 
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `device_id` | UUID string | The sender's directory device id |
-| `peering_protocol` | `YYYY-MM-DD` | Top of the sender's window |
-| `peering_protocol_min` | `YYYY-MM-DD`, optional | Bottom of the window; absent means equal to the top |
-| `directory_version` | integer, default `0` | The directory version the sender pins |
-| `proof` | `{ "ed": bytes, "ml": bytes }` | The hybrid signature ([](/design/cryptography/primitives/#signature-scheme)): the classical half (64-byte Ed25519, or DER ECDSA-P256) and the ML-DSA-65 half |
+| Field                  | Type                           | Meaning                                                                                                                                                      |
+| ---------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `device_id`            | UUID string                    | The sender's directory device id                                                                                                                             |
+| `peering_protocol`     | `YYYY-MM-DD`                   | Top of the sender's window                                                                                                                                   |
+| `peering_protocol_min` | `YYYY-MM-DD`, optional         | Bottom of the window; absent means equal to the top                                                                                                          |
+| `directory_version`    | integer, default `0`           | The directory version the sender pins                                                                                                                        |
+| `proof`                | `{ "ed": bytes, "ml": bytes }` | The hybrid signature ([](/design/cryptography/primitives/#signature-scheme)): the classical half (64-byte Ed25519, or DER ECDSA-P256) and the ML-DSA-65 half |
 
 The proof signs `"capsule-peering-hello-v1/" ‖ role ‖ 0x00 ‖ exporter`, where `role` is the ASCII `dialer` or `listener` of the **sender**. The receiver checks, in order: the version window, that the directory chains to the User IK and does not roll back, that the peer's directory is not stale, that the hello does not name the receiver, that the device is enrolled and unrevoked, and then the signature.
 
 **Frames after the hello.** Every frame is `tag: u8 ‖ length: u32 (big-endian) ‖ payload`. The receiver checks the tag and the length against the tag's ceiling **before** it allocates or reads the payload; a wrong tag or an oversized length ends the channel.
 
-| Tag | Payload | Ceiling |
-| --- | --- | --- |
-| `1` control | One JSON message object, below | 64 KiB |
-| `2` data | Raw bytes of the ranged answer or offer page in flight | 1 MiB |
+| Tag         | Payload                                                | Ceiling |
+| ----------- | ------------------------------------------------------ | ------- |
+| `1` control | One JSON message object, below                         | 64 KiB  |
+| `2` data    | Raw bytes of the ranged answer or offer page in flight | 1 MiB   |
 
 **Control messages.** Each is a JSON object whose `type` member names it. The exchange is strictly request–response: the pulling side sends one request and reads its whole answer before it sends the next.
 
-| `type` | Direction | Members | Answer |
-| --- | --- | --- | --- |
-| `offer` | puller → server, first | `pages`: count of offer-page data frames that follow, at most 256; `0` offers nothing | `listing` |
-| `listing` | server → puller | `artifacts`: at most 256 of `{ address, len }` (SHA-256 lowercase hex, byte length ≤ 4 GiB) | — |
-| `range` | puller → server | `address`, `start`, `max_len` (optional) | `range_reply` then data frames, or `refused` |
-| `range_reply` | server → puller | `len`: bytes that follow, at most 16 MiB | — |
-| `ack` | delegate → origin | `ack`: `{ asset_id, hand_off, delegate_device }` | `acked` or `refused` |
-| `acked` | origin → delegate | none | — |
-| `refused` | server → puller | `kind` (stable name), `message` (English detail) | — |
-| `done` | puller → server | none | channel closes |
+| `type`        | Direction              | Members                                                                                     | Answer                                       |
+| ------------- | ---------------------- | ------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| `offer`       | puller → server, first | `pages`: count of offer-page data frames that follow, at most 256; `0` offers nothing       | `listing`                                    |
+| `listing`     | server → puller        | `artifacts`: at most 256 of `{ address, len }` (SHA-256 lowercase hex, byte length ≤ 4 GiB) | —                                            |
+| `range`       | puller → server        | `address`, `start`, `max_len` (optional)                                                    | `range_reply` then data frames, or `refused` |
+| `range_reply` | server → puller        | `len`: bytes that follow, at most 16 MiB                                                    | —                                            |
+| `ack`         | delegate → origin      | `ack`: `{ asset_id, hand_off, delegate_device }`                                            | `acked` or `refused`                         |
+| `acked`       | origin → delegate      | none                                                                                        | —                                            |
+| `refused`     | server → puller        | `kind` (stable name), `message` (English detail)                                            | —                                            |
+| `done`        | puller → server        | none                                                                                        | channel closes                               |
 
 **Offer page.** A data frame holding a 12-byte header (`cursor: u64`, `count: u32`, both big-endian) and then 32-byte address slots, the first `count` of them real and the rest zero padding up to a power-of-two bucket of at least 64 slots. A page holds at most 4,096 addresses.
 
@@ -172,19 +172,19 @@ A bundle is **one file** holding one asset's hand-off, so it can travel by any c
 
 ### Threat Analysis
 
-| Threat | What it can do | What stops it | Residual |
-| --- | --- | --- | --- |
-| **Malicious courier** (a compromised device of the account) | Withhold, delay or lose the bundle | The start deadline and liveness window forfeit it on the server's clock; the origin re-queues and never releases without custody it fetched itself | Delay up to the start window plus one liveness window |
-| | Tamper with bytes or the container header | Member hashes, the manifest signature, header–manifest agreement and the registered bundle address fail at the courier's own check, at the server's start and finalize, and against the origin's own hashes | None |
-| | Read the assets | Nothing in delegation: a device of the account already holds the account's keys | Containment is device revocation and epoch rotation ([](/design/cryptography/keys/)), not delegation |
-| | Forge a registration or claim another courier's hand-off | Registration needs the origin's device signature, a start the registered courier's | None |
-| **Replayed bundle** | Redelivered to the same courier | The inbox is idempotent by bundle address | None |
-| | Delivered to a different device | The header and the registration name the courier; another device's start is refused | None |
-| | Started after forfeiture, withdrawal or expiry | `handoff_closed` | None |
-| | Uploaded after the origin uploaded it itself | Deduplication by address: `duplicate_blob`, no second charge, and the courier drops its copy on custody | None |
-| | Uploaded after the asset was deleted | The origin holds the delete until the create is indexed; a create behind a later chain head is `stale_revival`, which the courier quarantines | None |
-| **Revoked courier** | Start or continue a hand-off | The start checks the directory; a started hand-off is forfeited at the courier's next request, and the origin re-queues | Members it already finalized stand: they are the origin's signed bytes |
-| **Revoked origin** | Have its bundle uploaded | Finalization verifies the signer against the directory and refuses a revoked one | The courier quarantines its copy, which may be the last one ([](#delegation)) |
+| Threat                                                      | What it can do                                           | What stops it                                                                                                                                                                                               | Residual                                                                                             |
+| ----------------------------------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| **Malicious courier** (a compromised device of the account) | Withhold, delay or lose the bundle                       | The start deadline and liveness window forfeit it on the server's clock; the origin re-queues and never releases without custody it fetched itself                                                          | Delay up to the start window plus one liveness window                                                |
+|                                                             | Tamper with bytes or the container header                | Member hashes, the manifest signature, header–manifest agreement and the registered bundle address fail at the courier's own check, at the server's start and finalize, and against the origin's own hashes | None                                                                                                 |
+|                                                             | Read the assets                                          | Nothing in delegation: a device of the account already holds the account's keys                                                                                                                             | Containment is device revocation and epoch rotation ([](/design/cryptography/keys/)), not delegation |
+|                                                             | Forge a registration or claim another courier's hand-off | Registration needs the origin's device signature, a start the registered courier's                                                                                                                          | None                                                                                                 |
+| **Replayed bundle**                                         | Redelivered to the same courier                          | The inbox is idempotent by bundle address                                                                                                                                                                   | None                                                                                                 |
+|                                                             | Delivered to a different device                          | The header and the registration name the courier; another device's start is refused                                                                                                                         | None                                                                                                 |
+|                                                             | Started after forfeiture, withdrawal or expiry           | `handoff_closed`                                                                                                                                                                                            | None                                                                                                 |
+|                                                             | Uploaded after the origin uploaded it itself             | Deduplication by address: `duplicate_blob`, no second charge, and the courier drops its copy on custody                                                                                                     | None                                                                                                 |
+|                                                             | Uploaded after the asset was deleted                     | The origin holds the delete until the create is indexed; a create behind a later chain head is `stale_revival`, which the courier quarantines                                                               | None                                                                                                 |
+| **Revoked courier**                                         | Start or continue a hand-off                             | The start checks the directory; a started hand-off is forfeited at the courier's next request, and the origin re-queues                                                                                     | Members it already finalized stand: they are the origin's signed bytes                               |
+| **Revoked origin**                                          | Have its bundle uploaded                                 | Finalization verifies the signer against the directory and refuses a revoked one                                                                                                                            | The courier quarantines its copy, which may be the last one ([](#delegation))                        |
 
 Edge cases:
 
@@ -198,10 +198,10 @@ Edge cases:
 - **Delegate on an older protocol.** It must speak the bundle's `protocol_version`; otherwise it refuses the hand-off and the origin keeps the upload.
 - **Delegate compromised.** Through delegation it learns what the server learns (ciphertext, sizes, timing) plus the origin's hand-off schedule, and it cannot forge assets, since it cannot sign as the origin. As a device of the account it can read whatever the account can, with or without delegation ([](#threat-analysis)).
 - **Held hand-off permanently refused.** The delegate never deletes a copy the server has not taken custody of. A held hand-off that can never succeed is **quarantined**: the copy is kept byte for byte, no later run retries it, the delegate reports it once with a stable reason, and only the user deletes it. A revoked origin is often a lost device, so the delegate's copy may be the only one left. Separately, the origin keeps its own original pinned and re-queues the upload once the server reports the hand-off forfeited, unless the asset is in the trash.
-  - *Closed:* `error.upload.handoff_closed` is neither. The courier stops uploading and keeps the copy only until custody of every member exists, whoever uploads it ([](#hand-off-registration)).
-  - *Never succeeds:* the origin is revoked or gone from the directory after acceptance; the held bytes no longer verify; or the server refuses with `error.upload.envelope_rejected`, `envelope_mismatch` or `stale_revival` (a conflicting provenance), or at creation with `timestamp_out_of_range`, `album_access_denied` or `device_not_authorized`, the same conditions met one step earlier. The delegate cannot change a request the origin signed, so retrying cannot help.
+  - _Closed:_ `error.upload.handoff_closed` is neither. The courier stops uploading and keeps the copy only until custody of every member exists, whoever uploads it ([](#hand-off-registration)).
+  - _Never succeeds:_ the origin is revoked or gone from the directory after acceptance; the held bytes no longer verify; or the server refuses with `error.upload.envelope_rejected`, `envelope_mismatch` or `stale_revival` (a conflicting provenance), or at creation with `timestamp_out_of_range`, `album_access_denied` or `device_not_authorized`, the same conditions met one step earlier. The delegate cannot change a request the origin signed, so retrying cannot help.
   - `envelope_rejected` covers a manifest under a stale album epoch; a signer that is revoked, of another account or not verifying; a role conflict; a timestamp out of range; the album closed or the uploader's write access withdrawn since creation; and a signing device no longer authorized.
-  - *Retried next run:* any other failure (network, outage, quota, rate limit, this device's own directory state, a newer format) keeps the copy.
+  - _Retried next run:_ any other failure (network, outage, quota, rate limit, this device's own directory state, a newer format) keeps the copy.
 
 The delegate follows the same battery, metering and scheduling policy as its own uploads ([](/design/sync/#auto-syncing)). The origin shows each delegated asset as "handed to {device}, awaiting server" until the receipt arrives, and "hand-off overdue" once the server reports it forfeited.
 
