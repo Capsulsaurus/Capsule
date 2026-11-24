@@ -207,7 +207,7 @@ fn render(answer: Answer) -> ReannounceResult {
         outcome,
         sync_seq: None,
         missing: Vec::new(),
-        code: None.into(),
+        code: None,
     };
     match answer {
         Answer::Restored { asset, sync_seq } => ReannounceResult {
