@@ -269,7 +269,7 @@ impl ReadFailed {
     /// however deep a reader wrapped it, and a transport failure otherwise.
     fn of(error: &(dyn std::error::Error + 'static)) -> Self {
         let stalled = std::iter::successors(Some(error), |&error| error.source())
-            .any(|error| error.is::<kynos::http::body::BodyStalled>());
+            .any(<dyn std::error::Error + 'static>::is::<kynos::http::body::BodyStalled>);
         if stalled {
             Self::Stalled
         } else {
