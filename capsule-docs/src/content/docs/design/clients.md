@@ -190,7 +190,7 @@ The server never holds plaintext, so decoding, the client's largest attack surfa
 Per-platform pins; library pins carry their rationale beside the pin in each manifest.
 
 - **Apple:** swift-testing is the sole unit/smoke framework, with XCTest only in XCUITest bundles. Profiling uses Instruments and field metrics MetricKit, with no third-party on-device APM.
-- **Kotlin/Android:** JUnit 5.
+- **Kotlin/Android:** JUnit Jupiter 6 on the JUnit Platform for the core bindings' JVM tests; JUnit 4 through `kotlin-test-junit` for the app's local unit tests, and AndroidX Test with the Compose JUnit 4 rules on device.
 - **Web:** bun's built-in runner.
 
 ## Validation
