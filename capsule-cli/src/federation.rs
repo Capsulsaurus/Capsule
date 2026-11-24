@@ -347,15 +347,12 @@ async fn read_pulled_assets(
         let params = rest::ListPulledAssetsParams {
             after: after.clone(),
             limit: Some(PULLED_ASSETS_PAGE),
-            ..rest::ListPulledAssetsParams::default()
+            ..rest::ListPulledAssetsParams::from(rest::ListPulledAssetsParamsRequired {
+                x_capsule_protocol: PROTOCOL_VERSION.into(),
+            })
         };
         let page = client
-            .list_pulled_assets(
-                peer.to_owned(),
-                album_id.to_owned(),
-                PROTOCOL_VERSION,
-                params,
-            )
+            .list_pulled_assets(peer.to_owned(), album_id.to_owned(), params)
             .await
             .map_err(|error| refusal(error, pulled_assets_code))?
             .into_inner();
@@ -365,7 +362,7 @@ async fn read_pulled_assets(
             .assets
             .extend(page.assets.into_iter().map(PulledAssetEntry::from));
         tracing::debug!(after = ?after, next = ?page.next_after, assets = pulled.assets.len(), "read a page of a pulled album");
-        match page.next_after {
+        match page.next_after.into_option() {
             None => return Ok(pulled),
             // Asset ids ascend, so a page that does not move past the last would repeat forever.
             Some(next) if after.as_ref().is_some_and(|after| next <= *after) => {
@@ -391,8 +388,9 @@ async fn read_pulled_metadata(
             peer.to_owned(),
             album_id.to_owned(),
             asset_id.to_owned(),
-            PROTOCOL_VERSION,
-            None,
+            rest::GetPulledAssetMetadataParamsRequired {
+                x_capsule_protocol: PROTOCOL_VERSION.into(),
+            },
         )
         .await
         .map_err(|error| refusal(error, pulled_metadata_code))?
@@ -418,7 +416,12 @@ async fn post_subscription(
         token: token.to_owned(),
     };
     let response = client(api_root, session)?
-        .subscribe_album(PROTOCOL_VERSION, None, &body)
+        .subscribe_album(
+            rest::SubscribeAlbumParamsRequired {
+                x_capsule_protocol: PROTOCOL_VERSION.into(),
+            },
+            body,
+        )
         .await
         .map_err(|error| refusal(error, subscribe_code))?;
     Ok(match response.into_inner() {
@@ -439,7 +442,9 @@ async fn read_subscriptions(
     session: Session,
 ) -> Result<Vec<SubscriptionEntry>, FederationCommandError> {
     let response = client(api_root, session)?
-        .list_subscriptions(PROTOCOL_VERSION, None)
+        .list_subscriptions(rest::ListSubscriptionsParamsRequired {
+            x_capsule_protocol: PROTOCOL_VERSION.into(),
+        })
         .await
         .map_err(|error| refusal(error, list_code))?;
     Ok(response
@@ -458,7 +463,13 @@ async fn delete_subscription(
     album_id: &str,
 ) -> Result<(), FederationCommandError> {
     client(api_root, session)?
-        .unsubscribe_album(peer.to_owned(), album_id.to_owned(), PROTOCOL_VERSION, None)
+        .unsubscribe_album(
+            peer.to_owned(),
+            album_id.to_owned(),
+            rest::UnsubscribeAlbumParamsRequired {
+                x_capsule_protocol: PROTOCOL_VERSION.into(),
+            },
+        )
         .await
         .map_err(|error| refusal(error, unsubscribe_code))?;
     Ok(())

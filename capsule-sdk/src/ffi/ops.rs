@@ -241,7 +241,7 @@ fn op_request(record: &ProvenanceRecord, canonical: &[u8]) -> crate::rest::types
     crate::rest::types::OpRequest {
         manifest_envelope: op_envelope(&record.manifest.core),
         manifest_cbor: base64::engine::general_purpose::STANDARD.encode(canonical),
-        metadata_blob: None,
+        metadata_blob: crate::rest::Nullable::Absent,
     }
 }
 

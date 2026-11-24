@@ -14,9 +14,17 @@ use capsule_core::crypto::upgrade::{SignedUpgradeIntent, UpgradeIntent};
 use capsule_e2e::push::push_asset;
 use capsule_e2e::{Device, PROTOCOL_VERSION, Server, entry_for};
 use capsule_sdk::push::{bundle_blobs, create_request};
+use capsule_sdk::rest::{AlbumUpgradePhaseParamsRequired, Nullable};
 use capsule_sdk::upgrade::UpgradeClient;
 use capsule_sdk::upload::UploadError;
 use uuid::Uuid;
+
+/// The upgrade-phase read's required parameters: this build's protocol date.
+fn phase_params() -> AlbumUpgradePhaseParamsRequired {
+    AlbumUpgradePhaseParamsRequired {
+        x_capsule_protocol: PROTOCOL_VERSION.into(),
+    }
+}
 
 #[tokio::test]
 async fn e2e_case_8_a_proposed_upgrade_quiesces_the_album_until_it_is_aborted() {
@@ -58,15 +66,15 @@ async fn e2e_case_8_a_proposed_upgrade_quiesces_the_album_until_it_is_aborted() 
     assert!(phase.expires_at.is_some());
 
     let read = generated
-        .album_upgrade_phase(album.to_string(), PROTOCOL_VERSION, None)
+        .album_upgrade_phase(album.to_string(), phase_params())
         .await
         .expect("the phase reads")
         .into_inner();
+    assert_eq!(read.intent_id, Nullable::Value(intent_id.to_string()));
     assert_eq!(
-        read.intent_id.as_deref(),
-        Some(intent_id.to_string().as_str())
+        read.to_protocol_version,
+        Nullable::Value("2030-01-01".to_owned())
     );
-    assert_eq!(read.to_protocol_version.as_deref(), Some("2030-01-01"));
 
     // A write that does not name the ceremony is refused with its code and the live intent.
     let asset = a.import_jpeg("during-quiesce.jpg");
@@ -92,20 +100,21 @@ async fn e2e_case_8_a_proposed_upgrade_quiesces_the_album_until_it_is_aborted() 
     let aborted = generated
         .abort_album_upgrade(
             album.to_string(),
-            intent_id.to_string(),
-            PROTOCOL_VERSION,
-            None,
+            capsule_sdk::rest::AbortAlbumUpgradeParamsRequired {
+                intent_id: intent_id.to_string(),
+                x_capsule_protocol: PROTOCOL_VERSION.into(),
+            },
         )
         .await
         .expect("the proposer aborts")
         .into_inner();
-    assert_eq!(aborted.intent_id, None);
+    assert!(!aborted.intent_id.is_value());
     let cleared = generated
-        .album_upgrade_phase(album.to_string(), PROTOCOL_VERSION, None)
+        .album_upgrade_phase(album.to_string(), phase_params())
         .await
         .expect("the phase reads")
         .into_inner();
-    assert_eq!(cleared.intent_id, None);
+    assert!(!cleared.intent_id.is_value());
 
     push_asset(&a, &server, &asset).await;
     let feed = a.feed(&server).await;

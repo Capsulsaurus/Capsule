@@ -63,18 +63,19 @@ async fn adopt_in_place(server: &Server) -> AdoptedInPlace {
     let opaque_id = hex(&link.opaque_id);
     let provisioned = generated
         .provision_link(
-            PROTOCOL_VERSION,
-            None,
-            &ProvisionLinkRequest {
+            rest::ProvisionLinkParamsRequired {
+                x_capsule_protocol: PROTOCOL_VERSION.into(),
+            },
+            ProvisionLinkRequest {
                 opaque_id: opaque_id.clone(),
                 drop_pubkey: BASE64.encode(&link.drop_pubkey),
                 crypto_suite_id: CRYPTO_SUITE_ID,
-                expires_at: None,
-                max_total_bytes: None,
-                max_file_count: None,
-                max_file_size: None,
+                expires_at: rest::Nullable::Absent,
+                max_total_bytes: rest::Nullable::Absent,
+                max_file_count: rest::Nullable::Absent,
+                max_file_size: rest::Nullable::Absent,
                 single_use: Some(false),
-                passphrase_verifier: None,
+                passphrase_verifier: rest::Nullable::Absent,
             },
         )
         .await
@@ -90,13 +91,13 @@ async fn adopt_in_place(server: &Server) -> AdoptedInPlace {
     let created = guest
         .create_drop(
             &opaque_id,
-            &CreateDropRequest {
+            CreateDropRequest {
                 content_type: "image/jpeg".to_owned(),
                 size: sealed.ciphertext.len() as u64,
                 ciphertext_hash: ciphertext_hash.clone(),
                 kem_ct: BASE64.encode(&sealed.descriptor.kem_ct),
-                passphrase_proof: None,
-                suggested_filename: Some("drop.jpg".to_owned()),
+                passphrase_proof: rest::Nullable::Absent,
+                suggested_filename: rest::Nullable::Value("drop.jpg".to_owned()),
             },
         )
         .await
@@ -110,7 +111,7 @@ async fn adopt_in_place(server: &Server) -> AdoptedInPlace {
                 x_capsule_offset: Some("0".to_owned()),
                 x_capsule_checksum: Some(hash_bytes(&sealed.ciphertext).to_hex()),
             },
-            &sealed.ciphertext.clone().into(),
+            sealed.ciphertext.clone(),
         )
         .await
         .expect("the exempt chunk operation admits the bytes");
@@ -121,7 +122,9 @@ async fn adopt_in_place(server: &Server) -> AdoptedInPlace {
     let inbox = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
             let inbox = generated
-                .list_inbox(PROTOCOL_VERSION, None)
+                .list_inbox(rest::ListInboxParamsRequired {
+                    x_capsule_protocol: PROTOCOL_VERSION.into(),
+                })
                 .await
                 .expect("the inbox answers")
                 .into_inner();
@@ -168,9 +171,10 @@ async fn adopt_in_place(server: &Server) -> AdoptedInPlace {
     let promoted = generated
         .adopt_drop(
             &pending.drop_id,
-            PROTOCOL_VERSION,
-            None,
-            &AdoptRequest {
+            rest::AdoptDropParamsRequired {
+                x_capsule_protocol: PROTOCOL_VERSION.into(),
+            },
+            AdoptRequest {
                 album_id: album.to_string(),
                 asset_id: asset.to_string(),
                 size: sealed.ciphertext.len() as u64,
@@ -188,7 +192,9 @@ async fn adopt_in_place(server: &Server) -> AdoptedInPlace {
     assert_eq!(promoted.asset_id, asset.to_string());
     assert!(
         generated
-            .list_inbox(PROTOCOL_VERSION, None)
+            .list_inbox(rest::ListInboxParamsRequired {
+                x_capsule_protocol: PROTOCOL_VERSION.into(),
+            })
             .await
             .expect("the inbox answers")
             .into_inner()

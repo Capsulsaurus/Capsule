@@ -280,7 +280,9 @@ mod route_classes {
         );
 
         client
-            .get_quota(PROTOCOL_VERSION, None)
+            .get_quota(crate::rest::GetQuotaParamsRequired {
+                x_capsule_protocol: PROTOCOL_VERSION.into(),
+            })
             .await
             .expect("the read is served");
 
@@ -298,7 +300,9 @@ mod route_classes {
         let client =
             AuthenticatedClient::new(&server.base_url(), session_for(&server.base_url())).unwrap();
         let error = client
-            .get_quota(PROTOCOL_VERSION, None)
+            .get_quota(crate::rest::GetQuotaParamsRequired {
+                x_capsule_protocol: PROTOCOL_VERSION.into(),
+            })
             .await
             .expect_err("refused");
         let refusal = upgrade_required_of(&error).expect("a 426 is UpgradeRequired");

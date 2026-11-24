@@ -1110,7 +1110,7 @@ fn a_delete_after_an_edit_or_a_restore_is_held_with_every_record_since_the_hand_
     let first =
         serde_json::from_slice::<capsule_sdk::rest::types::OpRequest>(&held[0]).expect("an op");
     assert!(
-        first.metadata_blob.is_some(),
+        first.metadata_blob.is_value(),
         "the edit carries the blob it binds"
     );
 
@@ -1128,7 +1128,7 @@ fn a_delete_after_an_edit_or_a_restore_is_held_with_every_record_since_the_hand_
     let records = ws.asset(&asset).expect("held").chain.records();
     for (op, prior) in held.iter().zip(records) {
         assert_eq!(
-            envelope_of(op).prior_provenance_hash,
+            envelope_of(op).prior_provenance_hash.into_option(),
             Some(prior.record_hash().to_hex()),
             "each op chains onto the record before it, the first onto the sealed head"
         );
@@ -1216,7 +1216,7 @@ fn a_delete_purged_before_custody_is_held_from_the_tombstone() {
     let kept = ws.purged_chain(&asset).expect("the tombstone");
     for (op, prior) in held.iter().zip(kept) {
         assert_eq!(
-            envelope_of(op).prior_provenance_hash,
+            envelope_of(op).prior_provenance_hash.into_option(),
             Some(prior.record_hash().to_hex()),
             "each op chains onto the record before it, the first onto the sealed head"
         );

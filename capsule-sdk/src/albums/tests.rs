@@ -39,6 +39,7 @@ use capsule_i18n::error_codes;
 use uuid::Uuid;
 
 use super::*;
+use crate::rest::Nullable;
 use crate::testmock::{MockRequest, MockResponse, MockServer};
 
 /// A stable album id to provision.
@@ -621,27 +622,27 @@ fn restore_op() -> crate::rest::types::OpRequest {
         manifest_envelope: crate::rest::types::ManifestEnvelope {
             crypto_suite_id: 1,
             protocol_version: capsule_core::crypto::primitives::PROTOCOL_VERSION.to_owned(),
-            album_id: Some(album().hyphenated().to_string()),
+            album_id: Nullable::Value(album().hyphenated().to_string()),
             file_id: "0198f3c2-9c4a-7b3d-8f21-4d7c9a1b2e99".to_owned(),
             amk_version: 1,
             ciphertext_hash: "00".repeat(32),
             plaintext_size: 3,
             chunk_size: 65536,
             key_mode: "derived".to_owned(),
-            metadata_blob_hash: None,
-            original_blob_hash: None,
-            derivative_role: None,
-            derivative_format: None,
+            metadata_blob_hash: Nullable::Absent,
+            original_blob_hash: Nullable::Absent,
+            derivative_role: Nullable::Absent,
+            derivative_format: Nullable::Absent,
             created_by_user: "user".to_owned(),
             created_by_device: "0198f3c2-9c4a-7b3d-8f21-4d7c9a1b2e00".to_owned(),
             client_version: "test".to_owned(),
             timestamp: "2026-10-29T00:00:00Z".to_owned(),
             action: "trash-restore".to_owned(),
-            prior_provenance_hash: Some("11".repeat(32)),
-            retention_until: None,
+            prior_provenance_hash: Nullable::Value("11".repeat(32)),
+            retention_until: Nullable::Absent,
         },
         manifest_cbor: "AAEC".to_owned(),
-        metadata_blob: None,
+        metadata_blob: Nullable::Absent,
     }
 }
 
@@ -847,7 +848,7 @@ async fn a_401_under_a_session_is_refreshed_and_the_op_replayed_once() {
 async fn an_op_naming_no_album_is_refused_before_the_wire() {
     let (server, seen) = recording(|_| applied(false)).await;
     let mut op = restore_op();
-    op.manifest_envelope.album_id = None;
+    op.manifest_envelope.album_id = Nullable::Absent;
     let error = ops_client_for(&server)
         .apply_op(&op)
         .await

@@ -804,6 +804,7 @@ dependencies = [
  "capsule-i18n",
  "capsule-library",
  "ed25519-dalek",
+ "futures-core",
  "h3",
  "h3-quinn",
  "hex",
@@ -830,6 +831,7 @@ dependencies = [
  "tokio-rustls",
  "tracing",
  "uniffi",
+ "url",
  "uuid",
  "webpki-root-certs",
  "webpki-roots",
@@ -851,6 +853,7 @@ dependencies = [
  "capsule-wasm",
  "clap",
  "color-eyre",
+ "futures-core",
  "http",
  "http-body",
  "http-body-util",
@@ -874,6 +877,7 @@ dependencies = [
  "totp-rs",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
  "webpki-root-certs",
 ]
@@ -6392,9 +6396,9 @@ dependencies = [
 
 [[package]]
 name = "spargen"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "568c527c062bcbf7bafc33ba952b66932ab186e82232f5b237cca609b841ab2a"
+checksum = "27652f6a64ef6230e4cf7aab286a07f0d60fd47f911b68c5502fbc28ffbcc7d3"
 dependencies = [
  "camino",
  "cfg-expr",

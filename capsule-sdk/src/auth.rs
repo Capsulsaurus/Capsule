@@ -66,6 +66,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 use tracing::instrument;
 
+use crate::client::absent_unless;
 use crate::net::negotiation::{self, UpgradeRequired};
 use crate::rest;
 
@@ -827,7 +828,7 @@ impl AuthClient {
             .into_inner();
         let options = SignInOptions {
             server_id: info.server_id,
-            oidc: info.auth.oidc.is_some(),
+            oidc: info.auth.oidc.is_value(),
             password_disabled: info.auth.password_disabled.unwrap_or(false),
         };
         tracing::debug!(
@@ -860,9 +861,10 @@ impl AuthClient {
         let body = self
             .rest
             .begin_oidc_login(
-                PROTOCOL_VERSION.to_owned(),
-                None,
-                &rest::types::OidcAuthorizeRequest {
+                rest::BeginOidcLoginParamsRequired {
+                    x_capsule_protocol: PROTOCOL_VERSION.into(),
+                },
+                rest::types::OidcAuthorizeRequest {
                     redirect_uri: redirect_uri.to_owned(),
                     binding_challenge: oidc_binding_challenge(&binding),
                 },
@@ -933,14 +935,15 @@ impl AuthClient {
         let answer = self
             .rest
             .complete_oidc_login(
-                PROTOCOL_VERSION.to_owned(),
-                None,
-                &rest::types::OidcCallbackRequest {
+                rest::CompleteOidcLoginParamsRequired {
+                    x_capsule_protocol: PROTOCOL_VERSION.into(),
+                },
+                rest::types::OidcCallbackRequest {
                     state: pending.state.expose_secret().to_owned(),
                     code: code.to_owned(),
                     binding_verifier: pending.binding.expose_secret().to_owned(),
-                    cohort_hash: self.cohort().map(str::to_owned),
-                    device_id: None,
+                    cohort_hash: absent_unless(self.cohort().map(str::to_owned)),
+                    device_id: rest::Nullable::Absent,
                 },
             )
             .await
@@ -1002,9 +1005,10 @@ impl AuthClient {
         let body = self
             .rest
             .begin_oidc_device_login(
-                PROTOCOL_VERSION.to_owned(),
-                None,
-                &rest::types::OidcDeviceRequest {
+                rest::BeginOidcDeviceLoginParamsRequired {
+                    x_capsule_protocol: PROTOCOL_VERSION.into(),
+                },
+                rest::types::OidcDeviceRequest {
                     binding_challenge: oidc_binding_challenge(&binding),
                 },
             )
@@ -1033,7 +1037,7 @@ impl AuthClient {
             binding,
             user_code: body.user_code,
             verification_uri: body.verification_uri,
-            verification_uri_complete: body.verification_uri_complete,
+            verification_uri_complete: body.verification_uri_complete.into_option(),
             interval_secs: body.interval,
             expires_by: body.expires_by,
         })
@@ -1060,13 +1064,14 @@ impl AuthClient {
         let answer = self
             .rest
             .poll_oidc_device_login(
-                PROTOCOL_VERSION.to_owned(),
-                None,
-                &rest::types::OidcDevicePollRequest {
+                rest::PollOidcDeviceLoginParamsRequired {
+                    x_capsule_protocol: PROTOCOL_VERSION.into(),
+                },
+                rest::types::OidcDevicePollRequest {
                     handle: pending.handle.expose_secret().to_owned(),
                     binding_verifier: pending.binding.expose_secret().to_owned(),
-                    cohort_hash: self.cohort().map(str::to_owned),
-                    device_id: None,
+                    cohort_hash: absent_unless(self.cohort().map(str::to_owned)),
+                    device_id: rest::Nullable::Absent,
                 },
             )
             .await;

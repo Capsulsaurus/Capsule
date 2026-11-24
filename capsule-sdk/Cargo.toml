@@ -94,6 +94,11 @@ http-body-util = { workspace = true }
 # so the per-request stall timer cuts a stalled upload and never a slow one. Already in the
 # lock file through reqwest and hyper.
 http-body = { workspace = true }
+# spargen 0.8's generated runtime names both, and its runtime-dependency contract refuses to
+# generate without them: `futures-core` for the `Stream` its body streams implement, `url` for
+# the base URL it joins operation paths onto. Already in the lock file through reqwest.
+futures-core = "0.3.34"
+url = "2.5.9"
 # Packet marking (`net::mark_lower_effort`): the Lower Effort DSCP on a bulk-transfer socket the
 # SDK holds, which neither std nor tokio can set. Already in the lock file through tokio.
 socket2 = { workspace = true }
@@ -144,14 +149,14 @@ uniffi = { version = "0.32", features = ["tokio"], optional = true }
 
 [build-dependencies]
 # spargen (in-house) generates the typed REST client from the committed OpenAPI 3.2 schema
-# at build time; see `build.rs`. `default-features = false` drops its `cli`
-# (clap) and the `uuid`/`time` `format`-mapping features — the current schema emits neither,
-# and disabling them keeps the SDK's build graph minimal. spargen is a *build*-dependency
-# only: its embedded runtime is emitted into the generated module, so spargen never appears
-# in the SDK's runtime dependency tree. The generated runtime needs `secrecy` beside the
-# `bytes`/`reqwest`/`serde`/`serde_json` floors; bump those floors together with spargen.
-# Everything that parses is generated; only orchestration is hand-written. Not Progenitor.
-spargen = { version = "0.7.0", default-features = false }
+# at build time; see `build.rs`, which also picks `jiff` as its date-time mapping.
+# `default-features = false` keeps its `cli` (clap) and `remote-fetch` (a reqwest client of its
+# own) out of the build graph. spargen is a *build*-dependency only: its embedded runtime is
+# emitted into the generated module, so spargen never appears in the SDK's runtime dependency
+# tree. The generated runtime needs `secrecy` beside the `bytes`/`reqwest`/`serde`/`serde_json`
+# floors; bump those floors together with spargen. Everything that parses is generated; only
+# orchestration is hand-written. Not Progenitor.
+spargen = { version = "0.8.0", default-features = false }
 
 [dev-dependencies]
 # `test-util` gives `tests/upload_fault_schedules.rs` a paused clock, so the retry engine's real

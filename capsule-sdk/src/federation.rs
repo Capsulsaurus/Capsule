@@ -52,12 +52,6 @@ use crate::fetch::{BlobSource, RangeOutcome};
 use crate::sync::{SyncConsumer, SyncCursor, SyncError, SyncPage};
 use crate::{net, rest};
 
-/// The scheme key the generated client attaches a bearer under.
-///
-/// The same one a session token rides: the server registers one `bearer` component for both
-/// token types, which is what keeps a capability presentable through the generated client at all.
-const BEARER_SCHEME: &str = "bearer";
-
 /// The domain separator a request signature's claim opens with (design/federation.md).
 pub const REQUEST_CONTEXT: &str = "capsule-federation-request-v1";
 
@@ -399,13 +393,12 @@ impl FederationPull {
         let signature = request_signature(self.signer.as_ref(), "POST", REFRESH_PATH, &token)
             .map_err(FederationError::Transport)?;
         let refreshed = client
-            .refresh_capability(
-                capsule_core::crypto::primitives::PROTOCOL_VERSION,
-                rest::RefreshCapabilityParams {
-                    x_capsule_request_signature: Some(signature),
-                    ..rest::RefreshCapabilityParams::default()
-                },
-            )
+            .refresh_capability(rest::RefreshCapabilityParams {
+                x_capsule_request_signature: Some(signature),
+                ..rest::RefreshCapabilityParams::from(rest::RefreshCapabilityParamsRequired {
+                    x_capsule_protocol: capsule_core::crypto::primitives::PROTOCOL_VERSION.into(),
+                })
+            })
             .await
             .map_err(|error| match crate::client::upgrade_required_of(&error) {
                 // The gate's `426`, or the typed transport's local one (issue #674).
@@ -494,10 +487,7 @@ fn client_for(base_url: &str, token: &str) -> Result<rest::Client, FederationErr
     let http = net::http_client().map_err(|error| FederationError::Transport(error.to_string()))?;
     Ok(crate::client::negotiated_client(http, base_url)
         .map_err(FederationError::Transport)?
-        .with_credential(
-            BEARER_SCHEME,
-            rest::Credential::Bearer(token.to_owned().into()),
-        ))
+        .with_bearer(token.to_owned().into()))
 }
 
 /// A refusal from the home server, carrying the stable code when the answer had one.
@@ -588,17 +578,11 @@ impl BlobSource for CapabilityBlobSource {
         let params = rest::GetBlobParams {
             range: Some(range),
             x_capsule_request_signature: Some(signature),
-            ..rest::GetBlobParams::default()
+            ..rest::GetBlobParams::from(rest::GetBlobParamsRequired {
+                x_capsule_protocol: capsule_core::crypto::primitives::PROTOCOL_VERSION.into(),
+            })
         };
-        match self
-            .client
-            .get_blob(
-                hash.to_owned(),
-                capsule_core::crypto::primitives::PROTOCOL_VERSION,
-                params,
-            )
-            .await
-        {
+        match self.client.get_blob(hash.to_owned(), params).await {
             Ok(response) => {
                 let bytes = match response.into_inner() {
                     rest::GetBlobResponse::Status200(bytes)

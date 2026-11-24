@@ -80,11 +80,16 @@ fn main() {
         .into_os_string()
         .into_string()
         .expect("UTF-8 OUT_DIR path");
-    // `uuid` and `time` off: the three operations carry neither format, and leaving them on would
-    // add two crates to the server's runtime tree for nothing.
+    // `uuid` off: the three operations carry no `format: uuid`, and leaving it on would add a
+    // crate requirement for nothing. Date-times, should one appear, map to `jiff`, the
+    // workspace's one datetime crate and already in the server's tree; the generator's default
+    // is `time`. String enums stay closed, as they were before spargen 0.8 made them open.
     let narrowed = rules.into_iter().fold(
-        spargen::Spec::new(spec.clone()).uuid(false).time(false),
-        spargen::Spec::omit_rule,
+        spargen::Spec::new(spec.clone())
+            .with_uuid(spargen::UuidMapping::String)
+            .with_datetime(spargen::DateTimeBackend::Jiff)
+            .with_closed_enums(spargen::StringEnums::Closed),
+        spargen::Spec::add_omit_rule,
     );
     let report = spargen::generate(&narrowed.build(out));
     assert!(

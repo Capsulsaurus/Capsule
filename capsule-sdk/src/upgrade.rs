@@ -352,14 +352,14 @@ fn decode_phase(wire: UpgradePhaseResponse) -> Result<UpgradePhase, UpgradeError
         .map_err(|e| UpgradeError::MalformedResponse(format!("response album_id: {e}")))?;
     let intent_id = wire
         .intent_id
-        .as_deref()
-        .map(Uuid::parse_str)
+        .as_option()
+        .map(|id| Uuid::parse_str(id))
         .transpose()
         .map_err(|e| UpgradeError::MalformedResponse(format!("response intent_id: {e}")))?;
     let expires_at = wire
         .expires_at
-        .as_deref()
-        .map(str::parse::<Timestamp>)
+        .as_option()
+        .map(|at| at.parse::<Timestamp>())
         .transpose()
         .map_err(|e| UpgradeError::MalformedResponse(format!("response expires_at: {e}")))?;
     // The contract declares the count `uint64` and the generated type carries it unsigned, so a
@@ -368,7 +368,7 @@ fn decode_phase(wire: UpgradePhaseResponse) -> Result<UpgradePhase, UpgradeError
     Ok(UpgradePhase {
         album_id,
         intent_id,
-        to_protocol_version: wire.to_protocol_version,
+        to_protocol_version: wire.to_protocol_version.into_option(),
         expires_at,
         in_flight,
     })

@@ -134,7 +134,10 @@ argon2 = { workspace = true }
 # (this one and the federation pull worker's). rustls only, like everywhere else Capsule
 # holds a TLS stack. `rustls` names reqwest's aws-lc-rs provider: the server's crypto provider,
 # already linked through `jsonwebtoken` (the workspace pin explains the per-artifact choice).
-reqwest = { workspace = true, features = ["rustls"] }
+#
+# `stream` because spargen 0.8's generated runtime streams response bodies through it, and its
+# runtime-dependency contract refuses to generate the pull worker's client without it.
+reqwest = { workspace = true, features = ["rustls", "stream"] }
 # The public trust anchors both egress clients (the OIDC relying party and the federation pull
 # worker) verify against: the bundled webpki root set rather than the host's store, as for every
 # Capsule HTTP client; see the workspace pin.
@@ -146,10 +149,14 @@ webpki-root-certs = { workspace = true }
 # is how the pull transport hands the generated code a body it has already bounded. spargen's
 # runtime-dependency contract refuses to generate without them. All are workspace pins already
 # in the lock file through `capsule-sdk` (and `http`/`http-body` through reqwest and hyper), so
-# nothing new enters the tree.
+# nothing new enters the tree. spargen 0.8's runtime adds `futures-core` (the `Stream` its body
+# streams implement) and `url` (the base URL it joins operation paths onto); both are already in
+# the lock file through reqwest.
 secrecy = { workspace = true }
 http = { workspace = true }
 http-body = { workspace = true }
+futures-core = "0.3.34"
+url = "2.5.9"
 # The `capsule-server` binary: subcommand parsing, and the error report a startup failure prints.
 # `clap` and `color-eyre` were already here for the `gen_openapi` binary this replaces; the
 # binary is now one `capsule-server` with `serve | gc | purge | scrub | gen-openapi`
@@ -173,7 +180,7 @@ tracing-subscriber = { workspace = true }
 # to. The SDK's pin, with its defaults off for the SDK's reason, and a build-dependency only: the
 # runtime is emitted into the generated module, so spargen never enters the served binary.
 # `serde_json` reads the document's path list so the narrowing is computed, not hand-listed.
-spargen = { version = "0.7.0", default-features = false }
+spargen = { version = "0.8.0", default-features = false }
 serde_json = { workspace = true }
 
 [dev-dependencies]

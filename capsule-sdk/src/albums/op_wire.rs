@@ -24,6 +24,8 @@ use capsule_core::crypto::hash::Hash32;
 use capsule_core::crypto::provenance::{Action, ManifestCore, ProvenanceRecord};
 use serde::Serialize;
 
+use crate::client::absent_unless;
+use crate::rest::Nullable;
 use crate::rest::types::ManifestEnvelope;
 
 /// The server-visible projection of a lifecycle manifest: every field verbatim, naming the
@@ -39,24 +41,24 @@ pub fn op_envelope(core: &ManifestCore) -> ManifestEnvelope {
     ManifestEnvelope {
         crypto_suite_id: core.crypto_suite_id,
         protocol_version: core.protocol_version.clone(),
-        album_id: Some(core.album_id.to_string()),
+        album_id: Nullable::Value(core.album_id.to_string()),
         file_id: core.file_id.to_string(),
         amk_version: core.amk_version.0,
         ciphertext_hash: core.ciphertext_hash.to_hex(),
         plaintext_size: core.plaintext_size,
         chunk_size: core.chunk_size,
         key_mode: wire(serde_json::to_value(core.key_mode)),
-        metadata_blob_hash: core.metadata_blob_hash.map(|h| h.to_hex()),
-        original_blob_hash: None,
-        derivative_role: None,
-        derivative_format: None,
+        metadata_blob_hash: absent_unless(core.metadata_blob_hash.map(|h| h.to_hex())),
+        original_blob_hash: Nullable::Absent,
+        derivative_role: Nullable::Absent,
+        derivative_format: Nullable::Absent,
         created_by_user: core.created_by_user.to_string(),
         created_by_device: core.created_by_device.to_string(),
         client_version: core.client_version.clone(),
         timestamp: core.timestamp.clone(),
         action: wire(serde_json::to_value(core.action)),
-        prior_provenance_hash: core.prior_provenance_hash.map(|h| h.to_hex()),
-        retention_until: core.retention_until.clone(),
+        prior_provenance_hash: absent_unless(core.prior_provenance_hash.map(|h| h.to_hex())),
+        retention_until: absent_unless(core.retention_until.clone()),
     }
 }
 

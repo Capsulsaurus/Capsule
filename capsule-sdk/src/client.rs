@@ -44,12 +44,34 @@ use secrecy::ExposeSecret;
 
 use crate::auth::Session;
 use crate::net::negotiation;
-use crate::rest::{self, Client, Credential};
+use crate::rest::{self, Client};
 
-/// The security-scheme key the server declares for its bearer JWT (see
-/// `capsule_api::create_openapi_spec`); the generated client attaches the registered
-/// credential to every operation whose `security` names it.
-const BEARER_SCHEME: &str = "bearer";
+/// The credential a generated client presents under the contract's `bearer` security scheme,
+/// attached through the typed setter spargen generates for that scheme.
+pub(crate) enum Bearer {
+    /// A fixed token: a static access token, or a federation capability.
+    Token(String),
+    /// A source asked for a fresh token each time a call attaches the scheme.
+    Provider(rest::TokenProvider),
+}
+
+/// An optional, nullable field of a generated request: the value, or absent (omitted from the
+/// body) when there is none, as spargen before 0.8 sent an `Option`'s `None`. Never `null`:
+/// nothing the SDK sends distinguishes the two.
+pub(crate) fn absent_unless<T>(value: Option<T>) -> rest::Nullable<T> {
+    value.map_or(rest::Nullable::Absent, rest::Nullable::Value)
+}
+
+impl Bearer {
+    /// `client`, presenting this credential on every operation whose `security` names the
+    /// bearer scheme.
+    pub(crate) fn attach(self, client: Client) -> Client {
+        match self {
+            Self::Token(token) => client.with_bearer(token.into()),
+            Self::Provider(provider) => client.with_bearer_provider(provider),
+        }
+    }
+}
 
 /// Failure constructing an [`AuthenticatedClient`] — today only a malformed base URL. Wire
 /// failures surface later, per operation, through the generated client's own typed error.
@@ -70,8 +92,9 @@ pub enum ClientError {
 /// Cheap to build; holds one [`rest::Client`] whose bearer credential is
 /// an async provider backed by the session. Because the provider is consulted per request,
 /// token rotation (refresh) is picked up with no rebuild. Deref-transparent: call any
-/// generated operation directly, e.g. `client.get_quota(PROTOCOL_VERSION, None).await` — every
-/// gated operation takes the protocol date as its first argument, because the document
+/// generated operation directly, e.g.
+/// `client.get_quota(GetQuotaParamsRequired { x_capsule_protocol: PROTOCOL_VERSION.into() })` —
+/// every gated operation's `…ParamsRequired` carries the protocol date, because the document
 /// declares `X-Capsule-Protocol` required there (issue #404); the transport sends the same value
 /// as a default header regardless.
 pub struct AuthenticatedClient {
@@ -298,9 +321,9 @@ fn build_client(base_url: &str, session: Session) -> Result<Client, ClientError>
         })
     });
 
-    // `with_backend` builds requests on a default `reqwest::Client` and *executes* them
-    // through the backend, so the executing client — and with it the TLS stack, the redirect
-    // policy and the timeouts — is still `reqwest_client()`, one layer down.
+    // `with_backend` builds no HTTP client of its own: every request is executed through the
+    // backend, so the executing client — and with it the TLS stack, the redirect policy and the
+    // timeouts — is `reqwest_client()`, one layer down.
     let backend: Arc<dyn rest::HttpBackend> = Arc::new(Negotiate::over(Arc::new(RefreshOn401 {
         inner: crate::net::backend(reqwest_client()),
         session,
@@ -310,7 +333,7 @@ fn build_client(base_url: &str, session: Session) -> Result<Client, ClientError>
             url: base_url.to_string(),
             reason,
         })?
-        .with_credential(BEARER_SCHEME, Credential::Provider(provider));
+        .with_bearer_provider(provider);
     Ok(client)
 }
 
@@ -324,14 +347,9 @@ fn build_client(base_url: &str, session: Session) -> Result<Client, ClientError>
 /// per-client transport would mean a fresh TLS handshake for every escrow read on a device
 /// that does several during one cadence prompt. Nothing here is configured per instance —
 /// `http_client` takes no arguments and its protocol headers are the same on every request —
-/// so there is nothing to vary: the same client serves them all.
-///
-/// **What that does not fix.** `Client::with_backend` still builds its *own* default
-/// `reqwest::Client` internally, one per [`AuthenticatedClient`]. That one only assembles
-/// requests — every byte is executed through the backend below, and therefore through this
-/// shared client — so it opens no connection and costs nothing on the wire; what it costs is
-/// one throwaway allocation per construction. Removing even that needs a
-/// `with_client_and_backend` constructor spargen does not expose.
+/// so there is nothing to vary: the same client serves them all. `Client::with_backend` builds
+/// no client of its own (spargen 0.8), so this is the only `reqwest::Client` an
+/// [`AuthenticatedClient`] touches.
 fn reqwest_client() -> reqwest::Client {
     static SHARED: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
     SHARED

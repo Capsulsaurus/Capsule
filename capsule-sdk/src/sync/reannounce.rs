@@ -170,9 +170,10 @@ impl SyncConsumer {
         Ok(self
             .client
             .reannounce_manifests(
-                capsule_core::crypto::primitives::PROTOCOL_VERSION,
-                None,
-                body,
+                rest::ReannounceManifestsParamsRequired {
+                    x_capsule_protocol: capsule_core::crypto::primitives::PROTOCOL_VERSION.into(),
+                },
+                body.clone(),
             )
             .await?
             .into_inner())
@@ -244,18 +245,18 @@ fn map_error(error: rest::Error<rest::ReannounceManifestsError>) -> SyncError {
 fn decode_result(result: rest::types::ReannounceResult) -> ReannounceResult {
     let outcome = match result.outcome {
         rest::types::ReannounceOutcome::Restored => ReannounceOutcome::Restored {
-            sync_seq: result.sync_seq,
+            sync_seq: result.sync_seq.into_option(),
         },
         rest::types::ReannounceOutcome::AlreadyIndexed => ReannounceOutcome::AlreadyIndexed,
         rest::types::ReannounceOutcome::MissingBlobs => {
             ReannounceOutcome::MissingBlobs(result.missing.into_iter().flatten().collect())
         }
         rest::types::ReannounceOutcome::Refused => ReannounceOutcome::Refused {
-            code: result.code.unwrap_or_default(),
+            code: result.code.into_option().unwrap_or_default(),
         },
     };
     ReannounceResult {
-        asset_id: result.asset_id,
+        asset_id: result.asset_id.into_option(),
         outcome,
     }
 }

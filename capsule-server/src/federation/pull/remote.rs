@@ -59,9 +59,6 @@ pub mod rest {
     include!(concat!(env!("OUT_DIR"), "/peer_client.rs"));
 }
 
-/// The security scheme the contract registers both bearer kinds under.
-const BEARER_SCHEME: &str = "bearer";
-
 /// The longest a connection to a peer may take to open.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -373,12 +370,7 @@ impl PeerClient {
     fn client(&self, token: &str) -> Result<rest::Client, RemoteError> {
         let backend: Arc<dyn rest::HttpBackend> = self.transport.clone();
         rest::Client::with_backend(backend, &self.base)
-            .map(|client| {
-                client.with_credential(
-                    BEARER_SCHEME,
-                    rest::Credential::Bearer(token.to_owned().into()),
-                )
-            })
+            .map(|client| client.with_bearer(token.to_owned().into()))
             .map_err(|error| RemoteError::Malformed(format!("no client for the origin: {error}")))
     }
 
@@ -414,19 +406,17 @@ impl PeerClient {
     ) -> Result<rest::types::SyncPageResponse, RemoteError> {
         let _gate = self.gate.lock().await;
         let client = self.client(token)?;
-        let params = rest::SyncFeedParams {
-            x_capsule_request_signature: Some(self.sign("GET", "/v1/sync", token)?),
-            album_id: Some(album.as_str().to_owned()),
-            cursor: cursor
-                .filter(|cursor| !cursor.is_empty())
-                .map(str::to_owned),
-            page_size: Some(page_size),
-            ..rest::SyncFeedParams::default()
-        };
+        let mut params = rest::SyncFeedParams::from(rest::SyncFeedParamsRequired {
+            x_capsule_protocol: capsule_core::crypto::primitives::PROTOCOL_VERSION.into(),
+        })
+        .x_capsule_request_signature(self.sign("GET", "/v1/sync", token)?)
+        .album_id(album.as_str().to_owned())
+        .page_size(page_size);
+        if let Some(cursor) = cursor.filter(|cursor| !cursor.is_empty()) {
+            params = params.cursor(cursor.to_owned());
+        }
         self.transport.arm(limit);
-        let result = client
-            .sync_feed(capsule_core::crypto::primitives::PROTOCOL_VERSION, params)
-            .await;
+        let result = client.sync_feed(params).await;
         match result {
             Ok(page) => Ok(page.into_inner()),
             Err(error) => Err(self.classify(error, |refusal| {
@@ -468,22 +458,16 @@ impl PeerClient {
             ));
         }
         let client = self.client(token)?;
-        let params = rest::GetBlobParams {
-            x_capsule_request_signature: Some(self.sign(
-                "GET",
-                &format!("/v1/blob/{hash}"),
-                token,
-            )?),
-            ..rest::GetBlobParams::default()
-        };
+        let params = rest::GetBlobParams::from(rest::GetBlobParamsRequired {
+            x_capsule_protocol: capsule_core::crypto::primitives::PROTOCOL_VERSION.into(),
+        })
+        .x_capsule_request_signature(self.sign(
+            "GET",
+            &format!("/v1/blob/{hash}"),
+            token,
+        )?);
         self.transport.arm(limit);
-        let result = client
-            .get_blob(
-                hash.to_owned(),
-                capsule_core::crypto::primitives::PROTOCOL_VERSION,
-                params,
-            )
-            .await;
+        let result = client.get_blob(hash.to_owned(), params).await;
         match result {
             Ok(response) => Ok(match response.into_inner() {
                 rest::GetBlobResponse::Status200(bytes)
@@ -525,18 +509,16 @@ impl PeerClient {
     ) -> Result<rest::types::RefreshedCapabilityResponse, RemoteError> {
         let _gate = self.gate.lock().await;
         let client = self.client(token)?;
-        let params = rest::RefreshCapabilityParams {
-            x_capsule_request_signature: Some(self.sign(
-                "POST",
-                "/v1/federation/capabilities/refresh",
-                token,
-            )?),
-            ..rest::RefreshCapabilityParams::default()
-        };
+        let params = rest::RefreshCapabilityParams::from(rest::RefreshCapabilityParamsRequired {
+            x_capsule_protocol: capsule_core::crypto::primitives::PROTOCOL_VERSION.into(),
+        })
+        .x_capsule_request_signature(self.sign(
+            "POST",
+            "/v1/federation/capabilities/refresh",
+            token,
+        )?);
         self.transport.arm(limit);
-        let result = client
-            .refresh_capability(capsule_core::crypto::primitives::PROTOCOL_VERSION, params)
-            .await;
+        let result = client.refresh_capability(params).await;
         match result {
             Ok(refreshed) => Ok(refreshed.into_inner()),
             Err(error) => Err(self.classify(error, |refusal| {
@@ -599,6 +581,15 @@ impl PeerClient {
             // something the contract does not allow.
             rest::Error::PaginationCycle { .. } => {
                 RemoteError::Malformed("the peer's links form a cycle".into())
+            }
+            rest::Error::PaginationOriginChanged { .. } => {
+                RemoteError::Malformed("the peer's links leave its origin".into())
+            }
+            // The transport bounds every read itself (`PeerTransport::arm`), so this fires only
+            // if the generated client is ever given a limit of its own; either way an oversized
+            // answer is the peer's input failing validation.
+            rest::Error::BodyTooLarge { limit, status } => {
+                RemoteError::Malformed(format!("the peer's {status} body exceeds {limit} bytes"))
             }
             // Not a connect failure: spargen files those under `Transport`, below. What is left
             // is a request the generated code could not assemble, an answer hyper could not parse

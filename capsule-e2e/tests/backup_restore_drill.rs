@@ -434,7 +434,9 @@ mod postgres_conformance {
         // restore does not sign anybody out, and host B accepts the session host A issued.
         let profile = device
             .generated(&server_b)
-            .get_profile(PROTOCOL_VERSION, None)
+            .get_profile(capsule_sdk::rest::GetProfileParamsRequired {
+                x_capsule_protocol: PROTOCOL_VERSION.into(),
+            })
             .await
             .expect("a session from before the restore is accepted by the restored host")
             .into_inner();

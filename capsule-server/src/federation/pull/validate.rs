@@ -342,11 +342,11 @@ fn screen_entry(
     let derivative_manifests = screen_derivatives(&entry, rules)?;
     let metadata_named = entry
         .metadata_blob
-        .as_deref()
+        .as_option()
         .map(|hash| address(hash, "invariant 25"))
         .transpose()?;
 
-    let Some(encoded) = entry.manifest_cbor.as_deref() else {
+    let Some(encoded) = entry.manifest_cbor.as_option() else {
         if purged {
             // A purged tombstone carries no record: the asset's references are gone.
             if let Some(head) = state.assets.get(&asset_id).cloned() {

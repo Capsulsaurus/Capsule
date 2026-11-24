@@ -63,33 +63,33 @@ fn batches_are_cut_by_bytes_and_an_oversized_manifest_rides_alone() {
 #[test]
 fn a_wire_answer_decodes_into_its_outcome() {
     let restored = decode_result(rest::types::ReannounceResult {
-        asset_id: Some("a".to_owned()),
+        asset_id: rest::Nullable::Value("a".to_owned()),
         outcome: rest::types::ReannounceOutcome::Restored,
-        sync_seq: Some(7),
+        sync_seq: rest::Nullable::Value(7),
         missing: None,
-        code: None,
+        code: rest::Nullable::Absent,
     });
     assert_eq!(
         restored.outcome,
         ReannounceOutcome::Restored { sync_seq: Some(7) }
     );
     let missing = decode_result(rest::types::ReannounceResult {
-        asset_id: Some("b".to_owned()),
+        asset_id: rest::Nullable::Value("b".to_owned()),
         outcome: rest::types::ReannounceOutcome::MissingBlobs,
-        sync_seq: None,
+        sync_seq: rest::Nullable::Absent,
         missing: Some(vec!["ab".to_owned()]),
-        code: None,
+        code: rest::Nullable::Absent,
     });
     assert_eq!(
         missing.outcome,
         ReannounceOutcome::MissingBlobs(vec!["ab".to_owned()])
     );
     let refused = decode_result(rest::types::ReannounceResult {
-        asset_id: None,
+        asset_id: rest::Nullable::Absent,
         outcome: rest::types::ReannounceOutcome::Refused,
-        sync_seq: None,
+        sync_seq: rest::Nullable::Absent,
         missing: None,
-        code: Some("error.sync.reannounce_malformed".to_owned()),
+        code: rest::Nullable::Value("error.sync.reannounce_malformed".to_owned()),
     });
     assert_eq!(
         refused.outcome,

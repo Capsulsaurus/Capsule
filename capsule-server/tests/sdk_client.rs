@@ -825,7 +825,9 @@ async fn a_token_the_server_stopped_honouring_is_refreshed_and_the_call_replayed
     // A generated operation, called straight through the Deref — nothing about this call site
     // knows a retry layer exists, which is the point of putting it at the transport seam.
     let quota = client
-        .get_quota(capsule_core::crypto::primitives::PROTOCOL_VERSION, None)
+        .get_quota(capsule_sdk::rest::GetQuotaParamsRequired {
+            x_capsule_protocol: capsule_core::crypto::primitives::PROTOCOL_VERSION.into(),
+        })
         .await
         .expect("the 401 is recovered and the call replayed")
         .into_inner();
@@ -851,7 +853,13 @@ async fn a_token_the_server_stopped_honouring_is_refreshed_and_the_call_replayed
 #[tokio::test]
 async fn the_sdk_reads_the_account_activity_log_over_a_socket() {
     use capsule_sdk::client::AuthenticatedClient;
-    use capsule_sdk::rest::ListActivityParams;
+    use capsule_sdk::rest::{ListActivityParams, ListActivityParamsRequired};
+
+    let params = || {
+        ListActivityParams::from(ListActivityParamsRequired {
+            x_capsule_protocol: capsule_core::crypto::primitives::PROTOCOL_VERSION.into(),
+        })
+    };
 
     let fixture = Fixture::working();
     let base_url = serve(&fixture).await;
@@ -860,21 +868,18 @@ async fn the_sdk_reads_the_account_activity_log_over_a_socket() {
         AuthenticatedClient::new(&base_url, session(&base_url).await).expect("an API root parses");
 
     let all = client
-        .list_activity(capsule_core::crypto::primitives::PROTOCOL_VERSION, None)
+        .list_activity(params())
         .await
         .expect("the owner reads their log")
         .into_inner();
     let kinds: Vec<&str> = all.events.iter().map(|event| event.kind.as_str()).collect();
     assert_eq!(kinds, ["sign_in.password", "sign_in.password"]);
-    assert!(all.events[0].session_id.is_none());
-    assert!(all.events[0].subject.is_some());
-    assert!(all.events[0].request_id.is_some());
+    assert!(all.events[0].session_id.is_absent());
+    assert!(all.events[0].subject.is_value());
+    assert!(all.events[0].request_id.is_value());
 
     let one = client
-        .list_activity(
-            capsule_core::crypto::primitives::PROTOCOL_VERSION,
-            ListActivityParams::default().limit(1),
-        )
+        .list_activity(params().limit(1))
         .await
         .expect("a limited read")
         .into_inner();

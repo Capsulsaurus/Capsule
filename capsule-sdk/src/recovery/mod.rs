@@ -485,10 +485,9 @@ impl RecoveryClient {
         // transport's default header carries. The suite and sidecar schema ride the transport.
         let bytes = self
             .client
-            .fetch_escrow(
-                capsule_core::crypto::primitives::PROTOCOL_VERSION,
-                rest::FetchEscrowParams::default(),
-            )
+            .fetch_escrow(rest::FetchEscrowParamsRequired {
+                x_capsule_protocol: capsule_core::crypto::primitives::PROTOCOL_VERSION.into(),
+            })
             .await
             .map_err(fetch_escrow_error)?
             .into_inner();
@@ -514,9 +513,10 @@ impl RecoveryClient {
         let stored = self
             .client
             .store_escrow(
-                capsule_core::crypto::primitives::PROTOCOL_VERSION,
-                rest::StoreEscrowParams::default(),
-                &rest::types::RequestBody::from(body),
+                rest::StoreEscrowParamsRequired {
+                    x_capsule_protocol: capsule_core::crypto::primitives::PROTOCOL_VERSION.into(),
+                },
+                rest::types::StoreEscrowBody::from(body),
             )
             .await
             .map_err(store_escrow_error)?
@@ -556,9 +556,10 @@ impl RecoveryClient {
         let stored = self
             .client
             .store_sealed_identity(
-                capsule_core::crypto::primitives::PROTOCOL_VERSION,
-                rest::StoreSealedIdentityParams::default(),
-                &rest::types::RequestBody::from(sealed.to_vec()),
+                rest::StoreSealedIdentityParamsRequired {
+                    x_capsule_protocol: capsule_core::crypto::primitives::PROTOCOL_VERSION.into(),
+                },
+                rest::types::StoreSealedIdentityBody::from(sealed.to_vec()),
             )
             .await
             .map_err(store_sealed_identity_error)?
@@ -586,10 +587,9 @@ impl RecoveryClient {
     pub async fn fetch_sealed_identity(&self) -> Result<Vec<u8>, RecoveryError> {
         let bytes = self
             .client
-            .fetch_sealed_identity(
-                capsule_core::crypto::primitives::PROTOCOL_VERSION,
-                rest::FetchSealedIdentityParams::default(),
-            )
+            .fetch_sealed_identity(rest::FetchSealedIdentityParamsRequired {
+                x_capsule_protocol: capsule_core::crypto::primitives::PROTOCOL_VERSION.into(),
+            })
             .await
             .map_err(fetch_sealed_identity_error)?
             .into_inner();
@@ -618,9 +618,10 @@ impl RecoveryClient {
             .client
             .store_album_keys(
                 album_id.to_string(),
-                capsule_core::crypto::primitives::PROTOCOL_VERSION,
-                rest::StoreAlbumKeysParams::default(),
-                &rest::types::RequestBody::from(sealed.to_vec()),
+                rest::StoreAlbumKeysParamsRequired {
+                    x_capsule_protocol: capsule_core::crypto::primitives::PROTOCOL_VERSION.into(),
+                },
+                rest::types::StoreAlbumKeysBody::from(sealed.to_vec()),
             )
             .await
             .map_err(store_album_keys_error)?
@@ -650,10 +651,9 @@ impl RecoveryClient {
     pub async fn list_album_keys(&self) -> Result<Vec<EscrowedAlbumKeys>, RecoveryError> {
         let listing = self
             .client
-            .list_album_keys(
-                capsule_core::crypto::primitives::PROTOCOL_VERSION,
-                rest::ListAlbumKeysParams::default(),
-            )
+            .list_album_keys(rest::ListAlbumKeysParamsRequired {
+                x_capsule_protocol: capsule_core::crypto::primitives::PROTOCOL_VERSION.into(),
+            })
             .await
             .map_err(list_album_keys_error)?
             .into_inner();

@@ -205,23 +205,17 @@ impl AlbumTransport {
                 (
                     crate::net::http_client()
                         .map_err(|error| AlbumError::Transport(error.to_string()))?,
-                    crate::rest::Credential::Provider(provider),
+                    crate::client::Bearer::Provider(provider),
                 )
             }
-            AlbumAuth::Static { http, token } => (
-                http.clone(),
-                crate::rest::Credential::Bearer(token.clone().into()),
-            ),
+            AlbumAuth::Static { http, token } => {
+                (http.clone(), crate::client::Bearer::Token(token.clone()))
+            }
         };
-        Ok(crate::client::negotiated_client(http, root)
-            .map_err(AlbumError::Transport)?
-            .with_credential(BEARER_SCHEME, credential))
+        Ok(credential
+            .attach(crate::client::negotiated_client(http, root).map_err(AlbumError::Transport)?))
     }
 }
-
-/// The security-scheme key the document declares for the bearer JWT; the generated client
-/// attaches the registered credential to every operation whose `security` names it.
-const BEARER_SCHEME: &str = "bearer";
 
 // ─── Wire DTOs (mirror the server's transport JSON) ───────────────────────────
 
@@ -433,9 +427,10 @@ async fn publish(
     Ok(client
         .publish_album_roster(
             album_id.hyphenated().to_string(),
-            capsule_core::crypto::primitives::PROTOCOL_VERSION,
-            None,
-            body,
+            crate::rest::PublishAlbumRosterParamsRequired {
+                x_capsule_protocol: capsule_core::crypto::primitives::PROTOCOL_VERSION.into(),
+            },
+            body.clone(),
         )
         .await?
         .into_inner())
@@ -653,6 +648,7 @@ impl AlbumClient {
             .manifest_envelope
             .album_id
             .clone()
+            .into_option()
             .ok_or_else(|| LifecycleOpError::Malformed("the op names no album".to_owned()))?;
         let client = self.transport.generated()?;
         let wire = match apply(&client, &album_id, request).await {
@@ -695,9 +691,10 @@ async fn apply(
     Ok(client
         .album_lifecycle_op(
             album_id.to_owned(),
-            capsule_core::crypto::primitives::PROTOCOL_VERSION,
-            None,
-            body,
+            crate::rest::AlbumLifecycleOpParamsRequired {
+                x_capsule_protocol: capsule_core::crypto::primitives::PROTOCOL_VERSION.into(),
+            },
+            body.clone(),
         )
         .await?
         .into_inner())
@@ -729,7 +726,11 @@ fn op_refusal(error: crate::rest::Error<crate::rest::AlbumLifecycleOpError>) -> 
     };
     let status = response.status().as_u16();
     let (code, chain_head, retention_until) = match response.into_inner() {
-        Refusal::Status409(problem) => (problem.code, problem.chain_head, problem.retention_until),
+        Refusal::Status409(problem) => (
+            problem.code,
+            problem.chain_head.into_option(),
+            problem.retention_until.into_option(),
+        ),
         Refusal::Status400(problem)
         | Refusal::Status401(problem)
         | Refusal::Status403(problem)

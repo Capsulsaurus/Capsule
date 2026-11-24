@@ -146,14 +146,15 @@ async fn e2e_case_4_bobs_server_pulls_alices_album_with_the_capability_bob_subsc
         .generated(&alice_server)
         .issue_capability(
             &album.to_string(),
-            PROTOCOL_VERSION,
-            None,
-            &MintCapabilityRequest {
+            capsule_sdk::rest::IssueCapabilityParamsRequired {
+                x_capsule_protocol: PROTOCOL_VERSION.into(),
+            },
+            MintCapabilityRequest {
                 peer: BOB.to_owned(),
                 member: bob.user_id.to_string(),
                 scope: WireScope::Read,
-                ttl_seconds: None,
-                renewable_until: None,
+                ttl_seconds: capsule_sdk::rest::Nullable::Absent,
+                renewable_until: capsule_sdk::rest::Nullable::Absent,
             },
         )
         .await
