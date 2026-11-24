@@ -51,7 +51,7 @@ public final class SoftwareP256KeyAgreement: FfiHardwareKeyAgreement, @unchecked
         return shared.withUnsafeBytes { Data($0) }
     }
 
-    public func assertNonExportable(keyAlias: String) throws {
+    public func assertNonExportable(keyAlias _: String) throws {
         // Honest by design: a software key is readable, so it can never meet the hardware
         // non-exportability contract a Secure Enclave / StrongBox / TPM does.
         throw FfiHardwareSignerError.Exportable(detail: "software P-256 key is exportable")
