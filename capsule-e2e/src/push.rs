@@ -81,29 +81,34 @@ pub fn sdk_envelope(core: &ManifestCore, blob_hash: &str) -> ManifestEnvelope {
 pub fn wire_envelope(core: &ManifestCore, blob_hash: &str) -> rest::types::ManifestEnvelope {
     let envelope = sdk_envelope(core, blob_hash);
     rest::types::ManifestEnvelope {
-        crypto_suite_id: i64::from(envelope.crypto_suite_id),
+        crypto_suite_id: envelope.crypto_suite_id,
         protocol_version: envelope.protocol_version,
-        album_id: envelope.album_id,
+        album_id: absent_unless(envelope.album_id),
         file_id: envelope.file_id,
-        amk_version: i64::from(envelope.amk_version),
+        amk_version: envelope.amk_version,
         ciphertext_hash: envelope.ciphertext_hash,
-        plaintext_size: envelope.plaintext_size as i64,
-        chunk_size: i64::from(envelope.chunk_size),
+        plaintext_size: envelope.plaintext_size,
+        chunk_size: envelope.chunk_size,
         key_mode: envelope.key_mode,
-        metadata_blob_hash: envelope.metadata_blob_hash,
-        original_blob_hash: None,
+        metadata_blob_hash: absent_unless(envelope.metadata_blob_hash),
+        original_blob_hash: rest::Nullable::Absent,
         // A lifecycle-op or adopt envelope names no derivative: `check_op` refuses the pair on
         // a lifecycle write, and the upload gate refuses it on anything but a derivative.
-        derivative_role: None,
-        derivative_format: None,
+        derivative_role: rest::Nullable::Absent,
+        derivative_format: rest::Nullable::Absent,
         created_by_user: envelope.created_by_user,
         created_by_device: envelope.created_by_device,
         client_version: envelope.client_version,
         timestamp: envelope.timestamp,
         action: envelope.action,
-        prior_provenance_hash: envelope.prior_provenance_hash,
-        retention_until: envelope.retention_until,
+        prior_provenance_hash: absent_unless(envelope.prior_provenance_hash),
+        retention_until: absent_unless(envelope.retention_until),
     }
+}
+
+/// An optional field of a generated request: the value, or left out of the body when absent.
+fn absent_unless<T>(value: Option<T>) -> rest::Nullable<T> {
+    value.map_or(rest::Nullable::Absent, rest::Nullable::Value)
 }
 
 /// Push `asset_id` in full through the SDK ladder under `UploadPolicy::Full` on an unmetered
@@ -171,13 +176,20 @@ pub async fn post_lifecycle_head(
     let request = rest::types::OpRequest {
         manifest_envelope: wire_envelope(core, &core.ciphertext_hash.to_hex()),
         manifest_cbor: BASE64.encode(&manifest),
-        metadata_blob: core
-            .metadata_blob_hash
-            .map(|_| BASE64.encode(&asset.metadata_blob)),
+        metadata_blob: absent_unless(
+            core.metadata_blob_hash
+                .map(|_| BASE64.encode(&asset.metadata_blob)),
+        ),
     };
     let response = device
         .generated(server)
-        .album_lifecycle_op(core.album_id.to_string(), PROTOCOL_VERSION, None, &request)
+        .album_lifecycle_op(
+            core.album_id.to_string(),
+            rest::AlbumLifecycleOpParamsRequired {
+                x_capsule_protocol: PROTOCOL_VERSION.into(),
+            },
+            request,
+        )
         .await
         .unwrap_or_else(|error| panic!("the {:?} op applies: {error}", core.action))
         .into_inner();

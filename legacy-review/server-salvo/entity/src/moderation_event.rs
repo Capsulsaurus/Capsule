@@ -14,7 +14,6 @@
 //!
 //! [No silent operations]: https://docs/design/moderation/#what-moderation-cannot-do-structural
 
-use chrono::{DateTime, Utc};
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -36,7 +35,7 @@ pub struct Model {
     pub reason: Option<String>,
     /// When the action was applied.
     #[sea_orm(column_type = "TimestampWithTimeZone")]
-    pub created_at: DateTime<Utc>,
+    pub created_at: DateTimeUtc,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

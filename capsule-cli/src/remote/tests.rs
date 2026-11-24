@@ -1570,26 +1570,33 @@ async fn a_delete_op_carries_the_signed_delete_record_and_its_projection() {
     );
     let envelope = &request.manifest_envelope;
     assert_eq!(envelope.action, "delete");
-    assert_eq!(envelope.album_id, Some(core.album_id.to_string()));
+    assert_eq!(
+        envelope.album_id.clone().into_option(),
+        Some(core.album_id.to_string())
+    );
     assert_eq!(envelope.file_id, other.to_string());
-    assert_eq!(envelope.retention_until, core.retention_until);
+    assert_eq!(
+        envelope.retention_until.clone().into_option(),
+        core.retention_until
+    );
     assert!(
-        envelope.retention_until.is_some(),
+        envelope.retention_until.is_value(),
         "the signed floor rides along"
     );
     assert_eq!(
-        envelope.prior_provenance_hash,
+        envelope.prior_provenance_hash.clone().into_option(),
         core.prior_provenance_hash.map(|h| h.to_hex())
     );
     assert_eq!(envelope.ciphertext_hash, core.ciphertext_hash.to_hex());
-    assert_eq!(envelope.derivative_role, None);
+    assert!(!envelope.derivative_role.is_value());
     assert_eq!(
-        envelope.metadata_blob_hash,
+        envelope.metadata_blob_hash.clone().into_option(),
         core.metadata_blob_hash.map(|h| h.to_hex())
     );
     assert_eq!(
         request
             .metadata_blob
+            .into_option()
             .map(|blob| base64.decode(blob).expect("base64")),
         core.metadata_blob_hash.map(|_| asset.metadata_blob.clone())
     );
@@ -1768,10 +1775,10 @@ fn a_trash_delete_signs_one_delete_and_resends_it_on_a_rerun() {
     let sent: capsule_sdk::rest::types::OpRequest =
         serde_json::from_slice(&first_op).expect("an op");
     assert_eq!(sent.manifest_envelope.action, "delete");
-    assert!(sent.manifest_envelope.retention_until.is_some());
+    assert!(sent.manifest_envelope.retention_until.is_value());
     assert_eq!(
         first.retention_until,
-        sent.manifest_envelope.retention_until
+        sent.manifest_envelope.retention_until.into_option()
     );
 
     let again = prepare_trash_op(&mut ws, &asset, &request(TrashAction::Delete, asset), now)
@@ -2065,7 +2072,7 @@ async fn bytes_that_are_not_a_sendable_op_are_refused_for_good() {
     let op = delete_op(&ws, &asset).expect("encodes").expect("a delete");
     let mut request: capsule_sdk::rest::types::OpRequest =
         serde_json::from_slice(&op).expect("an op");
-    request.manifest_envelope.album_id = None;
+    request.manifest_envelope.album_id = capsule_sdk::rest::Nullable::Absent;
     let albumless = serde_json::to_vec(&request).expect("encodes");
     let (remote, session, seen) = ops_mock(500, serde_json::json!({}), Vec::new()).await;
 

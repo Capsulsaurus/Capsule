@@ -123,27 +123,37 @@ fn the_envelope_projects_the_signed_core_verbatim() {
 
     assert_eq!(envelope.action, "delete");
     assert_eq!(envelope.file_id, reissue.file_id.to_string());
-    assert_eq!(envelope.album_id, Some(reissue.album_id.to_string()));
+    assert_eq!(
+        envelope.album_id,
+        Nullable::Value(reissue.album_id.to_string())
+    );
     assert_eq!(envelope.ciphertext_hash, reissue.ciphertext_hash.to_hex());
     assert_eq!(
         envelope.prior_provenance_hash,
-        Some(chain[1].record_hash().to_hex()),
+        Nullable::Value(chain[1].record_hash().to_hex()),
         "the re-issue names the delete it chains onto"
     );
-    assert_eq!(envelope.retention_until, reissue.retention_until);
+    assert_eq!(
+        envelope.retention_until.into_option(),
+        reissue.retention_until
+    );
     assert_eq!(envelope.timestamp, reissue.timestamp);
     assert!(
         !envelope.key_mode.is_empty(),
         "the key mode is its wire name"
     );
-    assert_eq!(envelope.metadata_blob_hash, None, "a delete binds no blob");
+    assert_eq!(
+        envelope.metadata_blob_hash,
+        Nullable::Absent,
+        "a delete binds no blob, and the field is left out rather than sent as null"
+    );
     assert_eq!(
         (
             envelope.original_blob_hash,
             envelope.derivative_role,
             envelope.derivative_format
         ),
-        (None, None, None),
+        (Nullable::Absent, Nullable::Absent, Nullable::Absent),
         "a lifecycle op names no derivative"
     );
 }

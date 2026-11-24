@@ -66,6 +66,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 use tracing::instrument;
 
+use crate::client::absent_unless;
 use crate::net::negotiation::{self, UpgradeRequired};
 use crate::rest;
 
@@ -739,10 +740,10 @@ impl AuthClient {
         let backend: Arc<dyn rest::HttpBackend> = Arc::new(crate::client::Negotiate::observing(
             crate::net::backend(http.clone()),
         ));
-        let rest = rest::Client::with_backend(backend, &base.server_root).map_err(|e| {
+        let rest = crate::net::generated_client(backend, &base.server_root).map_err(|reason| {
             AuthError::InvalidBaseUrl {
                 url: base_url.to_string(),
-                reason: e.to_string(),
+                reason,
             }
         })?;
         Ok(Self {
@@ -827,7 +828,7 @@ impl AuthClient {
             .into_inner();
         let options = SignInOptions {
             server_id: info.server_id,
-            oidc: info.auth.oidc.is_some(),
+            oidc: info.auth.oidc.is_value(),
             password_disabled: info.auth.password_disabled.unwrap_or(false),
         };
         tracing::debug!(
@@ -860,9 +861,10 @@ impl AuthClient {
         let body = self
             .rest
             .begin_oidc_login(
-                PROTOCOL_VERSION.to_owned(),
-                None,
-                &rest::types::OidcAuthorizeRequest {
+                rest::BeginOidcLoginParamsRequired {
+                    x_capsule_protocol: PROTOCOL_VERSION.into(),
+                },
+                rest::types::OidcAuthorizeRequest {
                     redirect_uri: redirect_uri.to_owned(),
                     binding_challenge: oidc_binding_challenge(&binding),
                 },
@@ -887,7 +889,7 @@ impl AuthClient {
             authorization_url: body.authorization_url,
             state: SecretString::from(body.state),
             binding,
-            expires_by: u64::try_from(body.expires_by).unwrap_or(0),
+            expires_by: body.expires_by,
         })
     }
 
@@ -933,14 +935,15 @@ impl AuthClient {
         let answer = self
             .rest
             .complete_oidc_login(
-                PROTOCOL_VERSION.to_owned(),
-                None,
-                &rest::types::OidcCallbackRequest {
+                rest::CompleteOidcLoginParamsRequired {
+                    x_capsule_protocol: PROTOCOL_VERSION.into(),
+                },
+                rest::types::OidcCallbackRequest {
                     state: pending.state.expose_secret().to_owned(),
                     code: code.to_owned(),
                     binding_verifier: pending.binding.expose_secret().to_owned(),
-                    cohort_hash: self.cohort().map(str::to_owned),
-                    device_id: None,
+                    cohort_hash: absent_unless(self.cohort().map(str::to_owned)),
+                    device_id: rest::Nullable::Absent,
                 },
             )
             .await
@@ -965,7 +968,7 @@ impl AuthClient {
                 tracing::info!("the identity provider sign-in needs a second factor");
                 LoginOutcome::SecondFactorRequired {
                     mfa_token: SecretString::from(challenge.mfa_token),
-                    expires_by: u64::try_from(challenge.expires_by).unwrap_or(0),
+                    expires_by: challenge.expires_by,
                 }
             }
             rest::CompleteOidcLoginResponse::Status200(pair) => {
@@ -974,7 +977,7 @@ impl AuthClient {
                     TokenResponseBody {
                         access_token: pair.access_token,
                         refresh_token: pair.refresh_token,
-                        expires_by: u64::try_from(pair.expires_by).unwrap_or(0),
+                        expires_by: pair.expires_by,
                     },
                 )?;
                 tracing::info!("the identity provider sign-in succeeded; session established");
@@ -1002,9 +1005,10 @@ impl AuthClient {
         let body = self
             .rest
             .begin_oidc_device_login(
-                PROTOCOL_VERSION.to_owned(),
-                None,
-                &rest::types::OidcDeviceRequest {
+                rest::BeginOidcDeviceLoginParamsRequired {
+                    x_capsule_protocol: PROTOCOL_VERSION.into(),
+                },
+                rest::types::OidcDeviceRequest {
                     binding_challenge: oidc_binding_challenge(&binding),
                 },
             )
@@ -1033,9 +1037,9 @@ impl AuthClient {
             binding,
             user_code: body.user_code,
             verification_uri: body.verification_uri,
-            verification_uri_complete: body.verification_uri_complete,
-            interval_secs: u64::try_from(body.interval).unwrap_or(0),
-            expires_by: u64::try_from(body.expires_by).unwrap_or(0),
+            verification_uri_complete: body.verification_uri_complete.into_option(),
+            interval_secs: body.interval,
+            expires_by: body.expires_by,
         })
     }
 
@@ -1060,13 +1064,14 @@ impl AuthClient {
         let answer = self
             .rest
             .poll_oidc_device_login(
-                PROTOCOL_VERSION.to_owned(),
-                None,
-                &rest::types::OidcDevicePollRequest {
+                rest::PollOidcDeviceLoginParamsRequired {
+                    x_capsule_protocol: PROTOCOL_VERSION.into(),
+                },
+                rest::types::OidcDevicePollRequest {
                     handle: pending.handle.expose_secret().to_owned(),
                     binding_verifier: pending.binding.expose_secret().to_owned(),
-                    cohort_hash: self.cohort().map(str::to_owned),
-                    device_id: None,
+                    cohort_hash: absent_unless(self.cohort().map(str::to_owned)),
+                    device_id: rest::Nullable::Absent,
                 },
             )
             .await;
@@ -1103,7 +1108,7 @@ impl AuthClient {
                 tracing::info!("the device sign-in needs a second factor");
                 LoginOutcome::SecondFactorRequired {
                     mfa_token: SecretString::from(challenge.mfa_token),
-                    expires_by: u64::try_from(challenge.expires_by).unwrap_or(0),
+                    expires_by: challenge.expires_by,
                 }
             }
             rest::PollOidcDeviceLoginResponse::Status200(pair) => {
@@ -1112,7 +1117,7 @@ impl AuthClient {
                     TokenResponseBody {
                         access_token: pair.access_token,
                         refresh_token: pair.refresh_token,
-                        expires_by: u64::try_from(pair.expires_by).unwrap_or(0),
+                        expires_by: pair.expires_by,
                     },
                 )?;
                 tracing::info!("the device sign-in succeeded; session established");

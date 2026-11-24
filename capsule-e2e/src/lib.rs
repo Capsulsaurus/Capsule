@@ -368,7 +368,9 @@ impl Device {
         let generated =
             AuthenticatedClient::new(api_root, session.clone()).expect("the API root parses");
         let profile = generated
-            .get_profile(PROTOCOL_VERSION, None)
+            .get_profile(capsule_sdk::rest::GetProfileParamsRequired {
+                x_capsule_protocol: PROTOCOL_VERSION.into(),
+            })
             .await
             .expect("the profile answers")
             .into_inner();

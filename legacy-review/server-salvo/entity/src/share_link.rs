@@ -1,4 +1,3 @@
-use chrono::{DateTime, Utc};
 use nanoid::nanoid;
 use sea_orm::Set;
 use sea_orm::entity::prelude::*;
@@ -40,7 +39,7 @@ pub struct Model {
     pub password_hash: Option<String>,
     /// Optional expiration timestamp
     #[sea_orm(column_type = "TimestampWithTimeZone", nullable)]
-    pub expires_at: Option<DateTime<Utc>>,
+    pub expires_at: Option<DateTimeUtc>,
     /// Number of times the link has been viewed
     #[sea_orm(default_value = "0")]
     pub view_count: i32,
@@ -48,7 +47,7 @@ pub struct Model {
         column_type = "TimestampWithTimeZone",
         default_value = "CURRENT_TIMESTAMP"
     )]
-    pub created_at: DateTime<Utc>,
+    pub created_at: DateTimeUtc,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -90,7 +89,7 @@ impl Entity {
         Self::find().filter(
             Column::ExpiresAt
                 .is_null()
-                .or(Column::ExpiresAt.gt(Utc::now())),
+                .or(Column::ExpiresAt.gt(crate::time::now_entity())),
         )
     }
 }

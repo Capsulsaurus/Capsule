@@ -8,7 +8,6 @@
 //! bounded by at most 24 hours of revocations. SSoT: the
 //! [Federation design doc](https://docs/design/federation/).
 
-use chrono::{DateTime, Utc};
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -18,13 +17,13 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub jti: String,
     /// The revoked token's `exp` (RFC 3339). The row is pruned once this passes.
-    pub expires_at: DateTime<Utc>,
+    pub expires_at: DateTimeUtc,
     /// When the revocation was recorded.
     #[sea_orm(
         column_type = "TimestampWithTimeZone",
         default_value = "CURRENT_TIMESTAMP"
     )]
-    pub revoked_at: DateTime<Utc>,
+    pub revoked_at: DateTimeUtc,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

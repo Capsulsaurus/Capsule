@@ -169,10 +169,15 @@ fn the_request_carries_the_publication_and_never_the_fragment() {
             .collect::<Vec<_>>()
     );
     assert_eq!(request.serves[0], request.metadata_hash);
-    assert_eq!(request.wrapped_secret, None);
-    assert_eq!(request.expires_at, link.expires_at);
+    assert_eq!(request.wrapped_secret, rest::Nullable::Absent);
+    assert_eq!(request.expires_at.clone().into_option(), link.expires_at);
     let record = BASE64
-        .decode(request.metadata_blob.as_deref().expect("the sealed record"))
+        .decode(
+            request
+                .metadata_blob
+                .as_option()
+                .expect("the sealed record"),
+        )
         .unwrap();
     assert_eq!(record, publication.metadata_blob);
 
@@ -188,7 +193,12 @@ fn a_passphrase_link_sends_its_wrapped_secret_as_base64() {
     let (link, publication) = published(Some("hunter2"));
     let request = issue_request(&link, &publication);
     let sent = BASE64
-        .decode(request.wrapped_secret.expect("a wrapped secret"))
+        .decode(
+            request
+                .wrapped_secret
+                .into_option()
+                .expect("a wrapped secret"),
+        )
         .unwrap();
     assert_eq!(Some(sent), publication.wrapped_secret);
 }

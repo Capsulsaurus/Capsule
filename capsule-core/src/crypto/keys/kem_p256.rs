@@ -40,8 +40,8 @@ use std::sync::Arc;
 use ml_kem::kem::Decapsulate;
 use ml_kem::{B32, DecapsulationKey, EncapsulationKey, Key, KeyExport, MlKem768, Seed};
 use p256::elliptic_curve::sec1::ToEncodedPoint;
-use sha3::digest::{ExtendableOutput, Update, XofReader};
-use sha3::{Digest, Sha3_256, Shake256};
+use sha3::{Digest, Sha3_256};
+use shake::{ExtendableOutput, Shake256, Update, XofReader};
 
 use super::hardware::{HardwareKeyAgreement, HardwareSignerError};
 use crate::crypto::{CryptoError, rng};

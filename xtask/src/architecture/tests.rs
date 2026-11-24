@@ -1,5 +1,14 @@
 use super::*;
 
+/// The sanctioned edges the lock-graph fixtures below are written against. Fixed here rather
+/// than read from [`SANCTIONED_TRANSITIVE_EDGES`], so the tests keep proving the sanction logic
+/// whatever the production list holds today.
+const FIXTURE_SANCTIONED: &[(&str, &str, &str)] = &[(
+    "tzf-rs",
+    "prost",
+    "fixture: an internal encoding, no RPC surface",
+)];
+
 fn core_violations(source: &str) -> Vec<String> {
     stateless_core_violations("capsule-core/src/x.rs", source)
 }
@@ -218,7 +227,8 @@ name = "tonic"
 version = "0.12.0"
 "#;
     let members = BTreeSet::from(["capsule-server".to_owned(), "capsule-cli".to_owned()]);
-    let found = transitive_retired_paths(lock, &members).expect("the lock parses");
+    let found =
+        transitive_retired_paths(lock, &members, FIXTURE_SANCTIONED).expect("the lock parses");
     assert_eq!(
         found,
         [
@@ -255,7 +265,8 @@ name = "prost"
 version = "0.13.0"
 "#;
     let members = BTreeSet::from(["capsule-core".to_owned()]);
-    let found = transitive_retired_paths(lock, &members).expect("the lock parses");
+    let found =
+        transitive_retired_paths(lock, &members, FIXTURE_SANCTIONED).expect("the lock parses");
     assert_eq!(found.len(), 1, "{found:?}");
     assert!(
         found[0].contains("capsule-core -> rpc-shim -> prost"),
@@ -286,7 +297,8 @@ name = "prost"
 version = "0.13.0"
 "#;
     let members = BTreeSet::from(["capsule-sdk".to_owned(), "capsule-core".to_owned()]);
-    let found = transitive_retired_paths(lock, &members).expect("the lock parses");
+    let found =
+        transitive_retired_paths(lock, &members, FIXTURE_SANCTIONED).expect("the lock parses");
     assert_eq!(
         found,
         [
@@ -330,7 +342,7 @@ name = "serde"
 version = "2.0.0"
 "#;
     let members = BTreeSet::from(["capsule-server".to_owned()]);
-    assert!(transitive_retired_paths(lock, &members).is_err());
+    assert!(transitive_retired_paths(lock, &members, FIXTURE_SANCTIONED).is_err());
 }
 
 #[test]
@@ -351,48 +363,6 @@ fn every_planned_workspace_dependency_states_its_reason() {
             "`{name}` is exempted with no reason, which is the exemption this list exists to prevent"
         );
     }
-}
-
-#[test]
-fn a_failed_cargo_tree_is_never_read_as_chrono_absent() {
-    // The fail-open this guard used to have. `cargo tree` exits non-zero for a *failure* as
-    // well as for "that crate is not in the lock", and treating every non-zero exit as the
-    // second one means the guard reports clean exactly when it knows least.
-    let failed = classify_chrono_tree(
-        false,
-        "",
-        "error: failed to parse manifest at `/x/Cargo.toml`\n",
-    );
-    assert!(
-        failed.is_err(),
-        "a broken invocation must not decide anything, got {failed:?}"
-    );
-
-    // The one non-zero exit that *is* an answer: chrono has left the lock file entirely.
-    assert_eq!(
-        classify_chrono_tree(
-            false,
-            "",
-            "error: package ID specification `chrono` did not match any packages",
-        ),
-        Ok(false)
-    );
-}
-
-#[test]
-fn a_successful_cargo_tree_is_read_from_its_output() {
-    assert_eq!(
-        classify_chrono_tree(true, "", "warning: nothing to print."),
-        Ok(false)
-    );
-    assert_eq!(
-        classify_chrono_tree(
-            true,
-            "chrono v0.4.45\n└── capsule-server-migration v0.1.0\n",
-            ""
-        ),
-        Ok(true)
-    );
 }
 
 #[test]

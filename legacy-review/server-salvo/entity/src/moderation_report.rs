@@ -7,7 +7,6 @@
 //! sees only opaque identifiers, exactly as the E2EE model requires. SSoT:
 //! [Moderation — Federated Reporting](https://docs/design/moderation/#federated-reporting).
 
-use chrono::{DateTime, Utc};
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -32,7 +31,7 @@ pub struct Model {
     pub reason: Option<String>,
     /// When the report was accepted into the queue.
     #[sea_orm(column_type = "TimestampWithTimeZone")]
-    pub received_at: DateTime<Utc>,
+    pub received_at: DateTimeUtc,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

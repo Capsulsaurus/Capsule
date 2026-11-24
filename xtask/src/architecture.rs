@@ -47,56 +47,12 @@ const PLANNED_WORKSPACE_DEPENDENCIES: &[(&str, &str)] = &[];
 
 // Lock-graph edges into a retired crate that are not the decision the retirement records, each
 // with its reason. `prost`/`tonic` are retired as **Capsule's public surface** (no gRPC; see
-// .claude/rules/capsule-server.md), and these crates use them as an internal encoding or a
-// container-runtime client, which exposes no surface of Capsule's. An edge is sanctioned, not a
-// crate: the same retired crate arriving through anything else is still a violation.
-const SANCTIONED_TRANSITIVE_EDGES: &[(&str, &str, &str)] = &[
-    (
-        "tzf-rs",
-        "prost",
-        "the timezone finder's compiled boundary data is protobuf; no RPC surface",
-    ),
-    (
-        "prost-build",
-        "prost",
-        "build-time code generation for tzf-rs's data format",
-    ),
-    (
-        "prost-build",
-        "prost-types",
-        "build-time code generation for tzf-rs's data format",
-    ),
-    (
-        "bollard",
-        "tonic",
-        "testcontainers' Docker client (dev-dependency); BuildKit over the local daemon socket",
-    ),
-    (
-        "bollard-stubs",
-        "prost",
-        "testcontainers' Docker client (dev-dependency); Docker API message types",
-    ),
-    (
-        "bollard-buildkit-proto",
-        "tonic",
-        "testcontainers' Docker client (dev-dependency); BuildKit message types",
-    ),
-    (
-        "bollard-buildkit-proto",
-        "prost",
-        "testcontainers' Docker client (dev-dependency); BuildKit message types",
-    ),
-    (
-        "bollard-buildkit-proto",
-        "prost-types",
-        "testcontainers' Docker client (dev-dependency); BuildKit message types",
-    ),
-    (
-        "bollard-buildkit-proto",
-        "tonic-prost",
-        "testcontainers' Docker client (dev-dependency); BuildKit message types",
-    ),
-];
+// .claude/rules/capsule-server.md); a crate that used one as an internal encoding, exposing no
+// surface of Capsule's, would be listed here. An edge is sanctioned, not a crate: the same
+// retired crate arriving through anything else is still a violation.
+// Empty: tzf-rs 2 ships its boundary data without protobuf, and testcontainers' Docker client
+// (`bollard`, over `tonic`) left with testcontainers.
+const SANCTIONED_TRANSITIVE_EDGES: &[(&str, &str, &str)] = &[];
 
 const RETIRED_COMPONENT_NAMES: &[&str] = &[
     "capsule-api-auth",
@@ -115,7 +71,6 @@ pub(crate) fn run(root: &Path) -> Result<()> {
     check_transitive_dependencies(root, &mut violations)?;
     check_workspace_dependencies(root, &mut violations)?;
     check_legacy_manifests(root, &mut violations)?;
-    check_chrono_isolation(root, &mut violations)?;
     check_stateless_core(root, &mut violations)?;
     check_retired_references(root, &mut violations)?;
 
@@ -292,14 +247,23 @@ fn check_transitive_dependencies(root: &Path, violations: &mut Vec<String>) -> R
     let lock_path = root.join("Cargo.lock");
     let lock = fs::read_to_string(&lock_path)
         .wrap_err_with(|| format!("reading {}", lock_path.display()))?;
-    violations.extend(transitive_retired_paths(&lock, &members)?);
+    violations.extend(transitive_retired_paths(
+        &lock,
+        &members,
+        SANCTIONED_TRANSITIVE_EDGES,
+    )?);
     Ok(())
 }
 
 /// Every unsanctioned edge into a [`RETIRED_DEPENDENCIES`] entry reachable, two or more edges
 /// out, from a package in `members` of the lock file `lock` — one violation line each, carrying
-/// a shortest path to it.
-fn transitive_retired_paths(lock: &str, members: &BTreeSet<String>) -> Result<Vec<String>> {
+/// a shortest path to it. An edge `sanctioned` lists is not reported; the gate passes
+/// [`SANCTIONED_TRANSITIVE_EDGES`].
+fn transitive_retired_paths(
+    lock: &str,
+    members: &BTreeSet<String>,
+    sanctioned: &[(&str, &str, &str)],
+) -> Result<Vec<String>> {
     let document: DocumentMut = lock.parse().wrap_err("parsing Cargo.lock")?;
     let packages = document
         .get("package")
@@ -388,7 +352,7 @@ fn transitive_retired_paths(lock: &str, members: &BTreeSet<String>) -> Result<Ve
             for entry in graph.get(via).into_iter().flatten() {
                 let retired = name_of(&resolve(entry)?);
                 if !RETIRED_DEPENDENCIES.contains(&retired.as_str())
-                    || SANCTIONED_TRANSITIVE_EDGES
+                    || sanctioned
                         .iter()
                         .any(|(from, to, _)| *from == via_name && *to == retired)
                 {
@@ -483,154 +447,6 @@ fn member_dependency_names(root: &Path) -> Result<BTreeSet<String>> {
                 dependency["name"]
                     .as_str()
                     .context("dependency name missing")?
-                    .to_owned(),
-            );
-        }
-    }
-    Ok(names)
-}
-
-/// `capsule-server` must not be on the `chrono` path.
-///
-/// `cargo tree -i chrono -e no-dev` is a review-blocking gate: chrono reaches this workspace only
-/// through `sea-orm-migration`'s defaults in `capsule-server-migration`, and the workspace's
-/// datetime crate is `jiff`. #402 puts sea-orm into `capsule-server` for the
-/// Postgres adapters, which makes that gate worth *enforcing* rather than reading.
-///
-/// The check is deliberately **per package** rather than a grep of the workspace-wide tree.
-/// `capsule-server-migration` pulls sea-orm with its default features, `with-chrono` among them,
-/// and cargo unifies features across the packages a workspace build selects — so the
-/// workspace-wide `cargo tree` output can list `capsule-server` under sea-orm whatever this crate
-/// declares. What is actually decidable, and what the rule is about, is whether *this package's
-/// own manifest* asks for chrono: `cargo tree -p capsule-server -i chrono -e no-dev` must print
-/// nothing. That is what `default-features = false` on the server's sea-orm entry buys, and this
-/// is what stops somebody restoring the defaults without noticing.
-fn check_chrono_isolation(root: &Path, violations: &mut Vec<String>) -> Result<()> {
-    const PACKAGES: &[&str] = &["capsule-server", "capsule-server-migration"];
-    // The migration crate is exempt from the *conclusion* but not from the check: it is a
-    // dev-dependency of the server precisely because `sea-orm-migration` drags sea-orm's
-    // defaults in, so it is expected to be on the path and is listed here only so a reader sees
-    // that the exemption is deliberate rather than an omission.
-    const EXPECTED_ON_THE_PATH: &[&str] = &["capsule-server-migration"];
-
-    // A positive control before any negative is trusted. `cargo tree -p <name>` exits **zero and
-    // prints nothing** when `<name>` is not a package it knows, so a rename or a typo in
-    // `PACKAGES` would make this whole guard pass silently for the rest of its life — the exact
-    // failure mode a boundary check exists to prevent.
-    let members = workspace_member_names(root)?;
-    for package in PACKAGES {
-        if !members.contains(*package) {
-            violations.push(format!(
-                "the chrono guard names `{package}`, which is not a workspace member; \
-                 `cargo tree -p` would exit zero and print nothing, so the guard would pass \
-                 without checking anything"
-            ));
-        }
-    }
-
-    for package in PACKAGES {
-        if !members.contains(*package) {
-            continue;
-        }
-        let output = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
-            .args([
-                "tree",
-                "--offline",
-                "-p",
-                package,
-                "-i",
-                "chrono",
-                "-e",
-                "no-dev",
-            ])
-            .current_dir(root)
-            .output()
-            .with_context(|| format!("running cargo tree for {package}"))?;
-
-        let reaches_chrono = match classify_chrono_tree(
-            output.status.success(),
-            &String::from_utf8_lossy(&output.stdout),
-            &String::from_utf8_lossy(&output.stderr),
-        ) {
-            Ok(reaches) => reaches,
-            Err(detail) => {
-                violations.push(format!(
-                    "the chrono guard could not decide anything about `{package}`: {detail}"
-                ));
-                continue;
-            }
-        };
-
-        let expected = EXPECTED_ON_THE_PATH.contains(package);
-        if reaches_chrono && !expected {
-            violations.push(format!(
-                "`{package}` reaches `chrono` through its own manifest; the workspace \
-                 permits chrono only through `sea-orm-migration` in \
-                 `capsule-server-migration`. Check that sea-orm is declared with \
-                 `default-features = false`"
-            ));
-        }
-        if !reaches_chrono && expected {
-            violations.push(format!(
-                "`{package}` no longer reaches `chrono`; remove it from EXPECTED_ON_THE_PATH so \
-                 the exemption stops describing something that is not true"
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// Decide what one `cargo tree -i chrono` invocation established, or that it established nothing.
-///
-/// Split out of [`check_chrono_isolation`] because it is the whole of the guard's judgement and
-/// the only part that can be tested without a cargo invocation — and because the shape it is
-/// written against is not obvious. `cargo tree -i` has **three** outcomes and the previous
-/// version of this guard collapsed them into two:
-///
-/// - exit zero, a tree on stdout — the crate is reachable;
-/// - exit zero, `warning: nothing to print.` on stderr — it is not;
-/// - exit non-zero, `did not match any packages` — `chrono` is not in the lock file at all,
-///   which is also "not reachable", and is the state this repository would be in if the CLI's
-///   entity crate ever dropped it.
-///
-/// Anything else non-zero is a **failed invocation** — a manifest error, a lock that needs
-/// updating under `--offline`, a cargo that is not there — and reading it as "chrono absent" is
-/// failing open: the guard would report clean precisely when it knows least. So it is an error,
-/// and the caller turns it into a violation.
-fn classify_chrono_tree(success: bool, stdout: &str, stderr: &str) -> Result<bool, String> {
-    if success {
-        return Ok(stdout.contains("chrono v"));
-    }
-    if stderr.contains("did not match any packages") {
-        return Ok(false);
-    }
-    Err(format!(
-        "`cargo tree` failed: {}",
-        stderr.trim().lines().next().unwrap_or("no diagnostic")
-    ))
-}
-
-/// Every workspace member's package name.
-fn workspace_member_names(root: &Path) -> Result<BTreeSet<String>> {
-    let metadata = cargo_metadata(root)?;
-    let member_ids: BTreeSet<&str> = metadata["workspace_members"]
-        .as_array()
-        .context("cargo metadata workspace_members missing")?
-        .iter()
-        .map(|id| id.as_str().context("workspace member id missing"))
-        .collect::<Result<_>>()?;
-
-    let mut names = BTreeSet::new();
-    for package in metadata["packages"]
-        .as_array()
-        .context("cargo metadata packages missing")?
-    {
-        let id = package["id"].as_str().context("package id missing")?;
-        if member_ids.contains(id) {
-            names.insert(
-                package["name"]
-                    .as_str()
-                    .context("package name missing")?
                     .to_owned(),
             );
         }

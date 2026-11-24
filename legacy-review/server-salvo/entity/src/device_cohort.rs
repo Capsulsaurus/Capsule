@@ -10,7 +10,6 @@
 //!
 //! `user_id` is the account id (a nanoid, matching `users.id`) the session was created under.
 
-use chrono::{DateTime, Utc};
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -25,10 +24,10 @@ pub struct Model {
     pub cohort_hash: String,
     /// First observation of this `(user, cohort)` — pinned, never moved back.
     #[sea_orm(column_type = "TimestampWithTimeZone")]
-    pub first_seen: DateTime<Utc>,
+    pub first_seen: DateTimeUtc,
     /// Most recent observation — bumped on every re-observation.
     #[sea_orm(column_type = "TimestampWithTimeZone")]
-    pub last_seen: DateTime<Utc>,
+    pub last_seen: DateTimeUtc,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

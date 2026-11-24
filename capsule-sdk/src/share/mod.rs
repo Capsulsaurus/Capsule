@@ -25,7 +25,9 @@ use capsule_core::sharing::{ShareLink, SharePublication};
 use tracing::instrument;
 
 use crate::auth::Session;
-use crate::client::{AuthenticatedClient, ClientError, describe_error, is_token_failure};
+use crate::client::{
+    AuthenticatedClient, ClientError, absent_unless, describe_error, is_token_failure,
+};
 use crate::rest;
 
 /// Why a share-link operation did not complete.
@@ -119,12 +121,14 @@ pub fn issue_request(
             .iter()
             .map(capsule_core::crypto::hash::Hash32::to_hex)
             .collect(),
-        wrapped_secret: publication
-            .wrapped_secret
-            .as_ref()
-            .map(|secret| BASE64.encode(secret)),
-        expires_at: link.expires_at.clone(),
-        metadata_blob: Some(BASE64.encode(&publication.metadata_blob)),
+        wrapped_secret: absent_unless(
+            publication
+                .wrapped_secret
+                .as_ref()
+                .map(|secret| BASE64.encode(secret)),
+        ),
+        expires_at: absent_unless(link.expires_at.clone()),
+        metadata_blob: rest::Nullable::Value(BASE64.encode(&publication.metadata_blob)),
     }
 }
 
@@ -190,9 +194,10 @@ impl ShareClient {
         let echoed = self
             .client
             .issue_share(
-                capsule_core::crypto::primitives::PROTOCOL_VERSION,
-                None,
-                &body,
+                crate::rest::IssueShareParamsRequired {
+                    x_capsule_protocol: capsule_core::crypto::primitives::PROTOCOL_VERSION.into(),
+                },
+                body.clone(),
             )
             .await
             .map_err(|error| refusal(error, issue_refusal))?
@@ -205,8 +210,8 @@ impl ShareClient {
             });
         }
         tracing::info!(
-            passphrase = body.wrapped_secret.is_some(),
-            expires = body.expires_at.is_some(),
+            passphrase = body.wrapped_secret.is_value(),
+            expires = body.expires_at.is_value(),
             "share link registered"
         );
         Ok(())
@@ -225,8 +230,9 @@ impl ShareClient {
         self.client
             .revoke_share(
                 opaque_id.to_owned(),
-                capsule_core::crypto::primitives::PROTOCOL_VERSION,
-                None,
+                crate::rest::RevokeShareParamsRequired {
+                    x_capsule_protocol: capsule_core::crypto::primitives::PROTOCOL_VERSION.into(),
+                },
             )
             .await
             .map_err(|error| refusal(error, revoke_refusal))?;

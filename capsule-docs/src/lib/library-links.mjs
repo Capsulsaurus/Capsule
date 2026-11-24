@@ -171,11 +171,6 @@ export const LIBRARIES = [
         code: ['jiff'],
     },
     {
-        url: 'https://github.com/chronotope/chrono',
-        names: [],
-        code: ['chrono'],
-    },
-    {
         url: 'https://github.com/dtolnay/thiserror',
         names: [],
         code: ['thiserror'],
@@ -236,11 +231,6 @@ export const LIBRARIES = [
         url: 'https://github.com/nextest-rs/nextest',
         names: ['nextest'],
         code: ['cargo-nextest'],
-    },
-    {
-        url: 'https://github.com/testcontainers/testcontainers-rs',
-        names: [],
-        code: ['testcontainers'],
     },
     {
         url: 'https://github.com/proptest-rs/proptest',

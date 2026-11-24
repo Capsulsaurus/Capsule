@@ -8,7 +8,6 @@
 //! `quarantined` on an integrity fault; storage verification reads both to compute the
 //! key-free `retrievable` fact.
 
-use chrono::{DateTime, FixedOffset};
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -25,7 +24,7 @@ pub struct Model {
     /// mid-collection and reports `retrievable = false`; its bytes survive until this
     /// instant plus the standing GC grace window (`service::gc::earliest_byte_deletion`).
     #[sea_orm(column_type = "TimestampWithTimeZone", nullable)]
-    pub collectable_since: Option<DateTime<FixedOffset>>,
+    pub collectable_since: Option<DateTimeWithTimeZone>,
     /// Whether an integrity fault has quarantined the blob (dangling reference / failed deep
     /// scan). A quarantined blob is never retrievable.
     #[sea_orm(default_value = "false")]

@@ -11,6 +11,13 @@ use tokio::net::{TcpListener, TcpStream};
 use super::*;
 use crate::auth::{AuthClient, PersistedSession};
 
+/// The quota read the tests drive through the generated client, at this build's protocol date.
+fn quota_params() -> rest::GetQuotaParamsRequired {
+    rest::GetQuotaParamsRequired {
+        x_capsule_protocol: capsule_core::crypto::primitives::PROTOCOL_VERSION.into(),
+    }
+}
+
 // ── Minimal in-process HTTP/1.1 mock (real reqwest over TCP; no booted server) ──────
 
 struct Recorded {
@@ -250,11 +257,7 @@ async fn authenticated_call_flows_bearer_header() {
     let session = session_with(&server.base_url, "access-1", "refresh-1", far_future());
     let client = AuthenticatedClient::new(&server.base_url, session).unwrap();
 
-    let quota = client
-        .get_quota(capsule_core::crypto::primitives::PROTOCOL_VERSION, None)
-        .await
-        .unwrap()
-        .into_inner();
+    let quota = client.get_quota(quota_params()).await.unwrap().into_inner();
     assert_eq!(quota.used, 0);
 
     let requests = server.requests.lock().unwrap();
@@ -351,11 +354,7 @@ async fn a_401_is_refreshed_once_and_the_call_replayed() {
     let session = session_with(&server.base_url, "access-1", "refresh-1", far_future());
     let client = AuthenticatedClient::new(&server.base_url, session).unwrap();
 
-    let quota = client
-        .get_quota(capsule_core::crypto::primitives::PROTOCOL_VERSION, None)
-        .await
-        .unwrap()
-        .into_inner();
+    let quota = client.get_quota(quota_params()).await.unwrap().into_inner();
     assert_eq!(
         quota.used, 5,
         "the replayed call is the one the caller sees"
@@ -405,7 +404,7 @@ async fn a_persistent_401_is_surfaced_after_exactly_one_replay() {
     let client = AuthenticatedClient::new(&server.base_url, session).unwrap();
 
     let error = client
-        .get_quota(capsule_core::crypto::primitives::PROTOCOL_VERSION, None)
+        .get_quota(quota_params())
         .await
         .expect_err("a credential the server never honours must fail");
     let rest::Error::Api(response) = &error else {
@@ -456,7 +455,7 @@ async fn a_401_whose_refresh_fails_keeps_the_servers_own_401() {
     let client = AuthenticatedClient::new(&server.base_url, session).unwrap();
 
     let error = client
-        .get_quota(capsule_core::crypto::primitives::PROTOCOL_VERSION, None)
+        .get_quota(quota_params())
         .await
         .expect_err("nothing can rescue this");
     let rest::Error::Api(response) = &error else {
@@ -505,7 +504,7 @@ async fn quota_answering_401(body: String) -> (MockServer, rest::Error<rest::Get
     let session = session_with(&server.base_url, "access-1", "refresh-1", far_future());
     let client = AuthenticatedClient::new(&server.base_url, session).unwrap();
     let error = client
-        .get_quota(capsule_core::crypto::primitives::PROTOCOL_VERSION, None)
+        .get_quota(quota_params())
         .await
         .expect_err("the mock refuses the operation");
     (server, error)
@@ -565,7 +564,7 @@ async fn quota_answering_413(body: String) -> rest::Error<rest::GetQuotaError> {
     let session = session_with(&server.base_url, "access-1", "refresh-1", far_future());
     let client = AuthenticatedClient::new(&server.base_url, session).unwrap();
     client
-        .get_quota(capsule_core::crypto::primitives::PROTOCOL_VERSION, None)
+        .get_quota(quota_params())
         .await
         .expect_err("the mock refuses the operation")
 }
@@ -682,11 +681,7 @@ async fn preflight_refresh_fires_through_client() {
     );
     let client = AuthenticatedClient::new(&server.base_url, session).unwrap();
 
-    let quota = client
-        .get_quota(capsule_core::crypto::primitives::PROTOCOL_VERSION, None)
-        .await
-        .unwrap()
-        .into_inner();
+    let quota = client.get_quota(quota_params()).await.unwrap().into_inner();
     assert_eq!(quota.used, 7);
 
     assert_eq!(

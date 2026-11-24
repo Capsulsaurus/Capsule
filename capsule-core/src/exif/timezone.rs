@@ -15,7 +15,7 @@ pub struct TimezoneResolution {
 pub fn resolve_timezone(extract: &ExifExtract) -> TimezoneResolution {
     let capture_timestamp = extract
         .date_time_original
-        .and_then(|dt| dt.to_zoned(TimeZone::UTC).ok())
+        .and_then(|dt| dt.to_zoned_datetime(TimeZone::UTC).ok())
         .map(|z| z.timestamp().as_second());
 
     // Case 1: OffsetTimeOriginal present
@@ -25,7 +25,7 @@ pub fn resolve_timezone(extract: &ExifExtract) -> TimezoneResolution {
     {
         // A fixed offset is never ambiguous, so this either resolves or the datetime
         // itself is out of range.
-        let local = dt.to_zoned(TimeZone::fixed(offset)).ok();
+        let local = dt.to_zoned_datetime(TimeZone::fixed(offset)).ok();
         let capture_utc = local.map(|t| t.timestamp().as_second());
         return TimezoneResolution {
             capture_timestamp,

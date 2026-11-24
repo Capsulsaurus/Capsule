@@ -12,7 +12,6 @@
 //! silently rewrite. The full signed receipt travels as canonical CBOR in `receipt_cbor`
 //! (the served/persisted form); the scalar columns mirror it for indexed lookup.
 
-use chrono::{DateTime, FixedOffset, Utc};
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -56,7 +55,7 @@ pub struct Model {
     pub server_key_id: String,
     /// The server's trusted clock at the finalization commit.
     #[sea_orm(column_type = "TimestampWithTimeZone")]
-    pub received_at: DateTime<FixedOffset>,
+    pub received_at: DateTimeWithTimeZone,
     /// The full signed receipt as canonical CBOR (the served, evidentiary form).
     #[sea_orm(column_type = "Blob")]
     pub receipt_cbor: Vec<u8>,
@@ -65,7 +64,7 @@ pub struct Model {
         column_type = "TimestampWithTimeZone",
         default_value = "CURRENT_TIMESTAMP"
     )]
-    pub created_at: DateTime<Utc>,
+    pub created_at: DateTimeUtc,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

@@ -45,14 +45,12 @@ use capsule_i18n::error_codes;
 use tracing::instrument;
 
 use crate::auth::{AuthError, Session};
+use crate::client::Bearer;
 use crate::federation::RequestSigner;
 use crate::net::{RetryClass, RetryDecision, RetryEngine, Sleeper, TokioSleeper};
 use crate::rest;
 
 pub mod reannounce;
-
-/// The security-scheme key the Kynos document declares for the bearer JWT.
-const BEARER_SCHEME: &str = "bearer";
 
 // ─── Cursor ──────────────────────────────────────────────────────────────────
 
@@ -524,7 +522,7 @@ impl SyncConsumer {
     pub fn with_static_token(base_url: &str, token: impl Into<String>) -> Result<Self, SyncError> {
         let token = token.into();
         Ok(Self {
-            client: build_client(base_url, rest::Credential::Bearer(token.into()))?,
+            client: build_client(base_url, Bearer::Token(token))?,
             auth: SyncAuth::Static,
         })
     }
@@ -542,7 +540,7 @@ impl SyncConsumer {
     ) -> Result<Self, SyncError> {
         let token: String = token.into();
         Ok(Self {
-            client: build_client(base_url, rest::Credential::Bearer(token.clone().into()))?,
+            client: build_client(base_url, Bearer::Token(token.clone()))?,
             auth: SyncAuth::Signed {
                 token: token.into(),
                 signer,
@@ -676,35 +674,32 @@ impl SyncConsumer {
                 .as_text()
                 .filter(|value| !value.is_empty())
                 .map(str::to_owned),
-            page_size: Some(i64::from(page_size)),
+            page_size: Some(page_size),
             // The suite and the sidecar schema are validated when present and a feed pull has
             // no use for either; the suite already rides the transport's default headers.
-            ..rest::SyncFeedParams::default()
+            //
+            // The protocol date is a required parameter of every gated operation in the
+            // document, so the generated `…ParamsRequired` asks for it; the value is the build's
+            // own, the same one the transport's default header carries.
+            ..rest::SyncFeedParams::from(rest::SyncFeedParamsRequired {
+                x_capsule_protocol: capsule_core::crypto::primitives::PROTOCOL_VERSION.into(),
+            })
         };
-        // The protocol date is a required parameter of every gated operation in the document,
-        // so the generated signature asks for it; the value is the build's own, the same one the
-        // transport's default header carries.
-        Ok(self
-            .client
-            .sync_feed(capsule_core::crypto::primitives::PROTOCOL_VERSION, params)
-            .await?
-            .into_inner())
+        Ok(self.client.sync_feed(params).await?.into_inner())
     }
 }
 
 /// A generated client for `base_url` carrying `credential` under the bearer scheme.
-fn build_client(base_url: &str, credential: rest::Credential) -> Result<rest::Client, SyncError> {
+fn build_client(base_url: &str, credential: Bearer) -> Result<rest::Client, SyncError> {
     // The SDK's one HTTP client, so the feed pull carries the protocol handshake.
     let http =
         crate::net::http_client().map_err(|error| SyncError::Transport(error.to_string()))?;
-    let client = crate::client::negotiated_client(http, base_url)
-        .map_err(SyncError::Transport)?
-        .with_credential(BEARER_SCHEME, credential);
-    Ok(client)
+    let client = crate::client::negotiated_client(http, base_url).map_err(SyncError::Transport)?;
+    Ok(credential.attach(client))
 }
 
 /// A credential that pulls a fresh access token from `session` on every request.
-fn bearer_provider(session: Session) -> rest::Credential {
+fn bearer_provider(session: Session) -> Bearer {
     let provider: rest::TokenProvider = Arc::new(move || {
         let session = session.clone();
         Box::pin(async move {
@@ -714,7 +709,7 @@ fn bearer_provider(session: Session) -> rest::Credential {
                 .map_err(|error| rest::AuthError::new(error.to_string()))
         })
     });
-    rest::Credential::Provider(provider)
+    Bearer::Provider(provider)
 }
 
 /// Whether the feed refused the credential.
@@ -799,7 +794,7 @@ fn decode_entry(entry: rest::types::SyncEntry) -> Result<FeedEntry, SyncError> {
     // Base64, because the manifest is CBOR and the feed is JSON. Decoded here so a caller holds
     // the *exact* signed bytes `verify_asset` needs — re-encoding them anywhere would be the
     // corruption that carrying the signed bytes verbatim exists to prevent.
-    let manifest_cbor = match entry.manifest_cbor.as_deref() {
+    let manifest_cbor = match entry.manifest_cbor.as_option() {
         Some(encoded) => BASE64
             .decode(encoded)
             .map_err(|error| SyncError::MalformedManifest(error.to_string()))?,
@@ -819,12 +814,16 @@ fn decode_entry(entry: rest::types::SyncEntry) -> Result<FeedEntry, SyncError> {
         .collect::<Result<Vec<_>, _>>()?;
     Ok(FeedEntry {
         album_id: entry.album_id.into_bytes(),
-        sync_seq: u64::try_from(entry.sync_seq).unwrap_or(u64::MAX),
+        sync_seq: entry.sync_seq,
         protocol_version: entry.protocol_version,
         kind,
         asset_id: entry.asset_id.into_bytes(),
         manifest_cbor,
-        metadata_blob: entry.metadata_blob.unwrap_or_default().into_bytes(),
+        metadata_blob: entry
+            .metadata_blob
+            .into_option()
+            .unwrap_or_default()
+            .into_bytes(),
         blobs: decode_blobs(entry.blobs),
         derivative_manifests,
         original_held: entry.original_held,
@@ -845,7 +844,7 @@ fn decode_blobs(blobs: Vec<rest::types::SyncBlobRef>) -> BlobManifest {
         let reference = BlobRef {
             ciphertext_hash: blob.hash,
             role: role_str(&blob.role).to_owned(),
-            size: u64::try_from(blob.size).unwrap_or(u64::MAX),
+            size: blob.size,
         };
         if matches!(blob.role, rest::types::WireBlobRole::Original) {
             manifest.original = Some(reference);

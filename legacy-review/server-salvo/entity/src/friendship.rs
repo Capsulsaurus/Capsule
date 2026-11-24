@@ -1,4 +1,3 @@
-use chrono::{DateTime, Utc};
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -16,9 +15,9 @@ pub struct Model {
         column_type = "TimestampWithTimeZone",
         default_value = "CURRENT_TIMESTAMP"
     )]
-    pub created_at: DateTime<Utc>,
+    pub created_at: DateTimeUtc,
     #[sea_orm(column_type = "TimestampWithTimeZone", nullable)]
-    pub accepted_at: Option<DateTime<Utc>>,
+    pub accepted_at: Option<DateTimeUtc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]

@@ -1,8 +1,9 @@
-//! The chrono ⇄ jiff conversion seam.
+//! The column-type ⇄ jiff conversion seam.
 //!
 //! Per the [Dependencies design doc](../../../capsule-docs/src/content/docs/design/dependencies.md),
-//! `jiff` is the canonical datetime library for all domain logic; `chrono` survives only
-//! as the sea-orm column type inside the entity crates. Every value crossing the entity
+//! `jiff` is the canonical datetime library for all domain logic; sea-orm's own `DateTimeUtc`
+//! and `DateTimeWithTimeZone` survive only as column types inside the entity crates. Every
+//! value crossing the entity
 //! boundary converts through these helpers, losslessly at second + nanosecond precision
 //! for any real wall-clock value.
 

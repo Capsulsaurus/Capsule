@@ -87,9 +87,15 @@ fn build_rest_client() {
         spargen::OmitRule::operation(spargen::OmitMethod::Post, "/v1/albums/{album_id}/upgrade"),
         spargen::OmitRule::operation(spargen::OmitMethod::Get, "/v1/upload/{id}/receipt"),
     ];
-    let spec_cfg = omitted
-        .into_iter()
-        .fold(spargen::Spec::new(spec.clone()), spargen::Spec::omit_rule);
+    // `Jiff`: the workspace's one datetime crate, should the contract ever carry a `date-time`
+    // (it carries RFC 3339 strings and integer epochs today, so nothing maps to it yet); the
+    // generator's default is `time`, a second datetime crate. `Closed` keeps the string enums
+    // the SDK matches on exhaustive, as they were before spargen 0.8 made them open: a value
+    // this build does not know is a decode failure, never a silent `Unknown`.
+    let base = spargen::Spec::new(spec.clone())
+        .with_datetime(spargen::DateTimeBackend::Jiff)
+        .with_closed_enums(spargen::StringEnums::Closed);
+    let spec_cfg = omitted.into_iter().fold(base, spargen::Spec::add_omit_rule);
     let report = spargen::generate(&spec_cfg.build(out));
 
     // `Cached` is a success: spargen verified the already-rendered module against the build

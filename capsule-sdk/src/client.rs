@@ -38,17 +38,40 @@
 use std::ops::Deref;
 use std::sync::Arc;
 
+use http_body_util::BodyExt;
 use reqwest::header::{AUTHORIZATION, HeaderValue};
 use secrecy::ExposeSecret;
 
 use crate::auth::Session;
 use crate::net::negotiation;
-use crate::rest::{self, Client, Credential};
+use crate::rest::{self, Client};
 
-/// The security-scheme key the server declares for its bearer JWT (see
-/// `capsule_api::create_openapi_spec`); the generated client attaches the registered
-/// credential to every operation whose `security` names it.
-const BEARER_SCHEME: &str = "bearer";
+/// The credential a generated client presents under the contract's `bearer` security scheme,
+/// attached through the typed setter spargen generates for that scheme.
+pub(crate) enum Bearer {
+    /// A fixed token: a static access token, or a federation capability.
+    Token(String),
+    /// A source asked for a fresh token each time a call attaches the scheme.
+    Provider(rest::TokenProvider),
+}
+
+/// An optional, nullable field of a generated request: the value, or absent (omitted from the
+/// body) when there is none, as spargen before 0.8 sent an `Option`'s `None`. Never `null`:
+/// nothing the SDK sends distinguishes the two.
+pub(crate) fn absent_unless<T>(value: Option<T>) -> rest::Nullable<T> {
+    value.map_or(rest::Nullable::Absent, rest::Nullable::Value)
+}
+
+impl Bearer {
+    /// `client`, presenting this credential on every operation whose `security` names the
+    /// bearer scheme.
+    pub(crate) fn attach(self, client: Client) -> Client {
+        match self {
+            Self::Token(token) => client.with_bearer(token.into()),
+            Self::Provider(provider) => client.with_bearer_provider(provider),
+        }
+    }
+}
 
 /// Failure constructing an [`AuthenticatedClient`] — today only a malformed base URL. Wire
 /// failures surface later, per operation, through the generated client's own typed error.
@@ -69,8 +92,9 @@ pub enum ClientError {
 /// Cheap to build; holds one [`rest::Client`] whose bearer credential is
 /// an async provider backed by the session. Because the provider is consulted per request,
 /// token rotation (refresh) is picked up with no rebuild. Deref-transparent: call any
-/// generated operation directly, e.g. `client.get_quota(PROTOCOL_VERSION, None).await` — every
-/// gated operation takes the protocol date as its first argument, because the document
+/// generated operation directly, e.g.
+/// `client.get_quota(GetQuotaParamsRequired { x_capsule_protocol: PROTOCOL_VERSION.into() })` —
+/// every gated operation's `…ParamsRequired` carries the protocol date, because the document
 /// declares `X-Capsule-Protocol` required there (issue #404); the transport sends the same value
 /// as a default header regardless.
 pub struct AuthenticatedClient {
@@ -150,7 +174,7 @@ const BEARER_PREFIX: &str = "Bearer ";
 /// neither `Clone` nor constructible outside the generated runtime. A middleware therefore
 /// *cannot* send a second time, which is the one thing this layer must do. The backend seam
 /// has no such constraint, and spargen's own `RetryBackend` is the precedent — including the
-/// `Request::try_clone()`-returns-`None` rule for one-shot bodies.
+/// `try_clone`-returns-`None` rule for one-shot bodies.
 ///
 /// # Exactly once, by construction
 ///
@@ -173,7 +197,7 @@ impl std::fmt::Debug for RefreshOn401 {
 }
 
 impl rest::HttpBackend for RefreshOn401 {
-    fn execute(&self, request: reqwest::Request) -> rest::ExecuteFuture<'_> {
+    fn execute(&self, request: http::Request<rest::HttpBody>) -> rest::ExecuteFuture<'_> {
         // Own clones of the `Arc`/`Session` so the returned future is self-contained, matching
         // the seam's expectations (and `RetryBackend`'s shape).
         let inner = self.inner.clone();
@@ -181,7 +205,7 @@ impl rest::HttpBackend for RefreshOn401 {
         Box::pin(async move {
             // A one-shot streaming body cannot be resent intact. Execute the original once and
             // return: half a body on the wire twice is worse than a `401` the caller can see.
-            let Some(mut replay) = request.try_clone() else {
+            let Some(mut replay) = crate::net::try_clone_request(&request) else {
                 tracing::debug!("request body is not replayable; a 401 will not be retried");
                 return inner.execute(request).await;
             };
@@ -257,26 +281,19 @@ struct ProblemCode {
 /// `None`, which [`RefreshOn401`] treats as "not an expired token": it fails closed, never
 /// replaying a `401` it cannot classify.
 async fn problem_code_of(
-    response: reqwest::Response,
-) -> Result<(Option<String>, reqwest::Response), rest::TransportError> {
-    let status = response.status();
-    let version = response.version();
-    let headers = response.headers().clone();
-    let body = response.bytes().await.map_err(rest::TransportError::new)?;
+    response: http::Response<rest::HttpBody>,
+) -> Result<(Option<String>, http::Response<rest::HttpBody>), rest::TransportError> {
+    let (parts, body) = response.into_parts();
+    let body = BodyExt::collect(body).await?.to_bytes();
     let code = serde_json::from_slice::<ProblemCode>(&body)
         .ok()
         .and_then(|problem| problem.code);
-
-    let mut rebuilt = http::Response::new(body);
-    *rebuilt.status_mut() = status;
-    *rebuilt.version_mut() = version;
-    *rebuilt.headers_mut() = headers;
-    Ok((code, reqwest::Response::from(rebuilt)))
+    Ok((code, http::Response::from_parts(parts, body.into())))
 }
 
 /// The bearer token a prepared request carries, if any. `None` for an unauthenticated
 /// operation, and for any credential shape this layer cannot refresh.
-fn bearer_of(request: &reqwest::Request) -> Option<String> {
+fn bearer_of(request: &http::Request<rest::HttpBody>) -> Option<String> {
     request
         .headers()
         .get(AUTHORIZATION)?
@@ -304,19 +321,19 @@ fn build_client(base_url: &str, session: Session) -> Result<Client, ClientError>
         })
     });
 
-    // `with_backend` builds requests on a default `reqwest::Client` and *executes* them
-    // through the backend, so the executing client — and with it the TLS stack, the redirect
-    // policy and the timeouts — is still `reqwest_client()`, one layer down.
+    // `with_backend` builds no HTTP client of its own: every request is executed through the
+    // backend, so the executing client — and with it the TLS stack, the redirect policy and the
+    // timeouts — is `reqwest_client()`, one layer down.
     let backend: Arc<dyn rest::HttpBackend> = Arc::new(Negotiate::over(Arc::new(RefreshOn401 {
         inner: crate::net::backend(reqwest_client()),
         session,
     })));
-    let client = Client::with_backend(backend, base_url)
-        .map_err(|e| ClientError::InvalidBaseUrl {
+    let client = crate::net::generated_client(backend, base_url)
+        .map_err(|reason| ClientError::InvalidBaseUrl {
             url: base_url.to_string(),
-            reason: e.to_string(),
+            reason,
         })?
-        .with_credential(BEARER_SCHEME, Credential::Provider(provider));
+        .with_bearer_provider(provider);
     Ok(client)
 }
 
@@ -330,15 +347,9 @@ fn build_client(base_url: &str, session: Session) -> Result<Client, ClientError>
 /// per-client transport would mean a fresh TLS handshake for every escrow read on a device
 /// that does several during one cadence prompt. Nothing here is configured per instance —
 /// `http_client` takes no arguments and its protocol headers are the same on every request —
-/// so there is nothing to vary: the same client serves them all.
-///
-/// **What that does not fix.** `Client::with_backend` still builds its *own* default
-/// `reqwest::Client` internally, one per [`AuthenticatedClient`]. That one only assembles
-/// requests — every byte is executed through the backend below, and therefore through this
-/// shared client — so it opens no connection and costs nothing on the wire; what it costs is
-/// one throwaway allocation per construction. Removing even that needs a
-/// `with_client_and_backend` constructor spargen does not expose, which is generator work of
-/// exactly the same kind as the `application/cbor` gap, and lands where that lands.
+/// so there is nothing to vary: the same client serves them all. `Client::with_backend` builds
+/// no client of its own (spargen 0.8), so this is the only `reqwest::Client` an
+/// [`AuthenticatedClient`] touches.
 fn reqwest_client() -> reqwest::Client {
     static SHARED: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
     SHARED
@@ -355,8 +366,8 @@ fn reqwest_client() -> reqwest::Client {
 ///
 /// # Why a synthesized `426` and not an error
 ///
-/// The backend seam's error type wraps a `reqwest::Error` and nothing else, so a typed refusal
-/// cannot cross it. A `426` can: the generated operation maps it exactly as it maps the
+/// The backend seam's error type carries a failure *class* and a cause, so a typed refusal
+/// cannot cross it as one. A `426` can: the generated operation maps it exactly as it maps the
 /// server's own, and [`upgrade_required_of`] turns either into the one
 /// [`UpgradeRequired`](negotiation::UpgradeRequired). The synthesized response carries the
 /// latched window headers and a coded problem, so it is indistinguishable at the caller from
@@ -389,19 +400,31 @@ impl Negotiate {
 }
 
 impl rest::HttpBackend for Negotiate {
-    fn execute(&self, request: reqwest::Request) -> rest::ExecuteFuture<'_> {
+    fn execute(&self, request: http::Request<rest::HttpBody>) -> rest::ExecuteFuture<'_> {
         let inner = self.inner.clone();
         let preflight = self.preflight;
         Box::pin(async move {
+            // The seam carries an `http::Uri`, which the generated runtime guarantees absolute.
+            // One that is not a URL is the runtime's to refuse, so it passes through unscreened.
+            let url = reqwest::Url::parse(&request.uri().to_string()).ok();
             let protocol = negotiation::protocol_of(request.headers());
             if preflight
-                && let Err(refusal) =
-                    negotiation::preflight(request.method(), request.url(), &protocol)
+                && let Some(url) = &url
+                && let Err(refusal) = negotiation::preflight(request.method(), url, &protocol)
             {
                 return Ok(local_upgrade_required(&refusal));
             }
             let response = inner.execute(request).await?;
-            negotiation::observe(response.url(), response.headers());
+            // The window is latched for the origin the request was sent to, because an
+            // `http::Response` carries no final URL (reqwest keeps it private). That assumes the
+            // API answers its operations where the document places them: the SDK's client still
+            // follows redirects, and a cross-origin one would latch the redirect target's window
+            // under this origin. A narrower window there refuses a write locally with a `426`; a
+            // wider one lets through a write this origin's server then refuses with its own. No
+            // write lands that the server would refuse either way.
+            if let Some(url) = &url {
+                negotiation::observe(url, response.headers());
+            }
             if response.status() == reqwest::StatusCode::PAYLOAD_TOO_LARGE {
                 return coded_too_large(response).await;
             }
@@ -421,12 +444,10 @@ impl rest::HttpBackend for Negotiate {
 /// not a coded problem is answered here with one coded `error.request.too_large`, keeping the
 /// status and headers. A `413` that already carries a code passes through unchanged.
 async fn coded_too_large(
-    response: reqwest::Response,
-) -> Result<reqwest::Response, rest::TransportError> {
-    let status = response.status();
-    let version = response.version();
-    let mut headers = response.headers().clone();
-    let body = response.bytes().await.map_err(rest::TransportError::new)?;
+    response: http::Response<rest::HttpBody>,
+) -> Result<http::Response<rest::HttpBody>, rest::TransportError> {
+    let (mut parts, body) = response.into_parts();
+    let body = BodyExt::collect(body).await?.to_bytes();
     let coded = serde_json::from_slice::<ProblemCode>(&body)
         .ok()
         .and_then(|problem| problem.code)
@@ -438,11 +459,11 @@ async fn coded_too_large(
             bytes = body.len(),
             "a 413 without a coded problem body was coded error.request.too_large"
         );
-        headers.insert(
+        parts.headers.insert(
             reqwest::header::CONTENT_TYPE,
             HeaderValue::from_static("application/problem+json"),
         );
-        headers.remove(reqwest::header::CONTENT_LENGTH);
+        parts.headers.remove(reqwest::header::CONTENT_LENGTH);
         serde_json::json!({
             "type": "about:blank",
             "title": "Payload Too Large",
@@ -453,11 +474,7 @@ async fn coded_too_large(
         .to_string()
         .into()
     };
-    let mut rebuilt = http::Response::new(body);
-    *rebuilt.status_mut() = status;
-    *rebuilt.version_mut() = version;
-    *rebuilt.headers_mut() = headers;
-    Ok(reqwest::Response::from(rebuilt))
+    Ok(http::Response::from_parts(parts, body.into()))
 }
 
 /// A generated client for `base_url` that executes on `http` under the window screen — the
@@ -466,16 +483,17 @@ async fn coded_too_large(
 ///
 /// The error is the generated client's description of a `base_url` it cannot parse.
 pub(crate) fn negotiated_client(http: reqwest::Client, base_url: &str) -> Result<Client, String> {
-    Client::with_backend(
+    crate::net::generated_client(
         Arc::new(Negotiate::over(crate::net::backend(http))),
         base_url,
     )
-    .map_err(|error| error.to_string())
 }
 
 /// The `426` [`Negotiate`] answers a refused write with: the window it was refused under, as
 /// headers, and an RFC 9457 problem coded `error.protocol.version_unsupported`.
-fn local_upgrade_required(refusal: &negotiation::UpgradeRequired) -> reqwest::Response {
+fn local_upgrade_required(
+    refusal: &negotiation::UpgradeRequired,
+) -> http::Response<rest::HttpBody> {
     let problem = serde_json::json!({
         "type": "about:blank",
         "title": "Upgrade Required",
@@ -483,7 +501,7 @@ fn local_upgrade_required(refusal: &negotiation::UpgradeRequired) -> reqwest::Re
         "detail": refusal.message,
         "code": refusal.error_code(),
     });
-    let mut response = http::Response::new(problem.to_string());
+    let mut response = http::Response::new(rest::HttpBody::from(problem.to_string()));
     *response.status_mut() = reqwest::StatusCode::UPGRADE_REQUIRED;
     let headers = response.headers_mut();
     headers.insert(
@@ -508,7 +526,7 @@ fn local_upgrade_required(refusal: &negotiation::UpgradeRequired) -> reqwest::Re
             headers.insert(name, value);
         }
     }
-    reqwest::Response::from(response)
+    response
 }
 
 /// The one typed [`UpgradeRequired`](negotiation::UpgradeRequired) a generated-client failure
@@ -543,9 +561,10 @@ where
 
 /// Whether a generated-client failure is the session failing to produce a bearer.
 ///
-/// `RequestConstruction` is **not** a pre-flight-only class. reqwest builds every failure of
-/// the request it executes with `error::request(..)`, so connection-refused, DNS and TLS
-/// failures land there too. The *source* discriminates them: the token provider
+/// `RequestConstruction` is **not** a token-only class: every request-kind cause lands there,
+/// a request the runtime could not assemble among them (connection-refused, DNS and TLS
+/// failures are the generated taxonomy's `Transport`). The *source* discriminates them: the
+/// token provider
 /// [`build_client`] registers boxes its failure as the generated runtime's own
 /// [`rest::AuthError`], and nothing else on this path is. A dead session must reach a caller
 /// as an auth failure rather than as a transport blip, because the two have opposite remedies.

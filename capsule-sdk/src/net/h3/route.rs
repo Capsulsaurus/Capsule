@@ -423,14 +423,60 @@ impl RoutedBackend {
 }
 
 impl crate::rest::HttpBackend for RoutedBackend {
-    fn execute(&self, request: reqwest::Request) -> crate::rest::ExecuteFuture<'_> {
+    fn execute(
+        &self,
+        request: http::Request<crate::rest::HttpBody>,
+    ) -> crate::rest::ExecuteFuture<'_> {
         let client = self.client.clone();
         Box::pin(async move {
-            execute(&client, request)
+            let request = to_reqwest(request).await?;
+            let response = execute(&client, request)
                 .await
-                .map_err(crate::rest::TransportError::new)
+                .map_err(crate::rest::TransportError::from_reqwest)?;
+            Ok(from_reqwest(response))
         })
     }
+}
+
+/// A request from the generated client's seam, as [`execute`] sends it. An in-memory body is
+/// handed to reqwest as its bytes (read off the one frame it holds, so nothing is copied) and
+/// the router can still replay it on a lost race; only a streaming body is streamed, and that
+/// one is never replayed.
+async fn to_reqwest(
+    request: http::Request<crate::rest::HttpBody>,
+) -> Result<reqwest::Request, crate::rest::TransportError> {
+    use http_body_util::BodyExt;
+
+    let (parts, body) = request.into_parts();
+    let body = if body.as_bytes().is_some() {
+        reqwest::Body::from(BodyExt::collect(body).await?.to_bytes())
+    } else {
+        reqwest::Body::wrap(body)
+    };
+    reqwest::Request::try_from(http::Request::from_parts(parts, body))
+        .map_err(crate::rest::TransportError::from_reqwest)
+}
+
+/// A response [`execute`] received, as the generated client's seam carries it: the body is
+/// reqwest's own, read as it arrives.
+///
+/// A failure reading it is classified as the default backend classifies one: a timeout keeps its
+/// class, and anything else is the connection giving out partway through the body
+/// ([`crate::rest::Error::InterruptedBody`]). The default backend further tells a malformed body
+/// (a protocol failure) from a cut-short one by the I/O error under reqwest's; that reading is
+/// private to the generated runtime, so both arrive here as an interruption.
+fn from_reqwest(response: reqwest::Response) -> http::Response<crate::rest::HttpBody> {
+    use http_body_util::BodyExt as _;
+
+    http::Response::<reqwest::Body>::from(response).map(|body| {
+        crate::rest::HttpBody::wrap(body.map_err(|error| {
+            if error.is_timeout() {
+                crate::rest::TransportError::from_reqwest(error)
+            } else {
+                crate::rest::TransportError::interrupted(error)
+            }
+        }))
+    })
 }
 
 #[cfg(test)]

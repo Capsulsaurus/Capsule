@@ -41,10 +41,10 @@ enter this tree at all is `deny.toml`, and the rationale is
 capsule-docs/src/content/docs/design/licensing.md.
 
 --------------------------------------------------------------------------------
-tzf-rel — Open Database License v1.0 (ODbL-1.0)
+tzf-dist — Open Database License v1.0 (ODbL-1.0)
 --------------------------------------------------------------------------------
 
-Capsule embeds the `tzf-rel` timezone boundary database (reached through the
+Capsule embeds the `tzf-dist` timezone boundary database (reached through the
 MIT-licensed `tzf-rs` crate) in every distributed binary: the `capsule` CLI, the
 server binaries, the iOS static library, the Android shared library, and the
 WebAssembly bundle.
@@ -54,7 +54,7 @@ WebAssembly bundle.
   <https://opendatacommons.org/licenses/odbl/1-0/>
 
   Upstream database: <https://github.com/evansiroky/timezone-boundary-builder>
-  Rust packaging:    <https://github.com/ringsaturn/tzf-rel>
+  Rust packaging:    <https://github.com/ringsaturn/tzf-dist>
 
 Capsule redistributes this database unmodified and creates no Derivative
 Database. The ODbL share-alike obligation attaches to the database, not to

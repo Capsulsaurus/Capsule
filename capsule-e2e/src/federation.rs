@@ -50,7 +50,7 @@ impl TlsFront {
         let leaf_key = rcgen::KeyPair::generate().expect("a leaf key");
         let leaf = rcgen::CertificateParams::new(vec![host.to_owned()])
             .expect("leaf parameters")
-            .signed_by(&leaf_key, &ca, &ca_key)
+            .signed_by(&leaf_key, &rcgen::Issuer::from_params(&ca_params, &ca_key))
             .expect("a leaf signed by the CA");
 
         // `ring`, named rather than taken from the process default: the stack every other

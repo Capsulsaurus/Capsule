@@ -1075,7 +1075,9 @@ async fn register_without_a_directory(server: &Server) -> (Session, Uuid) {
         .expect("a fresh account registers");
     let profile = AuthenticatedClient::new(server.base_url(), session.clone())
         .expect("the API root parses")
-        .get_profile(PROTOCOL_VERSION, None)
+        .get_profile(capsule_sdk::rest::GetProfileParamsRequired {
+            x_capsule_protocol: PROTOCOL_VERSION.into(),
+        })
         .await
         .expect("the profile answers")
         .into_inner();

@@ -25,6 +25,23 @@ use capsule_sdk::rest;
 use capsule_sdk::rest::types::{ReauthenticateRequest, RedeemRequest, RelayRequest};
 use tempfile::TempDir;
 
+/// A gated operation's required parameters: this build's protocol date and nothing else.
+macro_rules! gated {
+    ($required:ident) => {
+        rest::$required {
+            x_capsule_protocol: PROTOCOL_VERSION.into(),
+        }
+    };
+}
+
+/// A drain's required parameters: the mailbox `direction` and this build's protocol date.
+fn drain_params(direction: &str) -> rest::DrainEnrollmentChannelParamsRequired {
+    rest::DrainEnrollmentChannelParamsRequired {
+        direction: direction.into(),
+        x_capsule_protocol: PROTOCOL_VERSION.into(),
+    }
+}
+
 const TO_ENROLLEE: &str = "to_enrollee";
 const TO_INITIATOR: &str = "to_initiator";
 
@@ -40,14 +57,17 @@ fn enrollee(server: &Server) -> rest::Client {
 async fn open_channel(server: &Server, a: &Device) -> String {
     let issued = a
         .generated(server)
-        .issue_enrollment_code(PROTOCOL_VERSION, None)
+        .issue_enrollment_code(gated!(IssueEnrollmentCodeParamsRequired))
         .await
         .expect("a freshly authenticated initiator issues a code")
         .into_inner();
     assert!(!issued.code.is_empty());
     assert!(!issued.text_fallback.is_empty());
     enrollee(server)
-        .redeem_enrollment_code(PROTOCOL_VERSION, None, &RedeemRequest { code: issued.code })
+        .redeem_enrollment_code(
+            gated!(RedeemEnrollmentCodeParamsRequired),
+            RedeemRequest { code: issued.code },
+        )
         .await
         .expect("the enrollee redeems the code")
         .into_inner()
@@ -74,7 +94,11 @@ fn new_device_library() -> (TempDir, Workspace) {
 async fn send(client: &rest::Client, channel: &str, direction: &str, payload: &EnrollmentPayload) {
     let encoded = payload.encode().expect("a ceremony payload encodes");
     client
-        .relay_enrollment_payload(channel, PROTOCOL_VERSION, None, &relay(direction, &encoded))
+        .relay_enrollment_payload(
+            channel,
+            gated!(RelayEnrollmentPayloadParamsRequired),
+            relay(direction, &encoded),
+        )
         .await
         .expect("the relay accepts a ceremony payload");
 }
@@ -82,7 +106,7 @@ async fn send(client: &rest::Client, channel: &str, direction: &str, payload: &E
 /// Drain `direction` and decode the one payload it must hold.
 async fn receive(client: &rest::Client, channel: &str, direction: &str) -> EnrollmentPayload {
     let drained = client
-        .drain_enrollment_channel(channel, direction, PROTOCOL_VERSION, None)
+        .drain_enrollment_channel(channel, drain_params(direction))
         .await
         .expect("the mailbox drains")
         .into_inner();
@@ -104,7 +128,7 @@ fn is_safety_code(code: &str) -> bool {
 /// A drain of a closed channel is refused as not found.
 async fn assert_channel_gone(client: &rest::Client, channel: &str, direction: &str) {
     let gone = client
-        .drain_enrollment_channel(channel, direction, PROTOCOL_VERSION, None)
+        .drain_enrollment_channel(channel, drain_params(direction))
         .await
         .expect_err("a closed channel delivers nothing");
     assert!(
@@ -127,9 +151,8 @@ async fn e2e_case_12_a_code_opens_a_relay_channel_that_delivers_each_payload_onc
     // Fresh local auth on the initiator: the password, on the already-authenticated session.
     let fresh = initiator
         .reauthenticate(
-            PROTOCOL_VERSION,
-            None,
-            &ReauthenticateRequest {
+            gated!(ReauthenticateParamsRequired),
+            ReauthenticateRequest {
                 password: PASSWORD.to_owned(),
             },
         )
@@ -144,28 +167,26 @@ async fn e2e_case_12_a_code_opens_a_relay_channel_that_delivers_each_payload_onc
     initiator
         .relay_enrollment_payload(
             &channel,
-            PROTOCOL_VERSION,
-            None,
-            &relay(TO_ENROLLEE, "wrapped-album-keys"),
+            gated!(RelayEnrollmentPayloadParamsRequired),
+            relay(TO_ENROLLEE, "wrapped-album-keys"),
         )
         .await
         .expect("the initiator relays");
     b.relay_enrollment_payload(
         &channel,
-        PROTOCOL_VERSION,
-        None,
-        &relay(TO_INITIATOR, "device-b-public-keys"),
+        gated!(RelayEnrollmentPayloadParamsRequired),
+        relay(TO_INITIATOR, "device-b-public-keys"),
     )
     .await
     .expect("the enrollee relays");
     let to_b = b
-        .drain_enrollment_channel(&channel, TO_ENROLLEE, PROTOCOL_VERSION, None)
+        .drain_enrollment_channel(&channel, drain_params(TO_ENROLLEE))
         .await
         .expect("the enrollee drains")
         .into_inner();
     assert_eq!(to_b.payloads, vec!["wrapped-album-keys"]);
     let to_a = initiator
-        .drain_enrollment_channel(&channel, TO_INITIATOR, PROTOCOL_VERSION, None)
+        .drain_enrollment_channel(&channel, drain_params(TO_INITIATOR))
         .await
         .expect("the initiator drains")
         .into_inner();
@@ -174,7 +195,7 @@ async fn e2e_case_12_a_code_opens_a_relay_channel_that_delivers_each_payload_onc
     // Delivered once: both mailboxes are now empty.
     for direction in [TO_ENROLLEE, TO_INITIATOR] {
         let again = b
-            .drain_enrollment_channel(&channel, direction, PROTOCOL_VERSION, None)
+            .drain_enrollment_channel(&channel, drain_params(direction))
             .await
             .expect("a drained mailbox still answers")
             .into_inner();
@@ -183,11 +204,11 @@ async fn e2e_case_12_a_code_opens_a_relay_channel_that_delivers_each_payload_onc
 
     // The initiator closes; the channel is gone for the enrollee.
     initiator
-        .close_enrollment_channel(&channel, PROTOCOL_VERSION, None)
+        .close_enrollment_channel(&channel, gated!(CloseEnrollmentChannelParamsRequired))
         .await
         .expect("the initiator closes its channel");
     let closed = b
-        .drain_enrollment_channel(&channel, TO_ENROLLEE, PROTOCOL_VERSION, None)
+        .drain_enrollment_channel(&channel, drain_params(TO_ENROLLEE))
         .await
         .expect_err("a closed channel is not found");
     match closed {
@@ -214,14 +235,13 @@ async fn e2e_case_12_the_initiator_aborts_on_a_payload_it_did_not_expect() {
     const ADVERTISED: &str = "device-b-public-keys";
     b.relay_enrollment_payload(
         &channel,
-        PROTOCOL_VERSION,
-        None,
-        &relay(TO_INITIATOR, "device-m-public-keys"),
+        gated!(RelayEnrollmentPayloadParamsRequired),
+        relay(TO_INITIATOR, "device-m-public-keys"),
     )
     .await
     .expect("the relay accepts what it is given");
     let arrived = initiator
-        .drain_enrollment_channel(&channel, TO_INITIATOR, PROTOCOL_VERSION, None)
+        .drain_enrollment_channel(&channel, drain_params(TO_INITIATOR))
         .await
         .expect("the initiator drains")
         .into_inner();
@@ -233,11 +253,11 @@ async fn e2e_case_12_the_initiator_aborts_on_a_payload_it_did_not_expect() {
 
     // Abort: close, and never send the wrapped keys.
     initiator
-        .close_enrollment_channel(&channel, PROTOCOL_VERSION, None)
+        .close_enrollment_channel(&channel, gated!(CloseEnrollmentChannelParamsRequired))
         .await
         .expect("the initiator aborts by closing");
     let aborted = b
-        .drain_enrollment_channel(&channel, TO_ENROLLEE, PROTOCOL_VERSION, None)
+        .drain_enrollment_channel(&channel, drain_params(TO_ENROLLEE))
         .await
         .expect_err("nothing reaches the enrollee after the abort");
     assert!(
@@ -251,9 +271,8 @@ async fn e2e_case_12_the_initiator_aborts_on_a_payload_it_did_not_expect() {
     let relayed_late = b
         .relay_enrollment_payload(
             &channel,
-            PROTOCOL_VERSION,
-            None,
-            &relay(TO_INITIATOR, ADVERTISED),
+            gated!(RelayEnrollmentPayloadParamsRequired),
+            relay(TO_INITIATOR, ADVERTISED),
         )
         .await;
     assert!(relayed_late.is_err(), "a closed channel accepts nothing");
@@ -366,7 +385,7 @@ async fn e2e_case_12_the_client_ceremony_admits_the_new_device_over_the_relay() 
     assert!(received.device(&a.workspace.device_id()).is_some());
 
     initiator
-        .close_enrollment_channel(&channel, PROTOCOL_VERSION, None)
+        .close_enrollment_channel(&channel, gated!(CloseEnrollmentChannelParamsRequired))
         .await
         .expect("the initiator closes the finished channel");
     assert_channel_gone(&b, &channel, TO_ENROLLEE).await;
@@ -445,7 +464,7 @@ async fn e2e_case_12_a_relay_that_swaps_the_enrollee_keys_diverges_the_codes_and
     // abort is scripted here (no production code decides it), so the directory
     // checks below prove only that closing the channel changes neither directory.
     initiator
-        .close_enrollment_channel(&channel, PROTOCOL_VERSION, None)
+        .close_enrollment_channel(&channel, gated!(CloseEnrollmentChannelParamsRequired))
         .await
         .expect("the initiator aborts by closing");
     assert_eq!(a.directory(), before, "nothing was cross-signed");

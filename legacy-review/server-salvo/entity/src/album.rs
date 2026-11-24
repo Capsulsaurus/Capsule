@@ -1,4 +1,3 @@
-use chrono::{DateTime, Utc};
 use nanoid::nanoid;
 use sea_orm::Set;
 use sea_orm::entity::prelude::*;
@@ -20,17 +19,17 @@ pub struct Model {
         default_value = "CURRENT_TIMESTAMP",
         indexed
     )]
-    pub created_at: DateTime<Utc>,
+    pub created_at: DateTimeUtc,
     #[sea_orm(
         column_type = "TimestampWithTimeZone",
         default_value = "CURRENT_TIMESTAMP",
         on_update = "CURRENT_TIMESTAMP",
         indexed
     )]
-    pub modified_at: DateTime<Utc>,
+    pub modified_at: DateTimeUtc,
     /// Date when the album was deleted if not NULL
     #[sea_orm(column_type = "TimestampWithTimeZone", nullable, indexed)]
-    pub deleted_at: Option<DateTime<Utc>>,
+    pub deleted_at: Option<DateTimeUtc>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

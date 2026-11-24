@@ -23,7 +23,8 @@
 //!
 //! # Hand-written over `jsonwebtoken`, not `openidconnect`
 //!
-//! `openidconnect` would have pulled in `chrono` and the `log` facade — both banned — and
+//! `openidconnect` would have pulled in a second datetime crate and the `log` facade — both
+//! banned — and
 //! `rsa 0.9` carrying RUSTSEC-2023-0071 with no fixed release, which `deny.toml` would not catch
 //! because only the licence check is wired. The hard part, verifying a signature against a JWKS,
 //! is already in the workspace's JWT crate; what is left is discovery, a form `POST` and the

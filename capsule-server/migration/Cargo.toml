@@ -8,13 +8,9 @@ publish.workspace = true
 # The server's schema, as an operator binary and as a library the conformance harness applies.
 #
 # `capsule-server` takes this crate as a **dev-dependency only**, which is a deliberate
-# constraint rather than an accident of layering: `sea-orm-migration` pulls `sea-orm` with its
-# default features, `with-chrono` among them, and `cargo xtask architecture-check` makes
-# `cargo tree -p capsule-server -i chrono -e no-dev` a review-blocking gate. Keeping the migrator
-# out of the server's normal dependency graph is what keeps chrono off the server's path; this
-# crate is the one place it is expected. The consequence is recorded where it is felt:
-# `capsule_server::postgres::assert_schema_current` refuses to boot on a pending migration and
-# names the command below, rather than running `Migrator::up` on `serve`.
+# constraint rather than an accident of layering: `serve` must not migrate. The consequence is
+# recorded where it is felt: `capsule_server::postgres::assert_schema_current` refuses to boot on
+# a pending migration and names the command below, rather than running `Migrator::up` on `serve`.
 
 [lib]
 # Not `migration`: a name that generic invites a collision (the CLI once published a lib of that
@@ -27,12 +23,25 @@ name = "capsule-server-migration"
 path = "src/main.rs"
 
 [dependencies]
-# The runtime `cli::run_cli` drives. Already the workspace's async runtime.
+# The runtime the binary drives. Already the workspace's async runtime.
 tokio = { workspace = true }
-# The migrator itself, pinned at the workspace with `sqlx-postgres` and `runtime-tokio-rustls`
-# — the server's schema is PostgreSQL's, and the TLS rule is rustls only. This crate opens no
-# new dependency domain.
-sea-orm-migration = { workspace = true }
+# The schema builder, the Postgres driver and the connection the migrator (`migrator.rs`) runs
+# migrations over: the workspace pin, defaults off, so no datetime crate comes with it. The
+# migrator replaced `sea-orm-migration`, which keeps sea-orm's defaults (and their datetime
+# binding) on; see the root manifest.
+sea-orm = { workspace = true }
+# `MigrationTrait` is an async trait object (`Box<dyn MigrationTrait>`), which native async fn in
+# traits cannot express, and every migration file names `#[async_trait::async_trait]` through the
+# prelude. Already in the lock file through sea-orm.
+async-trait = "0.1.89"
+# The binary's command line (`cli.rs`): the `up | down | status` verbs, and `DATABASE_URL` from the
+# environment (`env`). Already in the lock file through `capsule-server`, at the same version.
+clap = { version = "4.6.7", features = ["derive", "env"] }
+# The migrator's progress log, and the subscriber the binary prints it with. Workspace pins.
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+# `seaql_migrations.applied_at`, seconds since the Unix epoch. The workspace's datetime crate.
+jiff = { workspace = true }
 # The per-migration content checksum (#524): SHA-256 of each migration's source, hex-encoded.
 # Both are already workspace dependencies, so this opens no new dependency domain, and neither
 # reaches `capsule-server`'s normal graph — the server compares the recorded hex against a

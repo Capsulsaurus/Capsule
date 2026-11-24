@@ -58,7 +58,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use jiff::{SignedDuration, Timestamp};
 use subtle::ConstantTimeEq as _;
-use totp_rs::{Algorithm, Secret, TOTP};
+use totp_rs::{Algorithm, Builder, Secret, Totp};
 
 use super::directory::DirectoryFuture;
 use crate::store::UserId;
@@ -245,7 +245,7 @@ impl TotpCodes {
     /// A fresh, RFC-compliant shared secret.
     #[must_use]
     pub fn generate_secret() -> TotpSecret {
-        TotpSecret::new(Secret::generate_secret().to_encoded().to_string())
+        TotpSecret::new(Secret::generate().to_base32())
     }
 
     /// The step `at` falls in.
@@ -266,7 +266,11 @@ impl TotpCodes {
         secret: &TotpSecret,
         account: &str,
     ) -> Result<String, UnusableSecret> {
-        Ok(self.authenticator(secret, account)?.get_url())
+        self.authenticator(secret, account)?
+            .to_url()
+            .map_err(|error| UnusableSecret {
+                detail: error.to_string(),
+            })
     }
 
     /// Check `code` against `secret` at `at`, and report the step it matched.
@@ -306,7 +310,10 @@ impl TotpCodes {
             let Some(step) = current.saturating_add(DRIFT_STEPS).checked_sub(offset) else {
                 continue;
             };
-            let expected = authenticator.generate(step * STEP_SECONDS);
+            // `Token` compares in constant time only against another `Token`, and totp-rs keeps
+            // parsing one from a string private; its own `check` walks the window oldest-first,
+            // which would record the lower of two matching steps. So the digits are compared here.
+            let expected = authenticator.generate(step * STEP_SECONDS).to_string();
             // Constant-time. A byte-wise `==` on a code leaks, through timing, how many leading
             // digits were right — which turns one guess against a million into six against ten.
             // `subtle` rather than a hand-rolled fold, because a fold is what the optimizer is
@@ -319,26 +326,26 @@ impl TotpCodes {
     }
 
     /// The `totp-rs` authenticator for one secret.
-    fn authenticator(&self, secret: &TotpSecret, account: &str) -> Result<TOTP, UnusableSecret> {
-        let bytes = Secret::Encoded(secret.expose_base32().to_owned())
-            .to_bytes()
-            .map_err(|error| UnusableSecret {
+    fn authenticator(&self, secret: &TotpSecret, account: &str) -> Result<Totp, UnusableSecret> {
+        let secret =
+            Secret::try_from_base32(secret.expose_base32()).map_err(|error| UnusableSecret {
                 detail: error.to_string(),
             })?;
-        // Skew is zero here on purpose: the drift window is walked by `verify`, which needs to
-        // know *which* step matched, and `totp_rs::check` reports only that one did.
-        TOTP::new(
-            Algorithm::SHA1,
-            DIGITS,
-            0,
-            STEP_SECONDS,
-            bytes,
-            Some(self.issuer.clone()),
-            account.to_owned(),
-        )
-        .map_err(|error| UnusableSecret {
-            detail: error.to_string(),
-        })
+        // Skew is zero here on purpose: the drift window is walked by `verify`, newest step
+        // first, so that a code matching two steps records the higher one; `Totp::check` walks
+        // its window oldest-first.
+        Builder::new()
+            .with_algorithm(Algorithm::SHA1)
+            .with_digits(DIGITS as u8)
+            .with_skew(0)
+            .with_step_duration(STEP_SECONDS)
+            .with_secret(secret)
+            .with_issuer(Some(self.issuer.as_str()))
+            .with_account_name(account)
+            .build()
+            .map_err(|error| UnusableSecret {
+                detail: error.to_string(),
+            })
     }
 }
 

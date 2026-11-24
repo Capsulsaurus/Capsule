@@ -24,20 +24,19 @@ use support::{EMAIL, Fixture, PASSWORD};
 /// reconstructing SHA-1 / six digits / thirty seconds here checks the interop contract every app
 /// assumes instead of trusting one function to agree with itself.
 fn app_code(secret: &TotpSecret, at: jiff::Timestamp) -> String {
-    let bytes = totp_rs::Secret::Encoded(secret.expose_base32().to_owned())
-        .to_bytes()
+    let secret = totp_rs::Secret::try_from_base32(secret.expose_base32())
         .expect("the fixture's secret is base32");
-    totp_rs::TOTP::new(
-        totp_rs::Algorithm::SHA1,
-        DIGITS,
-        0,
-        STEP_SECONDS,
-        bytes,
-        Some("Capsule".to_owned()),
-        String::new(),
-    )
-    .expect("a usable secret")
-    .generate(u64::try_from(at.as_second()).expect("a post-epoch instant"))
+    totp_rs::Builder::new()
+        .with_algorithm(totp_rs::Algorithm::SHA1)
+        .with_digits(u8::try_from(DIGITS).expect("a digit count"))
+        .with_skew(0)
+        .with_step_duration(STEP_SECONDS)
+        .with_secret(secret)
+        .with_issuer(Some("Capsule"))
+        .build()
+        .expect("a usable secret")
+        .generate(u64::try_from(at.as_second()).expect("a post-epoch instant"))
+        .to_string()
 }
 
 /// The code the seeded account's authenticator would be showing now.

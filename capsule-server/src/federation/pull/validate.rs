@@ -293,8 +293,9 @@ fn screen_entry(
     if uuid::Uuid::parse_str(&entry.album_id).ok() != Some(album) {
         return Err(Invalid::new("invariant 6", "an entry names another album").into());
     }
-    let sync_seq = u64::try_from(entry.sync_seq)
-        .map_err(|_| Invalid::new("anti-rewind", "a negative sync_seq"))?;
+    // Unsigned on the wire: a negative `sync_seq` never decodes, so a page carrying one is
+    // refused as malformed before it is validated.
+    let sync_seq = entry.sync_seq;
     if state.high_water.is_some_and(|high| sync_seq <= high) {
         return Err(Invalid::new(
             "anti-rewind",
@@ -341,11 +342,11 @@ fn screen_entry(
     let derivative_manifests = screen_derivatives(&entry, rules)?;
     let metadata_named = entry
         .metadata_blob
-        .as_deref()
+        .as_option()
         .map(|hash| address(hash, "invariant 25"))
         .transpose()?;
 
-    let Some(encoded) = entry.manifest_cbor.as_deref() else {
+    let Some(encoded) = entry.manifest_cbor.as_option() else {
         if purged {
             // A purged tombstone carries no record: the asset's references are gone.
             if let Some(head) = state.assets.get(&asset_id).cloned() {
@@ -640,8 +641,7 @@ fn screen_blobs(
                     return Err(Invalid::new("invariant 16", "an entry lists a backup").into());
                 }
             };
-            let size = u64::try_from(blob.size)
-                .ok()
+            let size = Some(blob.size)
                 .filter(|size| size_in_bounds(*size, ctx.policy.max_file_bytes()))
                 .ok_or_else(|| Invalid::new("invariant 4", "a blob size is out of bounds"))?;
             Ok(PulledBlob {

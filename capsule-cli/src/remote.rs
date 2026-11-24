@@ -448,10 +448,16 @@ async fn read_activity(
 ) -> Result<Vec<ActivityEntry>, RemoteError> {
     let client = AuthenticatedClient::new(api_root, session)
         .map_err(|error| RemoteError::Activity(error.to_string()))?;
-    let params =
-        limit.map(|limit| capsule_sdk::rest::ListActivityParams::default().limit(i64::from(limit)));
+    let mut params = capsule_sdk::rest::ListActivityParams::from(
+        capsule_sdk::rest::ListActivityParamsRequired {
+            x_capsule_protocol: capsule_core::crypto::primitives::PROTOCOL_VERSION.into(),
+        },
+    );
+    if let Some(limit) = limit {
+        params = params.limit(limit);
+    }
     let response = client
-        .list_activity(capsule_core::crypto::primitives::PROTOCOL_VERSION, params)
+        .list_activity(params)
         .await
         .map_err(|error| RemoteError::Activity(error.to_string()))?
         .into_inner();
@@ -462,9 +468,9 @@ async fn read_activity(
             event_id: event.event_id,
             kind: event.kind,
             at: event.at,
-            request_id: event.request_id,
-            session_id: event.session_id,
-            subject: event.subject,
+            request_id: event.request_id.into_option(),
+            session_id: event.session_id.into_option(),
+            subject: event.subject.into_option(),
         })
         .collect())
 }
@@ -833,7 +839,9 @@ async fn account_id(api_root: &str, session: Session) -> Result<Uuid, RemoteErro
     let client = AuthenticatedClient::new(api_root, session)
         .map_err(|error| RemoteError::Profile(error.to_string()))?;
     let profile = client
-        .get_profile(capsule_core::crypto::primitives::PROTOCOL_VERSION, None)
+        .get_profile(capsule_sdk::rest::GetProfileParamsRequired {
+            x_capsule_protocol: capsule_core::crypto::primitives::PROTOCOL_VERSION.into(),
+        })
         .await
         .map_err(|error| RemoteError::Profile(error.to_string()))?
         .into_inner();
@@ -2831,7 +2839,10 @@ fn encode_op(
     let request = capsule_sdk::rest::types::OpRequest {
         manifest_envelope: capsule_sdk::albums::op_envelope(core),
         manifest_cbor: base64.encode(&manifest),
-        metadata_blob: blob,
+        metadata_blob: blob.map_or(
+            capsule_sdk::rest::Nullable::Absent,
+            capsule_sdk::rest::Nullable::Value,
+        ),
     };
     serde_json::to_vec(&request)
         .map_err(|e| LifecycleError::Cbor(format!("encoding the lifecycle op: {e}")))
@@ -2905,7 +2916,7 @@ pub(crate) async fn send_op(
     let request: capsule_sdk::rest::types::OpRequest = serde_json::from_slice(op)
         .map_err(|error| not_an_op(format!("the held op does not parse: {error}")))?;
     // Checked here as well as in the SDK so that bytes no resend can fix stay permanent.
-    if request.manifest_envelope.album_id.is_none() {
+    if !request.manifest_envelope.album_id.is_value() {
         return Err(not_an_op("the held op names no album".to_owned()));
     }
     let client = AlbumClient::new(AlbumTransport::with_session(

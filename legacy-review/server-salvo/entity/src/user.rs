@@ -1,4 +1,3 @@
-use chrono::{DateTime, Utc};
 use nanoid::nanoid;
 use sea_orm::Set;
 use sea_orm::entity::prelude::*;
@@ -32,9 +31,9 @@ pub struct Model {
     #[sea_orm(unique, column_type = "String(StringLen::N(255))", nullable)]
     pub password_reset_token: Option<String>,
     #[sea_orm(column_type = "TimestampWithTimeZone", nullable)]
-    pub password_reset_expires_at: Option<DateTime<Utc>>,
+    pub password_reset_expires_at: Option<DateTimeUtc>,
     #[sea_orm(column_type = "TimestampWithTimeZone", nullable)]
-    pub last_login_at: Option<DateTime<Utc>>,
+    pub last_login_at: Option<DateTimeUtc>,
     #[sea_orm(default_value = "0")]
     pub failed_login_attempts: i32,
     // pub external_id: String,
@@ -44,16 +43,16 @@ pub struct Model {
         column_type = "TimestampWithTimeZone",
         default_value = "CURRENT_TIMESTAMP"
     )]
-    pub created_at: DateTime<Utc>,
+    pub created_at: DateTimeUtc,
     #[sea_orm(
         column_type = "TimestampWithTimeZone",
         default_value = "CURRENT_TIMESTAMP",
         on_update = "CURRENT_TIMESTAMP"
     )]
-    pub modified_at: DateTime<Utc>,
+    pub modified_at: DateTimeUtc,
     /// Date when the user was deleted if not NULL
     #[sea_orm(column_type = "TimestampWithTimeZone", nullable, indexed)]
-    pub deleted_at: Option<DateTime<Utc>>,
+    pub deleted_at: Option<DateTimeUtc>,
     /// How the account was created (e.g. 'invitation'); NULL for seeded/legacy/unknown
     #[sea_orm(column_type = "String(StringLen::N(32))", nullable)]
     pub registered_via: Option<String>,

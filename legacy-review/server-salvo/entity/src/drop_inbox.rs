@@ -6,7 +6,6 @@
 //! blob to an `assets` row and deletes this row in one transaction; discard just deletes it.
 //! Drops never appear on any album's sync feed (SSoT: the Web Upload design doc).
 
-use chrono::{DateTime, Utc};
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -38,7 +37,7 @@ pub struct Model {
         column_type = "TimestampWithTimeZone",
         default_value = "CURRENT_TIMESTAMP"
     )]
-    pub received_at: DateTime<Utc>,
+    pub received_at: DateTimeUtc,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

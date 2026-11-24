@@ -12,7 +12,7 @@ paths:
 
 ## Rules
 
-- Datetime: `jiff`, never `chrono`. chrono reaches the lock file only through `sea-orm-migration`'s defaults in `capsule-server-migration`, a server dev-dependency; no workspace crate names it (`cargo xtask architecture-check` gates the server).
+- Datetime: `jiff`, never `chrono`, which is out of the lock file. RUSTSEC-2026-0543 (unmaintained, every version) makes `mise run deny-check` refuse it if anything brings it back; the usual way in is a crate's default datetime feature, which is why the workspace `sea-orm` pin has its defaults off and the server's migrator is its own rather than `sea-orm-migration`.
 - Errors: `thiserror` in libraries, `eyre`/`color-eyre` in binaries; no `anyhow`.
 - Logging: `tracing`, never the `log` facade in new code.
 - TLS: `rustls` only; never native-tls/openssl.

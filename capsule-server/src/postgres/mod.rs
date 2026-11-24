@@ -17,8 +17,9 @@
 //! # Migrations are applied by a separate binary, and `serve` refuses to run without them
 //!
 //! `capsule-server` takes `capsule-server-migration` as a **dev-dependency only**, so
-//! `Migrator::up` is not reachable from the server binary at all — see that crate's manifest for
-//! why (the `chrono` gate). What the server does instead is [`assert_schema_current`]: it reads
+//! `Migrator::up` is not reachable from the server binary at all: a server that migrated on
+//! start would migrate once per replica during a rolling deploy. What the server does instead is
+//! [`assert_schema_current`]: it reads
 //! `seaql_migrations` and refuses to boot unless every ordinal it was built against has been
 //! applied, naming the command an operator has to run — and reads the migration crate's
 //! checksum ledger beside it, refusing an applied ordinal whose source has changed since it ran
@@ -271,7 +272,7 @@ pub async fn connect(database_url: &str) -> Result<DatabaseConnection, PostgresE
 /// Refuse to continue unless every migration in [`EXPECTED_MIGRATIONS`] has been applied, and
 /// applied as the text this binary was built against.
 ///
-/// Reads `seaql_migrations` — the ledger `sea-orm-migration` maintains — and the migration
+/// Reads `seaql_migrations` — the ledger `server_migration::migrator` maintains — and the migration
 /// crate's checksum ledger beside it, and compares both against the compiled-in list:
 ///
 /// - A **missing** ordinal is fatal ([`PostgresError::Schema`]): the binary would query a table
