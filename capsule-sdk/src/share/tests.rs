@@ -247,6 +247,18 @@ async fn an_unavailable_store_carries_its_code() {
     assert_eq!(error.error_code(), Some(error_codes::SHARE_UNAVAILABLE));
 }
 
+/// A `408` is a body that stalled on the way in: the same issue re-sent later lands, so it is
+/// the transient `Unavailable`, not an unexpected status.
+#[tokio::test]
+async fn a_stalled_issue_is_unavailable() {
+    let (link, publication) = published(None);
+    let (_server, client, _) =
+        recording(|_| problem(408, "Request Timeout", error_codes::REQUEST_TIMEOUT)).await;
+    let error = client.issue(&link, &publication).await.unwrap_err();
+    assert!(matches!(error, ShareError::Unavailable { .. }), "{error:?}");
+    assert_eq!(error.error_code(), Some(error_codes::REQUEST_TIMEOUT));
+}
+
 #[tokio::test]
 async fn a_forbidden_issue_is_unauthorized() {
     let (link, publication) = published(None);
