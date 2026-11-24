@@ -510,6 +510,7 @@ fn subscribe_code(error: &rest::SubscribeAlbumError) -> String {
         | Refusal::Status401(problem)
         | Refusal::Status403(problem)
         | Refusal::Status404(problem)
+        | Refusal::Status408(problem)
         | Refusal::Status413(problem)
         | Refusal::Status415(problem)
         | Refusal::Status422(problem)
