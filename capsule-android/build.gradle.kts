@@ -18,7 +18,10 @@ kotlin {
 
 android {
     namespace = "com.justin13888.capsule"
-    compileSdk = 37
+    // API 37.1: the Compose 1.13 AARs (BOM 2026.11.01) require compiling against 37.1 or later.
+    compileSdk {
+        version = release(37) { minorApiLevel = 1 }
+    }
 
     defaultConfig {
         applicationId = "com.justin13888.capsule"
