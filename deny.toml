@@ -112,19 +112,6 @@ ignore = [
     # latest release, still depends on it, so no uniffi upgrade drops it. It parses only
     # askama's build-time configuration. Remove when askama_derive replaces basic-toml, in #720.
     { id = "RUSTSEC-2026-0374", reason = "basic-toml (unmaintained) via askama_derive (latest 0.16.1) via uniffi_bindgen; compile-time only; tracked in #720" },
-
-    # libsqlite3-sys 0.30.1 bundles SQLite before 3.54.0 (CVE-2026-119375): a database opened
-    # with a crafted `-wal` of another page size can return stale page-cache memory. It comes
-    # from the workspace's one SQLite driver, rusqlite 0.32 (`bundled`), in capsule-library,
-    # capsule-core-ffi and capsule-cli; the fix, libsqlite3-sys 0.39, ships with rusqlite 0.41.
-    # The bump does not resolve yet. No crate enables sqlx-sqlite, but sqlx 0.9.0 (via sea-orm
-    # 2.x in the server) declares it as an optional dependency, and Cargo applies the
-    # `links = "sqlite3"` uniqueness rule to optional dependencies when it resolves the lock
-    # file. sqlx-sqlite 0.9.0 requires libsqlite3-sys <0.38, which conflicts with rusqlite
-    # 0.41's ^0.39 and later. The only databases Capsule opens are its own library index and
-    # the CLI's state database, both under paths it creates. Remove this entry in #1232, with
-    # the rusqlite bump.
-    { id = "RUSTSEC-2026-0459", reason = "libsqlite3-sys 0.30.1 via rusqlite 0.32; rusqlite 0.41+ cannot resolve beside sqlx-sqlite 0.9.0's optional libsqlite3-sys <0.38 (links conflict); tracked in #1232" },
 ]
 
 [bans]

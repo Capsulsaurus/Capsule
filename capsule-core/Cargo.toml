@@ -217,7 +217,7 @@ tracing = { workspace = true }
 # From 0.9 the X-Wing suite sits behind `draft-ietf-mls-pq-ciphersuites`. It is enabled on the
 # four leaf crates, not on `openmls`: openmls's own feature names `openmls_sqlite_storage?/…`, and
 # Cargo's resolver then pulls that optional crate's rusqlite 0.37 into the `links = "sqlite3"`
-# check, where it conflicts with `capsule-library`'s rusqlite 0.32. openmls's feature only adds the PQ
+# check, where it conflicts with the workspace's rusqlite. openmls's feature only adds the PQ
 # suites to its *default* leaf capabilities, which `openmls_authority::pinned_capabilities` sets
 # explicitly instead.
 openmls = { version = "0.9.2", default-features = false, features = [
