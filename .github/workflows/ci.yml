@@ -531,7 +531,7 @@ jobs:
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Resolve the newest release older than this commit
@@ -552,7 +552,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Install Rust toolchain
@@ -578,7 +578,7 @@ jobs:
             scripts/prev-release-compat.sh target/debug --prev-dir target/debug --prev-protocol "$protocol"
       - name: Upload the flows' logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: prev-release-compat-logs
           path: ${{ runner.temp }}/prev-release-compat.*/
@@ -594,7 +594,7 @@ jobs:
     if: ${{ needs.changes.outputs.rust == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust toolchain
         run: rustup toolchain install
       - name: Cache cargo
@@ -602,7 +602,7 @@ jobs:
         with:
           key: cross-check
       - name: Set up mise (task runner + zig)
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
         with:
           install_args: zig
       - name: Check Tier 1 targets
@@ -800,9 +800,9 @@ jobs:
     if: ${{ needs.changes.outputs.shell == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Set up mise (task runner + shellcheck + actionlint)
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
         with:
           install_args: shellcheck actionlint
       - name: Check (shellcheck + actionlint)

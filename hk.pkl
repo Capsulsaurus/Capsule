@@ -3,7 +3,7 @@
 // steps whose files actually changed.
 //
 // The hk version in this URL MUST match `hk` in mise.toml [tools]; bump them together.
-amends "package://github.com/jdx/hk/releases/download/v2.13.0/hk@2.13.0#/Config.pkl"
+amends "package://github.com/jdx/hk/releases/download/v2.14.0/hk@2.14.0#/Config.pkl"
 
 hooks {
   // pre-commit: auto-fix formatters/linters and stage the result. hk's native
