@@ -4,8 +4,8 @@
 //! # Why the server runs its own
 //!
 //! This replaced `sea-orm-migration`, whose `sea-orm` dependency keeps sea-orm's default
-//! features on, `with-chrono` among them: as long as it was in the graph, chrono was in the lock
-//! file. The runner keeps that crate's contract with a database, because existing databases
+//! features on, a datetime binding among them: as long as it was in the graph, a datetime crate
+//! unmaintained in every version (RUSTSEC-2026-0543) was in the lock file. The runner keeps that crate's contract with a database, because existing databases
 //! were migrated by it:
 //!
 //! - the ledger is the same `seaql_migrations` table, `version` (the migration's name) as its
