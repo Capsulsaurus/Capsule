@@ -1,13 +1,13 @@
 plugins {
     // Versions are managed by the root build (apply false); re-declaring them here
-    // conflicts with the plugin already on the classpath.
+    // conflicts with the plugin already on the classpath. AGP 9 compiles Kotlin itself, so no
+    // Kotlin Android plugin is applied.
     id("com.android.library")
-    id("org.jetbrains.kotlin.android")
 }
 
 android {
     namespace = "com.justin13888.capsule.core"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         minSdk = 26
@@ -18,9 +18,9 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     // The generated uniffi Kotlin bindings, staged by ./stage-bindings.sh (.gitignored).
-    sourceSets["main"].kotlin.srcDir("build/generated-bindings")
+    sourceSets["main"].kotlin.directories.add("build/generated-bindings")
     // Per-ABI JNI libs (cargo-ndk output), staged for on-device instrumented tests.
-    sourceSets["main"].jniLibs.srcDir("src/main/jniLibs")
+    sourceSets["main"].jniLibs.directories.add("src/main/jniLibs")
 }
 
 kotlin {
@@ -30,18 +30,20 @@ kotlin {
 dependencies {
     // uniffi Kotlin bindings need JNA at runtime. The plain jar carries the host jnidispatch the
     // JVM unit test needs; on-device instrumented tests use the @aar (per-ABI Android natives).
-    implementation("net.java.dev.jna:jna:5.14.0")
+    implementation("net.java.dev.jna:jna:5.19.1")
     // The `capsule_sdk` namespace exports `async fn` flows (FfiSession, FfiCapsuleClient), which
     // uniffi lowers to Kotlin `suspend fun`s over kotlinx.coroutines — the generated source does
     // not compile without it, even though the harness itself calls only synchronous verbs.
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
-    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.87")
 
-    testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
+    testImplementation("org.junit.jupiter:junit-jupiter:6.1.3")
+    // Gradle 9 no longer puts a JUnit Platform launcher on the test runtime classpath itself.
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher:6.1.3")
 
-    androidTestImplementation("net.java.dev.jna:jna:5.14.0@aar")
-    androidTestImplementation("androidx.test.ext:junit:1.2.1")
-    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("net.java.dev.jna:jna:5.19.1@aar")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.test:runner:1.7.0")
 }
 
 // JVM unit tests load the host libcapsule_sdk dylib/so through JNA. The repo root is
@@ -70,30 +72,32 @@ tasks.withType<Test>().configureEach {
 // parent in either case — unlike `rootDir`, which differs between the two.
 val repoRoot = projectDir.parentFile
 
-val stageUniffiBindings by tasks.registering(Exec::class) {
-    description = "Generate + stage the uniffi Kotlin bindings (mise run gen-bindings)"
-    group = "ffi"
-    workingDir = projectDir
-    // Idempotent: builds target/debug/libcapsule_sdk + copies capsule_sdk.kt into
-    // build/generated-bindings/uniffi/capsule_sdk/ (the sourceSet srcDir above).
-    commandLine("bash", "stage-bindings.sh")
-    outputs.dir(layout.buildDirectory.dir("generated-bindings"))
-}
+val stageUniffiBindings =
+    tasks.register<Exec>("stageUniffiBindings") {
+        description = "Generate + stage the uniffi Kotlin bindings (mise run gen-bindings)"
+        group = "ffi"
+        workingDir = projectDir
+        // Idempotent: builds target/debug/libcapsule_sdk + copies capsule_sdk.kt into
+        // build/generated-bindings/uniffi/capsule_sdk/ (the sourceSet srcDir above).
+        commandLine("bash", "stage-bindings.sh")
+        outputs.dir(layout.buildDirectory.dir("generated-bindings"))
+    }
 
 // cargo-ndk's `-o` lays the per-ABI .so out in the jniLibs directory layout AGP expects
 // (<abi>/libcapsule_sdk.so). arm64/armv7/x86_64/x86 cover the four Tier-1 Android ABIs.
-val buildAndroidJniLibs by tasks.registering(Exec::class) {
-    description = "Build per-ABI libcapsule_sdk.so via cargo-ndk into src/main/jniLibs"
-    group = "ffi"
-    workingDir = repoRoot
-    val jniLibsDir = file("src/main/jniLibs")
-    val abiArgs = listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86").flatMap { listOf("-t", it) }
-    commandLine(
-        listOf("cargo", "ndk", "-o", jniLibsDir.absolutePath) + abiArgs +
-            listOf("--platform", "26", "build", "-p", "capsule-sdk", "--features", "ffi"),
-    )
-    outputs.dir(jniLibsDir)
-}
+val buildAndroidJniLibs =
+    tasks.register<Exec>("buildAndroidJniLibs") {
+        description = "Build per-ABI libcapsule_sdk.so via cargo-ndk into src/main/jniLibs"
+        group = "ffi"
+        workingDir = repoRoot
+        val jniLibsDir = file("src/main/jniLibs")
+        val abiArgs = listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86").flatMap { listOf("-t", it) }
+        commandLine(
+            listOf("cargo", "ndk", "-o", jniLibsDir.absolutePath) + abiArgs +
+                listOf("--platform", "26", "build", "-p", "capsule-sdk", "--features", "ffi"),
+        )
+        outputs.dir(jniLibsDir)
+    }
 
 if (project.hasProperty("capsule.wireFfi")) {
     // Bindings are Kotlin source: every compilation (JVM unit tests + Android variants)
@@ -102,9 +106,10 @@ if (project.hasProperty("capsule.wireFfi")) {
     // JNI libs are only needed when a native artifact is actually produced or run:
     // the APK's merged jniLibs and on-device instrumented tests. Keeping them off the
     // compile path means a plain JVM `test` (host dylib via JNA) needs no NDK.
-    tasks.matching {
-        (it.name.startsWith("merge") && it.name.endsWith("JniLibFolders")) ||
-            it.name.startsWith("connected") ||
-            it.name.startsWith("bundle") && it.name.endsWith("Aar")
-    }.configureEach { dependsOn(buildAndroidJniLibs) }
+    tasks
+        .matching {
+            (it.name.startsWith("merge") && it.name.endsWith("JniLibFolders")) ||
+                it.name.startsWith("connected") ||
+                (it.name.startsWith("bundle") && it.name.endsWith("Aar"))
+        }.configureEach { dependsOn(buildAndroidJniLibs) }
 }

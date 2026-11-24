@@ -126,7 +126,12 @@ class MockLabelStore(
 
     private fun current(target: LabelTarget): List<String> =
         when (target) {
-            is LabelTarget.Region -> regions[target.asset].orEmpty().firstOrNull { it.id == target.region }?.labels.orEmpty()
+            is LabelTarget.Region ->
+                regions[target.asset]
+                    .orEmpty()
+                    .firstOrNull { it.id == target.region }
+                    ?.labels
+                    .orEmpty()
             is LabelTarget.Stack -> stackLabels[target.stack].orEmpty().sorted()
             is LabelTarget.Album -> albumLabels[target.album].orEmpty().sorted()
         }

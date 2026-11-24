@@ -39,10 +39,9 @@ On-device StrongBox (a physical device with a secure element; an emulator only h
 
 ## ⚠️ Toolchain prerequisites / known caveats
 
-- **JDK vs Gradle.** This repo pins Gradle 8.11.1, which does **not** support JDK 26 (the version
-  currently installed on the reference MacBook). Run with a JDK in Gradle 8.11.1's supported range
-  (e.g. JDK 21): `JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew test`. This affects the whole
-  repo's Gradle build, not just this module.
+- **JDK vs Gradle.** This repo pins Gradle 9.9, which runs on JDK 17 through 27; CI runs it on
+  JDK 21. This module compiles with a JDK 17 toolchain (`jvmToolchain(17)`), which Gradle must find
+  installed, since no toolchain download repository is configured.
 - **Android SDK.** `./gradlew` needs the Android SDK (`ANDROID_HOME` / `local.properties`).
 - **StrongBox** is on-device only and (like Secure Enclave and the TPM) exposes ECDSA-P256, not
   Ed25519, so `StrongBoxSigner` plugs into `createWithP256HardwareSigner`, not the Ed25519

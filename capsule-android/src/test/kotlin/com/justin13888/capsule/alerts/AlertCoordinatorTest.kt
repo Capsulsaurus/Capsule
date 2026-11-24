@@ -21,7 +21,10 @@ class AlertCoordinatorTest {
         assertEquals(mapOf(AlertClass.SYNC_STALE to day(14)), harness.armedAt())
         assertEquals(
             mapOf("count" to "3", "days_behind" to "14"),
-            harness.scheduler.armed().getValue(AlertClass.SYNC_STALE).alert.params,
+            harness.scheduler
+                .armed()
+                .getValue(AlertClass.SYNC_STALE)
+                .alert.params,
         )
     }
 
@@ -83,7 +86,12 @@ class AlertCoordinatorTest {
         val harness = Harness(NotifyFacts(lastCompletedSync = EPOCH, unsyncedChanges = 3), now = day(1))
         harness.coordinator.refresh()
 
-        assertTrue(harness.coordinator.refresh().operations.isEmpty())
+        assertTrue(
+            harness.coordinator
+                .refresh()
+                .operations
+                .isEmpty(),
+        )
         assertEquals(1, harness.scheduler.log.size)
     }
 
@@ -131,7 +139,13 @@ class AlertCoordinatorTest {
     @Test
     fun theSnoozeIsBoundedThenABadge() {
         val harness = Harness(NotifyFacts(lastCompletedSync = EPOCH, unsyncedChanges = 3), now = day(15))
-        assertEquals(listOf(AlertClass.SYNC_STALE), harness.coordinator.refresh().badges.map { it.alertClass })
+        assertEquals(
+            listOf(AlertClass.SYNC_STALE),
+            harness.coordinator
+                .refresh()
+                .badges
+                .map { it.alertClass },
+        )
 
         repeat(AlertSnoozeLedger.MAXIMUM_CONSECUTIVE_SNOOZES - 1) {
             val end = harness.now.plusSeconds(AlertSnoozeLedger.INTERVAL_SECONDS)
@@ -146,7 +160,13 @@ class AlertCoordinatorTest {
         assertTrue(harness.armedAt().isEmpty())
         assertEquals(AlertSnoozeOutcome.BadgeOnly, harness.coordinator.snooze(AlertClass.SYNC_STALE))
         harness.now = harness.now.plusSeconds(2 * AlertSnoozeLedger.INTERVAL_SECONDS)
-        assertEquals(listOf(AlertClass.SYNC_STALE), harness.coordinator.refresh().badges.map { it.alertClass })
+        assertEquals(
+            listOf(AlertClass.SYNC_STALE),
+            harness.coordinator
+                .refresh()
+                .badges
+                .map { it.alertClass },
+        )
         assertTrue(harness.armedAt().isEmpty())
     }
 
@@ -158,7 +178,10 @@ class AlertCoordinatorTest {
         harness.facts = NotifyFacts(lastCompletedSync = day(15), unsyncedChanges = 0)
         harness.coordinator.refresh()
 
-        assertTrue(harness.snoozes.ledger.entries.isEmpty())
+        assertTrue(
+            harness.snoozes.ledger.entries
+                .isEmpty(),
+        )
     }
 
     @Test

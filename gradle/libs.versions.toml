@@ -1,23 +1,24 @@
 [versions]
-agp = "8.9.2"
-androidx-activityCompose = "1.10.1"
-androidx-appcompat = "1.7.0"
-androidx-benchmark = "1.4.1"
+agp = "9.5.2"
+androidx-activityCompose = "1.13.0"
+androidx-appcompat = "1.8.0"
+androidx-benchmark = "1.5.0"
 androidx-metrics = "1.0.0"
-androidx-test-ext-junit = "1.2.1"
-androidx-test-runner = "1.6.2"
-androidx-tracing = "1.2.0"
-androidx-uiautomator = "2.3.0"
-androidx-navigationCompose = "2.8.9"
-androidx-viewmodelCompose = "2.8.7"
-coil = "3.1.0"
-# Jetpack Compose BOM: pins every androidx.compose artifact to one tested set (Compose 1.8,
-# Material 3 1.3).
-compose-bom = "2025.04.01"
-koin = "4.0.4"
-kotlin = "2.1.20"
-kotlinx-serialization = "1.8.1"
-ktlint = "12.1.2"
+androidx-test-ext-junit = "1.3.0"
+androidx-test-runner = "1.7.0"
+androidx-tracing = "2.0.5"
+androidx-uiautomator = "2.4.1"
+androidx-navigationCompose = "2.10.2"
+androidx-viewmodelCompose = "2.11.1"
+coil = "3.6.3"
+# Jetpack Compose BOM: pins every androidx.compose artifact to one tested set (Compose 1.12,
+# Material 3 1.4). The 2026.11 BOM's Compose 1.13 needs compileSdk 37.1, so it waits on that
+# platform.
+compose-bom = "2026.09.00"
+koin = "4.2.2"
+kotlin = "2.4.21"
+kotlinx-serialization = "1.13.0"
+ktlint = "14.2.0"
 detekt = "1.23.8"
 
 [libraries]
