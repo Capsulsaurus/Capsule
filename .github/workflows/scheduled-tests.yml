@@ -126,13 +126,14 @@ jobs:
         with:
           tool: nextest
       # A fresh seed each night widens the search; it is printed in every case's stderr, and
-      # `PROPTEST_RNG_SEED=<seed>` replays a failure locally.
+      # `PROPTEST_RNG_SEED=<seed>` replays a failure locally. The `soak` nextest profile gives
+      # each suite the longer leash this depth needs (see .config/nextest.toml).
       - name: Run the property suites at depth under the run's seed
         env:
           PROPTEST_CASES: "4096"
           PROPTEST_RNG_SEED: ${{ github.run_id }}
         run: >-
-          cargo nextest run -p capsule-core -p capsule-sdk --no-fail-fast
+          cargo nextest run --profile soak -p capsule-core -p capsule-sdk --no-fail-fast
           --test codec_properties --test crdt_laws --test upload_fault_schedules
 
   # The kill-anywhere suite (#678) at soak depth: the pull request's two seeds become many, in

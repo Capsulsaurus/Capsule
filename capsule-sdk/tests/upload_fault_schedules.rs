@@ -225,7 +225,14 @@ struct Model {
     refusal: Option<Refusal>,
     violations: Vec<String>,
     requests: usize,
+    /// The attempt the driver is running: the process an answer can still reach. Every request
+    /// names its own in [`ATTEMPT_HEADER`].
+    attempt: usize,
 }
+
+/// The header each attempt's client sends its attempt number in, so the model can tell a request
+/// from the live process from one a killed process left in flight.
+const ATTEMPT_HEADER: &str = "x-fault-schedule-attempt";
 
 struct Request {
     method: String,
@@ -304,6 +311,20 @@ impl Model {
             .copied()
             .unwrap_or(Fault::Honest);
         self.next_fault += 1;
+        // A request a killed process sent can land after its successor started; whatever it is
+        // answered reaches no one, so it neither refuses the run nor tells the client anything.
+        let live = req.header(ATTEMPT_HEADER).and_then(|a| a.parse().ok()) == Some(self.attempt);
+        let refusal = self.refusal;
+        let answer = self.respond(req, fault, live, kill);
+        if !live {
+            self.refusal = refusal;
+        }
+        answer
+    }
+
+    /// [`Self::handle`]'s answer to `req` under `fault`. Only a `live` request's answer is
+    /// recorded as what the client was told.
+    fn respond(&mut self, req: &Request, fault: Fault, live: bool, kill: &Notify) -> Answer {
         let id = req.path.trim_start_matches('/').to_string();
         let is_create = req.method == "POST";
         let is_patch = req.method == "PATCH";
@@ -372,7 +393,9 @@ impl Model {
                 Answer::Reply(Reply::error(500, error_codes::UPLOAD_STORAGE_INCONSISTENT))
             }
             _ => {
-                self.learn(req, &id, &reply, is_create);
+                if live {
+                    self.learn(req, &id, &reply, is_create);
+                }
                 Answer::Reply(reply)
             }
         }
@@ -726,9 +749,16 @@ async fn run_schedule(
             "{attempts} attempts for {interruptions} interruptions"
         );
         // Every attempt is a fresh process: a new client, no state but the session id it was
-        // told about.
+        // told about, and its attempt number on every request it sends.
+        model.lock().expect("model lock").attempt = attempts;
+        let mut tag = reqwest::header::HeaderMap::new();
+        tag.insert(ATTEMPT_HEADER, attempts.into());
+        let http = capsule_sdk::net::http_builder()
+            .default_headers(tag)
+            .build()
+            .expect("client");
         let client = UploadClient::new(UploadTransport::with_static_token(
-            capsule_sdk::net::http_client().expect("client"),
+            http,
             format!("http://{addr}/upload"),
             "2026-01-01",
             StaticToken("token".into()),

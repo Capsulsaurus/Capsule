@@ -304,11 +304,17 @@ done
 # scheduled workflow runs it and publishes `mutants.out`; locally, narrow it with extra
 # arguments (`mise run mutants -- --file capsule-core/src/metadata/crdt/lww.rs`). cargo-mutants
 # exits 2 when a mutant survives and 3 when one times out, so the task fails on either.
+#
+# The `--features` mirror the codec set `test-rust`'s `--workspace` build unifies through
+# `capsule-cli`. cargo-mutants tests only the mutated package (`--package capsule-library`), where
+# nothing turns those features on, so without them the library suite runs on the AVIF-only build
+# its JXL-thumbnail tests do not describe and the unmutated baseline fails (#1355).
 [tasks.mutants]
 description = "Mutation-test the CRDT, transfer and provenance code (needs cargo-mutants)"
 run = """
 cargo mutants --test-tool nextest --timeout-multiplier 3 \
   --package capsule-core --package capsule-library --package capsule-sdk \
+  --features capsule-core/media-linked-codecs,capsule-core/media-avif-decode \
   --file 'capsule-core/src/metadata/crdt/**' \
   --file 'capsule-core/src/crypto/provenance/**' \
   --file capsule-library/src/lifecycle/provenance.rs \

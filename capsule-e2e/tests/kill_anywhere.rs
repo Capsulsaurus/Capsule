@@ -50,6 +50,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -64,7 +65,10 @@ use capsule_library::lifecycle::Workspace;
 use capsule_sdk::auth::AuthClient;
 use capsule_sdk::sync::ChangeKind;
 use capsule_server::boot;
+use capsule_server::client_addr::ClientAddr;
 use capsule_server::config::{Config, Demands, Overrides};
+use capsule_server::counter::postgres::PostgresCounters;
+use capsule_server::counter::{CounterKey, CounterStore as _};
 use capsule_server::scrub::{self, Depth, Finding};
 use capsule_test_postgres::{DATABASE, PostgresContainer, Request};
 use server_migration::MigratorTrait as _;
@@ -128,6 +132,27 @@ impl Backends {
             database_url,
             _postgres: postgres,
         }
+    }
+
+    /// Clear the loopback source's registration budget, as the operator of this deployment.
+    ///
+    /// Every run registers a fresh account from `127.0.0.1`, and a soak shard's baseline plus its
+    /// seeds outnumber the hourly allowance of
+    /// [`REGISTRATION_SOURCE`](capsule_server::counter::budgets::REGISTRATION_SOURCE), so
+    /// without this the limiter refuses a seed's account before any kill point is reached
+    /// (#1355). The budget is the server's defence against an account sweep, not something this
+    /// suite tests: it is reset through the server's own
+    /// [`CounterStore`](capsule_server::counter::CounterStore) over the shared Postgres, under
+    /// the key the register route charges, and left in force for every other source and budget.
+    async fn reopen_registrations(&self) {
+        let connection = capsule_server::postgres::connect(&self.database_url)
+            .await
+            .expect("the container accepts a connection");
+        let loopback = ClientAddr::new(Some(IpAddr::V4(Ipv4Addr::LOCALHOST))).source_key();
+        PostgresCounters::new(connection)
+            .reset(&CounterKey::RegistrationSource(loopback))
+            .await
+            .expect("the registration budget resets");
     }
 
     /// What a durable server process reads on top of its blob root.
@@ -229,6 +254,7 @@ impl Run {
     /// the CLI's way to bind a library, confirms its secret on an interactive prompt; the library
     /// records the cost it was wrapped under, so every `capsule` below runs the full unlock.
     async fn provision(world: &World, label: &str) -> Self {
+        world.backends.reopen_registrations().await;
         let device = Device::register_at(world.server.base_url(), label).await;
         let Device {
             email,
