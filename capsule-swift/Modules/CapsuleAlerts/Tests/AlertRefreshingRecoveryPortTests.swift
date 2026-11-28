@@ -9,10 +9,10 @@ import Testing
 @Suite("Recovery calls refresh the alerts")
 struct AlertRefreshingRecoveryPortTests {
     private actor RefreshCounter {
-        private(set) var count = 0
+        private(set) var refreshes = 0
 
         func increment() {
-            count += 1
+            refreshes += 1
         }
     }
 
@@ -30,7 +30,7 @@ struct AlertRefreshingRecoveryPortTests {
 
         _ = try await port.summary()
 
-        #expect(await counter.count == 0)
+        #expect(await counter.refreshes == 0)
     }
 
     @Test("a verification refreshes once, whatever its outcome")
@@ -39,7 +39,7 @@ struct AlertRefreshingRecoveryPortTests {
 
         _ = try await port.verify(passphrase: "not the secret")
 
-        #expect(await counter.count == 1)
+        #expect(await counter.refreshes == 1)
     }
 
     @Test("a snooze refreshes once and is passed through")
@@ -49,7 +49,7 @@ struct AlertRefreshingRecoveryPortTests {
 
         try await port.snoozeVerification(until: until)
 
-        #expect(await counter.count == 1)
+        #expect(await counter.refreshes == 1)
         #expect(try await port.summary().verification.nextDueAt == until)
     }
 
@@ -60,6 +60,6 @@ struct AlertRefreshingRecoveryPortTests {
         await #expect(throws: CapsuleError.self) {
             _ = try await port.restore(usingRecoverySecret: "not the secret")
         }
-        #expect(await counter.count == 1)
+        #expect(await counter.refreshes == 1)
     }
 }

@@ -54,7 +54,7 @@ struct SmokeTests {
     /// thread so `#expect`/`#require` still record against the running test.
     private func onLargeStack<T>(_ body: @escaping () throws -> T) throws -> T {
         let done = DispatchSemaphore(value: 0)
-        var result: Result<T, Error>!
+        var result: Result<T, Error>?
         let thread = Thread {
             result = Result { try body() }
             done.signal()
@@ -62,6 +62,9 @@ struct SmokeTests {
         thread.stackSize = 64 * 1024 * 1024
         thread.start()
         done.wait()
+        guard let result else {
+            preconditionFailure("the large-stack thread signalled without storing a result")
+        }
         return try result.get()
     }
 

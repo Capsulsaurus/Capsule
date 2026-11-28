@@ -269,7 +269,9 @@ struct CullingPassTests {
         #expect(pass.currentAsset?.id == Fixture.id(10), "the cover arrived and now fronts the stack")
         #expect(pass.currentFlag == .stack(.mixed, memberCount: 3))
     }
+}
 
+extension CullingPassTests {
     // MARK: Sweep
 
     @Test("the sweep takes exactly the pass's rejects, and they leave the pass")
@@ -355,18 +357,18 @@ private extension CullingPass {
 private enum Fixture {
     static let stackID = StackID("0192f0c0-9999-7000-8000-000000000009")
 
-    static func id(_ n: Int) -> AssetID {
-        .managed(uuid: String(format: "0192f0c0-0000-7000-8000-%012d", n))
+    static func id(_ number: Int) -> AssetID {
+        .managed(uuid: String(format: "0192f0c0-0000-7000-8000-%012d", number))
     }
 
-    static func asset(_ n: Int, cull: CullFlag = .neutral, place: CullStackPlace? = nil) -> CullAsset {
-        CullAsset(id: id(n), cull: cull, stack: place)
+    static func asset(_ number: Int, cull: CullFlag = .neutral, place: CullStackPlace? = nil) -> CullAsset {
+        CullAsset(id: id(number), cull: cull, stack: place)
     }
 
     /// A burst whose first member is the cover, numbered as given.
     static func stack(members: [Int], cull: CullFlag = .neutral) -> [CullAsset] {
-        members.enumerated().map { offset, n in
-            asset(n, cull: cull, place: CullStackPlace(
+        members.enumerated().map { offset, number in
+            asset(number, cull: cull, place: CullStackPlace(
                 stackID: stackID,
                 isCover: offset == 0,
                 memberIndex: UInt32(offset)
