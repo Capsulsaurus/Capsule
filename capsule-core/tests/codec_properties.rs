@@ -251,9 +251,8 @@ fn stack_doc() -> impl Strategy<Value = StackDocV1> {
 /// count re-deriving it was most of their time (#1355). A `u8` seed bounds the cache at 256 keys.
 fn key(seed: u8) -> &'static HybridSigningKey {
     static KEYS: [OnceLock<HybridSigningKey>; 256] = [const { OnceLock::new() }; 256];
-    KEYS[usize::from(seed)].get_or_init(|| {
-        HybridSigningKey::from_seed_bytes(&[seed; 32], &[seed.wrapping_add(1); 32])
-    })
+    KEYS[usize::from(seed)]
+        .get_or_init(|| HybridSigningKey::from_seed_bytes(&[seed; 32], &[seed.wrapping_add(1); 32]))
 }
 
 /// The value a signed document encodes as, with its signature entry removed: what an older
