@@ -34,7 +34,7 @@
 //! rerun until the originals on disk are the imported files byte for byte — is
 //! `tests/kill_anywhere.rs`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use capsule_cli::remote::{self, AssetPushStatus, PushOptions, RemoteConfig, RemoteError};
 use capsule_cli::restore::{
@@ -910,7 +910,14 @@ async fn e2e_case_6_a_recovered_device_restores_every_album_byte_for_byte() {
     )
     .await
     .expect("`capsule auth recover` opens the account with its albums");
-    assert_eq!(b.albums(), a.workspace.albums(), "every album, by name");
+    // The listing order is each workspace's own album recency, which B need not share with A at
+    // this point; what recovery owes is the same albums under the same names.
+    let album_set = |w: &Workspace| w.albums().into_iter().collect::<BTreeSet<_>>();
+    assert_eq!(
+        album_set(&b),
+        album_set(&a.workspace),
+        "every album, by name"
+    );
 
     // What every later command does first: resolve the default album. It is A's, not a new one.
     b.ensure_album(default_album, "Imports")
