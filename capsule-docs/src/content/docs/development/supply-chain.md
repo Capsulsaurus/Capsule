@@ -107,7 +107,9 @@ Everything CI executes or downloads is pinned to content, not to a name that can
   maintainer regenerates and pushes the file. That review is the point of the gate.
 - **The Gradle wrapper is pinned** by `distributionSha256Sum` in
   `gradle/wrapper/gradle-wrapper.properties`.
-- **Toolchains are pinned** by `rust-toolchain.toml` and `mise.toml`.
+- **Tools are pinned** by `mise.toml`. The Rust toolchain is not: `rust-toolchain.toml` names
+  the `stable` channel (and rustfmt and cargo-fuzz run on the latest nightly), so a new Rust
+  release is picked up without a bump and anything it breaks is fixed in the tree.
 - **Container base images are pinned by digest** ([](/guides/self-hosting/#container-image)), and
   Dependabot's `docker` ecosystem updates the digest.
 

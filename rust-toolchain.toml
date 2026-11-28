@@ -1,7 +1,9 @@
-# Pinned nightly: build, clippy, and rustfmt all run on this one toolchain so the
-# unstable rustfmt import options in rustfmt.toml (imports_granularity / group_imports)
-# apply natively. Bump this date periodically; keep it reasonably recent.
+# Build, clippy, rustdoc and tests run on the latest stable release. The channel floats
+# on purpose, so there is nothing to bump: Rust releases are backwards compatible, and
+# anything a new one breaks (usually a new clippy lint) is fixed here when it lands.
+# Only the nightly-only tools run on nightly, as the floating `cargo +nightly`: rustfmt
+# (rustfmt.toml's unstable import options) and cargo-fuzz (libFuzzer's sanitizer flags).
 [toolchain]
-channel = "nightly-2026-06-10"
+channel = "stable"
 components = ["rustfmt", "clippy"]
 targets = ["aarch64-apple-ios", "aarch64-apple-ios-sim", "x86_64-apple-ios"]
