@@ -1711,7 +1711,10 @@ async fn a_chunk_too_slow_to_drain_inside_the_response_wait_is_resent_shorter() 
 /// and a slow runner can still miss the response wait on a grown chunk; the server has already
 /// accepted it, so the honest answer moves the client on rather than back to offset 0, where
 /// the crawl would start over.
-#[tokio::test]
+///
+/// Time is paused, so the twelve response waits are not slept: on wall time they put the run
+/// close to its own timeout on a loaded host (#1349).
+#[tokio::test(start_paused = true)]
 async fn a_ceiling_chunk_on_a_link_that_falls_to_a_crawl_shrinks_past_the_reset_budget() {
     const SIZE: u64 = 100 * 1024 * 1024;
     let patches = Arc::new(Mutex::new(Vec::<(u64, usize)>::new()));
