@@ -1,7 +1,7 @@
 # Dev toolchain for the Capsule Apple client (capsule-swift).
 #
 # Install everything with:  mise install   (run from this directory)
-# The Rust toolchain is pinned separately by /rust-toolchain.toml.
+# The Rust toolchain is named separately by /rust-toolchain.toml (latest stable).
 [tools]
 tuist = "4"
 swiftlint = "0.65"

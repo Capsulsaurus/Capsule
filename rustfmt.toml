@@ -1,5 +1,5 @@
-# rustfmt runs on the pinned nightly (see rust-toolchain.toml), so the unstable
-# import options below apply directly. Goal: deterministic, merge-friendly imports
+# rustfmt runs on the latest nightly (`cargo +nightly fmt`, via `mise run format-rust`),
+# so the unstable import options below apply. Goal: deterministic, merge-friendly imports
 # (adding one `use` never reshuffles a neighbouring line).
 max_width = 100
 newline_style = "Unix"

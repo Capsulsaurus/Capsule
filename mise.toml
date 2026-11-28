@@ -142,11 +142,13 @@ depends = ["lint-check-md"]
 
 # ── Rust ─────────────────────────────────────────────────────────────────────
 
+# Nightly rustfmt: rustfmt.toml's import options are unstable. The latest nightly, not a
+# dated one, so it never needs bumping; everything else builds on rust-toolchain.toml's stable.
 [tasks.format-rust]
-run = "cargo fmt"
+run = "cargo +nightly fmt"
 
 [tasks.format-check-rust]
-run = "cargo fmt --check"
+run = "cargo +nightly fmt --check"
 
 # `--all-targets` lints every unit-test module, integration test, bench and example too, not
 # only lib and bin targets (issue #474).
@@ -272,7 +274,8 @@ fi
 # build, and the server's manifest parser in `capsule-server/fuzz` likewise. `fuzz-check`
 # type-checks every target on stable tooling and runs in CI on every pull request, so a target
 # cannot rot between scheduled runs. `fuzz` runs each target for `FUZZ_SECONDS` (default 60)
-# with cargo-fuzz on the pinned nightly; the scheduled workflow runs it, and a crash is left
+# with cargo-fuzz on the latest nightly (`cargo +nightly fuzz`: libFuzzer's sanitizer flags
+# are nightly-only); the scheduled workflow runs it, and a crash is left
 # under `<crate>/fuzz/artifacts/<target>/`.
 [tasks.fuzz-check]
 description = "Type-check every cargo-fuzz target"
@@ -293,7 +296,7 @@ for crate in capsule-core capsule-server; do
   pushd "$crate/fuzz" >/dev/null
   for target in $(cargo fuzz list); do
     echo "fuzz: $crate/$target for ${FUZZ_SECONDS:-60}s"
-    cargo fuzz run --target "$host" "$target" -- -max_total_time="${FUZZ_SECONDS:-60}" -max_len=65536
+    cargo +nightly fuzz run --target "$host" "$target" -- -max_total_time="${FUZZ_SECONDS:-60}" -max_len=65536
   done
   popd >/dev/null
 done

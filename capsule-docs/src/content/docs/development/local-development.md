@@ -7,8 +7,9 @@ audit: none
 Every command runs through **mise**. `mise.toml` pins the toolchain and defines the task graph, with
 long tasks in `mise-tasks/`, and `mise tasks` lists everything. A bare task **fixes**; its `-check`
 variant **verifies only**. CI jobs map 1:1 onto the `check-*` tasks, so a green local `check-*` is
-what CI runs. The Rust toolchain is pinned in `rust-toolchain.toml` and Swift tooling in
-`capsule-swift/mise.toml`.
+what CI runs. Rust floats on the latest stable (`rust-toolchain.toml` names the `stable`
+channel), with the latest nightly for rustfmt and cargo-fuzz only (`cargo +nightly`); Swift
+tooling is pinned in `capsule-swift/mise.toml`.
 
 ## First-time setup
 
@@ -16,6 +17,7 @@ what CI runs. The Rust toolchain is pinned in `rust-toolchain.toml` and Swift to
 mise install           # pinned tools (hk, convco, cargo-nextest, shellcheck, actionlint, ...)
 mise run setup         # bun install in capsule-web + capsule-docs
 mise run hooks-install # git hooks (hk)
+rustup toolchain install nightly --profile minimal --component rustfmt # rustfmt, cargo-fuzz
 ```
 
 ## Gates
