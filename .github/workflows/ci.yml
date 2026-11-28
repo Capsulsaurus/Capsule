@@ -445,7 +445,7 @@ jobs:
 
   # `capsule auth login --oidc` against a real identity provider (#640). The round trip in
   # capsule-cli/tests/oidc_dex.rs skips unless CAPSULE_TEST_DEX=1, so `rust-test` passes it
-  # vacuously; this job is where it runs. It brings up compose.yaml's own dex service (v2.46.1,
+  # vacuously; this job is where it runs. It brings up compose.yaml's own dex service (v2.45.1,
   # its inline config, so CI and a developer's machine sign in to the same provider), starts
   # the in-memory server the test file's header names with the three OIDC variables, and fails
   # on a skip line just as `test-rust-containers` does. Every wait is bounded: compose's
