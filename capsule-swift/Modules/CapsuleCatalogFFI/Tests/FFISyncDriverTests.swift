@@ -277,15 +277,17 @@ extension FFISyncDriverFixture {
             #expect(verbs.historyFetches == [record])
             #expect(verbs.opens.isEmpty)
             #expect(verbs.applies.isEmpty)
-            #expect(verbs.historyOpens == [HistoryOpenCall(
-                call: ApplyCall(
-                    manifest: record,
-                    metadata: Data(metadataHash.utf8),
-                    localChainHead: FFIPurgeDelivery.headHash(Data([2])),
-                    ciphertext: Data(originalHash.utf8)
+            #expect(verbs.historyOpens == [
+                HistoryOpenCall(
+                    call: ApplyCall(
+                        manifest: record,
+                        metadata: Data(metadataHash.utf8),
+                        localChainHead: FFIPurgeDelivery.headHash(Data([2])),
+                        ciphertext: Data(originalHash.utf8)
+                    ),
+                    history: history
                 ),
-                history: history
-            )])
+            ])
             #expect(verbs.fetches == [metadataHash, originalHash])
             #expect(catalog.writes.map(\.action) == ["metadata-update"])
             #expect(catalog.writes.first?.original == plaintextBytes)
@@ -296,13 +298,15 @@ extension FFISyncDriverFixture {
         @Test("an asset adopted from its history is held for the rest of the drain: its next entry reads no history")
         func adoptedAssetIsHeldAfter() async throws {
             let verbs = ScriptedVerbs(
-                pages: [.success(page(
-                    [
-                        entry(assetA, record: Data([3]), kind: .updated, metadata: true),
-                        entry(assetA, record: Data([4]), kind: .updated, metadata: true),
-                    ],
-                    next: Data([1])
-                ))],
+                pages: [
+                    .success(page(
+                        [
+                            entry(assetA, record: Data([3]), kind: .updated, metadata: true),
+                            entry(assetA, record: Data([4]), kind: .updated, metadata: true),
+                        ],
+                        next: Data([1])
+                    )),
+                ],
                 histories: [Data([3]): .success([Data([1]), Data([2])])]
             )
 
@@ -318,13 +322,15 @@ extension FFISyncDriverFixture {
         @Test("an asset its create adopted is held for the rest of the drain: its next entry reads no history")
         func adoptedCreateIsHeldAfter() async throws {
             let verbs = ScriptedVerbs(
-                pages: [.success(page(
-                    [
-                        entry(assetA, record: Data([1]), metadata: true),
-                        entry(assetA, record: Data([2]), kind: .updated, metadata: true),
-                    ],
-                    next: Data([1])
-                ))],
+                pages: [
+                    .success(page(
+                        [
+                            entry(assetA, record: Data([1]), metadata: true),
+                            entry(assetA, record: Data([2]), kind: .updated, metadata: true),
+                        ],
+                        next: Data([1])
+                    )),
+                ],
                 openings: [Data([1]): .opened(facts: facts(Data([1]), metadata: metadataFacts, adopted: true))]
             )
 
@@ -357,13 +363,15 @@ extension FFISyncDriverFixture {
             let restore = Data([4])
             let history = [Data([1]), Data([2])]
             let verbs = ScriptedVerbs(
-                pages: [.success(page(
-                    [
-                        entry(assetA, record: delete, kind: .deleted, metadata: true),
-                        entry(assetA, record: restore, kind: .updated, metadata: true),
-                    ],
-                    next: Data([1])
-                ))],
+                pages: [
+                    .success(page(
+                        [
+                            entry(assetA, record: delete, kind: .deleted, metadata: true),
+                            entry(assetA, record: restore, kind: .updated, metadata: true),
+                        ],
+                        next: Data([1])
+                    )),
+                ],
                 openings: [restore: .opened(facts: facts(restore, action: "trash-restore", metadata: metadataFacts, adopted: true))],
                 histories: [delete: .success(history)],
                 historyOpenings: [delete: .opened(facts: facts(delete, action: "delete", metadata: metadataFacts, adopted: true))]
@@ -378,15 +386,17 @@ extension FFISyncDriverFixture {
             #expect(drain.skipped == 0)
             #expect(verbs.fetches == [metadataHash, originalHash, metadataHash, originalHash])
             #expect(verbs.historyFetches == [delete])
-            #expect(verbs.historyOpens == [HistoryOpenCall(
-                call: ApplyCall(
-                    manifest: delete,
-                    metadata: Data(metadataHash.utf8),
-                    localChainHead: nil,
-                    ciphertext: Data(originalHash.utf8)
+            #expect(verbs.historyOpens == [
+                HistoryOpenCall(
+                    call: ApplyCall(
+                        manifest: delete,
+                        metadata: Data(metadataHash.utf8),
+                        localChainHead: nil,
+                        ciphertext: Data(originalHash.utf8)
+                    ),
+                    history: history
                 ),
-                history: history
-            )])
+            ])
             #expect(verbs.opens.map(\.manifest) == [restore])
             #expect(verbs.opens.first?.metadata == Data(metadataHash.utf8))
             #expect(verbs.opens.first?.localChainHead == FFIPurgeDelivery.headHash(delete))
@@ -399,10 +409,12 @@ extension FFISyncDriverFixture {
         @Test("an entry whose metadata blob address is not a content address is skipped, fetching nothing")
         func malformedMetadataAddressIsSkipped() async throws {
             let verbs = ScriptedVerbs(
-                pages: [.success(page(
-                    [entry(assetA, record: Data([1]), metadata: true, metadataAddress: Data("../../etc/passwd".utf8))],
-                    next: Data([1])
-                ))]
+                pages: [
+                    .success(page(
+                        [entry(assetA, record: Data([1]), metadata: true, metadataAddress: Data("../../etc/passwd".utf8))],
+                        next: Data([1])
+                    )),
+                ]
             )
             let store = MemoryStore()
 

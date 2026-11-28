@@ -13,13 +13,15 @@ extension FFISyncDriverFixture {
             let restore = Data([4])
             let history = [Data([1]), Data([2])]
             let verbs = ScriptedVerbs(
-                pages: [.success(page(
-                    [
-                        tombstone(assetA, record: delete),
-                        entry(assetA, record: restore, kind: .updated, metadata: true),
-                    ],
-                    next: Data([1])
-                ))],
+                pages: [
+                    .success(page(
+                        [
+                            tombstone(assetA, record: delete),
+                            entry(assetA, record: restore, kind: .updated, metadata: true),
+                        ],
+                        next: Data([1])
+                    )),
+                ],
                 openings: [restore: .opened(facts: facts(restore, action: "trash-restore", metadata: metadataFacts, adopted: true))],
                 histories: [delete: .success(history)],
                 historyOpenings: [delete: .opened(facts: facts(delete, action: "delete", metadata: metadataFacts, adopted: true))],
@@ -38,15 +40,17 @@ extension FFISyncDriverFixture {
             #expect(verbs.sourceNamings == [SourcesCall(manifest: delete, history: history)])
             #expect(verbs.fetches == [liveMetadataHash, liveOriginalHash, metadataHash, originalHash])
             #expect(verbs.fetchedSizes == [liveSources.original.size, 64])
-            #expect(verbs.historyOpens == [HistoryOpenCall(
-                call: ApplyCall(
-                    manifest: delete,
-                    metadata: Data(liveMetadataHash.utf8),
-                    localChainHead: nil,
-                    ciphertext: Data(liveOriginalHash.utf8)
+            #expect(verbs.historyOpens == [
+                HistoryOpenCall(
+                    call: ApplyCall(
+                        manifest: delete,
+                        metadata: Data(liveMetadataHash.utf8),
+                        localChainHead: nil,
+                        ciphertext: Data(liveOriginalHash.utf8)
+                    ),
+                    history: history
                 ),
-                history: history
-            )])
+            ])
             #expect(verbs.opens.map(\.manifest) == [restore])
             #expect(verbs.opens.first?.localChainHead == FFIPurgeDelivery.headHash(delete))
             #expect(verbs.applies.isEmpty)
@@ -132,10 +136,12 @@ extension FFISyncDriverFixture {
             let delete = Data([3])
             let verbs = ScriptedVerbs(
                 pages: [.success(page([tombstone(assetA, record: delete)], next: Data([1])))],
-                histories: [delete: .failure(FfiError.Fetch(
-                    code: FFISyncDriver.blobGoneCode,
-                    detail: "provenance record: blob permanently unavailable"
-                ))]
+                histories: [
+                    delete: .failure(FfiError.Fetch(
+                        code: FFISyncDriver.blobGoneCode,
+                        detail: "provenance record: blob permanently unavailable"
+                    )),
+                ]
             )
             let store = MemoryStore()
             let staging = stagingDirectory()
@@ -182,13 +188,15 @@ extension FFISyncDriverFixture {
             let closed = Data([3])
             let gone = Data([5])
             let verbs = ScriptedVerbs(
-                pages: [.success(page(
-                    [
-                        entry(assetA, record: closed, kind: .deleted, metadata: true),
-                        entry(assetB, record: gone, kind: .deleted, metadata: true),
-                    ],
-                    next: Data([1])
-                ))],
+                pages: [
+                    .success(page(
+                        [
+                            entry(assetA, record: closed, kind: .deleted, metadata: true),
+                            entry(assetB, record: gone, kind: .deleted, metadata: true),
+                        ],
+                        next: Data([1])
+                    )),
+                ],
                 histories: [gone: .failure(FfiError.Fetch(code: FFISyncDriver.blobGoneCode, detail: "blob permanently unavailable"))],
                 closedWindows: [closed]
             )
@@ -252,11 +260,13 @@ extension FFISyncDriverFixture {
 
             #expect(drain.applied == 1)
             #expect(drain.awaitingOriginal == 0)
-            #expect(verbs.heldApplies == [HeldApplyCall(
-                manifest: delete,
-                metadata: Data(),
-                localChainHead: FFIPurgeDelivery.headHash(Data([1]))
-            )])
+            #expect(verbs.heldApplies == [
+                HeldApplyCall(
+                    manifest: delete,
+                    metadata: Data(),
+                    localChainHead: FFIPurgeDelivery.headHash(Data([1]))
+                ),
+            ])
             #expect(verbs.retentionJudgements.isEmpty)
             #expect(verbs.historyFetches.isEmpty)
             #expect(verbs.sourceNamings.isEmpty)

@@ -252,10 +252,12 @@ struct FFIPurgeDeliveryTests {
 
     @Test("a feed id in another case names the same asset; one that is not a UUID is ignored")
     func feedIdsAreNormalised() async throws {
-        let verbs = ScriptedVerbs(pages: [.success(page(
-            [entry(assetA.uppercased(), head: Data([0x07])), entry("not-a-uuid", head: Data([0x08]))],
-            next: Data([1])
-        ))])
+        let verbs = ScriptedVerbs(pages: [
+            .success(page(
+                [entry(assetA.uppercased(), head: Data([0x07])), entry("not-a-uuid", head: Data([0x08]))],
+                next: Data([1])
+            )),
+        ])
 
         _ = try await FFIPurgeDelivery(verbs: verbs).deliverPurge(assetID: assetA)
 
@@ -399,11 +401,13 @@ struct FFILifecycleDeliveryTests {
 
         _ = try await FFIPurgeDelivery(verbs: verbs).deliverLifecycle(assetID: assetA)
 
-        #expect(verbs.lifecycleDeliveries == [.init(
-            assetID: assetA,
-            serverHeadHash: hashed(0x02),
-            latestChangedAt: "2026-10-03T00:00:00.250000Z"
-        )])
+        #expect(verbs.lifecycleDeliveries == [
+            .init(
+                assetID: assetA,
+                serverHeadHash: hashed(0x02),
+                latestChangedAt: "2026-10-03T00:00:00.250000Z"
+            ),
+        ])
     }
 
     @Test("with no readable changed_at in the feed the session gets no floor")
