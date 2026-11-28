@@ -21,6 +21,17 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 [profile.ci.junit]
 path = "junit.xml"
 
+# The nightly property soak (`.github/workflows/scheduled-tests.yml`, `properties` job) runs the
+# property suites at `PROPTEST_CASES=4096`, 16 to 85 times their pull-request depth. A case
+# there is one search of many, not a unit test that might hang, so the soak profile gives each
+# test 20 minutes rather than the 180 s the other profiles allow; the job's own 90-minute bound
+# still ends a run that truly hangs. Before #1355 the signed-document and upload fault-schedule
+# suites ran past 180 s on every night's run, and that timeout, not a found counterexample, was
+# what failed the job.
+[profile.soak]
+fail-fast = false
+slow-timeout = { period = "300s", terminate-after = 4 }
+
 # The container group holds the adapter suites that stand up a real backing service.
 #
 # It existed for the retired Salvo auth crate, whose integration tests spun up shared Postgres
