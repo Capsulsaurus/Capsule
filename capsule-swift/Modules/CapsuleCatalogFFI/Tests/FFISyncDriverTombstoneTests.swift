@@ -244,7 +244,10 @@ extension FFISyncDriverFixture {
             #expect(catalog.writes.isEmpty)
             #expect(try leftovers(in: staging).isEmpty)
         }
+    }
 
+    @Suite("FFISyncDriver — a held asset's album-page tombstones")
+    struct FFISyncDriverHeldTombstoneTests {
         @Test("a held asset's album-page tombstone applies its delete against the held chain, fetching nothing, and keeps its head")
         func heldTombstoneAppliesTheDelete() async throws {
             let delete = Data([2])
