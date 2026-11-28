@@ -329,7 +329,7 @@ proptest! {
     #[test]
     fn signed_sidecar_round_trips_byte_identically(mut doc in sidecar(), seed in any::<u8>()) {
         let ik = key(seed);
-        doc.sign(&ik);
+        doc.sign(ik);
         let bytes = doc.to_canonical_vec();
         let back = SidecarV1::from_canonical_slice(&bytes, SIDECAR_SCHEMA_V1).expect("decodes");
         prop_assert!(back.verify(&ik.verifying_key()));
