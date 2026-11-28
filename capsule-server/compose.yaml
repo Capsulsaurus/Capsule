@@ -69,6 +69,13 @@ services:
   # `/dex/device/code` in its discovery document and admits its own device callback for a public
   # client without listing it.
   #
+  # Pinned to v2.45.1: v2.46.0 and v2.46.1 break that device callback under an issuer with a
+  # path such as `/dex`. Their verification page sends `redirect_uri=/dex/device/callback`, and
+  # their own check admits only the bare `/device/callback`, so every device sign-in ends in
+  # "Unregistered redirect_uri" (`server/device/device.go` against
+  # `server/authflow/request.go`'s `validateRedirectURI`). Move past v2.45.1 only to a release
+  # the `Rust (OIDC round trip)` CI job passes against.
+  #
   # From the CLI: `capsule auth login --oidc` (issue #461). The automated round trip is
   # `CAPSULE_TEST_DEX=1 cargo nextest run -p capsule-cli --test oidc_dex`, with this service
   # and `mise run serve-memory` (carrying the three variables above) both running.
@@ -76,7 +83,7 @@ services:
   # The dex configuration is inline (`configs.*.content`) rather than a file beside this one,
   # so the stack stays one file. docker compose ≥ 2.23.1 and podman-compose ≥ 1.2.0 read it.
   dex:
-    image: ghcr.io/dexidp/dex:v2.46.1
+    image: ghcr.io/dexidp/dex:v2.45.1
     profiles: ["oidc"]
     command: ["dex", "serve", "/etc/dex/config.yaml"]
     ports:
