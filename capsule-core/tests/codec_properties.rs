@@ -20,6 +20,7 @@
 mod support;
 
 use std::collections::BTreeMap;
+use std::sync::OnceLock;
 
 use capsule_core::cbor;
 use capsule_core::crypto::encryption::open_blob;
@@ -243,9 +244,16 @@ fn stack_doc() -> impl Strategy<Value = StackDocV1> {
     })
 }
 
-/// A signing key derived from `seed`, so a case replays with the same key.
-fn key(seed: u8) -> HybridSigningKey {
-    HybridSigningKey::from_seed_bytes(&[seed; 32], &[seed.wrapping_add(1); 32])
+/// The signing key derived from `seed`, so a case replays with the same key.
+///
+/// Derived once per seed and kept: an ML-DSA-65 key generation costs as much as a signature, and
+/// the signed-document suites call this up to four times a case, so at the nightly soak's case
+/// count re-deriving it was most of their time (#1355). A `u8` seed bounds the cache at 256 keys.
+fn key(seed: u8) -> &'static HybridSigningKey {
+    static KEYS: [OnceLock<HybridSigningKey>; 256] = [const { OnceLock::new() }; 256];
+    KEYS[usize::from(seed)].get_or_init(|| {
+        HybridSigningKey::from_seed_bytes(&[seed; 32], &[seed.wrapping_add(1); 32])
+    })
 }
 
 /// The value a signed document encodes as, with its signature entry removed: what an older
@@ -334,11 +342,11 @@ proptest! {
     fn sidecar_unknown_fields_survive_a_re_sign(
         mut doc in sidecar(), first in any::<u8>(), second in any::<u8>()
     ) {
-        doc.sign(&key(first));
+        doc.sign(key(first));
         let written = doc.to_canonical_vec();
         let mut reader = SidecarV1::from_canonical_slice(&written, SIDECAR_SCHEMA_V1)
             .expect("decodes");
-        reader.sign(&key(second));
+        reader.sign(key(second));
         let rewritten = reader.to_canonical_vec();
         prop_assert!(reader.verify(&key(second).verifying_key()));
         prop_assert_eq!(&reader.unknown, &doc.unknown);
@@ -349,7 +357,7 @@ proptest! {
     fn album_doc_round_trips_and_keeps_unknown_fields_across_a_re_sign(
         mut doc in album_doc(), first in any::<u8>(), second in any::<u8>()
     ) {
-        doc.sign(&key(first));
+        doc.sign(key(first));
         let written = doc.to_canonical_vec();
         let mut back = AlbumDocV1::from_canonical_slice(&written, ALBUM_DOC_SCHEMA_V1)
             .expect("decodes");
@@ -357,7 +365,7 @@ proptest! {
         prop_assert_eq!(back.to_canonical_vec(), written.clone());
         prop_assert_eq!(&back, &doc);
 
-        back.sign(&key(second));
+        back.sign(key(second));
         prop_assert!(back.verify(&key(second).verifying_key()));
         prop_assert_eq!(without_signature(&back.to_canonical_vec()), without_signature(&written));
     }
@@ -366,7 +374,7 @@ proptest! {
     fn stack_doc_round_trips_and_keeps_unknown_fields_across_a_re_sign(
         mut doc in stack_doc(), first in any::<u8>(), second in any::<u8>()
     ) {
-        doc.sign(&key(first));
+        doc.sign(key(first));
         let written = doc.to_canonical_vec();
         let mut back = StackDocV1::from_canonical_slice(&written, STACK_DOC_SCHEMA_V1)
             .expect("decodes");
@@ -374,7 +382,7 @@ proptest! {
         prop_assert_eq!(back.to_canonical_vec(), written.clone());
         prop_assert_eq!(&back, &doc);
 
-        back.sign(&key(second));
+        back.sign(key(second));
         prop_assert!(back.verify(&key(second).verifying_key()));
         prop_assert_eq!(without_signature(&back.to_canonical_vec()), without_signature(&written));
     }
@@ -389,7 +397,7 @@ proptest! {
         mut doc in album_doc(),
         flips in proptest::collection::vec((any::<prop::sample::Index>(), any::<u8>()), 1..4),
     ) {
-        doc.sign(&key(1));
+        doc.sign(key(1));
         let mut bytes = doc.to_canonical_vec();
         for (at, mask) in flips {
             let i = at.index(bytes.len());
